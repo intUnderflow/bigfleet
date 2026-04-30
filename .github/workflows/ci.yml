@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cache tools
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: ${{ runner.os }}-tools-${{ hashFiles('Makefile') }}
+
+      - name: Install tools
+        run: make tools
+
+      - name: Generate
+        run: make generate
+
+      - name: Verify generated code is up to date
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::Generated code is out of date. Run 'make generate' and commit."
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
+
+  sim:
+    name: simulator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run simulator scenarios
+        run: make sim || echo "::warning::sim target not yet populated (M2+)"

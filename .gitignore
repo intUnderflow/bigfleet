@@ -1,2 +1,6 @@
 .idea/
 .claude/
+bin/
+dist/
+coverage.out
+coverage.html
