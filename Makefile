@@ -50,7 +50,13 @@ $(BIN)/controller-gen: | $(BIN)
 .PHONY: generate
 generate: tools ## Regenerate proto + CRD code.
 	$(BIN)/buf generate
-	# CRD generation is wired up in M1 once pkg/apis exists.
+	$(BIN)/controller-gen \
+		object:headerFile="hack/boilerplate.go.txt" \
+		paths="./pkg/apis/..."
+	$(BIN)/controller-gen \
+		crd \
+		paths="./pkg/apis/..." \
+		output:crd:artifacts:config=api/crd
 
 .PHONY: build
 build: ## Compile all binaries.

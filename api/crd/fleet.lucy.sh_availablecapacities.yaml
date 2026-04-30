@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: availablecapacities.fleet.lucy.sh
+spec:
+  group: fleet.lucy.sh
+  names:
+    categories:
+    - fleet
+    kind: AvailableCapacity
+    listKind: AvailableCapacityList
+    plural: availablecapacities
+    shortNames:
+    - avc
+    singular: availablecapacity
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.availability
+      name: Availability
+      type: string
+    - jsonPath: .spec.availableCount
+      name: Available
+      type: integer
+    - jsonPath: .spec.cost
+      name: Cost
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AvailableCapacity is an eventually-consistent hint about provisionable
+          capacity. Cluster-scoped, lives in fleet-system per the paper.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              AvailableCapacitySpec is the operator-visible projection of the shard's
+              view of what it could provision. Eventually consistent.
+            properties:
+              availability:
+                description: |-
+                  Confidence is the qualitative signal on AvailableCapacity. Real capacity
+                  is inherently racy; consumers must treat AvailableCapacity as a hint,
+                  not a reservation.
+                enum:
+                - None
+                - Low
+                - Medium
+                - High
+                type: string
+              availableCount:
+                description: |-
+                  AvailableCount is the shard's hint about how many machines of this
+                  shape it could provide soon.
+                format: int32
+                type: integer
+              cost:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  Cost is the per-hour USD cost the shard expects to charge for this
+                  capacity.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              estimatedProvisioningTime:
+                description: |-
+                  EstimatedProvisioningTime is the wall-clock duration the shard
+                  expects to take from request to Ready.
+                type: string
+              nodeTemplate:
+                description: NodeTemplate shows operators what kind of node would
+                  result.
+                properties:
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  taints:
+                    items:
+                      description: |-
+                        The node this Taint is attached to has the "effect" on
+                        any pod that does not tolerate the Taint.
+                      properties:
+                        effect:
+                          description: |-
+                            Required. The effect of the taint on pods
+                            that do not tolerate the taint.
+                            Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+                          type: string
+                        key:
+                          description: Required. The taint key to be applied to a
+                            node.
+                          type: string
+                        timeAdded:
+                          description: TimeAdded represents the time at which the
+                            taint was added.
+                          format: date-time
+                          type: string
+                        value:
+                          description: The taint value corresponding to the taint
+                            key.
+                          type: string
+                      required:
+                      - effect
+                      - key
+                      type: object
+                    type: array
+                type: object
+              requirements:
+                description: Requirements describe the matchable shape of this capacity.
+                items:
+                  description: |-
+                    A node selector requirement is a selector that contains values, a key, and an operator
+                    that relates the key and values.
+                  properties:
+                    key:
+                      description: The label key that the selector applies to.
+                      type: string
+                    operator:
+                      description: |-
+                        Represents a key's relationship to a set of values.
+                        Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                      type: string
+                    values:
+                      description: |-
+                        An array of string values. If the operator is In or NotIn,
+                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                        the values array must be empty. If the operator is Gt or Lt, the values
+                        array must have a single element, which will be interpreted as an integer.
+                        This array is replaced during a strategic merge patch.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                  - key
+                  - operator
+                  type: object
+                type: array
+              resources:
+                additionalProperties:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
+                description: Resources the capacity would expose per machine.
+                type: object
+              supportsAtomicProvisioning:
+                description: |-
+                  SupportsAtomicProvisioning indicates whether the entire AvailableCount
+                  can be provisioned all-or-nothing. Useful for gang-scheduled workloads.
+                type: boolean
+            required:
+            - availability
+            - availableCount
+            - cost
+            - resources
+            type: object
+          status:
+            description: |-
+              AvailableCapacityStatus is reserved for future operator-side bookkeeping.
+              In v1alpha1 the spec carries everything; status is intentionally empty.
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

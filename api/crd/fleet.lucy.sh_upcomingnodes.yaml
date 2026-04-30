@@ -1,0 +1,199 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: upcomingnodes.fleet.lucy.sh
+spec:
+  group: fleet.lucy.sh
+  names:
+    categories:
+    - fleet
+    kind: UpcomingNode
+    listKind: UpcomingNodeList
+    plural: upcomingnodes
+    shortNames:
+    - upn
+    singular: upcomingnode
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.nodeRef.name
+      name: Node
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          UpcomingNode is a placeholder Kubernetes object that signals "a node
+          matching this spec is being provisioned". Cluster-scoped, lives in the
+          fleet-system namespace per the paper's kubectl experience.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              UpcomingNodeSpec describes the node that's coming online. Set when the
+              shard provisions a machine; updated only if the machine's identity
+              changes (which it doesn't — machine_id is stable).
+            properties:
+              labels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Labels the node will carry once it joins. Useful for scheduling
+                  decisions that need to make a placement choice before the node Ready
+                  transition (e.g., topology-spread bookkeeping).
+                type: object
+              resources:
+                additionalProperties:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
+                description: Resources the node will expose as allocatable.
+                type: object
+              taints:
+                description: Taints the node will register with.
+                items:
+                  description: |-
+                    The node this Taint is attached to has the "effect" on
+                    any pod that does not tolerate the Taint.
+                  properties:
+                    effect:
+                      description: |-
+                        Required. The effect of the taint on pods
+                        that do not tolerate the taint.
+                        Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+                      type: string
+                    key:
+                      description: Required. The taint key to be applied to a node.
+                      type: string
+                    timeAdded:
+                      description: TimeAdded represents the time at which the taint
+                        was added.
+                      format: date-time
+                      type: string
+                    value:
+                      description: The taint value corresponding to the taint key.
+                      type: string
+                  required:
+                  - effect
+                  - key
+                  type: object
+                type: array
+            required:
+            - resources
+            type: object
+          status:
+            properties:
+              estimatedReadyTime:
+                description: |-
+                  EstimatedReadyTime is when the shard expects the node to be Ready.
+                  Operators use this to age out stuck upcoming nodes.
+                format: date-time
+                type: string
+              lastError:
+                description: LastError is populated when Phase == Failed.
+                type: string
+              nodeRef:
+                description: |-
+                  NodeRef is set once the kubelet has registered and the Kubernetes
+                  node object exists.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              phase:
+                description: |-
+                  UpcomingNodePhase is the lifecycle phase of a node BigFleet is bringing
+                  online. The cluster operator drives transitions from NodeStateUpdate
+                  frames received over the Shard.Session stream.
+                enum:
+                - Provisioning
+                - Launched
+                - Registered
+                - Ready
+                - Failed
+                type: string
+              providerID:
+                description: |-
+                  ProviderID echoes the cloud / bare-metal identifier (e.g.,
+                  "aws:///us-east-1a/i-0abc123def456") for operator-side debugging.
+                type: string
+              provisioningStartTime:
+                description: |-
+                  ProvisioningStartTime is when the shard first told the operator
+                  about this node.
+                format: date-time
+                type: string
+            required:
+            - phase
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

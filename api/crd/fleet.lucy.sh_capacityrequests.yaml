@@ -1,0 +1,190 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: capacityrequests.fleet.lucy.sh
+spec:
+  group: fleet.lucy.sh
+  names:
+    categories:
+    - fleet
+    kind: CapacityRequest
+    listKind: CapacityRequestList
+    plural: capacityrequests
+    shortNames:
+    - cr
+    - crs
+    singular: capacityrequest
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.priority
+      name: Priority
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CapacityRequest declares a single pod's resource need.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CapacityRequestSpec is the user-facing description of a capacity need.
+
+              One CR per pod. Withdrawal is implicit: deleting the pod garbage-collects
+              the CR via ownerReferences, which causes the next roll-up to omit it.
+            properties:
+              interruptionPenalty:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  InterruptionPenalty is the dollar cost of interrupting the workload
+                  once. Used in the autoscaler's effective_cost calculation:
+
+                    effective_cost = price + (interruption_probability × interruption_penalty)
+
+                  The autoscaler buckets penalties to a coarse log scale at aggregation
+                  time (powers of 2 between $0.50 and $10M); two CRs whose raw values
+                  fall in the same bucket aggregate together. See the bucket boundaries
+                  in api/proto/.../capacity.proto.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              priority:
+                description: Priority is the pod's PriorityClass value. Higher = served
+                  first.
+                format: int32
+                type: integer
+              reclamationPenalty:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  ReclamationPenalty is the dollar cost tied to *this specific* set of
+                  machines (e.g., burned-in GPUs, warmed caches). Distinct from
+                  interruption penalty. Used in victim scoring and idle-tiebreaks.
+                  Bucketed identically to InterruptionPenalty.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              requirements:
+                description: |-
+                  Requirements are node-selector style match expressions. Standard
+                  operators only — In, NotIn, Exists, DoesNotExist. Co-location ("Same"
+                  rack / zone) is not expressed here; the cluster operator translates
+                  pod-level signals into the protobuf-only Same operator at roll-up.
+                items:
+                  description: |-
+                    A node selector requirement is a selector that contains values, a key, and an operator
+                    that relates the key and values.
+                  properties:
+                    key:
+                      description: The label key that the selector applies to.
+                      type: string
+                    operator:
+                      description: |-
+                        Represents a key's relationship to a set of values.
+                        Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                      type: string
+                    values:
+                      description: |-
+                        An array of string values. If the operator is In or NotIn,
+                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                        the values array must be empty. If the operator is Gt or Lt, the values
+                        array must have a single element, which will be interpreted as an integer.
+                        This array is replaced during a strategic merge patch.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                  - key
+                  - operator
+                  type: object
+                type: array
+              resources:
+                additionalProperties:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                  x-kubernetes-int-or-string: true
+                description: Resources are the per-machine resource requests.
+                type: object
+              topologySpread:
+                description: |-
+                  TopologySpread is copied from the source pod's topologySpreadConstraints.
+                  Pass-through to the autoscaler.
+                items:
+                  description: |-
+                    TopologySpreadConstraint mirrors the autoscaler-relevant subset of
+                    corev1.TopologySpreadConstraint. Only fields the autoscaler honours.
+                  properties:
+                    maxSkew:
+                      format: int32
+                      type: integer
+                    topologyKey:
+                      type: string
+                    whenUnsatisfiable:
+                      type: string
+                  required:
+                  - maxSkew
+                  - topologyKey
+                  - whenUnsatisfiable
+                  type: object
+                type: array
+            required:
+            - priority
+            - resources
+            type: object
+          status:
+            description: |-
+              CapacityRequestStatus is written exactly once by the cluster operator
+              on the first roll-up that includes this CR.
+            properties:
+              acknowledgedAt:
+                description: AcknowledgedAt is set when Phase transitions to Acknowledged.
+                format: date-time
+                type: string
+              phase:
+                description: |-
+                  CapacityRequestPhase mirrors the two-phase lifecycle from the paper:
+                  Pending → Acknowledged. The single transition is written by the cluster
+                  operator the first time a CR is included in a roll-up.
+                enum:
+                - Pending
+                - Acknowledged
+                type: string
+            required:
+            - phase
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
