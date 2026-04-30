@@ -36,11 +36,10 @@ const (
 
 // PenaltyBucket enumerates the boundaries used to coarsen workload-specific
 // penalty values. Selected at aggregation time by rounding up the raw
-// dollar value to the nearest bucket.
-//
-// Boundaries:   $0  $0.50  $1  $2  $4  $8  $16  …  $5,242,880  $10,485,760
-// Anything ≥ $10,485,760 falls in BUCKET_PINNED (treated as effectively
-// non-interruptible / non-reclaimable for cost-function purposes).
+// dollar value to the nearest bucket. Boundaries are powers of 2 in
+// dollars from $0.50 up to $8,388,608 (≈ $8.4M); anything larger falls
+// in PENALTY_BUCKET_PINNED and is treated as effectively non-interruptible
+// for cost-function purposes.
 type PenaltyBucket int32
 
 const (
@@ -70,8 +69,8 @@ const (
 	PenaltyBucket_PENALTY_BUCKET_1048576     PenaltyBucket = 23 // $1,048,576
 	PenaltyBucket_PENALTY_BUCKET_2097152     PenaltyBucket = 24
 	PenaltyBucket_PENALTY_BUCKET_4194304     PenaltyBucket = 25
-	PenaltyBucket_PENALTY_BUCKET_10485760    PenaltyBucket = 26 // $10,485,760
-	PenaltyBucket_PENALTY_BUCKET_PINNED      PenaltyBucket = 27 // > $10,485,760: treat as effectively infinite
+	PenaltyBucket_PENALTY_BUCKET_8388608     PenaltyBucket = 26 // $8,388,608  (≈ $8.4M)
+	PenaltyBucket_PENALTY_BUCKET_PINNED      PenaltyBucket = 27 // > $8,388,608: treat as effectively infinite
 )
 
 // Enum value maps for PenaltyBucket.
@@ -103,7 +102,7 @@ var (
 		23: "PENALTY_BUCKET_1048576",
 		24: "PENALTY_BUCKET_2097152",
 		25: "PENALTY_BUCKET_4194304",
-		26: "PENALTY_BUCKET_10485760",
+		26: "PENALTY_BUCKET_8388608",
 		27: "PENALTY_BUCKET_PINNED",
 	}
 	PenaltyBucket_value = map[string]int32{
@@ -133,7 +132,7 @@ var (
 		"PENALTY_BUCKET_1048576":     23,
 		"PENALTY_BUCKET_2097152":     24,
 		"PENALTY_BUCKET_4194304":     25,
-		"PENALTY_BUCKET_10485760":    26,
+		"PENALTY_BUCKET_8388608":     26,
 		"PENALTY_BUCKET_PINNED":      27,
 	}
 )
@@ -620,7 +619,7 @@ const file_fleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x11WhenUnsatisfiable\x12\"\n" +
 	"\x1eWHEN_UNSATISFIABLE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"WHEN_UNSATISFIABLE_DO_NOT_SCHEDULE\x10\x01\x12&\n" +
-	"\"WHEN_UNSATISFIABLE_SCHEDULE_ANYWAY\x10\x02*\xdc\x05\n" +
+	"\"WHEN_UNSATISFIABLE_SCHEDULE_ANYWAY\x10\x02*\xdb\x05\n" +
 	"\rPenaltyBucket\x12\x1e\n" +
 	"\x1aPENALTY_BUCKET_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13PENALTY_BUCKET_ZERO\x10\x01\x12\x1e\n" +
@@ -648,8 +647,8 @@ const file_fleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x15PENALTY_BUCKET_524288\x10\x16\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_1048576\x10\x17\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_2097152\x10\x18\x12\x1a\n" +
-	"\x16PENALTY_BUCKET_4194304\x10\x19\x12\x1b\n" +
-	"\x17PENALTY_BUCKET_10485760\x10\x1a\x12\x19\n" +
+	"\x16PENALTY_BUCKET_4194304\x10\x19\x12\x1a\n" +
+	"\x16PENALTY_BUCKET_8388608\x10\x1a\x12\x19\n" +
 	"\x15PENALTY_BUCKET_PINNED\x10\x1bB\xc9\x01\n" +
 	"\x12com.fleet.v1alpha1B\rCapacityProtoP\x01ZKgithub.com/intUnderflow/bigfleet/pkg/api/proto/fleet/v1alpha1;fleetv1alpha1\xa2\x02\x03FXX\xaa\x02\x0eFleet.V1alpha1\xca\x02\x0eFleet\\V1alpha1\xe2\x02\x1aFleet\\V1alpha1\\GPBMetadata\xea\x02\x0fFleet::V1alpha1b\x06proto3"
 
