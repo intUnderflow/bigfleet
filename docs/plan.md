@@ -95,7 +95,7 @@ bigfleet/
 │   │   │   └── coordinator.proto      # internal: coordinator ↔ shard (instructions, shortfalls, fencing)
 │   │   └── buf.yaml / buf.gen.yaml
 │   └── crd/
-│       └── fleet.lucy.sh_*.yaml       # CapacityRequest, AvailableCapacity, UpcomingNode
+│       └── bigfleet.lucy.sh_*.yaml       # CapacityRequest, AvailableCapacity, UpcomingNode
 ├── pkg/
 │   ├── apis/fleet/v1alpha1/           # Go CRD types (controller-runtime / kubebuilder generated)
 │   ├── machine/                       # Machine struct, state machine, transition validation
@@ -151,7 +151,7 @@ bigfleet/
 
 ## 2. Wire formats
 
-### 2.1 CRDs (cluster-side, group `fleet.lucy.sh`, version `v1alpha1`)
+### 2.1 CRDs (cluster-side, group `bigfleet.lucy.sh`, version `v1alpha1`)
 
 - `CapacityRequest` (namespaced). Fields per paper §6.1, including `interruptionPenalty` and `reclamationPenalty` on the spec. Status: `phase: Pending | Acknowledged`. Uses ownerRefs for GC.
 - `AvailableCapacity` (cluster-scoped, namespace `fleet-system`). Hint with confidence (`High|Medium|Low|None`), price, atomic-provisioning flag, ETA, node template. Eventually consistent.
@@ -222,7 +222,7 @@ Ships as a separate binary. Watches Pods with `PodScheduled=False, reason=Unsche
 - resources from the pod's requests
 - priority from `pod.Spec.Priority`
 - topologySpread from `pod.Spec.TopologySpreadConstraints`
-- interruptionPenalty/reclamationPenalty from pod annotations (`fleet.lucy.sh/interruption-penalty`, `…/reclamation-penalty`); default to conservative non-zero values when absent.
+- interruptionPenalty/reclamationPenalty from pod annotations (`bigfleet.lucy.sh/interruption-penalty`, `…/reclamation-penalty`); default to conservative non-zero values when absent.
 
 Idempotent (keyed by pod UID). Suppresses creation when an existing UpcomingNode would satisfy the pod (best-effort check via labels).
 

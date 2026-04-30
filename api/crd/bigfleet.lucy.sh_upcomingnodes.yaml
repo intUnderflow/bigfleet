@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.17.2
-  name: upcomingnodes.fleet.lucy.sh
+  name: upcomingnodes.bigfleet.lucy.sh
 spec:
-  group: fleet.lucy.sh
+  group: bigfleet.lucy.sh
   names:
     categories:
     - fleet

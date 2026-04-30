@@ -1,8 +1,8 @@
-// Package v1alpha1 contains the Kubernetes types for the fleet.lucy.sh
+// Package v1alpha1 contains the Kubernetes types for the bigfleet.lucy.sh
 // API group: CapacityRequest, AvailableCapacity, UpcomingNode.
 //
 // +kubebuilder:object:generate=true
-// +groupName=fleet.lucy.sh
+// +groupName=bigfleet.lucy.sh
 package v1alpha1
 
 import (
@@ -12,7 +12,7 @@ import (
 
 var (
 	// GroupVersion is the API group / version for this package.
-	GroupVersion = schema.GroupVersion{Group: "fleet.lucy.sh", Version: "v1alpha1"}
+	GroupVersion = schema.GroupVersion{Group: "bigfleet.lucy.sh", Version: "v1alpha1"}
 
 	// SchemeBuilder registers the types in this package with a scheme.
 	// scheme.Builder is the canonical kubebuilder pattern; the SA1019

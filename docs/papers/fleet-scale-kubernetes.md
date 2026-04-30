@@ -42,7 +42,7 @@ The contract is the minimum viable interface. Three CRDs and a protobuf message:
 A namespaced CRD that declares a resource need. Two phases, one transition: Pending → Acknowledged.
 
 ```yaml
-apiVersion: fleet.lucy.sh/v1alpha1
+apiVersion: bigfleet.lucy.sh/v1alpha1
 kind: CapacityRequest
 metadata:
   name: cr-trainer-worker-42
@@ -90,7 +90,7 @@ The operator runs anywhere that can reach the cluster's API server and the autos
 
 ```protobuf
 syntax = "proto3";
-package fleet.lucy.sh.v1alpha1;
+package bigfleet.lucy.sh.v1alpha1;
 import "google/protobuf/timestamp.proto";
 
 service InfrastructureAutoscaler {
