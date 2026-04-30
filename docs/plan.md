@@ -348,16 +348,18 @@ Property-based tests (`testing/quick` or `gopter`) for:
 
 Scale testing is a first-class part of E2E, not a one-time exercise. Every milestone that ships real code is exercised at the highest scale the local M5 Max running Docker Desktop can sustain, and the achieved numbers are recorded as the milestone's scale-ceiling baseline. Regressions against the prior ceiling are a release blocker.
 
-The local development hardware is one fully-spec'd Apple M5 Max (16-core CPU, 64 GB unified memory) running Docker Desktop. Realistic budget for testing:
+The local development hardware is one Apple M5 Max 16" MacBook Pro: **18-core CPU, 40-core GPU, 64 GB unified memory, 2 TB SSD**, running Docker Desktop. With macOS overhead and Docker Desktop sized to ~40 GB, the realistic budget for testing is:
 
 | Knob | M5 Max ceiling (with headroom) |
 |------|--------------------------------|
-| Resident kind clusters running concurrently | ~3 with ~10 worker nodes each |
-| Lightweight container "operators" against one shard | ~5,000 (one process per container, 10MB RSS each) |
-| Operator gRPC streams against one shard process | ~10,000 (golang goroutines + sockets — bottleneck is fd limit, not CPU) |
-| Synthetic machines in shard inventory (in-memory) | ~5,000,000 (fits in ~250 MB at the per-machine record size from BigFleet paper §9) |
-| Rollups/sec the shard can ingest from one stream | budget: <1 ms per rollup, target 5,000 rollups/sec across 5,000 streams |
-| Decision cycles/sec at full inventory | target 10 Hz (100ms/cycle) at the largest inventory above |
+| Resident kind clusters running concurrently | ~3 with 5–8 worker nodes each (each kind node ≈ 1–2 GB) |
+| Lightweight container "operators" against one shard | ~2,000 (one process per container, ~15 MB RSS each ≈ 30 GB) |
+| Operator gRPC streams against one shard process (in-process or container-light) | ~10,000 (goroutines + sockets — bottleneck is fd limit, not memory) |
+| Synthetic machines in shard inventory (in-memory) | ~5,000,000 (≈250 MB at the per-machine record size from BigFleet paper §9 — well within 64 GB) |
+| Rollups/sec the shard can ingest aggregated across streams | target 5,000 rollups/sec sustained (18-core CPU is the lever, not memory) |
+| Decision cycles/sec at full inventory | target 10 Hz (100 ms/cycle) at the largest inventory above |
+
+The split worth noting: CPU is generous (18 cores is plenty for the engine's hot path), so throughput targets are aggressive; memory is the binding constraint, so kind-cluster and container-operator counts are deliberately moderate.
 
 These numbers map onto two distinct test layers:
 
