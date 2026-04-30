@@ -1,23 +1,203 @@
-// Shard service: the operator-initiated bidirectional stream that carries
-// all cluster ↔ shard traffic. Operators dial out and hold the stream;
-// no inbound listener is required on the cluster side.
+// Shard is the operator-initiated bidirectional stream that carries every
+// piece of cluster ↔ shard traffic. The cluster operator dials the shard
+// and holds a long-lived stream; no inbound listener is required on the
+// cluster side. All multiplexing happens here:
 //
-// Real message types are added in M1; this stub only exists so buf generates.
+//  • roll-ups (operator → shard, periodic, full-replacement)
+//  • bootstrap blob requests/responses (shard pulls; operator answers)
+//  • reclaim instructions (shard → operator) and acks
+//  • node state and available-capacity updates (shard → operator)
+//
+// Coalescing messages (NodeStateUpdate, AvailableCapacityUpdate) carry an
+// explicit `supersedes_key`. The shard's outbox is permitted to drop an
+// older queued frame when a newer one with the same key arrives. The
+// operator applies frames in arrival order.
 syntax = "proto3";
 
 package fleet.v1alpha1;
 
+import "fleet/v1alpha1/capacity.proto";
+import "fleet/v1alpha1/provider.proto";
+
 service Shard {
-  // Long-lived bidi stream. M1 fills in OperatorMessage / ShardMessage with
-  // Hello, ClusterCapacityNeeds, BootstrapRequest/Response, ReclaimInstruction/Ack,
-  // NodeStateUpdate, AvailableCapacityUpdate.
   rpc Session(stream OperatorMessage) returns (stream ShardMessage);
 }
 
+// OperatorMessage is anything the operator sends up the stream.
 message OperatorMessage {
-  string placeholder = 1;
+  oneof payload {
+    Hello                  hello                  = 1;
+    ClusterCapacityNeeds   rollup                 = 2;
+    BootstrapBlobResponse  bootstrap_response     = 3;
+    ReclaimAck             reclaim_ack            = 4;
+  }
 }
 
+// ShardMessage is anything the shard sends down the stream.
 message ShardMessage {
-  string placeholder = 1;
+  oneof payload {
+    Acknowledgement          ack                  = 1;
+    BootstrapRequest         bootstrap_request    = 2;
+    ReclaimInstruction       reclaim_instruction  = 3;
+    NodeStateUpdate          node_state_update    = 4;
+    AvailableCapacityUpdate  available_capacity   = 5;
+  }
+}
+
+// Hello is the first frame the operator sends. Carries identity and
+// capability negotiation.
+message Hello {
+  string cluster_id = 1;
+
+  // Free-form capability strings. v1 has no required capabilities;
+  // future protocol features can be advertised here without bumping the
+  // service version.
+  repeated string capabilities = 2;
+
+  // Operator's view of the protocol version it speaks.
+  string protocol_version = 3;
+}
+
+message Acknowledgement {
+  // Echo of the request kind the shard is acknowledging — useful for
+  // operators that want to confirm a roll-up was processed before
+  // garbage-collecting local state.
+  string echo = 1;
+
+  // Coordinator term and the shard's epoch at the time of ack. Operators
+  // do not act on these but logging them helps when reasoning about
+  // multi-shard / multi-coordinator state in incident review.
+  int64 coordinator_term = 2;
+  int64 shard_epoch      = 3;
+}
+
+// BootstrapRequest is the shard pulling a kubelet bootstrap blob from the
+// operator. The operator's BootstrapBlobResponse must echo `request_id`.
+message BootstrapRequest {
+  string request_id = 1;
+
+  // Requirements the bootstrapped node must satisfy (kubelet version,
+  // feature gates, labels, …). The operator translates these into
+  // kubelet flags / labels when generating the blob.
+  repeated NodeSelectorRequirement requirements = 2;
+
+  // Cluster-side context for telemetry and operator-side template
+  // selection. Always echoes the cluster_id from Hello.
+  string cluster_id = 3;
+}
+
+message BootstrapBlobResponse {
+  // Correlation with the originating BootstrapRequest.
+  string request_id = 1;
+
+  // Provider-opaque blob. Forwarded as-is to CapacityProvider.Configure.
+  bytes user_data = 2;
+
+  // Bootstrap token / kubeconfig credential lifetime. The shard must apply
+  // this blob before ttl_seconds elapses, or pull a fresh one.
+  int64 ttl_seconds = 3;
+
+  // Populated when the cluster cannot satisfy the requirements (e.g.,
+  // requested kubelet version is outside the apiserver's skew window).
+  // The shard treats a non-empty error as an unsatisfiable requirement
+  // and emits a shortfall.
+  string error = 4;
+}
+
+// ReclaimInstruction tells the operator to drain specific nodes with a
+// supplied grace period. The grace scales with the priority gap between
+// the preemptor and the victim (10s / 30s / 2m / 10m).
+message ReclaimInstruction {
+  string instruction_id = 1;
+
+  // Node names (Kubernetes node names) to drain.
+  repeated string nodes = 2;
+
+  // Grace period the operator must pass to the kubelet's graceful node
+  // shutdown. PDBs are honoured up to this bound.
+  int64 grace_period_seconds = 3;
+
+  // For observability only — the priority of the workload that triggered
+  // the reclaim. Operators may surface this in events / logs.
+  int32 preemptor_priority = 4;
+}
+
+message ReclaimAck {
+  string instruction_id = 1;
+
+  // Number of nodes the operator has begun to drain. Equal to the count
+  // in the instruction unless some nodes have already gone away locally.
+  int32 nodes_started = 2;
+}
+
+// NodeStateUpdate drives UpcomingNode CR phase transitions. Coalescing:
+// receivers may drop any queued frame whose supersedes_key matches a
+// later frame's. The operator applies frames in arrival order.
+message NodeStateUpdate {
+  // Coalescing key. Conventionally "node:<machine_id>". The shard's
+  // outbox is permitted to drop older frames with the same key.
+  string supersedes_key = 1;
+
+  // BigFleet machine_id (stable across speculative → idle → configured).
+  string machine_id = 2;
+
+  // Cluster the node is bound to (or being bound to).
+  string cluster_id = 3;
+
+  // Current state of the underlying machine. Operators map this to the
+  // UpcomingNode CRD phase.
+  MachineState state = 4;
+
+  // Set once the kubelet registers and the provider's view of the host
+  // includes a node name.
+  string node_name = 5;
+
+  // Optional provider ID (e.g., "aws:///us-east-1a/i-…") that callers
+  // may surface in UpcomingNode.status for debugging.
+  string provider_id = 6;
+
+  // Estimated wall-clock time at which the node will be Ready. Used by
+  // the operator to populate AvailableCapacity ETAs and to age out stuck
+  // upcoming nodes. Zero if unknown.
+  int64 estimated_ready_unix_nanos = 7;
+
+  // Populated when state == FAILED.
+  string last_error = 8;
+}
+
+// AvailableCapacityUpdate is a hint about what capacity the shard could
+// procure. Eventually consistent, advisory only. Operators write this
+// through to AvailableCapacity CRDs.
+message AvailableCapacityUpdate {
+  // Coalescing key. Conventionally "available:<profile-hash>".
+  string supersedes_key = 1;
+
+  // Machine profile this hint refers to.
+  repeated NodeSelectorRequirement requirements = 2;
+  Resources resources                            = 3;
+
+  // How many machines of this profile the shard could provide soon.
+  int32 available_count = 4;
+
+  enum Confidence {
+    CONFIDENCE_UNSPECIFIED = 0;
+    CONFIDENCE_NONE        = 1;
+    CONFIDENCE_LOW         = 2;
+    CONFIDENCE_MEDIUM      = 3;
+    CONFIDENCE_HIGH        = 4;
+  }
+  Confidence confidence = 5;
+
+  // Per-hour cost the shard expects to pay if it draws on this capacity.
+  double cost_per_hour = 6;
+
+  // Whether the shard expects to be able to provision the entire count
+  // atomically (all-or-nothing). Useful for gang-scheduled workloads.
+  bool supports_atomic_provisioning = 7;
+
+  // Estimated time to actuate.
+  int64 estimated_provisioning_seconds = 8;
+
+  // Node template that consumers may surface in AvailableCapacity.spec.
+  map<string, string> node_template_labels = 9;
 }

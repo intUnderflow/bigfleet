@@ -1,14 +1,138 @@
 // Capacity message types shared by the cluster operator → shard stream and
-// the shard's internal data model. Defines the wire shape of a CapacityNeed
-// (the aggregated unit of demand) and the supporting requirement / spread
-// types. Real fields are added in M1; this stub only exists so buf generates.
+// the shard's internal data model.
+//
+// The CapacityNeed is the unit of aggregated demand. Every send up the
+// Shard.Session stream is a *full replacement* of the cluster's desired
+// state: the receiver must treat the message as the cluster's complete
+// current need set. Withdrawal is implicit (a CR no longer present).
+//
+// Per docs/plan.md §0.1 B, the two penalty fields on CapacityNeed are
+// bucketed to a coarse log scale at aggregation time so that workloads
+// with slightly different penalty values still aggregate into a single
+// need. The bucket boundary list is published with the CapacityRequest CRD.
 syntax = "proto3";
 
 package fleet.v1alpha1;
 
-// CapacityNeed is the aggregated unit of capacity demand. Filled out in M1.
+// ClusterCapacityNeeds is what an operator sends to its shard each cycle.
+// It is a full replacement of the cluster's desired state. The shard diffs
+// against its inventory and reacts.
+message ClusterCapacityNeeds {
+  // Stable identifier for the cluster. Assigned by the operator and never
+  // changed for the life of the cluster.
+  string cluster_id = 1;
+
+  // Wall-clock time at which the operator built this snapshot.
+  int64 timestamp_unix_nanos = 2;
+
+  // Aggregated demand. Pods sharing a profile collapse into one entry.
+  repeated CapacityNeed needs = 3;
+}
+
+// CapacityNeed is the aggregated unit of capacity demand. The aggregation
+// key is (requirements, resources, priority, spread, interruption_penalty_bucket,
+// reclamation_penalty_bucket). Two CRs whose fields all match across that key
+// become a single CapacityNeed with count = 2.
 message CapacityNeed {
-  // Placeholder. M1 adds requirements, resources, priority, count, spread,
-  // interruption_penalty, reclamation_penalty (bucketed per plan §0.1 B).
-  string placeholder = 1;
+  // Node-selector style requirements that must be satisfied. The autoscaler
+  // is responsible for honouring all standard operators (In, NotIn, Exists,
+  // DoesNotExist) plus the protobuf-only Same operator (see below).
+  repeated NodeSelectorRequirement requirements = 1;
+
+  // Per-machine resource requests. Map keys are Kubernetes resource names
+  // (e.g., "cpu", "memory", "nvidia.com/gpu"); values are quantity strings
+  // ("96", "768Gi", "8"). The autoscaler does not parse these; it forwards
+  // them to the provider, which is responsible for matching offerings.
+  map<string, string> resources = 2;
+
+  // The pod's PriorityClass value. Higher = served first. The autoscaler
+  // walks needs top-down by priority.
+  int32 priority = 3;
+
+  // Number of identically-shaped machines required.
+  int32 count = 4;
+
+  // Topology-spread constraints copied from the source pod(s). Pass-through
+  // to the autoscaler so it can spread provisioning across domains.
+  repeated TopologySpread spread = 5;
+
+  // Bucketed penalties. Bucket boundaries are powers of 2 in dollars between
+  // $0.50 and $10M; CRs with raw penalties in the same bucket aggregate.
+  // The cost-function effect of bucketing is bounded and small; the size
+  // of the roll-up message stays bounded even when penalties are
+  // workload-specific.
+  PenaltyBucket interruption_penalty_bucket = 6;
+  PenaltyBucket reclamation_penalty_bucket  = 7;
+}
+
+// NodeSelectorRequirement mirrors core/v1.NodeSelectorRequirement, plus a
+// protobuf-only Same operator that the cluster operator emits when a CR
+// requires co-location (e.g., all 64 nodes on one rack).
+message NodeSelectorRequirement {
+  string key = 1;
+  enum Operator {
+    OPERATOR_UNSPECIFIED  = 0;
+    OPERATOR_IN           = 1;
+    OPERATOR_NOT_IN       = 2;
+    OPERATOR_EXISTS       = 3;
+    OPERATOR_DOES_NOT_EXIST = 4;
+    // Same: all `count` nodes in this CapacityNeed must share a value for
+    // this key. Optional values restrict which value is acceptable. Only
+    // valid in the protobuf wire format; not surfaced on the CRD.
+    OPERATOR_SAME         = 5;
+  }
+  Operator operator       = 2;
+  repeated string values  = 3;
+}
+
+// TopologySpread is the autoscaler-visible projection of a pod's
+// topologySpreadConstraints. Whether the autoscaler honours the constraint
+// when no machines exist depends on whenUnsatisfiable.
+message TopologySpread {
+  string topology_key      = 1;
+  int32 max_skew           = 2;
+  enum WhenUnsatisfiable {
+    WHEN_UNSATISFIABLE_UNSPECIFIED   = 0;
+    WHEN_UNSATISFIABLE_DO_NOT_SCHEDULE = 1;
+    WHEN_UNSATISFIABLE_SCHEDULE_ANYWAY = 2;
+  }
+  WhenUnsatisfiable when_unsatisfiable = 3;
+}
+
+// PenaltyBucket enumerates the boundaries used to coarsen workload-specific
+// penalty values. Selected at aggregation time by rounding up the raw
+// dollar value to the nearest bucket.
+//
+// Boundaries:   $0  $0.50  $1  $2  $4  $8  $16  …  $5,242,880  $10,485,760
+// Anything ≥ $10,485,760 falls in BUCKET_PINNED (treated as effectively
+// non-interruptible / non-reclaimable for cost-function purposes).
+enum PenaltyBucket {
+  PENALTY_BUCKET_UNSPECIFIED = 0;
+  PENALTY_BUCKET_ZERO        = 1;   // $0
+  PENALTY_BUCKET_HALF_DOLLAR = 2;   // (0, $0.50]
+  PENALTY_BUCKET_1           = 3;   // ($0.50, $1]
+  PENALTY_BUCKET_2           = 4;
+  PENALTY_BUCKET_4           = 5;
+  PENALTY_BUCKET_8           = 6;
+  PENALTY_BUCKET_16          = 7;
+  PENALTY_BUCKET_32          = 8;
+  PENALTY_BUCKET_64          = 9;
+  PENALTY_BUCKET_128         = 10;
+  PENALTY_BUCKET_256         = 11;
+  PENALTY_BUCKET_512         = 12;
+  PENALTY_BUCKET_1024        = 13;  // $1,024
+  PENALTY_BUCKET_2048        = 14;
+  PENALTY_BUCKET_4096        = 15;
+  PENALTY_BUCKET_8192        = 16;
+  PENALTY_BUCKET_16384       = 17;
+  PENALTY_BUCKET_32768       = 18;
+  PENALTY_BUCKET_65536       = 19;
+  PENALTY_BUCKET_131072      = 20;
+  PENALTY_BUCKET_262144      = 21;
+  PENALTY_BUCKET_524288      = 22;
+  PENALTY_BUCKET_1048576     = 23;  // $1,048,576
+  PENALTY_BUCKET_2097152     = 24;
+  PENALTY_BUCKET_4194304     = 25;
+  PENALTY_BUCKET_10485760    = 26;  // $10,485,760
+  PENALTY_BUCKET_PINNED      = 27;  // > $10,485,760: treat as effectively infinite
 }

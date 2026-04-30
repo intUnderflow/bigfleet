@@ -1,27 +1,180 @@
-// CapacityProvider service: the contract every out-of-tree provider implements.
-// Six RPCs only — Create, Configure, Drain, Delete, Get, List — all async,
-// all idempotent. No Watch (reconciliation is List + Get).
+// CapacityProvider is the contract every out-of-tree provider implements.
 //
-// Real fields are added in M1; this stub only exists so buf generates.
+// Six RPCs only — Create, Configure, Drain, Delete, Get, List. All four
+// lifecycle RPCs (Create/Configure/Drain/Delete) are *asynchronous*: they
+// return a TransitionAck immediately and the actual transition is observed
+// via state changes visible through subsequent List/Get calls. All
+// lifecycle RPCs are *idempotent* on (machine_id, target_state).
+//
+// There is no Watch RPC. Reconciliation is List + Get only (see plan §10.6
+// for why; List supports an optional `since_revision` cursor so providers
+// above a documented threshold can serve incremental state efficiently).
 syntax = "proto3";
 
 package fleet.v1alpha1;
 
 service CapacityProvider {
-  rpc Create(CreateRequest) returns (TransitionAck);
+  rpc Create   (CreateRequest)    returns (TransitionAck);
   rpc Configure(ConfigureRequest) returns (TransitionAck);
-  rpc Drain(DrainRequest) returns (TransitionAck);
-  rpc Delete(MachineRef) returns (TransitionAck);
-  rpc Get(MachineRef) returns (Machine);
-  rpc List(ListFilter) returns (MachineList);
+  rpc Drain    (DrainRequest)     returns (TransitionAck);
+  rpc Delete   (MachineRef)       returns (TransitionAck);
+  rpc Get      (MachineRef)       returns (Machine);
+  rpc List     (ListFilter)       returns (MachineList);
 }
 
-message CreateRequest    { string placeholder = 1; }
-message ConfigureRequest { string placeholder = 1; }
-message DrainRequest     { string placeholder = 1; }
-message MachineRef       { string placeholder = 1; }
-message TransitionAck    { string placeholder = 1; }
-message Machine          { string placeholder = 1; }
-message MachineList      { string placeholder = 1; }
-// M1 adds the optional `since_revision` field per plan §0.1 C.
-message ListFilter       { string placeholder = 1; }
+// MachineState enumerates the eight states a machine can occupy. Three
+// stable (Speculative, Idle, Configured), four transitional (Creating,
+// Configuring, Draining, Deleting), one terminal-pending-cleanup (Failed).
+enum MachineState {
+  MACHINE_STATE_UNSPECIFIED = 0;
+  MACHINE_STATE_SPECULATIVE = 1;  // host=nil, cluster=0
+  MACHINE_STATE_CREATING    = 2;  // Speculative → Idle in progress
+  MACHINE_STATE_IDLE        = 3;  // host=set,  cluster=0
+  MACHINE_STATE_CONFIGURING = 4;  // Idle → Configured in progress
+  MACHINE_STATE_CONFIGURED  = 5;  // host=set,  cluster=set
+  MACHINE_STATE_DRAINING    = 6;  // Configured → Idle in progress
+  MACHINE_STATE_DELETING    = 7;  // Idle → Speculative in progress (cloud only)
+  MACHINE_STATE_FAILED      = 8;  // last transition timed out; needs intervention
+}
+
+// CapacityType is the cost-of-holding category. Drives idle-hold policy
+// (bare-metal: forever; reserved: forever; on-demand: minutes; spot: ~1m).
+enum CapacityType {
+  CAPACITY_TYPE_UNSPECIFIED = 0;
+  CAPACITY_TYPE_BARE_METAL  = 1;
+  CAPACITY_TYPE_RESERVED    = 2;
+  CAPACITY_TYPE_ON_DEMAND   = 3;
+  CAPACITY_TYPE_SPOT        = 4;
+}
+
+// HostRef is the provider's identifier for a real host. Empty when the
+// machine is in the SPECULATIVE state.
+message HostRef {
+  string provider = 1;  // e.g. "aws-eu-west-1", "bare-metal-amsterdam"
+  string ref      = 2;  // provider-scoped ID (instance-id, serial number, …)
+}
+
+// Resources is per-machine allocatable capacity. Map keys mirror Kubernetes
+// resource names; values are quantity strings.
+message Resources {
+  map<string, string> resources = 1;
+}
+
+// Machine is the unit of inventory the autoscaler reasons about. Same shape
+// regardless of whether the machine is a quota slot, a real but idle node,
+// or a configured cluster member.
+message Machine {
+  // BigFleet's internal machine identifier. Stable across the entire
+  // lifecycle (a Speculative slot that becomes a real Idle host keeps the
+  // same machine_id; the host_ref is the field that fills in).
+  string id = 1;
+
+  MachineState state = 2;
+
+  // Empty when state == SPECULATIVE (or CREATING before host attaches).
+  HostRef host = 3;
+
+  string instance_type = 4;
+  string zone          = 5;
+  CapacityType capacity_type = 6;
+
+  // Per-hour price in USD. Zero for bare metal (already paid for).
+  double price_per_hour = 7;
+
+  // Hourly interruption probability, [0.0, 1.0]. Provider-declared only:
+  // forecast for SPECULATIVE machines, observed for real ones. No
+  // cluster-side override (per design memory).
+  double interruption_probability = 8;
+
+  Resources resources = 9;
+
+  // Provider-supplied labels. Used by the autoscaler to satisfy node-selector
+  // requirements without re-deriving them from instance_type/zone.
+  map<string, string> labels = 10;
+
+  // Unix-nanos when the current transitional state began. Zero if state is
+  // stable. Used to detect stuck transitions.
+  int64 transition_started_unix_nanos = 11;
+
+  // Populated when state == FAILED.
+  string last_error = 12;
+}
+
+message MachineRef {
+  string id = 1;
+}
+
+message MachineList {
+  repeated Machine machines = 1;
+
+  // Opaque cursor. Providers that support incremental List echo a revision
+  // here that the caller can pass back as ListFilter.since_revision on the
+  // next call to receive only deltas. Providers below the conformance
+  // threshold may leave this empty and return full state every time.
+  bytes revision = 2;
+}
+
+message ListFilter {
+  // Restrict to the listed states. Empty list = any state.
+  repeated MachineState states = 1;
+
+  // Optional zone / instance-type filters. Empty = any.
+  string zone          = 2;
+  string instance_type = 3;
+
+  // Cap on returned results. Zero means no cap.
+  int32 max_results = 4;
+
+  // Optional opaque cursor returned by a prior MachineList.revision. When
+  // set, the provider should return only machines whose state has changed
+  // since the cursor was issued. Providers that don't support cursors must
+  // ignore this field and return full state. See plan §0.1 C.
+  bytes since_revision = 5;
+}
+
+// CreateRequest moves Speculative → Creating → Idle.
+message CreateRequest {
+  // The speculative machine to actuate. Must be a machine the caller
+  // currently observes in MACHINE_STATE_SPECULATIVE.
+  string machine_id = 1;
+
+  // Optional: tags / labels to apply on creation.
+  map<string, string> labels = 2;
+}
+
+// ConfigureRequest moves Idle → Configuring → Configured. The bootstrap
+// blob is opaque to the provider (cloud: cloud-init / ignition; bare-metal:
+// PXE / iPXE config). It is generated on demand by the cluster operator
+// over the Shard.Session stream and forwarded by the shard.
+message ConfigureRequest {
+  string machine_id = 1;
+  // Cluster the machine is being configured for. The provider records this
+  // so subsequent Get/List responses can populate it.
+  string cluster_id = 2;
+  // Provider-opaque bootstrap data. Applied as user-data / ignition / PXE.
+  bytes bootstrap_blob = 3;
+}
+
+// DrainRequest moves Configured → Draining → Idle. The grace period bounds
+// how long the kubelet's graceful shutdown is permitted to take. PDBs are
+// honoured up to the grace period; beyond it, the provider may escalate
+// (kubelet kill, instance shutdown).
+message DrainRequest {
+  string machine_id = 1;
+  // Grace period for the kubelet's graceful node shutdown.
+  int64 grace_period_seconds = 2;
+}
+
+// TransitionAck is the response from any of Create/Configure/Drain/Delete.
+// Acceptance is immediate; progress is observed via state changes.
+message TransitionAck {
+  // Operation identifier for idempotent retry and provider-side tracking.
+  // Repeated calls keyed by (machine_id, target_state) must reuse the same
+  // operation_id rather than starting a new transition.
+  string operation_id = 1;
+
+  // Snapshot of the machine at acceptance time — typically already in the
+  // corresponding transitional state (CREATING, CONFIGURING, DRAINING,
+  // DELETING).
+  Machine machine = 2;
+}

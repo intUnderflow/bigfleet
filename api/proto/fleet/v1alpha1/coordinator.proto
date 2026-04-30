@@ -1,19 +1,179 @@
-// Coordinator service: internal RPCs between shards and the global coordinator.
-// Shard → coordinator: ReportShard (summary + shortfalls).
-// Coordinator → shard: Instruct (rebalance, drain, transfer ownership) carrying
-// (coordinator_term, sequence_number) for fencing.
+// Coordinator is the internal RPC surface between shards and the global
+// coordinator. The coordinator does not make provisioning decisions; it
+// owns shard membership, the cluster→shard map, the topology-domain→shard
+// map, quota allocations, and the provider registry, and it issues
+// rebalancing / cross-shard preemption instructions.
 //
-// Real fields are added in M1; this stub only exists so buf generates.
+// Every coordinator-issued instruction carries (coordinator_term, sequence_number).
+// Shards reject instructions with stale terms (zombie-leader protection).
 syntax = "proto3";
 
 package fleet.v1alpha1;
 
+import "fleet/v1alpha1/capacity.proto";
+import "fleet/v1alpha1/provider.proto";
+
 service Coordinator {
+  // Shards push periodic reports. Idempotent per (shard_id, cycle).
   rpc ReportShard(ShardReport) returns (ReportAck);
+
+  // Coordinator-issued instructions. Shards may receive these via
+  // streaming in future revisions; the v1 surface is request/response.
   rpc Instruct(CoordinatorInstruction) returns (InstructAck);
 }
 
-message ShardReport            { string placeholder = 1; }
-message ReportAck              { string placeholder = 1; }
-message CoordinatorInstruction { string placeholder = 1; }
-message InstructAck            { string placeholder = 1; }
+// ShardReport is what each shard sends every ~30s. Stateless: the
+// coordinator builds its fleet picture from the latest report per shard.
+message ShardReport {
+  string shard_id = 1;
+
+  // Monotonic counter for this shard's reports. Used by the coordinator
+  // to discard out-of-order delivery.
+  int64 cycle = 2;
+
+  // Wall-clock time of report generation.
+  int64 timestamp_unix_nanos = 3;
+
+  // Shard's epoch. Increments on shard restart. Carried so coordinator
+  // logs can correlate with shard-side fencing.
+  int64 shard_epoch = 4;
+
+  // Aggregate inventory and demand summaries. Bounded in size; not the
+  // per-machine inventory.
+  ShardSummary summary = 5;
+
+  // Top-N unresolved needs, ranked by priority. Bounded to 100 per
+  // §3.5 / shortfall protocol.
+  repeated Shortfall shortfalls = 6;
+}
+
+// ShardSummary is a coarse-grained snapshot of a shard's inventory and
+// demand. Sized to fit alongside 200 other shard summaries in the
+// coordinator's L1/L2-resident state.
+message ShardSummary {
+  // Total machines owned by the shard, in any state.
+  int32 total_machines = 1;
+
+  // Machines available for assignment (state == IDLE or SPECULATIVE).
+  int32 free_machines = 2;
+
+  // Per-instance-type counts for whichever instance types the shard
+  // currently owns. Bounded by the shard's catalog (small).
+  map<string, int32> per_instance_type_counts = 3;
+
+  // Per-zone counts. Bounded by zones the shard touches.
+  map<string, int32> per_zone_counts = 4;
+
+  // Aggregate utilisation hints. Defined by the operator's reporting
+  // policy; the coordinator does not interpret precise values.
+  double utilisation_cpu_fraction    = 5;
+  double utilisation_memory_fraction = 6;
+}
+
+// Shortfall describes a need the shard could not satisfy from its own
+// inventory and could not resolve via in-shard preemption. The coordinator
+// uses these to drive cross-shard rebalancing and preemption.
+message Shortfall {
+  // The unsatisfied profile.
+  repeated NodeSelectorRequirement requirements = 1;
+  Resources resources                            = 2;
+
+  int32 priority = 3;
+  int32 count    = 4;
+
+  // Cycles this shortfall has been unresolved. >5 escalates to fleet
+  // telemetry per the shortfall protocol.
+  int32 age_cycles = 5;
+
+  // Bucketed interruption penalty of the originating CapacityNeed.
+  // Lets the coordinator price cross-shard preemption.
+  PenaltyBucket interruption_penalty_bucket = 6;
+}
+
+message ReportAck {
+  // The coordinator's current term as observed at report time. The shard
+  // updates its high-water mark from this so subsequent Instruct frames
+  // can be checked against a known-good term.
+  int64 coordinator_term = 1;
+
+  bool acknowledged = 2;
+}
+
+// CoordinatorInstruction is the shard-bound action the coordinator wants
+// taken. Each instruction is fenced by (term, sequence) — shards reject
+// any instruction whose term is older than the highest observed.
+message CoordinatorInstruction {
+  // Fencing token. The shard rejects instructions whose term is less
+  // than its high-water mark.
+  int64 coordinator_term = 1;
+  int64 sequence_number  = 2;
+
+  // Stable id for the instruction; reused across retries by the
+  // coordinator so shards can deduplicate.
+  string instruction_id = 3;
+
+  oneof payload {
+    AssignDomain        assign_domain        = 4;
+    UnassignDomain      unassign_domain      = 5;
+    ReassignSpeculative reassign_speculative = 6;
+    CrossShardDrain     cross_shard_drain    = 7;
+    TransferOwnership   transfer_ownership   = 8;
+  }
+}
+
+// AssignDomain hands a topology domain to this shard. Per plan §10.1 we
+// assign at topology-domain granularity (rack, zone-slice), not machine.
+message AssignDomain {
+  string topology_key   = 1;
+  string topology_value = 2;
+}
+
+// UnassignDomain releases a topology domain previously assigned. Used
+// during shard splits / merges.
+message UnassignDomain {
+  string topology_key   = 1;
+  string topology_value = 2;
+}
+
+// ReassignSpeculative moves quota slices between shards. Pure bookkeeping
+// — no real machines exist yet.
+message ReassignSpeculative {
+  // The speculative machine ids being transferred. The receiving shard
+  // takes ownership; the donating shard releases.
+  repeated string machine_ids = 1;
+}
+
+// CrossShardDrain instructs a donor shard to drain configured machines so
+// they can become idle and be transferred. The donor shard scores victims
+// and emits ReclaimInstruction frames to the affected cluster operators.
+message CrossShardDrain {
+  repeated string machine_ids = 1;
+
+  // Priority of the preemptor on the requesting shard. The donor uses
+  // this to compute the appropriate drain grace period.
+  int32 preemptor_priority = 2;
+}
+
+// TransferOwnership reassigns a now-idle machine from one shard to another.
+// The receiving shard takes responsibility for the next Configure.
+message TransferOwnership {
+  repeated string machine_ids = 1;
+  string from_shard_id        = 2;
+  string to_shard_id          = 3;
+}
+
+message InstructAck {
+  string instruction_id = 1;
+
+  enum Outcome {
+    OUTCOME_UNSPECIFIED      = 0;
+    OUTCOME_ACCEPTED         = 1;
+    OUTCOME_REJECTED_STALE   = 2;  // term older than shard's high-water mark
+    OUTCOME_REJECTED_INVALID = 3;  // semantically not applicable
+    OUTCOME_FAILED           = 4;
+  }
+  Outcome outcome = 2;
+
+  // Populated when outcome != ACCEPTED.
+  string reason = 3;
+}
