@@ -93,6 +93,7 @@ These are the easy ways to ship a wrong implementation. Each has a reason.
 - **Tests live next to the code they test.** Property tests for invariants (aggregation correctness, idempotency, Phase 3 conservation). Race detector is the safety net for the lock-light hot path.
 - **Generated code is generated.** `make generate` is the single entry point. Don't edit generated files by hand.
 - **Static-stability-first commits.** Any change touching `pkg/shard/` should be reviewed against the question "does this introduce a hot-path coordinator dependency?" If yes, it doesn't ship.
+- **E2E as we go.** From M3 onwards (once the shard controller exists), every milestone that ships real code is exercised against a real Kubernetes cluster via `kind` before being declared done. The local dev box runs Docker Desktop, so `kind create cluster` works without setup. Type-checking and unit tests verify code correctness; e2e verifies behaviour. Don't batch e2e to the end.
 
 ## When you're stuck
 
