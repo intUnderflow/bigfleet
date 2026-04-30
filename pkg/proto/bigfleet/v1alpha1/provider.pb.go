@@ -918,8 +918,8 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\x05Drain\x12\x1f.bigfleet.v1alpha1.DrainRequest\x1a .bigfleet.v1alpha1.TransitionAck\x12I\n" +
 	"\x06Delete\x12\x1d.bigfleet.v1alpha1.MachineRef\x1a .bigfleet.v1alpha1.TransitionAck\x12@\n" +
 	"\x03Get\x12\x1d.bigfleet.v1alpha1.MachineRef\x1a\x1a.bigfleet.v1alpha1.Machine\x12E\n" +
-	"\x04List\x12\x1d.bigfleet.v1alpha1.ListFilter\x1a\x1e.bigfleet.v1alpha1.MachineListB\xde\x01\n" +
-	"\x15com.bigfleet.v1alpha1B\rProviderProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
+	"\x04List\x12\x1d.bigfleet.v1alpha1.ListFilter\x1a\x1e.bigfleet.v1alpha1.MachineListB\xda\x01\n" +
+	"\x15com.bigfleet.v1alpha1B\rProviderProtoP\x01ZMgithub.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
 	file_bigfleet_v1alpha1_provider_proto_rawDescOnce sync.Once

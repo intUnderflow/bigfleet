@@ -997,8 +997,8 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x0eOUTCOME_FAILED\x10\x042\xb1\x01\n" +
 	"\vCoordinator\x12K\n" +
 	"\vReportShard\x12\x1e.bigfleet.v1alpha1.ShardReport\x1a\x1c.bigfleet.v1alpha1.ReportAck\x12U\n" +
-	"\bInstruct\x12).bigfleet.v1alpha1.CoordinatorInstruction\x1a\x1e.bigfleet.v1alpha1.InstructAckB\xe1\x01\n" +
-	"\x15com.bigfleet.v1alpha1B\x10CoordinatorProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
+	"\bInstruct\x12).bigfleet.v1alpha1.CoordinatorInstruction\x1a\x1e.bigfleet.v1alpha1.InstructAckB\xdd\x01\n" +
+	"\x15com.bigfleet.v1alpha1B\x10CoordinatorProtoP\x01ZMgithub.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
 	file_bigfleet_v1alpha1_coordinator_proto_rawDescOnce sync.Once

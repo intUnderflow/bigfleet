@@ -36,6 +36,6 @@ issues:
       linters:
         - errcheck
         - unparam
-    - path: pkg/api/proto/
+    - path: pkg/proto/
       linters:
         - all

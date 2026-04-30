@@ -649,8 +649,8 @@ const file_bigfleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x16PENALTY_BUCKET_2097152\x10\x18\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_4194304\x10\x19\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_8388608\x10\x1a\x12\x19\n" +
-	"\x15PENALTY_BUCKET_PINNED\x10\x1bB\xde\x01\n" +
-	"\x15com.bigfleet.v1alpha1B\rCapacityProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
+	"\x15PENALTY_BUCKET_PINNED\x10\x1bB\xda\x01\n" +
+	"\x15com.bigfleet.v1alpha1B\rCapacityProtoP\x01ZMgithub.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
 	file_bigfleet_v1alpha1_capacity_proto_rawDescOnce sync.Once

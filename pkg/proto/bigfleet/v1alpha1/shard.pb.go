@@ -1065,9 +1065,9 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\x11CONFIDENCE_MEDIUM\x10\x03\x12\x13\n" +
 	"\x0fCONFIDENCE_HIGH\x10\x042[\n" +
 	"\x05Shard\x12R\n" +
-	"\aSession\x12\".bigfleet.v1alpha1.OperatorMessage\x1a\x1f.bigfleet.v1alpha1.ShardMessage(\x010\x01B\xdb\x01\n" +
+	"\aSession\x12\".bigfleet.v1alpha1.OperatorMessage\x1a\x1f.bigfleet.v1alpha1.ShardMessage(\x010\x01B\xd7\x01\n" +
 	"\x15com.bigfleet.v1alpha1B\n" +
-	"ShardProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
+	"ShardProtoP\x01ZMgithub.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
 	file_bigfleet_v1alpha1_shard_proto_rawDescOnce sync.Once

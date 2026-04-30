@@ -392,7 +392,7 @@ Each milestone is shippable and demoable; the next milestone subsumes the previo
 ### M1. Wire formats land
 - Full `capacity.proto`, `shard.proto`, `provider.proto`, `operator.proto`, `coordinator.proto`.
 - CRDs (`CapacityRequest`, `AvailableCapacity`, `UpcomingNode`) generated and round-trip-tested.
-- Generated Go types live under `pkg/apis/bigfleet/v1alpha1/` and `pkg/api/proto/`.
+- Generated Go types live under `pkg/apis/bigfleet/v1alpha1/` and `pkg/proto/`.
 
 ### M2. Core engine in isolation
 - `pkg/machine`, `pkg/needs`, `pkg/inventory`, `pkg/decision`.

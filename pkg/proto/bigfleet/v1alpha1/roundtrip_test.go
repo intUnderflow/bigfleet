@@ -5,7 +5,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	bigfleetv1alpha1 "github.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1"
+	bigfleetv1alpha1 "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
 // Round-trip tests for the wire formats. Each test marshals a
