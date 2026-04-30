@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
-	v1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/fleet/v1alpha1"
+	v1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 )
 
 // JSON / YAML round-trip tests for the three CRD Go types. A full envtest

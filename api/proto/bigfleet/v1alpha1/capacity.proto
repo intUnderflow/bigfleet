@@ -12,7 +12,7 @@
 // need. The bucket boundary list is published with the CapacityRequest CRD.
 syntax = "proto3";
 
-package fleet.v1alpha1;
+package bigfleet.v1alpha1;
 
 // ClusterCapacityNeeds is what an operator sends to its shard each cycle.
 // It is a full replacement of the cluster's desired state. The shard diffs

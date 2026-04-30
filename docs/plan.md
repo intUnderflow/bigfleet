@@ -88,7 +88,7 @@ The other five §10 items (coordinator write bursts, Phase 2 indexing, end-to-en
 bigfleet/
 ├── api/                              # all wire formats
 │   ├── proto/
-│   │   ├── fleet/v1alpha1/
+│   │   ├── bigfleet/v1alpha1/
 │   │   │   ├── capacity.proto         # CapacityNeed, ClusterCapacityNeeds, NodeSelectorRequirement, TopologySpread
 │   │   │   ├── shard.proto            # Shard service (operator-initiated bidi stream)
 │   │   │   ├── provider.proto         # CapacityProvider service + Machine, MachineState, ListFilter
@@ -97,7 +97,7 @@ bigfleet/
 │   └── crd/
 │       └── bigfleet.lucy.sh_*.yaml       # CapacityRequest, AvailableCapacity, UpcomingNode
 ├── pkg/
-│   ├── apis/fleet/v1alpha1/           # Go CRD types (controller-runtime / kubebuilder generated)
+│   ├── apis/bigfleet/v1alpha1/        # Go CRD types (controller-runtime / kubebuilder generated)
 │   ├── machine/                       # Machine struct, state machine, transition validation
 │   ├── needs/                         # NeedsTable (priority-sorted, full-replacement per cluster)
 │   ├── inventory/                     # in-memory inventory per shard
@@ -157,11 +157,11 @@ bigfleet/
 - `AvailableCapacity` (cluster-scoped, namespace `fleet-system`). Hint with confidence (`High|Medium|Low|None`), price, atomic-provisioning flag, ETA, node template. Eventually consistent.
 - `UpcomingNode` (cluster-scoped, namespace `fleet-system`). Status phases: `Provisioning | Launched | Registered | Ready | Failed`. Includes labels, resources, taints, providerID.
 
-Shipped as both raw YAML in `api/crd/` and Go types under `pkg/apis/fleet/v1alpha1/`. Generated using `controller-gen`.
+Shipped as both raw YAML in `api/crd/` and Go types under `pkg/apis/bigfleet/v1alpha1/`. Generated using `controller-gen`.
 
 ### 2.2 Protobuf services
 
-`api/proto/fleet/v1alpha1/`:
+`api/proto/bigfleet/v1alpha1/`:
 
 - **`Shard`** (cluster operator → BigFleet shard). One RPC, operator-initiated bidirectional stream:
   - `Session(stream OperatorMessage) returns (stream ShardMessage)`.
@@ -392,7 +392,7 @@ Each milestone is shippable and demoable; the next milestone subsumes the previo
 ### M1. Wire formats land
 - Full `capacity.proto`, `shard.proto`, `provider.proto`, `operator.proto`, `coordinator.proto`.
 - CRDs (`CapacityRequest`, `AvailableCapacity`, `UpcomingNode`) generated and round-trip-tested.
-- Generated Go types live under `pkg/apis/fleet/v1alpha1/` and `pkg/api/proto/`.
+- Generated Go types live under `pkg/apis/bigfleet/v1alpha1/` and `pkg/api/proto/`.
 
 ### M2. Core engine in isolation
 - `pkg/machine`, `pkg/needs`, `pkg/inventory`, `pkg/decision`.

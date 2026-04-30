@@ -11,9 +11,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: fleet/v1alpha1/coordinator.proto
+// source: bigfleet/v1alpha1/coordinator.proto
 
-package fleetv1alpha1
+package bigfleetv1alpha1
 
 import (
 	context "context"
@@ -28,8 +28,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Coordinator_ReportShard_FullMethodName = "/fleet.v1alpha1.Coordinator/ReportShard"
-	Coordinator_Instruct_FullMethodName    = "/fleet.v1alpha1.Coordinator/Instruct"
+	Coordinator_ReportShard_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ReportShard"
+	Coordinator_Instruct_FullMethodName    = "/bigfleet.v1alpha1.Coordinator/Instruct"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -157,7 +157,7 @@ func _Coordinator_Instruct_Handler(srv interface{}, ctx context.Context, dec fun
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Coordinator_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "fleet.v1alpha1.Coordinator",
+	ServiceName: "bigfleet.v1alpha1.Coordinator",
 	HandlerType: (*CoordinatorServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -170,5 +170,5 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "fleet/v1alpha1/coordinator.proto",
+	Metadata: "bigfleet/v1alpha1/coordinator.proto",
 }

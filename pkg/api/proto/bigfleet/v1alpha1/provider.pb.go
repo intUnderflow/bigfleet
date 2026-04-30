@@ -14,9 +14,9 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        (unknown)
-// source: fleet/v1alpha1/provider.proto
+// source: bigfleet/v1alpha1/provider.proto
 
-package fleetv1alpha1
+package bigfleetv1alpha1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -87,11 +87,11 @@ func (x MachineState) String() string {
 }
 
 func (MachineState) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_v1alpha1_provider_proto_enumTypes[0].Descriptor()
+	return file_bigfleet_v1alpha1_provider_proto_enumTypes[0].Descriptor()
 }
 
 func (MachineState) Type() protoreflect.EnumType {
-	return &file_fleet_v1alpha1_provider_proto_enumTypes[0]
+	return &file_bigfleet_v1alpha1_provider_proto_enumTypes[0]
 }
 
 func (x MachineState) Number() protoreflect.EnumNumber {
@@ -100,7 +100,7 @@ func (x MachineState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MachineState.Descriptor instead.
 func (MachineState) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{0}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{0}
 }
 
 // CapacityType is the cost-of-holding category. Drives idle-hold policy
@@ -144,11 +144,11 @@ func (x CapacityType) String() string {
 }
 
 func (CapacityType) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_v1alpha1_provider_proto_enumTypes[1].Descriptor()
+	return file_bigfleet_v1alpha1_provider_proto_enumTypes[1].Descriptor()
 }
 
 func (CapacityType) Type() protoreflect.EnumType {
-	return &file_fleet_v1alpha1_provider_proto_enumTypes[1]
+	return &file_bigfleet_v1alpha1_provider_proto_enumTypes[1]
 }
 
 func (x CapacityType) Number() protoreflect.EnumNumber {
@@ -157,7 +157,7 @@ func (x CapacityType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CapacityType.Descriptor instead.
 func (CapacityType) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{1}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{1}
 }
 
 // HostRef is the provider's identifier for a real host. Empty when the
@@ -172,7 +172,7 @@ type HostRef struct {
 
 func (x *HostRef) Reset() {
 	*x = HostRef{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[0]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +184,7 @@ func (x *HostRef) String() string {
 func (*HostRef) ProtoMessage() {}
 
 func (x *HostRef) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[0]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +197,7 @@ func (x *HostRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostRef.ProtoReflect.Descriptor instead.
 func (*HostRef) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{0}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *HostRef) GetProvider() string {
@@ -225,7 +225,7 @@ type Resources struct {
 
 func (x *Resources) Reset() {
 	*x = Resources{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[1]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -237,7 +237,7 @@ func (x *Resources) String() string {
 func (*Resources) ProtoMessage() {}
 
 func (x *Resources) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[1]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -250,7 +250,7 @@ func (x *Resources) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resources.ProtoReflect.Descriptor instead.
 func (*Resources) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{1}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Resources) GetResources() map[string]string {
@@ -269,12 +269,12 @@ type Machine struct {
 	// lifecycle (a Speculative slot that becomes a real Idle host keeps the
 	// same machine_id; the host_ref is the field that fills in).
 	Id    string       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	State MachineState `protobuf:"varint,2,opt,name=state,proto3,enum=fleet.v1alpha1.MachineState" json:"state,omitempty"`
+	State MachineState `protobuf:"varint,2,opt,name=state,proto3,enum=bigfleet.v1alpha1.MachineState" json:"state,omitempty"`
 	// Empty when state == SPECULATIVE (or CREATING before host attaches).
 	Host         *HostRef     `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
 	InstanceType string       `protobuf:"bytes,4,opt,name=instance_type,json=instanceType,proto3" json:"instance_type,omitempty"`
 	Zone         string       `protobuf:"bytes,5,opt,name=zone,proto3" json:"zone,omitempty"`
-	CapacityType CapacityType `protobuf:"varint,6,opt,name=capacity_type,json=capacityType,proto3,enum=fleet.v1alpha1.CapacityType" json:"capacity_type,omitempty"`
+	CapacityType CapacityType `protobuf:"varint,6,opt,name=capacity_type,json=capacityType,proto3,enum=bigfleet.v1alpha1.CapacityType" json:"capacity_type,omitempty"`
 	// Per-hour price in USD. Zero for bare metal (already paid for).
 	PricePerHour float64 `protobuf:"fixed64,7,opt,name=price_per_hour,json=pricePerHour,proto3" json:"price_per_hour,omitempty"`
 	// Hourly interruption probability, [0.0, 1.0]. Provider-declared only:
@@ -296,7 +296,7 @@ type Machine struct {
 
 func (x *Machine) Reset() {
 	*x = Machine{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[2]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -308,7 +308,7 @@ func (x *Machine) String() string {
 func (*Machine) ProtoMessage() {}
 
 func (x *Machine) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[2]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -321,7 +321,7 @@ func (x *Machine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Machine.ProtoReflect.Descriptor instead.
 func (*Machine) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{2}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Machine) GetId() string {
@@ -417,7 +417,7 @@ type MachineRef struct {
 
 func (x *MachineRef) Reset() {
 	*x = MachineRef{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[3]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -429,7 +429,7 @@ func (x *MachineRef) String() string {
 func (*MachineRef) ProtoMessage() {}
 
 func (x *MachineRef) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[3]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -442,7 +442,7 @@ func (x *MachineRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MachineRef.ProtoReflect.Descriptor instead.
 func (*MachineRef) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{3}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *MachineRef) GetId() string {
@@ -466,7 +466,7 @@ type MachineList struct {
 
 func (x *MachineList) Reset() {
 	*x = MachineList{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[4]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -478,7 +478,7 @@ func (x *MachineList) String() string {
 func (*MachineList) ProtoMessage() {}
 
 func (x *MachineList) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[4]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -491,7 +491,7 @@ func (x *MachineList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MachineList.ProtoReflect.Descriptor instead.
 func (*MachineList) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{4}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MachineList) GetMachines() []*Machine {
@@ -511,7 +511,7 @@ func (x *MachineList) GetRevision() []byte {
 type ListFilter struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Restrict to the listed states. Empty list = any state.
-	States []MachineState `protobuf:"varint,1,rep,packed,name=states,proto3,enum=fleet.v1alpha1.MachineState" json:"states,omitempty"`
+	States []MachineState `protobuf:"varint,1,rep,packed,name=states,proto3,enum=bigfleet.v1alpha1.MachineState" json:"states,omitempty"`
 	// Optional zone / instance-type filters. Empty = any.
 	Zone         string `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`
 	InstanceType string `protobuf:"bytes,3,opt,name=instance_type,json=instanceType,proto3" json:"instance_type,omitempty"`
@@ -528,7 +528,7 @@ type ListFilter struct {
 
 func (x *ListFilter) Reset() {
 	*x = ListFilter{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[5]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -540,7 +540,7 @@ func (x *ListFilter) String() string {
 func (*ListFilter) ProtoMessage() {}
 
 func (x *ListFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[5]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -553,7 +553,7 @@ func (x *ListFilter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFilter.ProtoReflect.Descriptor instead.
 func (*ListFilter) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{5}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListFilter) GetStates() []MachineState {
@@ -605,7 +605,7 @@ type CreateRequest struct {
 
 func (x *CreateRequest) Reset() {
 	*x = CreateRequest{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[6]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -617,7 +617,7 @@ func (x *CreateRequest) String() string {
 func (*CreateRequest) ProtoMessage() {}
 
 func (x *CreateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[6]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -630,7 +630,7 @@ func (x *CreateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateRequest.ProtoReflect.Descriptor instead.
 func (*CreateRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{6}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreateRequest) GetMachineId() string {
@@ -665,7 +665,7 @@ type ConfigureRequest struct {
 
 func (x *ConfigureRequest) Reset() {
 	*x = ConfigureRequest{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[7]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -677,7 +677,7 @@ func (x *ConfigureRequest) String() string {
 func (*ConfigureRequest) ProtoMessage() {}
 
 func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[7]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -690,7 +690,7 @@ func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{7}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ConfigureRequest) GetMachineId() string {
@@ -729,7 +729,7 @@ type DrainRequest struct {
 
 func (x *DrainRequest) Reset() {
 	*x = DrainRequest{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[8]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -741,7 +741,7 @@ func (x *DrainRequest) String() string {
 func (*DrainRequest) ProtoMessage() {}
 
 func (x *DrainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[8]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -754,7 +754,7 @@ func (x *DrainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainRequest.ProtoReflect.Descriptor instead.
 func (*DrainRequest) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{8}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *DrainRequest) GetMachineId() string {
@@ -789,7 +789,7 @@ type TransitionAck struct {
 
 func (x *TransitionAck) Reset() {
 	*x = TransitionAck{}
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +801,7 @@ func (x *TransitionAck) String() string {
 func (*TransitionAck) ProtoMessage() {}
 
 func (x *TransitionAck) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_provider_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_provider_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +814,7 @@ func (x *TransitionAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransitionAck.ProtoReflect.Descriptor instead.
 func (*TransitionAck) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_provider_proto_rawDescGZIP(), []int{9}
+	return file_bigfleet_v1alpha1_provider_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TransitionAck) GetOperationId() string {
@@ -831,31 +831,31 @@ func (x *TransitionAck) GetMachine() *Machine {
 	return nil
 }
 
-var File_fleet_v1alpha1_provider_proto protoreflect.FileDescriptor
+var File_bigfleet_v1alpha1_provider_proto protoreflect.FileDescriptor
 
-const file_fleet_v1alpha1_provider_proto_rawDesc = "" +
+const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\n" +
-	"\x1dfleet/v1alpha1/provider.proto\x12\x0efleet.v1alpha1\"7\n" +
+	" bigfleet/v1alpha1/provider.proto\x12\x11bigfleet.v1alpha1\"7\n" +
 	"\aHostRef\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x10\n" +
-	"\x03ref\x18\x02 \x01(\tR\x03ref\"\x91\x01\n" +
-	"\tResources\x12F\n" +
-	"\tresources\x18\x01 \x03(\v2(.fleet.v1alpha1.Resources.ResourcesEntryR\tresources\x1a<\n" +
+	"\x03ref\x18\x02 \x01(\tR\x03ref\"\x94\x01\n" +
+	"\tResources\x12I\n" +
+	"\tresources\x18\x01 \x03(\v2+.bigfleet.v1alpha1.Resources.ResourcesEntryR\tresources\x1a<\n" +
 	"\x0eResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf9\x04\n" +
 	"\aMachine\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
-	"\x05state\x18\x02 \x01(\x0e2\x1c.fleet.v1alpha1.MachineStateR\x05state\x12+\n" +
-	"\x04host\x18\x03 \x01(\v2\x17.fleet.v1alpha1.HostRefR\x04host\x12#\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x125\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x05state\x12.\n" +
+	"\x04host\x18\x03 \x01(\v2\x1a.bigfleet.v1alpha1.HostRefR\x04host\x12#\n" +
 	"\rinstance_type\x18\x04 \x01(\tR\finstanceType\x12\x12\n" +
-	"\x04zone\x18\x05 \x01(\tR\x04zone\x12A\n" +
-	"\rcapacity_type\x18\x06 \x01(\x0e2\x1c.fleet.v1alpha1.CapacityTypeR\fcapacityType\x12$\n" +
+	"\x04zone\x18\x05 \x01(\tR\x04zone\x12D\n" +
+	"\rcapacity_type\x18\x06 \x01(\x0e2\x1f.bigfleet.v1alpha1.CapacityTypeR\fcapacityType\x12$\n" +
 	"\x0eprice_per_hour\x18\a \x01(\x01R\fpricePerHour\x129\n" +
-	"\x18interruption_probability\x18\b \x01(\x01R\x17interruptionProbability\x127\n" +
-	"\tresources\x18\t \x01(\v2\x19.fleet.v1alpha1.ResourcesR\tresources\x12;\n" +
+	"\x18interruption_probability\x18\b \x01(\x01R\x17interruptionProbability\x12:\n" +
+	"\tresources\x18\t \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\tresources\x12>\n" +
 	"\x06labels\x18\n" +
-	" \x03(\v2#.fleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12A\n" +
+	" \x03(\v2&.bigfleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12A\n" +
 	"\x1dtransition_started_unix_nanos\x18\v \x01(\x03R\x1atransitionStartedUnixNanos\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\f \x01(\tR\tlastError\x1a9\n" +
@@ -864,22 +864,22 @@ const file_fleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1c\n" +
 	"\n" +
 	"MachineRef\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"^\n" +
-	"\vMachineList\x123\n" +
-	"\bmachines\x18\x01 \x03(\v2\x17.fleet.v1alpha1.MachineR\bmachines\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\fR\brevision\"\xc3\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"a\n" +
+	"\vMachineList\x126\n" +
+	"\bmachines\x18\x01 \x03(\v2\x1a.bigfleet.v1alpha1.MachineR\bmachines\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\fR\brevision\"\xc6\x01\n" +
 	"\n" +
-	"ListFilter\x124\n" +
-	"\x06states\x18\x01 \x03(\x0e2\x1c.fleet.v1alpha1.MachineStateR\x06states\x12\x12\n" +
+	"ListFilter\x127\n" +
+	"\x06states\x18\x01 \x03(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x06states\x12\x12\n" +
 	"\x04zone\x18\x02 \x01(\tR\x04zone\x12#\n" +
 	"\rinstance_type\x18\x03 \x01(\tR\finstanceType\x12\x1f\n" +
 	"\vmax_results\x18\x04 \x01(\x05R\n" +
 	"maxResults\x12%\n" +
-	"\x0esince_revision\x18\x05 \x01(\fR\rsinceRevision\"\xac\x01\n" +
+	"\x0esince_revision\x18\x05 \x01(\fR\rsinceRevision\"\xaf\x01\n" +
 	"\rCreateRequest\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\tR\tmachineId\x12A\n" +
-	"\x06labels\x18\x02 \x03(\v2).fleet.v1alpha1.CreateRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"machine_id\x18\x01 \x01(\tR\tmachineId\x12D\n" +
+	"\x06labels\x18\x02 \x03(\v2,.bigfleet.v1alpha1.CreateRequest.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
@@ -892,10 +892,10 @@ const file_fleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\fDrainRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x120\n" +
-	"\x14grace_period_seconds\x18\x02 \x01(\x03R\x12gracePeriodSeconds\"e\n" +
+	"\x14grace_period_seconds\x18\x02 \x01(\x03R\x12gracePeriodSeconds\"h\n" +
 	"\rTransitionAck\x12!\n" +
-	"\foperation_id\x18\x01 \x01(\tR\voperationId\x121\n" +
-	"\amachine\x18\x02 \x01(\v2\x17.fleet.v1alpha1.MachineR\amachine*\x8f\x02\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\x124\n" +
+	"\amachine\x18\x02 \x01(\v2\x1a.bigfleet.v1alpha1.MachineR\amachine*\x8f\x02\n" +
 	"\fMachineState\x12\x1d\n" +
 	"\x19MACHINE_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19MACHINE_STATE_SPECULATIVE\x10\x01\x12\x1a\n" +
@@ -911,70 +911,70 @@ const file_fleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\x18CAPACITY_TYPE_BARE_METAL\x10\x01\x12\x1a\n" +
 	"\x16CAPACITY_TYPE_RESERVED\x10\x02\x12\x1b\n" +
 	"\x17CAPACITY_TYPE_ON_DEMAND\x10\x03\x12\x16\n" +
-	"\x12CAPACITY_TYPE_SPOT\x10\x042\xb0\x03\n" +
-	"\x10CapacityProvider\x12F\n" +
-	"\x06Create\x12\x1d.fleet.v1alpha1.CreateRequest\x1a\x1d.fleet.v1alpha1.TransitionAck\x12L\n" +
-	"\tConfigure\x12 .fleet.v1alpha1.ConfigureRequest\x1a\x1d.fleet.v1alpha1.TransitionAck\x12D\n" +
-	"\x05Drain\x12\x1c.fleet.v1alpha1.DrainRequest\x1a\x1d.fleet.v1alpha1.TransitionAck\x12C\n" +
-	"\x06Delete\x12\x1a.fleet.v1alpha1.MachineRef\x1a\x1d.fleet.v1alpha1.TransitionAck\x12:\n" +
-	"\x03Get\x12\x1a.fleet.v1alpha1.MachineRef\x1a\x17.fleet.v1alpha1.Machine\x12?\n" +
-	"\x04List\x12\x1a.fleet.v1alpha1.ListFilter\x1a\x1b.fleet.v1alpha1.MachineListB\xc9\x01\n" +
-	"\x12com.fleet.v1alpha1B\rProviderProtoP\x01ZKgithub.com/intUnderflow/bigfleet/pkg/api/proto/fleet/v1alpha1;fleetv1alpha1\xa2\x02\x03FXX\xaa\x02\x0eFleet.V1alpha1\xca\x02\x0eFleet\\V1alpha1\xe2\x02\x1aFleet\\V1alpha1\\GPBMetadata\xea\x02\x0fFleet::V1alpha1b\x06proto3"
+	"\x12CAPACITY_TYPE_SPOT\x10\x042\xd4\x03\n" +
+	"\x10CapacityProvider\x12L\n" +
+	"\x06Create\x12 .bigfleet.v1alpha1.CreateRequest\x1a .bigfleet.v1alpha1.TransitionAck\x12R\n" +
+	"\tConfigure\x12#.bigfleet.v1alpha1.ConfigureRequest\x1a .bigfleet.v1alpha1.TransitionAck\x12J\n" +
+	"\x05Drain\x12\x1f.bigfleet.v1alpha1.DrainRequest\x1a .bigfleet.v1alpha1.TransitionAck\x12I\n" +
+	"\x06Delete\x12\x1d.bigfleet.v1alpha1.MachineRef\x1a .bigfleet.v1alpha1.TransitionAck\x12@\n" +
+	"\x03Get\x12\x1d.bigfleet.v1alpha1.MachineRef\x1a\x1a.bigfleet.v1alpha1.Machine\x12E\n" +
+	"\x04List\x12\x1d.bigfleet.v1alpha1.ListFilter\x1a\x1e.bigfleet.v1alpha1.MachineListB\xde\x01\n" +
+	"\x15com.bigfleet.v1alpha1B\rProviderProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
-	file_fleet_v1alpha1_provider_proto_rawDescOnce sync.Once
-	file_fleet_v1alpha1_provider_proto_rawDescData []byte
+	file_bigfleet_v1alpha1_provider_proto_rawDescOnce sync.Once
+	file_bigfleet_v1alpha1_provider_proto_rawDescData []byte
 )
 
-func file_fleet_v1alpha1_provider_proto_rawDescGZIP() []byte {
-	file_fleet_v1alpha1_provider_proto_rawDescOnce.Do(func() {
-		file_fleet_v1alpha1_provider_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_fleet_v1alpha1_provider_proto_rawDesc), len(file_fleet_v1alpha1_provider_proto_rawDesc)))
+func file_bigfleet_v1alpha1_provider_proto_rawDescGZIP() []byte {
+	file_bigfleet_v1alpha1_provider_proto_rawDescOnce.Do(func() {
+		file_bigfleet_v1alpha1_provider_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_provider_proto_rawDesc), len(file_bigfleet_v1alpha1_provider_proto_rawDesc)))
 	})
-	return file_fleet_v1alpha1_provider_proto_rawDescData
+	return file_bigfleet_v1alpha1_provider_proto_rawDescData
 }
 
-var file_fleet_v1alpha1_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_fleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
-var file_fleet_v1alpha1_provider_proto_goTypes = []any{
-	(MachineState)(0),        // 0: fleet.v1alpha1.MachineState
-	(CapacityType)(0),        // 1: fleet.v1alpha1.CapacityType
-	(*HostRef)(nil),          // 2: fleet.v1alpha1.HostRef
-	(*Resources)(nil),        // 3: fleet.v1alpha1.Resources
-	(*Machine)(nil),          // 4: fleet.v1alpha1.Machine
-	(*MachineRef)(nil),       // 5: fleet.v1alpha1.MachineRef
-	(*MachineList)(nil),      // 6: fleet.v1alpha1.MachineList
-	(*ListFilter)(nil),       // 7: fleet.v1alpha1.ListFilter
-	(*CreateRequest)(nil),    // 8: fleet.v1alpha1.CreateRequest
-	(*ConfigureRequest)(nil), // 9: fleet.v1alpha1.ConfigureRequest
-	(*DrainRequest)(nil),     // 10: fleet.v1alpha1.DrainRequest
-	(*TransitionAck)(nil),    // 11: fleet.v1alpha1.TransitionAck
-	nil,                      // 12: fleet.v1alpha1.Resources.ResourcesEntry
-	nil,                      // 13: fleet.v1alpha1.Machine.LabelsEntry
-	nil,                      // 14: fleet.v1alpha1.CreateRequest.LabelsEntry
+var file_bigfleet_v1alpha1_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_bigfleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_bigfleet_v1alpha1_provider_proto_goTypes = []any{
+	(MachineState)(0),        // 0: bigfleet.v1alpha1.MachineState
+	(CapacityType)(0),        // 1: bigfleet.v1alpha1.CapacityType
+	(*HostRef)(nil),          // 2: bigfleet.v1alpha1.HostRef
+	(*Resources)(nil),        // 3: bigfleet.v1alpha1.Resources
+	(*Machine)(nil),          // 4: bigfleet.v1alpha1.Machine
+	(*MachineRef)(nil),       // 5: bigfleet.v1alpha1.MachineRef
+	(*MachineList)(nil),      // 6: bigfleet.v1alpha1.MachineList
+	(*ListFilter)(nil),       // 7: bigfleet.v1alpha1.ListFilter
+	(*CreateRequest)(nil),    // 8: bigfleet.v1alpha1.CreateRequest
+	(*ConfigureRequest)(nil), // 9: bigfleet.v1alpha1.ConfigureRequest
+	(*DrainRequest)(nil),     // 10: bigfleet.v1alpha1.DrainRequest
+	(*TransitionAck)(nil),    // 11: bigfleet.v1alpha1.TransitionAck
+	nil,                      // 12: bigfleet.v1alpha1.Resources.ResourcesEntry
+	nil,                      // 13: bigfleet.v1alpha1.Machine.LabelsEntry
+	nil,                      // 14: bigfleet.v1alpha1.CreateRequest.LabelsEntry
 }
-var file_fleet_v1alpha1_provider_proto_depIdxs = []int32{
-	12, // 0: fleet.v1alpha1.Resources.resources:type_name -> fleet.v1alpha1.Resources.ResourcesEntry
-	0,  // 1: fleet.v1alpha1.Machine.state:type_name -> fleet.v1alpha1.MachineState
-	2,  // 2: fleet.v1alpha1.Machine.host:type_name -> fleet.v1alpha1.HostRef
-	1,  // 3: fleet.v1alpha1.Machine.capacity_type:type_name -> fleet.v1alpha1.CapacityType
-	3,  // 4: fleet.v1alpha1.Machine.resources:type_name -> fleet.v1alpha1.Resources
-	13, // 5: fleet.v1alpha1.Machine.labels:type_name -> fleet.v1alpha1.Machine.LabelsEntry
-	4,  // 6: fleet.v1alpha1.MachineList.machines:type_name -> fleet.v1alpha1.Machine
-	0,  // 7: fleet.v1alpha1.ListFilter.states:type_name -> fleet.v1alpha1.MachineState
-	14, // 8: fleet.v1alpha1.CreateRequest.labels:type_name -> fleet.v1alpha1.CreateRequest.LabelsEntry
-	4,  // 9: fleet.v1alpha1.TransitionAck.machine:type_name -> fleet.v1alpha1.Machine
-	8,  // 10: fleet.v1alpha1.CapacityProvider.Create:input_type -> fleet.v1alpha1.CreateRequest
-	9,  // 11: fleet.v1alpha1.CapacityProvider.Configure:input_type -> fleet.v1alpha1.ConfigureRequest
-	10, // 12: fleet.v1alpha1.CapacityProvider.Drain:input_type -> fleet.v1alpha1.DrainRequest
-	5,  // 13: fleet.v1alpha1.CapacityProvider.Delete:input_type -> fleet.v1alpha1.MachineRef
-	5,  // 14: fleet.v1alpha1.CapacityProvider.Get:input_type -> fleet.v1alpha1.MachineRef
-	7,  // 15: fleet.v1alpha1.CapacityProvider.List:input_type -> fleet.v1alpha1.ListFilter
-	11, // 16: fleet.v1alpha1.CapacityProvider.Create:output_type -> fleet.v1alpha1.TransitionAck
-	11, // 17: fleet.v1alpha1.CapacityProvider.Configure:output_type -> fleet.v1alpha1.TransitionAck
-	11, // 18: fleet.v1alpha1.CapacityProvider.Drain:output_type -> fleet.v1alpha1.TransitionAck
-	11, // 19: fleet.v1alpha1.CapacityProvider.Delete:output_type -> fleet.v1alpha1.TransitionAck
-	4,  // 20: fleet.v1alpha1.CapacityProvider.Get:output_type -> fleet.v1alpha1.Machine
-	6,  // 21: fleet.v1alpha1.CapacityProvider.List:output_type -> fleet.v1alpha1.MachineList
+var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
+	12, // 0: bigfleet.v1alpha1.Resources.resources:type_name -> bigfleet.v1alpha1.Resources.ResourcesEntry
+	0,  // 1: bigfleet.v1alpha1.Machine.state:type_name -> bigfleet.v1alpha1.MachineState
+	2,  // 2: bigfleet.v1alpha1.Machine.host:type_name -> bigfleet.v1alpha1.HostRef
+	1,  // 3: bigfleet.v1alpha1.Machine.capacity_type:type_name -> bigfleet.v1alpha1.CapacityType
+	3,  // 4: bigfleet.v1alpha1.Machine.resources:type_name -> bigfleet.v1alpha1.Resources
+	13, // 5: bigfleet.v1alpha1.Machine.labels:type_name -> bigfleet.v1alpha1.Machine.LabelsEntry
+	4,  // 6: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
+	0,  // 7: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
+	14, // 8: bigfleet.v1alpha1.CreateRequest.labels:type_name -> bigfleet.v1alpha1.CreateRequest.LabelsEntry
+	4,  // 9: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
+	8,  // 10: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
+	9,  // 11: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
+	10, // 12: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
+	5,  // 13: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.MachineRef
+	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
+	7,  // 15: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
+	11, // 16: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 17: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 18: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 19: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
+	4,  // 20: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
+	6,  // 21: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
 	16, // [16:22] is the sub-list for method output_type
 	10, // [10:16] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -982,27 +982,27 @@ var file_fleet_v1alpha1_provider_proto_depIdxs = []int32{
 	0,  // [0:10] is the sub-list for field type_name
 }
 
-func init() { file_fleet_v1alpha1_provider_proto_init() }
-func file_fleet_v1alpha1_provider_proto_init() {
-	if File_fleet_v1alpha1_provider_proto != nil {
+func init() { file_bigfleet_v1alpha1_provider_proto_init() }
+func file_bigfleet_v1alpha1_provider_proto_init() {
+	if File_bigfleet_v1alpha1_provider_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_fleet_v1alpha1_provider_proto_rawDesc), len(file_fleet_v1alpha1_provider_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_provider_proto_rawDesc), len(file_bigfleet_v1alpha1_provider_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_fleet_v1alpha1_provider_proto_goTypes,
-		DependencyIndexes: file_fleet_v1alpha1_provider_proto_depIdxs,
-		EnumInfos:         file_fleet_v1alpha1_provider_proto_enumTypes,
-		MessageInfos:      file_fleet_v1alpha1_provider_proto_msgTypes,
+		GoTypes:           file_bigfleet_v1alpha1_provider_proto_goTypes,
+		DependencyIndexes: file_bigfleet_v1alpha1_provider_proto_depIdxs,
+		EnumInfos:         file_bigfleet_v1alpha1_provider_proto_enumTypes,
+		MessageInfos:      file_bigfleet_v1alpha1_provider_proto_msgTypes,
 	}.Build()
-	File_fleet_v1alpha1_provider_proto = out.File
-	file_fleet_v1alpha1_provider_proto_goTypes = nil
-	file_fleet_v1alpha1_provider_proto_depIdxs = nil
+	File_bigfleet_v1alpha1_provider_proto = out.File
+	file_bigfleet_v1alpha1_provider_proto_goTypes = nil
+	file_bigfleet_v1alpha1_provider_proto_depIdxs = nil
 }

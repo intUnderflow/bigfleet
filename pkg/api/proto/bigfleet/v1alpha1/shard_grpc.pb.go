@@ -17,9 +17,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: fleet/v1alpha1/shard.proto
+// source: bigfleet/v1alpha1/shard.proto
 
-package fleetv1alpha1
+package bigfleetv1alpha1
 
 import (
 	context "context"
@@ -34,7 +34,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Shard_Session_FullMethodName = "/fleet.v1alpha1.Shard/Session"
+	Shard_Session_FullMethodName = "/bigfleet.v1alpha1.Shard/Session"
 )
 
 // ShardClient is the client API for Shard service.
@@ -115,7 +115,7 @@ type Shard_SessionServer = grpc.BidiStreamingServer[OperatorMessage, ShardMessag
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Shard_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "fleet.v1alpha1.Shard",
+	ServiceName: "bigfleet.v1alpha1.Shard",
 	HandlerType: (*ShardServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
@@ -126,5 +126,5 @@ var Shard_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "fleet/v1alpha1/shard.proto",
+	Metadata: "bigfleet/v1alpha1/shard.proto",
 }

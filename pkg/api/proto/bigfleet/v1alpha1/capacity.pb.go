@@ -15,9 +15,9 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        (unknown)
-// source: fleet/v1alpha1/capacity.proto
+// source: bigfleet/v1alpha1/capacity.proto
 
-package fleetv1alpha1
+package bigfleetv1alpha1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -148,11 +148,11 @@ func (x PenaltyBucket) String() string {
 }
 
 func (PenaltyBucket) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_v1alpha1_capacity_proto_enumTypes[0].Descriptor()
+	return file_bigfleet_v1alpha1_capacity_proto_enumTypes[0].Descriptor()
 }
 
 func (PenaltyBucket) Type() protoreflect.EnumType {
-	return &file_fleet_v1alpha1_capacity_proto_enumTypes[0]
+	return &file_bigfleet_v1alpha1_capacity_proto_enumTypes[0]
 }
 
 func (x PenaltyBucket) Number() protoreflect.EnumNumber {
@@ -161,7 +161,7 @@ func (x PenaltyBucket) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PenaltyBucket.Descriptor instead.
 func (PenaltyBucket) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{0}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{0}
 }
 
 type NodeSelectorRequirement_Operator int32
@@ -209,11 +209,11 @@ func (x NodeSelectorRequirement_Operator) String() string {
 }
 
 func (NodeSelectorRequirement_Operator) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_v1alpha1_capacity_proto_enumTypes[1].Descriptor()
+	return file_bigfleet_v1alpha1_capacity_proto_enumTypes[1].Descriptor()
 }
 
 func (NodeSelectorRequirement_Operator) Type() protoreflect.EnumType {
-	return &file_fleet_v1alpha1_capacity_proto_enumTypes[1]
+	return &file_bigfleet_v1alpha1_capacity_proto_enumTypes[1]
 }
 
 func (x NodeSelectorRequirement_Operator) Number() protoreflect.EnumNumber {
@@ -222,7 +222,7 @@ func (x NodeSelectorRequirement_Operator) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NodeSelectorRequirement_Operator.Descriptor instead.
 func (NodeSelectorRequirement_Operator) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{2, 0}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{2, 0}
 }
 
 type TopologySpread_WhenUnsatisfiable int32
@@ -258,11 +258,11 @@ func (x TopologySpread_WhenUnsatisfiable) String() string {
 }
 
 func (TopologySpread_WhenUnsatisfiable) Descriptor() protoreflect.EnumDescriptor {
-	return file_fleet_v1alpha1_capacity_proto_enumTypes[2].Descriptor()
+	return file_bigfleet_v1alpha1_capacity_proto_enumTypes[2].Descriptor()
 }
 
 func (TopologySpread_WhenUnsatisfiable) Type() protoreflect.EnumType {
-	return &file_fleet_v1alpha1_capacity_proto_enumTypes[2]
+	return &file_bigfleet_v1alpha1_capacity_proto_enumTypes[2]
 }
 
 func (x TopologySpread_WhenUnsatisfiable) Number() protoreflect.EnumNumber {
@@ -271,7 +271,7 @@ func (x TopologySpread_WhenUnsatisfiable) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use TopologySpread_WhenUnsatisfiable.Descriptor instead.
 func (TopologySpread_WhenUnsatisfiable) EnumDescriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{3, 0}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{3, 0}
 }
 
 // ClusterCapacityNeeds is what an operator sends to its shard each cycle.
@@ -292,7 +292,7 @@ type ClusterCapacityNeeds struct {
 
 func (x *ClusterCapacityNeeds) Reset() {
 	*x = ClusterCapacityNeeds{}
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[0]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -304,7 +304,7 @@ func (x *ClusterCapacityNeeds) String() string {
 func (*ClusterCapacityNeeds) ProtoMessage() {}
 
 func (x *ClusterCapacityNeeds) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[0]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -317,7 +317,7 @@ func (x *ClusterCapacityNeeds) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClusterCapacityNeeds.ProtoReflect.Descriptor instead.
 func (*ClusterCapacityNeeds) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{0}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ClusterCapacityNeeds) GetClusterId() string {
@@ -369,15 +369,15 @@ type CapacityNeed struct {
 	// The cost-function effect of bucketing is bounded and small; the size
 	// of the roll-up message stays bounded even when penalties are
 	// workload-specific.
-	InterruptionPenaltyBucket PenaltyBucket `protobuf:"varint,6,opt,name=interruption_penalty_bucket,json=interruptionPenaltyBucket,proto3,enum=fleet.v1alpha1.PenaltyBucket" json:"interruption_penalty_bucket,omitempty"`
-	ReclamationPenaltyBucket  PenaltyBucket `protobuf:"varint,7,opt,name=reclamation_penalty_bucket,json=reclamationPenaltyBucket,proto3,enum=fleet.v1alpha1.PenaltyBucket" json:"reclamation_penalty_bucket,omitempty"`
+	InterruptionPenaltyBucket PenaltyBucket `protobuf:"varint,6,opt,name=interruption_penalty_bucket,json=interruptionPenaltyBucket,proto3,enum=bigfleet.v1alpha1.PenaltyBucket" json:"interruption_penalty_bucket,omitempty"`
+	ReclamationPenaltyBucket  PenaltyBucket `protobuf:"varint,7,opt,name=reclamation_penalty_bucket,json=reclamationPenaltyBucket,proto3,enum=bigfleet.v1alpha1.PenaltyBucket" json:"reclamation_penalty_bucket,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *CapacityNeed) Reset() {
 	*x = CapacityNeed{}
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[1]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +389,7 @@ func (x *CapacityNeed) String() string {
 func (*CapacityNeed) ProtoMessage() {}
 
 func (x *CapacityNeed) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[1]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +402,7 @@ func (x *CapacityNeed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapacityNeed.ProtoReflect.Descriptor instead.
 func (*CapacityNeed) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{1}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *CapacityNeed) GetRequirements() []*NodeSelectorRequirement {
@@ -460,7 +460,7 @@ func (x *CapacityNeed) GetReclamationPenaltyBucket() PenaltyBucket {
 type NodeSelectorRequirement struct {
 	state         protoimpl.MessageState           `protogen:"open.v1"`
 	Key           string                           `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Operator      NodeSelectorRequirement_Operator `protobuf:"varint,2,opt,name=operator,proto3,enum=fleet.v1alpha1.NodeSelectorRequirement_Operator" json:"operator,omitempty"`
+	Operator      NodeSelectorRequirement_Operator `protobuf:"varint,2,opt,name=operator,proto3,enum=bigfleet.v1alpha1.NodeSelectorRequirement_Operator" json:"operator,omitempty"`
 	Values        []string                         `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -468,7 +468,7 @@ type NodeSelectorRequirement struct {
 
 func (x *NodeSelectorRequirement) Reset() {
 	*x = NodeSelectorRequirement{}
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[2]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -480,7 +480,7 @@ func (x *NodeSelectorRequirement) String() string {
 func (*NodeSelectorRequirement) ProtoMessage() {}
 
 func (x *NodeSelectorRequirement) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[2]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -493,7 +493,7 @@ func (x *NodeSelectorRequirement) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeSelectorRequirement.ProtoReflect.Descriptor instead.
 func (*NodeSelectorRequirement) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{2}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *NodeSelectorRequirement) GetKey() string {
@@ -524,14 +524,14 @@ type TopologySpread struct {
 	state             protoimpl.MessageState           `protogen:"open.v1"`
 	TopologyKey       string                           `protobuf:"bytes,1,opt,name=topology_key,json=topologyKey,proto3" json:"topology_key,omitempty"`
 	MaxSkew           int32                            `protobuf:"varint,2,opt,name=max_skew,json=maxSkew,proto3" json:"max_skew,omitempty"`
-	WhenUnsatisfiable TopologySpread_WhenUnsatisfiable `protobuf:"varint,3,opt,name=when_unsatisfiable,json=whenUnsatisfiable,proto3,enum=fleet.v1alpha1.TopologySpread_WhenUnsatisfiable" json:"when_unsatisfiable,omitempty"`
+	WhenUnsatisfiable TopologySpread_WhenUnsatisfiable `protobuf:"varint,3,opt,name=when_unsatisfiable,json=whenUnsatisfiable,proto3,enum=bigfleet.v1alpha1.TopologySpread_WhenUnsatisfiable" json:"when_unsatisfiable,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *TopologySpread) Reset() {
 	*x = TopologySpread{}
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[3]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -543,7 +543,7 @@ func (x *TopologySpread) String() string {
 func (*TopologySpread) ProtoMessage() {}
 
 func (x *TopologySpread) ProtoReflect() protoreflect.Message {
-	mi := &file_fleet_v1alpha1_capacity_proto_msgTypes[3]
+	mi := &file_bigfleet_v1alpha1_capacity_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -556,7 +556,7 @@ func (x *TopologySpread) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopologySpread.ProtoReflect.Descriptor instead.
 func (*TopologySpread) Descriptor() ([]byte, []int) {
-	return file_fleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{3}
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TopologySpread) GetTopologyKey() string {
@@ -580,30 +580,30 @@ func (x *TopologySpread) GetWhenUnsatisfiable() TopologySpread_WhenUnsatisfiable
 	return TopologySpread_WHEN_UNSATISFIABLE_UNSPECIFIED
 }
 
-var File_fleet_v1alpha1_capacity_proto protoreflect.FileDescriptor
+var File_bigfleet_v1alpha1_capacity_proto protoreflect.FileDescriptor
 
-const file_fleet_v1alpha1_capacity_proto_rawDesc = "" +
+const file_bigfleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\n" +
-	"\x1dfleet/v1alpha1/capacity.proto\x12\x0efleet.v1alpha1\"\x9b\x01\n" +
+	" bigfleet/v1alpha1/capacity.proto\x12\x11bigfleet.v1alpha1\"\x9e\x01\n" +
 	"\x14ClusterCapacityNeeds\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x120\n" +
-	"\x14timestamp_unix_nanos\x18\x02 \x01(\x03R\x12timestampUnixNanos\x122\n" +
-	"\x05needs\x18\x03 \x03(\v2\x1c.fleet.v1alpha1.CapacityNeedR\x05needs\"\x8a\x04\n" +
-	"\fCapacityNeed\x12K\n" +
-	"\frequirements\x18\x01 \x03(\v2'.fleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12I\n" +
-	"\tresources\x18\x02 \x03(\v2+.fleet.v1alpha1.CapacityNeed.ResourcesEntryR\tresources\x12\x1a\n" +
+	"\x14timestamp_unix_nanos\x18\x02 \x01(\x03R\x12timestampUnixNanos\x125\n" +
+	"\x05needs\x18\x03 \x03(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x05needs\"\x99\x04\n" +
+	"\fCapacityNeed\x12N\n" +
+	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12L\n" +
+	"\tresources\x18\x02 \x03(\v2..bigfleet.v1alpha1.CapacityNeed.ResourcesEntryR\tresources\x12\x1a\n" +
 	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12\x14\n" +
-	"\x05count\x18\x04 \x01(\x05R\x05count\x126\n" +
-	"\x06spread\x18\x05 \x03(\v2\x1e.fleet.v1alpha1.TopologySpreadR\x06spread\x12]\n" +
-	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2\x1d.fleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\x12[\n" +
-	"\x1areclamation_penalty_bucket\x18\a \x01(\x0e2\x1d.fleet.v1alpha1.PenaltyBucketR\x18reclamationPenaltyBucket\x1a<\n" +
+	"\x05count\x18\x04 \x01(\x05R\x05count\x129\n" +
+	"\x06spread\x18\x05 \x03(\v2!.bigfleet.v1alpha1.TopologySpreadR\x06spread\x12`\n" +
+	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\x12^\n" +
+	"\x1areclamation_penalty_bucket\x18\a \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x18reclamationPenaltyBucket\x1a<\n" +
 	"\x0eResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa3\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa6\x02\n" +
 	"\x17NodeSelectorRequirement\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12L\n" +
-	"\boperator\x18\x02 \x01(\x0e20.fleet.v1alpha1.NodeSelectorRequirement.OperatorR\boperator\x12\x16\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12O\n" +
+	"\boperator\x18\x02 \x01(\x0e23.bigfleet.v1alpha1.NodeSelectorRequirement.OperatorR\boperator\x12\x16\n" +
 	"\x06values\x18\x03 \x03(\tR\x06values\"\x8f\x01\n" +
 	"\bOperator\x12\x18\n" +
 	"\x14OPERATOR_UNSPECIFIED\x10\x00\x12\x0f\n" +
@@ -611,11 +611,11 @@ const file_fleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x0fOPERATOR_NOT_IN\x10\x02\x12\x13\n" +
 	"\x0fOPERATOR_EXISTS\x10\x03\x12\x1b\n" +
 	"\x17OPERATOR_DOES_NOT_EXIST\x10\x04\x12\x11\n" +
-	"\rOPERATOR_SAME\x10\x05\"\xb9\x02\n" +
+	"\rOPERATOR_SAME\x10\x05\"\xbc\x02\n" +
 	"\x0eTopologySpread\x12!\n" +
 	"\ftopology_key\x18\x01 \x01(\tR\vtopologyKey\x12\x19\n" +
-	"\bmax_skew\x18\x02 \x01(\x05R\amaxSkew\x12_\n" +
-	"\x12when_unsatisfiable\x18\x03 \x01(\x0e20.fleet.v1alpha1.TopologySpread.WhenUnsatisfiableR\x11whenUnsatisfiable\"\x87\x01\n" +
+	"\bmax_skew\x18\x02 \x01(\x05R\amaxSkew\x12b\n" +
+	"\x12when_unsatisfiable\x18\x03 \x01(\x0e23.bigfleet.v1alpha1.TopologySpread.WhenUnsatisfiableR\x11whenUnsatisfiable\"\x87\x01\n" +
 	"\x11WhenUnsatisfiable\x12\"\n" +
 	"\x1eWHEN_UNSATISFIABLE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"WHEN_UNSATISFIABLE_DO_NOT_SCHEDULE\x10\x01\x12&\n" +
@@ -649,42 +649,42 @@ const file_fleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x16PENALTY_BUCKET_2097152\x10\x18\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_4194304\x10\x19\x12\x1a\n" +
 	"\x16PENALTY_BUCKET_8388608\x10\x1a\x12\x19\n" +
-	"\x15PENALTY_BUCKET_PINNED\x10\x1bB\xc9\x01\n" +
-	"\x12com.fleet.v1alpha1B\rCapacityProtoP\x01ZKgithub.com/intUnderflow/bigfleet/pkg/api/proto/fleet/v1alpha1;fleetv1alpha1\xa2\x02\x03FXX\xaa\x02\x0eFleet.V1alpha1\xca\x02\x0eFleet\\V1alpha1\xe2\x02\x1aFleet\\V1alpha1\\GPBMetadata\xea\x02\x0fFleet::V1alpha1b\x06proto3"
+	"\x15PENALTY_BUCKET_PINNED\x10\x1bB\xde\x01\n" +
+	"\x15com.bigfleet.v1alpha1B\rCapacityProtoP\x01ZQgithub.com/intUnderflow/bigfleet/pkg/api/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
-	file_fleet_v1alpha1_capacity_proto_rawDescOnce sync.Once
-	file_fleet_v1alpha1_capacity_proto_rawDescData []byte
+	file_bigfleet_v1alpha1_capacity_proto_rawDescOnce sync.Once
+	file_bigfleet_v1alpha1_capacity_proto_rawDescData []byte
 )
 
-func file_fleet_v1alpha1_capacity_proto_rawDescGZIP() []byte {
-	file_fleet_v1alpha1_capacity_proto_rawDescOnce.Do(func() {
-		file_fleet_v1alpha1_capacity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_fleet_v1alpha1_capacity_proto_rawDesc), len(file_fleet_v1alpha1_capacity_proto_rawDesc)))
+func file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP() []byte {
+	file_bigfleet_v1alpha1_capacity_proto_rawDescOnce.Do(func() {
+		file_bigfleet_v1alpha1_capacity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_capacity_proto_rawDesc), len(file_bigfleet_v1alpha1_capacity_proto_rawDesc)))
 	})
-	return file_fleet_v1alpha1_capacity_proto_rawDescData
+	return file_bigfleet_v1alpha1_capacity_proto_rawDescData
 }
 
-var file_fleet_v1alpha1_capacity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_fleet_v1alpha1_capacity_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_fleet_v1alpha1_capacity_proto_goTypes = []any{
-	(PenaltyBucket)(0),                    // 0: fleet.v1alpha1.PenaltyBucket
-	(NodeSelectorRequirement_Operator)(0), // 1: fleet.v1alpha1.NodeSelectorRequirement.Operator
-	(TopologySpread_WhenUnsatisfiable)(0), // 2: fleet.v1alpha1.TopologySpread.WhenUnsatisfiable
-	(*ClusterCapacityNeeds)(nil),          // 3: fleet.v1alpha1.ClusterCapacityNeeds
-	(*CapacityNeed)(nil),                  // 4: fleet.v1alpha1.CapacityNeed
-	(*NodeSelectorRequirement)(nil),       // 5: fleet.v1alpha1.NodeSelectorRequirement
-	(*TopologySpread)(nil),                // 6: fleet.v1alpha1.TopologySpread
-	nil,                                   // 7: fleet.v1alpha1.CapacityNeed.ResourcesEntry
+var file_bigfleet_v1alpha1_capacity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_bigfleet_v1alpha1_capacity_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_bigfleet_v1alpha1_capacity_proto_goTypes = []any{
+	(PenaltyBucket)(0),                    // 0: bigfleet.v1alpha1.PenaltyBucket
+	(NodeSelectorRequirement_Operator)(0), // 1: bigfleet.v1alpha1.NodeSelectorRequirement.Operator
+	(TopologySpread_WhenUnsatisfiable)(0), // 2: bigfleet.v1alpha1.TopologySpread.WhenUnsatisfiable
+	(*ClusterCapacityNeeds)(nil),          // 3: bigfleet.v1alpha1.ClusterCapacityNeeds
+	(*CapacityNeed)(nil),                  // 4: bigfleet.v1alpha1.CapacityNeed
+	(*NodeSelectorRequirement)(nil),       // 5: bigfleet.v1alpha1.NodeSelectorRequirement
+	(*TopologySpread)(nil),                // 6: bigfleet.v1alpha1.TopologySpread
+	nil,                                   // 7: bigfleet.v1alpha1.CapacityNeed.ResourcesEntry
 }
-var file_fleet_v1alpha1_capacity_proto_depIdxs = []int32{
-	4, // 0: fleet.v1alpha1.ClusterCapacityNeeds.needs:type_name -> fleet.v1alpha1.CapacityNeed
-	5, // 1: fleet.v1alpha1.CapacityNeed.requirements:type_name -> fleet.v1alpha1.NodeSelectorRequirement
-	7, // 2: fleet.v1alpha1.CapacityNeed.resources:type_name -> fleet.v1alpha1.CapacityNeed.ResourcesEntry
-	6, // 3: fleet.v1alpha1.CapacityNeed.spread:type_name -> fleet.v1alpha1.TopologySpread
-	0, // 4: fleet.v1alpha1.CapacityNeed.interruption_penalty_bucket:type_name -> fleet.v1alpha1.PenaltyBucket
-	0, // 5: fleet.v1alpha1.CapacityNeed.reclamation_penalty_bucket:type_name -> fleet.v1alpha1.PenaltyBucket
-	1, // 6: fleet.v1alpha1.NodeSelectorRequirement.operator:type_name -> fleet.v1alpha1.NodeSelectorRequirement.Operator
-	2, // 7: fleet.v1alpha1.TopologySpread.when_unsatisfiable:type_name -> fleet.v1alpha1.TopologySpread.WhenUnsatisfiable
+var file_bigfleet_v1alpha1_capacity_proto_depIdxs = []int32{
+	4, // 0: bigfleet.v1alpha1.ClusterCapacityNeeds.needs:type_name -> bigfleet.v1alpha1.CapacityNeed
+	5, // 1: bigfleet.v1alpha1.CapacityNeed.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	7, // 2: bigfleet.v1alpha1.CapacityNeed.resources:type_name -> bigfleet.v1alpha1.CapacityNeed.ResourcesEntry
+	6, // 3: bigfleet.v1alpha1.CapacityNeed.spread:type_name -> bigfleet.v1alpha1.TopologySpread
+	0, // 4: bigfleet.v1alpha1.CapacityNeed.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
+	0, // 5: bigfleet.v1alpha1.CapacityNeed.reclamation_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
+	1, // 6: bigfleet.v1alpha1.NodeSelectorRequirement.operator:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement.Operator
+	2, // 7: bigfleet.v1alpha1.TopologySpread.when_unsatisfiable:type_name -> bigfleet.v1alpha1.TopologySpread.WhenUnsatisfiable
 	8, // [8:8] is the sub-list for method output_type
 	8, // [8:8] is the sub-list for method input_type
 	8, // [8:8] is the sub-list for extension type_name
@@ -692,27 +692,27 @@ var file_fleet_v1alpha1_capacity_proto_depIdxs = []int32{
 	0, // [0:8] is the sub-list for field type_name
 }
 
-func init() { file_fleet_v1alpha1_capacity_proto_init() }
-func file_fleet_v1alpha1_capacity_proto_init() {
-	if File_fleet_v1alpha1_capacity_proto != nil {
+func init() { file_bigfleet_v1alpha1_capacity_proto_init() }
+func file_bigfleet_v1alpha1_capacity_proto_init() {
+	if File_bigfleet_v1alpha1_capacity_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_fleet_v1alpha1_capacity_proto_rawDesc), len(file_fleet_v1alpha1_capacity_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_capacity_proto_rawDesc), len(file_bigfleet_v1alpha1_capacity_proto_rawDesc)),
 			NumEnums:      3,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_fleet_v1alpha1_capacity_proto_goTypes,
-		DependencyIndexes: file_fleet_v1alpha1_capacity_proto_depIdxs,
-		EnumInfos:         file_fleet_v1alpha1_capacity_proto_enumTypes,
-		MessageInfos:      file_fleet_v1alpha1_capacity_proto_msgTypes,
+		GoTypes:           file_bigfleet_v1alpha1_capacity_proto_goTypes,
+		DependencyIndexes: file_bigfleet_v1alpha1_capacity_proto_depIdxs,
+		EnumInfos:         file_bigfleet_v1alpha1_capacity_proto_enumTypes,
+		MessageInfos:      file_bigfleet_v1alpha1_capacity_proto_msgTypes,
 	}.Build()
-	File_fleet_v1alpha1_capacity_proto = out.File
-	file_fleet_v1alpha1_capacity_proto_goTypes = nil
-	file_fleet_v1alpha1_capacity_proto_depIdxs = nil
+	File_bigfleet_v1alpha1_capacity_proto = out.File
+	file_bigfleet_v1alpha1_capacity_proto_goTypes = nil
+	file_bigfleet_v1alpha1_capacity_proto_depIdxs = nil
 }

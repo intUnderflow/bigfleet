@@ -60,7 +60,7 @@ These are the easy ways to ship a wrong implementation. Each has a reason.
 |------|--------------|
 | `api/proto/` | Wire formats: `capacity.proto`, `shard.proto` (operator-initiated bidi stream), `provider.proto`, `coordinator.proto` |
 | `api/crd/` | CRDs: `CapacityRequest`, `AvailableCapacity`, `UpcomingNode` |
-| `pkg/apis/fleet/v1alpha1/` | Generated Go CRD types |
+| `pkg/apis/bigfleet/v1alpha1/` | Generated Go CRD types |
 | `pkg/machine/` | Machine state machine (3 stable + 4 transitional + Failed) |
 | `pkg/needs/` | NeedsTable: priority-sorted, full-replacement per cluster |
 | `pkg/inventory/` | In-memory machine inventory per shard |

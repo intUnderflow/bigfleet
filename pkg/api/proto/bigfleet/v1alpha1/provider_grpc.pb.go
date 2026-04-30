@@ -14,9 +14,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: fleet/v1alpha1/provider.proto
+// source: bigfleet/v1alpha1/provider.proto
 
-package fleetv1alpha1
+package bigfleetv1alpha1
 
 import (
 	context "context"
@@ -31,12 +31,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CapacityProvider_Create_FullMethodName    = "/fleet.v1alpha1.CapacityProvider/Create"
-	CapacityProvider_Configure_FullMethodName = "/fleet.v1alpha1.CapacityProvider/Configure"
-	CapacityProvider_Drain_FullMethodName     = "/fleet.v1alpha1.CapacityProvider/Drain"
-	CapacityProvider_Delete_FullMethodName    = "/fleet.v1alpha1.CapacityProvider/Delete"
-	CapacityProvider_Get_FullMethodName       = "/fleet.v1alpha1.CapacityProvider/Get"
-	CapacityProvider_List_FullMethodName      = "/fleet.v1alpha1.CapacityProvider/List"
+	CapacityProvider_Create_FullMethodName    = "/bigfleet.v1alpha1.CapacityProvider/Create"
+	CapacityProvider_Configure_FullMethodName = "/bigfleet.v1alpha1.CapacityProvider/Configure"
+	CapacityProvider_Drain_FullMethodName     = "/bigfleet.v1alpha1.CapacityProvider/Drain"
+	CapacityProvider_Delete_FullMethodName    = "/bigfleet.v1alpha1.CapacityProvider/Delete"
+	CapacityProvider_Get_FullMethodName       = "/bigfleet.v1alpha1.CapacityProvider/Get"
+	CapacityProvider_List_FullMethodName      = "/bigfleet.v1alpha1.CapacityProvider/List"
 )
 
 // CapacityProviderClient is the client API for CapacityProvider service.
@@ -290,7 +290,7 @@ func _CapacityProvider_List_Handler(srv interface{}, ctx context.Context, dec fu
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var CapacityProvider_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "fleet.v1alpha1.CapacityProvider",
+	ServiceName: "bigfleet.v1alpha1.CapacityProvider",
 	HandlerType: (*CapacityProviderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -319,5 +319,5 @@ var CapacityProvider_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "fleet/v1alpha1/provider.proto",
+	Metadata: "bigfleet/v1alpha1/provider.proto",
 }

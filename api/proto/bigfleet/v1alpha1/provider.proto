@@ -11,7 +11,7 @@
 // above a documented threshold can serve incremental state efficiently).
 syntax = "proto3";
 
-package fleet.v1alpha1;
+package bigfleet.v1alpha1;
 
 service CapacityProvider {
   rpc Create   (CreateRequest)    returns (TransitionAck);

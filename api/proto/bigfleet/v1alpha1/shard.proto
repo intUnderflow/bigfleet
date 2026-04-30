@@ -14,10 +14,10 @@
 // operator applies frames in arrival order.
 syntax = "proto3";
 
-package fleet.v1alpha1;
+package bigfleet.v1alpha1;
 
-import "fleet/v1alpha1/capacity.proto";
-import "fleet/v1alpha1/provider.proto";
+import "bigfleet/v1alpha1/capacity.proto";
+import "bigfleet/v1alpha1/provider.proto";
 
 service Shard {
   rpc Session(stream OperatorMessage) returns (stream ShardMessage);

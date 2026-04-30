@@ -8,10 +8,10 @@
 // Shards reject instructions with stale terms (zombie-leader protection).
 syntax = "proto3";
 
-package fleet.v1alpha1;
+package bigfleet.v1alpha1;
 
-import "fleet/v1alpha1/capacity.proto";
-import "fleet/v1alpha1/provider.proto";
+import "bigfleet/v1alpha1/capacity.proto";
+import "bigfleet/v1alpha1/provider.proto";
 
 service Coordinator {
   // Shards push periodic reports. Idempotent per (shard_id, cycle).
