@@ -78,8 +78,8 @@ integration: ## Run integration tests.
 	$(GO) test -race -count=1 -tags=integration ./test/integration/...
 
 .PHONY: e2e
-e2e: ## Run kind-based end-to-end tests.
-	$(GO) test -count=1 -tags=e2e -timeout=30m ./test/e2e/...
+e2e: ## Run kind-based end-to-end tests. Requires kind, kubectl, and a running Docker daemon.
+	$(GO) test -count=1 -tags=e2e -timeout=30m -v ./test/e2e/...
 
 .PHONY: sim
 sim: ## Run the simulator scenario suite.
