@@ -1,0 +1,14 @@
+// Capacity message types shared by the cluster operator → shard stream and
+// the shard's internal data model. Defines the wire shape of a CapacityNeed
+// (the aggregated unit of demand) and the supporting requirement / spread
+// types. Real fields are added in M1; this stub only exists so buf generates.
+syntax = "proto3";
+
+package fleet.v1alpha1;
+
+// CapacityNeed is the aggregated unit of capacity demand. Filled out in M1.
+message CapacityNeed {
+  // Placeholder. M1 adds requirements, resources, priority, count, spread,
+  // interruption_penalty, reclamation_penalty (bucketed per plan §0.1 B).
+  string placeholder = 1;
+}

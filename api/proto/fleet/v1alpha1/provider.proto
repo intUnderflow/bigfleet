@@ -1,0 +1,27 @@
+// CapacityProvider service: the contract every out-of-tree provider implements.
+// Six RPCs only — Create, Configure, Drain, Delete, Get, List — all async,
+// all idempotent. No Watch (reconciliation is List + Get).
+//
+// Real fields are added in M1; this stub only exists so buf generates.
+syntax = "proto3";
+
+package fleet.v1alpha1;
+
+service CapacityProvider {
+  rpc Create(CreateRequest) returns (TransitionAck);
+  rpc Configure(ConfigureRequest) returns (TransitionAck);
+  rpc Drain(DrainRequest) returns (TransitionAck);
+  rpc Delete(MachineRef) returns (TransitionAck);
+  rpc Get(MachineRef) returns (Machine);
+  rpc List(ListFilter) returns (MachineList);
+}
+
+message CreateRequest    { string placeholder = 1; }
+message ConfigureRequest { string placeholder = 1; }
+message DrainRequest     { string placeholder = 1; }
+message MachineRef       { string placeholder = 1; }
+message TransitionAck    { string placeholder = 1; }
+message Machine          { string placeholder = 1; }
+message MachineList      { string placeholder = 1; }
+// M1 adds the optional `since_revision` field per plan §0.1 C.
+message ListFilter       { string placeholder = 1; }

@@ -1,0 +1,19 @@
+// Coordinator service: internal RPCs between shards and the global coordinator.
+// Shard → coordinator: ReportShard (summary + shortfalls).
+// Coordinator → shard: Instruct (rebalance, drain, transfer ownership) carrying
+// (coordinator_term, sequence_number) for fencing.
+//
+// Real fields are added in M1; this stub only exists so buf generates.
+syntax = "proto3";
+
+package fleet.v1alpha1;
+
+service Coordinator {
+  rpc ReportShard(ShardReport) returns (ReportAck);
+  rpc Instruct(CoordinatorInstruction) returns (InstructAck);
+}
+
+message ShardReport            { string placeholder = 1; }
+message ReportAck              { string placeholder = 1; }
+message CoordinatorInstruction { string placeholder = 1; }
+message InstructAck            { string placeholder = 1; }

@@ -1,0 +1,23 @@
+version: v2
+modules:
+  - path: api/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # The proto package is `fleet.v1alpha1`; we don't repeat the version in
+    # the directory layout. Standard buf rule enforces a redundant suffix.
+    - PACKAGE_VERSION_SUFFIX
+    # Service names mirror design docs: `Shard`, `CapacityProvider`,
+    # `Coordinator`. Adding a `Service` suffix would diverge from the papers.
+    - SERVICE_SUFFIX
+    # RPCs deliberately share request/response types where the design treats
+    # them as one message — e.g., all four CapacityProvider lifecycle RPCs
+    # return TransitionAck, Get/Delete take MachineRef. Forcing per-RPC types
+    # is boilerplate that hides the shared semantics.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+breaking:
+  use:
+    - FILE

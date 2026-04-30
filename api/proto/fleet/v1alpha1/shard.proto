@@ -1,0 +1,23 @@
+// Shard service: the operator-initiated bidirectional stream that carries
+// all cluster ↔ shard traffic. Operators dial out and hold the stream;
+// no inbound listener is required on the cluster side.
+//
+// Real message types are added in M1; this stub only exists so buf generates.
+syntax = "proto3";
+
+package fleet.v1alpha1;
+
+service Shard {
+  // Long-lived bidi stream. M1 fills in OperatorMessage / ShardMessage with
+  // Hello, ClusterCapacityNeeds, BootstrapRequest/Response, ReclaimInstruction/Ack,
+  // NodeStateUpdate, AvailableCapacityUpdate.
+  rpc Session(stream OperatorMessage) returns (stream ShardMessage);
+}
+
+message OperatorMessage {
+  string placeholder = 1;
+}
+
+message ShardMessage {
+  string placeholder = 1;
+}
