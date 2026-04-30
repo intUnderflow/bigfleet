@@ -94,6 +94,7 @@ These are the easy ways to ship a wrong implementation. Each has a reason.
 - **Generated code is generated.** `make generate` is the single entry point. Don't edit generated files by hand.
 - **Static-stability-first commits.** Any change touching `pkg/shard/` should be reviewed against the question "does this introduce a hot-path coordinator dependency?" If yes, it doesn't ship.
 - **E2E as we go.** From M3 onwards (once the shard controller exists), every milestone that ships real code is exercised against a real Kubernetes cluster via `kind` before being declared done. The local dev box runs Docker Desktop, so `kind create cluster` works without setup. Type-checking and unit tests verify code correctness; e2e verifies behaviour. Don't batch e2e to the end.
+- **Scale ceilings as we go.** E2E includes scale testing — every milestone defines its own scale ceiling targets (see `docs/plan.md` §5.1) and the achieved numbers become the milestone's baseline. Two layers: `make scale` runs the synthetic Go-simulator scale tests (millions of machines, thousands of streams) under the `scale` build tag; the kind-based e2e tests run the same scenarios at realistic-but-smaller scale through real binaries / real gRPC / real Kubernetes. The local dev box is one fully-spec'd M5 Max running Docker Desktop; tests must be sized to that budget. Regressions against a prior milestone's ceiling are a release blocker.
 
 ## When you're stuck
 

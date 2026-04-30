@@ -344,6 +344,39 @@ Property-based tests (`testing/quick` or `gopter`) for:
 - Idempotency: replaying provider transition RPCs never produces duplicate machines.
 - Phase 3 conservation: total inventory before reclaim - reclaimed == inventory after reclaim.
 
+### 5.1 Scale ceilings — what we actually test, on what hardware
+
+Scale testing is a first-class part of E2E, not a one-time exercise. Every milestone that ships real code is exercised at the highest scale the local M5 Max running Docker Desktop can sustain, and the achieved numbers are recorded as the milestone's scale-ceiling baseline. Regressions against the prior ceiling are a release blocker.
+
+The local development hardware is one fully-spec'd Apple M5 Max (16-core CPU, 64 GB unified memory) running Docker Desktop. Realistic budget for testing:
+
+| Knob | M5 Max ceiling (with headroom) |
+|------|--------------------------------|
+| Resident kind clusters running concurrently | ~3 with ~10 worker nodes each |
+| Lightweight container "operators" against one shard | ~5,000 (one process per container, 10MB RSS each) |
+| Operator gRPC streams against one shard process | ~10,000 (golang goroutines + sockets — bottleneck is fd limit, not CPU) |
+| Synthetic machines in shard inventory (in-memory) | ~5,000,000 (fits in ~250 MB at the per-machine record size from BigFleet paper §9) |
+| Rollups/sec the shard can ingest from one stream | budget: <1 ms per rollup, target 5,000 rollups/sec across 5,000 streams |
+| Decision cycles/sec at full inventory | target 10 Hz (100ms/cycle) at the largest inventory above |
+
+These numbers map onto two distinct test layers:
+
+**Layer 1 — `cmd/fauxctl` synthetic scale**: pure Go simulation, no Docker. Drives the `decision`, `inventory`, `needs`, `shortfall` packages with synthetic providers and synthetic operators. Exercises the engine at the *machines* and *rollups/sec* ceilings — orders of magnitude beyond what kind can host. This is where we prove the decision engine is fast enough at fleet scale.
+
+**Layer 2 — Docker / kind end-to-end scale**: real binaries, real gRPC, real Kubernetes. Smaller numbers, but real network paths, real CRDs, real kubelet behaviour. This is where we prove the system survives realistic protocol roundtrips and that no bug hides behind in-process shortcuts.
+
+Each milestone (M3 onwards) defines its own scale ceilings:
+
+- **M3 (shard)**: 1 shard process, 1,000 simulated streams via `fauxctl-style` test driver, 10,000 machines in inventory, 1,000 rollups/sec sustained for 10 minutes. Full Phase 1/2/3 cycle within 100 ms at peak.
+- **M4 (operator)**: 1 real kind cluster with 5 nodes. Operator runs inside, shard runs on host. Drive 10,000 fake CRs through the cluster's etcd; verify the rollup compresses to ~5–20 entries and the cycle still runs at 10 Hz.
+- **M5 (single-cluster e2e)**: 1 kind cluster, full pipeline (CR controller → operator → shard → fake provider → UpcomingNode). 1,000 unschedulable pods → 1,000 satisfied pods within 60 seconds wall clock.
+- **M6 (multi-shard)**: 3 shards, 10 simulated clusters, 100K total machines. Cross-shard rebalance latency under 5 seconds. Coordinator failover under 2 seconds.
+- **M8 (multi-cluster e2e)**: 3 kind clusters, 1 BigFleet control plane in Docker. Cross-cluster preemption via real ReclaimInstruction frames. Static stability test: kill BigFleet, verify all three clusters keep running.
+
+Scale tests live under `test/scale/` with build tag `scale` so they don't slow PR CI. Run via `make scale`. CI runs them nightly; PRs that change `pkg/decision`, `pkg/shard`, `pkg/inventory`, or `pkg/needs` opt-in to running the relevant subset on the PR.
+
+The numbers above are starting targets. Each milestone is allowed to adjust *up* (we discovered we can do more) but a downward revision needs an ADR.
+
 ---
 
 ## 6. Observability

@@ -85,6 +85,10 @@ e2e: ## Run kind-based end-to-end tests.
 sim: ## Run the simulator scenario suite.
 	$(GO) test -race -count=1 -tags=sim ./sim/...
 
+.PHONY: scale
+scale: ## Run scale ceiling tests (slow; tagged "scale"). Designed for the M5 Max + Docker Desktop budget; not part of PR CI by default.
+	$(GO) test -count=1 -tags=scale -timeout=30m ./test/scale/...
+
 .PHONY: conformance
 conformance: ## Run the provider conformance suite (TARGET=addr:port).
 	@if [ -z "$$TARGET" ]; then echo "TARGET=addr:port required"; exit 1; fi
