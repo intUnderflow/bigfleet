@@ -60,13 +60,15 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		idleCands := candidatesFromList(idleByState, n.Profile, claimed)
 		sortIdleCandidates(idleCands)
 		take := minInt(len(idleCands), deficit)
+		profile := n.Profile
 		for _, m := range idleCands[:take] {
 			claimed.add(m.ID)
 			result.Actions = append(result.Actions, Action{
-				Kind:      ActionKindBootstrap,
-				MachineID: m.ID,
-				Cluster:   n.ClusterID,
-				Reason:    "phase1.idle",
+				Kind:          ActionKindBootstrap,
+				MachineID:     m.ID,
+				Cluster:       n.ClusterID,
+				SourceProfile: &profile,
+				Reason:        "phase1.idle",
 			})
 		}
 		deficit -= take
@@ -83,10 +85,11 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		for _, m := range specCands[:take] {
 			claimed.add(m.ID)
 			result.Actions = append(result.Actions, Action{
-				Kind:      ActionKindProvision,
-				MachineID: m.ID,
-				Cluster:   n.ClusterID,
-				Reason:    "phase1.speculative",
+				Kind:          ActionKindProvision,
+				MachineID:     m.ID,
+				Cluster:       n.ClusterID,
+				SourceProfile: &profile,
+				Reason:        "phase1.speculative",
 			})
 		}
 		deficit -= take

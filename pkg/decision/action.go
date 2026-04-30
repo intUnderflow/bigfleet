@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
 // ActionKind discriminates the four kinds of action the decision engine
@@ -55,6 +56,13 @@ type Action struct {
 	// Provision, this is the *destination* cluster. For Reclaim and
 	// Preempt, this is the source cluster the machine is leaving.
 	Cluster machine.ClusterID
+
+	// SourceProfile is the profile of the originating Need (set for
+	// Bootstrap and Provision). Carried through so the shard can produce
+	// a BootstrapRequest with the right requirements and stamp the
+	// configured machine with the workload's priority + penalties for
+	// Phase 2 victim scoring. Nil for Reclaim and Preempt.
+	SourceProfile *needs.Profile
 
 	// GracePeriod is set on Reclaim and Preempt actions.
 	GracePeriod time.Duration
