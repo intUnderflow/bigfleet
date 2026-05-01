@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -292,7 +293,10 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 
 // applyTransition advances a machine to the given state in the inventory,
 // validating against the state machine. Used by the executors to walk
-// transitional states.
+// transitional states. After a successful Apply, if the machine has a
+// non-empty Cluster binding, emits a NodeStateUpdate to that cluster's
+// operator session so the operator can write/refresh the matching
+// UpcomingNode CR.
 func (s *Shard) applyTransition(id machine.ID, target machine.State, mut func(*machine.Machine)) error {
 	cur, err := s.inv.Get(id)
 	if err != nil {
@@ -302,12 +306,19 @@ func (s *Shard) applyTransition(id machine.ID, target machine.State, mut func(*m
 		if mut != nil {
 			mut(&fresh)
 		}
-		return s.inv.Insert(fresh)
+		if err := s.inv.Insert(fresh); err != nil {
+			return err
+		}
+		s.notifyNodeState(fresh)
+		return nil
 	}
 	if cur.State == target {
 		if mut != nil {
 			mut(&cur)
-			return s.inv.Apply(cur)
+			if err := s.inv.Apply(cur); err != nil {
+				return err
+			}
+			s.notifyNodeState(cur)
 		}
 		return nil
 	}
@@ -315,7 +326,38 @@ func (s *Shard) applyTransition(id machine.ID, target machine.State, mut func(*m
 	if mut != nil {
 		mut(&cur)
 	}
-	return s.inv.Apply(cur)
+	if err := s.inv.Apply(cur); err != nil {
+		return err
+	}
+	s.notifyNodeState(cur)
+	return nil
+}
+
+// notifyNodeState pushes a NodeStateUpdate to the operator session
+// for the machine's bound cluster, if any. Best-effort: a missing or
+// disconnected session is silently skipped because the operator will
+// reconcile from full state on reconnect.
+func (s *Shard) notifyNodeState(m machine.Machine) {
+	if m.Cluster == "" {
+		return
+	}
+	sess := s.lookupSession(m.Cluster)
+	if sess == nil {
+		return
+	}
+	upd := &pb.NodeStateUpdate{
+		MachineId: string(m.ID),
+		State:     conv.MachineStateToProto(m.State),
+	}
+	if !m.Host.Empty() {
+		upd.ProviderId = m.Host.Ref
+	}
+	if m.LastError != "" {
+		upd.LastError = m.LastError
+	}
+	if err := sess.SendNodeStateUpdate(upd); err != nil {
+		s.log.Debug("notifyNodeState send failed", "machine", m.ID, "err", err)
+	}
 }
 
 // SeedInventory inserts a machine straight into the shard's inventory.

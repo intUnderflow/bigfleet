@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -77,20 +78,97 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 	return nil
 }
 
-// handleAvailableCapacityUpdate is the M4 stub for AvailableCapacity
-// CR writes. The full implementation lands when the operator-side
-// telemetry story is fleshed out — for M4 we log and drop, since the
-// shard hasn't started emitting these yet.
-func (o *Operator) handleAvailableCapacityUpdate(_ context.Context, u *pb.AvailableCapacityUpdate) error {
-	if u == nil {
+// handleAvailableCapacityUpdate upserts an AvailableCapacity CR for
+// the profile carried in the update. The supersedes_key is the profile
+// fingerprint, so the CR name is stable per profile and successive
+// updates rewrite the same object.
+func (o *Operator) handleAvailableCapacityUpdate(ctx context.Context, u *pb.AvailableCapacityUpdate) error {
+	if u == nil || u.GetSupersedesKey() == "" {
 		return nil
 	}
-	o.log.Debug("AvailableCapacityUpdate received (no-op in M4)",
-		"key", u.GetSupersedesKey(),
-		"count", u.GetAvailableCount(),
-		"confidence", u.GetConfidence(),
-	)
+	name := availableCapacityName(u.GetSupersedesKey())
+
+	reqs := availableCapacityRequirements(u.GetRequirements())
+	resources := availableCapacityResources(u.GetResources())
+	availability := availableCapacityConfidence(u.GetConfidence())
+
+	var existing bfv1alpha1.AvailableCapacity
+	getErr := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		ac := &bfv1alpha1.AvailableCapacity{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: bfv1alpha1.AvailableCapacitySpec{
+				Requirements:   reqs,
+				Resources:      resources,
+				AvailableCount: u.GetAvailableCount(),
+				Availability:   availability,
+			},
+		}
+		if err := o.cfg.KubeClient.Create(ctx, ac); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create AvailableCapacity: %w", err)
+		}
+		return nil
+	case getErr != nil:
+		return fmt.Errorf("get AvailableCapacity: %w", getErr)
+	}
+
+	existing.Spec.Requirements = reqs
+	existing.Spec.Resources = resources
+	existing.Spec.AvailableCount = u.GetAvailableCount()
+	existing.Spec.Availability = availability
+	if err := o.cfg.KubeClient.Update(ctx, &existing); err != nil {
+		return fmt.Errorf("update AvailableCapacity: %w", err)
+	}
 	return nil
+}
+
+// availableCapacityName produces a DNS-1123 name from a profile
+// fingerprint. The "ac-" prefix avoids collisions with user-named CRs.
+func availableCapacityName(fingerprint string) string {
+	return "ac-" + fingerprint
+}
+
+func availableCapacityRequirements(in []*pb.NodeSelectorRequirement) []corev1.NodeSelectorRequirement {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]corev1.NodeSelectorRequirement, 0, len(in))
+	for _, r := range in {
+		out = append(out, corev1.NodeSelectorRequirement{
+			Key:      r.GetKey(),
+			Operator: corev1.NodeSelectorOperator(requirementOperatorString(r.GetOperator())),
+			Values:   append([]string(nil), r.GetValues()...),
+		})
+	}
+	return out
+}
+
+func availableCapacityResources(in *pb.Resources) corev1.ResourceList {
+	out := corev1.ResourceList{}
+	if in == nil {
+		return out
+	}
+	for k, v := range in.GetResources() {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			continue
+		}
+		out[corev1.ResourceName(k)] = q
+	}
+	return out
+}
+
+func availableCapacityConfidence(c pb.AvailableCapacityUpdate_Confidence) bfv1alpha1.Confidence {
+	switch c {
+	case pb.AvailableCapacityUpdate_CONFIDENCE_LOW:
+		return bfv1alpha1.ConfidenceLow
+	case pb.AvailableCapacityUpdate_CONFIDENCE_MEDIUM:
+		return bfv1alpha1.ConfidenceMedium
+	case pb.AvailableCapacityUpdate_CONFIDENCE_HIGH:
+		return bfv1alpha1.ConfidenceHigh
+	}
+	return bfv1alpha1.ConfidenceNone
 }
 
 // upcomingNodeName produces a stable Kubernetes name for an

@@ -263,11 +263,15 @@ func (sess *operatorSession) deliverReclaimAck(ack *pb.ReclaimAck) {
 	}
 }
 
-// SendNodeStateUpdate is exposed for tests and future callers; it
-// pushes a coalescing NodeStateUpdate frame down the stream. The shard's
-// outbox layer (M3+ work) will handle drop-on-supersede; for M3 we
-// just send.
+// SendNodeStateUpdate pushes a coalescing NodeStateUpdate frame down
+// the stream. The receiver's supersedes_key is set to "node:<id>" so a
+// stale update for the same machine is dropped on reconnect. Called
+// by the shard's transition observer for every state change on a
+// cluster-bound machine.
 func (sess *operatorSession) SendNodeStateUpdate(u *pb.NodeStateUpdate) error {
+	if u.SupersedesKey == "" {
+		u.SupersedesKey = "node:" + u.GetMachineId()
+	}
 	return sess.send(&pb.ShardMessage{Payload: &pb.ShardMessage_NodeStateUpdate{NodeStateUpdate: u}})
 }
 

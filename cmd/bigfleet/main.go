@@ -1,11 +1,8 @@
 // Command bigfleet is the BigFleet binary. Subcommands:
 //
 //	bigfleet shard         run a single shard controller
-//	bigfleet coordinator   (stub for M6) run the global coordinator
-//	bigfleet all-in-one    (stub) run shard and coordinator in one process
-//
-// In M3 only `shard` is implemented. The other subcommands print a
-// not-yet-implemented message and exit with status 2.
+//	bigfleet coordinator   run the global coordinator (Raft + BoltDB)
+//	bigfleet all-in-one    run coordinator + shard in one process (dev / quickstart)
 package main
 
 import (
@@ -33,8 +30,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "all-in-one":
-		fmt.Fprintln(os.Stderr, "all-in-one: not yet implemented (M6)")
-		os.Exit(2)
+		if err := runAllInOne(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "bigfleet all-in-one:", err)
+			os.Exit(1)
+		}
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -49,8 +48,8 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "subcommands:")
 	fmt.Fprintln(os.Stderr, "  shard         run a single shard controller")
-	fmt.Fprintln(os.Stderr, "  coordinator   run the global coordinator (not yet implemented)")
-	fmt.Fprintln(os.Stderr, "  all-in-one    run shard and coordinator in one process (not yet implemented)")
+	fmt.Fprintln(os.Stderr, "  coordinator   run the global coordinator (Raft + BoltDB)")
+	fmt.Fprintln(os.Stderr, "  all-in-one    run coordinator + shard in one process (dev / quickstart)")
 }
 
 // signalContext returns a context that is cancelled on SIGINT or SIGTERM.

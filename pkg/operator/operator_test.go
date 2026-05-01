@@ -227,15 +227,6 @@ func TestOperator_DrivesBootstrapToConfigured(t *testing.T) {
 	}, "4 machines reach Configured")
 }
 
-// NodeStateUpdate frames from the shard cause UpcomingNode CRs to be
-// upserted with the matching phase. We simulate this by triggering a
-// Phase 1 → Configure flow and then verifying UpcomingNode reflects
-// Ready phase.
-func TestOperator_WritesUpcomingNodes(t *testing.T) {
-	t.Parallel()
-	t.Skip("UpcomingNode writer requires shard-side NodeStateUpdate emission, which lands together with the outbox in M5")
-}
-
 // Reconnect: the operator survives a server-side stream close and
 // re-establishes the session. Verified by sending a CR after restart
 // and observing the rollup land.

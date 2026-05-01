@@ -59,26 +59,27 @@ The operator dials the shard, opens a `Shard.Session` stream, and starts emittin
 
 ## 5. Create a CapacityRequest
 
+One CR represents one pod's worth of capacity. To ask for two nodes, apply two CRs.
+
 ```sh
-cat <<'EOF' | kubectl apply -f -
+for i in 1 2; do
+cat <<EOF | kubectl apply -f -
 apiVersion: bigfleet.lucy.sh/v1alpha1
 kind: CapacityRequest
 metadata:
-  name: training-job-1
+  name: training-job-$i
 spec:
-  count: 2
-  profile:
-    requirements:
-      - key: node.kubernetes.io/instance-type
-        operator: In
-        values: [a3-highgpu-8g]
-    resources:
-      - name: nvidia.com/gpu
-        quantity: "8"
-    priority: 1000000
-    interruptionPenalty: 8192
-    reclamationPenalty: 65536
+  requirements:
+    - key: node.kubernetes.io/instance-type
+      operator: In
+      values: [a3-highgpu-8g]
+  resources:
+    nvidia.com/gpu: "8"
+  priority: 1000000
+  interruptionPenalty: 8192
+  reclamationPenalty: 65536
 EOF
+done
 ```
 
 ## 6. Watch it flow through

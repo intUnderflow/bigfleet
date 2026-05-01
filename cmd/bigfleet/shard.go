@@ -21,11 +21,10 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/shard"
 )
 
-// runShard runs the shard controller. M3 deliberately uses an in-memory
-// fake provider (no out-of-tree provider gRPC adapter exists yet); M5
-// wires the real adapter and removes the fake from this binary's
-// production path. Until then the fake is the only way to run the shard
-// for local development.
+// runShard runs the shard controller. The in-process fake provider
+// lives at pkg/provider/fake and is used here for laptop / kind / dev
+// installs only; production deployments dial an out-of-tree provider
+// over gRPC via pkg/provider/grpcadapter (see provider-author-guide).
 func runShard(args []string) error {
 	fs := flag.NewFlagSet("shard", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)

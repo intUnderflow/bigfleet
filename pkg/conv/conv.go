@@ -182,7 +182,7 @@ func MachineFromProto(m *pb.Machine) (machine.Machine, error) {
 func MachineToProto(m machine.Machine) *pb.Machine {
 	out := &pb.Machine{
 		Id:                         string(m.ID),
-		State:                      stateToProto(m.State),
+		State:                      MachineStateToProto(m.State),
 		InstanceType:               m.Profile.InstanceType,
 		Zone:                       m.Profile.Zone,
 		CapacityType:               capacityTypeToProto(m.Profile.CapacityType),
@@ -225,7 +225,7 @@ func stateFromProto(s pb.MachineState) (machine.State, error) {
 	return machine.StateUnspecified, fmt.Errorf("unknown MachineState: %v", s)
 }
 
-func stateToProto(s machine.State) pb.MachineState {
+func MachineStateToProto(s machine.State) pb.MachineState {
 	switch s {
 	case machine.StateSpeculative:
 		return pb.MachineState_MACHINE_STATE_SPECULATIVE
