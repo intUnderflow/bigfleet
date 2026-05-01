@@ -1,0 +1,22 @@
+# dev-5k — smallest sensible profile, runs free on a laptop.
+# 5 simulated clusters × 1K CRs each = 5K total demand.
+
+kwok:
+  clusterCount: 5
+  resources:
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 800m, memory: 1Gi }
+
+shard:
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 600
+
+costEstimate:
+  vCPU: 3
+  memoryGB: 9
+  awsSpotUsdPerHour: 0.20
+  notes: "Free on M5 Max kind. ~10 min run."

@@ -114,12 +114,27 @@ lint: tools ## Run linters.
 	$(BIN)/buf lint
 
 .PHONY: helm-render
-helm-render: ## Render all three Helm charts to /dev/null as a smoke check.
+helm-render: ## Render all Helm charts to /dev/null as a smoke check.
 	@command -v helm >/dev/null || { echo "helm not on PATH"; exit 1; }
 	helm template bigfleet deploy/helm/bigfleet --namespace bigfleet-system >/dev/null
 	helm template bf-op deploy/helm/bigfleet-operator --namespace bigfleet-system --set clusterID=test --set shardAddress=bigfleet-shard:7780 >/dev/null
 	helm template bf-cr deploy/helm/bigfleet-unschedulable-pod-controller --namespace bigfleet-system >/dev/null
-	@echo "all three charts rendered"
+	helm template scaletest test/scaletest/chart -f test/scaletest/profiles/dev-5k.yaml >/dev/null
+	@echo "all charts rendered"
+
+.PHONY: scaletest-images
+scaletest-images: ## Build the two images the scaletest harness needs (bigfleet, bigfleet-scaletest).
+	@command -v docker >/dev/null || { echo "docker not on PATH"; exit 1; }
+	docker build -t bigfleet:dev -f cmd/bigfleet/Dockerfile .
+	docker build -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
+
+.PHONY: scaletest
+scaletest: ## Run the dev-5k profile end-to-end. Override with PROFILE=local-50k etc.
+	@mkdir -p test/scaletest/results
+	$(GO) run ./test/scaletest/cmd/scaletest-runner \
+		--profile=test/scaletest/profiles/$(or $(PROFILE),dev-5k).yaml \
+		--duration=$(or $(DURATION),2m) \
+		--output=test/scaletest/results/$$(date +%Y%m%d-%H%M%S)-$(or $(PROFILE),dev-5k)/
 
 .PHONY: vet
 vet: ## Run go vet.

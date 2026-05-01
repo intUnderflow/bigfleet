@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bigfleet-coordinator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  serviceName: bigfleet-coordinator
+  replicas: {{ .Values.coordinator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/part-of: bigfleet-scaletest
+  template:
+    metadata:
+      labels:
+        {{- include "scaletest.labels" . | nindent 8 }}
+        app.kubernetes.io/component: coordinator
+    spec:
+      containers:
+        - name: coordinator
+          image: "{{ .Values.bigfleet.image.repository }}:{{ .Values.bigfleet.image.tag }}"
+          imagePullPolicy: {{ .Values.bigfleet.image.pullPolicy }}
+          args:
+            - coordinator
+            - --listen=:7790
+            - --metrics-addr=:8790
+            - --raft-bind=:7791
+            - --raft-advertise=$(POD_IP):7791
+            - --data-dir=/var/lib/bigfleet
+            - --bootstrap=true
+            - --id=$(POD_NAME)
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+          ports:
+            - { name: grpc,    containerPort: 7790 }
+            - { name: raft,    containerPort: 7791 }
+            - { name: metrics, containerPort: 8790 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/bigfleet }
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.coordinator.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: bigfleet-coordinator-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-coordinator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: coordinator
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - { name: grpc,    port: 7790, targetPort: grpc }
+    - { name: metrics, port: 8790, targetPort: metrics }

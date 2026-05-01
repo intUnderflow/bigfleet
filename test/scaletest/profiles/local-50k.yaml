@@ -1,0 +1,21 @@
+# local-50k — M5 Max kind ceiling. 50 simulated clusters × 1K CRs.
+
+kwok:
+  clusterCount: 50
+
+shard:
+  replicas: 1
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+costEstimate:
+  vCPU: 30
+  memoryGB: 35
+  awsSpotUsdPerHour: 1.00
+  notes: "Free on M5 Max (18C/64GB). ~30 min run."

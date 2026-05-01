@@ -1,0 +1,73 @@
+# Defaults shared across all profiles. Profile-specific values files
+# under ../profiles/values-*.yaml override these.
+
+namespace: bigfleet-scaletest
+
+# The combined harness image (kine + apiserver + kwok + operator + load-driver).
+# Built from test/scaletest/image/Dockerfile.
+image:
+  repository: bigfleet-scaletest
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# The bigfleet binary (cmd/bigfleet) image used for the coordinator,
+# shards, and fake provider running in-cluster. For kind/dev runs, this
+# is built locally and side-loaded with `kind load docker-image`.
+bigfleet:
+  image:
+    repository: bigfleet
+    tag: dev
+    pullPolicy: IfNotPresent
+
+coordinator:
+  replicas: 1
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 4Gi }
+  # Stress runs use emptyDir to avoid storage class quirks across
+  # targets. HA + persistence is exercised separately.
+  persistence:
+    enabled: false
+    size: 10Gi
+
+shard:
+  replicas: 1
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+
+provider:
+  resources:
+    requests: { cpu: 500m, memory: 512Mi }
+    limits:   { cpu: 2,    memory: 2Gi }
+
+# The defining knobs: how many simulated clusters and how big each.
+kwok:
+  clusterCount: 5
+  resources:
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 800m, memory: 1Gi }
+
+# Load profile injected into each KWOK pod via a ConfigMap. See
+# test/scaletest/cmd/load-driver/main.go for the schema.
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  burstAtStart: 0
+  priorityClasses: [100, 1000, 1000000]
+  durationSeconds: 600
+
+prometheus:
+  enabled: true
+  retentionDays: 1
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits:   { cpu: 2,    memory: 8Gi }
+
+# Cost-model annotations used by the runner. Not enforced at chart
+# render time; informational so `helm get values` surfaces them.
+costEstimate:
+  vCPU: 3
+  memoryGB: 9
+  awsSpotUsdPerHour: 0.20
+  notes: "dev-5k baseline; runs free on M5 Max kind"

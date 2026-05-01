@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  replicas: {{ .Values.shard.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/part-of: bigfleet-scaletest
+  template:
+    metadata:
+      labels:
+        {{- include "scaletest.labels" . | nindent 8 }}
+        app.kubernetes.io/component: shard
+    spec:
+      containers:
+        - name: shard
+          image: "{{ .Values.bigfleet.image.repository }}:{{ .Values.bigfleet.image.tag }}"
+          imagePullPolicy: {{ .Values.bigfleet.image.pullPolicy }}
+          args:
+            - shard
+            - --listen=:7780
+            - --metrics-addr=:8780
+            - --id=$(POD_NAME)
+            - --data-dir=/var/lib/bigfleet
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          ports:
+            - { name: grpc,    containerPort: 7780 }
+            - { name: metrics, containerPort: 8780 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/bigfleet }
+          resources:
+            {{- toYaml .Values.shard.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  selector:
+    app.kubernetes.io/component: shard
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - { name: grpc,    port: 7780, targetPort: grpc }
+    - { name: metrics, port: 8780, targetPort: metrics }

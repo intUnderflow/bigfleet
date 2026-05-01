@@ -1,0 +1,13 @@
+apiVersion: v2
+name: bigfleet-scaletest
+description: Universal scaling harness for BigFleet. Lands on any Kubernetes cluster (kind, homelab k3s, GKE Autopilot, EKS) and exercises BigFleet at a configured scale via KWOK-faked clusters.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - bigfleet
+  - scaletest
+  - kwok
+home: https://bigfleet.lucy.sh
+sources:
+  - https://github.com/intUnderflow/bigfleet

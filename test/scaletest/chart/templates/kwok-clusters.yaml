@@ -1,0 +1,67 @@
+{{/*
+N replicas of the combined harness image. Each pod is one
+self-contained KWOK cluster running its own apiserver + the
+bigfleet-operator dialling the shard + the load-driver emitting CR
+churn per loadProfile.
+
+We use a Deployment because every pod is identical and stateless
+(state is in-pod sqlite, scrubbed on restart). For larger replica
+counts (5000+) we'd switch to a StatefulSet to get stable cluster IDs;
+for the M11 universal harness, Deployment + POD_NAME is sufficient.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kwok-load-profile
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+data:
+  profile.yaml: |
+    {{- toYaml .Values.loadProfile | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kwok-cluster
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kwok-cluster
+spec:
+  replicas: {{ .Values.kwok.clusterCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: kwok-cluster
+      app.kubernetes.io/part-of: bigfleet-scaletest
+  template:
+    metadata:
+      labels:
+        {{- include "scaletest.labels" . | nindent 8 }}
+        app.kubernetes.io/component: kwok-cluster
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8770"
+    spec:
+      containers:
+        - name: harness
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: BIGFLEET_SHARD_ADDR
+              value: {{ include "scaletest.shardAddr" . | quote }}
+            - name: LOAD_PROFILE
+              value: /etc/loadgen/profile.yaml
+          ports:
+            - { name: operator-met, containerPort: 8770 }
+            - { name: loadgen-met,  containerPort: 8771 }
+          volumeMounts:
+            - { name: profile, mountPath: /etc/loadgen, readOnly: true }
+          resources:
+            {{- toYaml .Values.kwok.resources | nindent 12 }}
+      volumes:
+        - name: profile
+          configMap:
+            name: kwok-load-profile

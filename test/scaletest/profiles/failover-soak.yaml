@@ -1,0 +1,32 @@
+# failover-soak — 50 clusters at steady state. The runner kills the
+# coordinator leader at t=10min and confirms the data plane (shards +
+# operators) keeps serving. Validates static stability.
+
+kwok:
+  clusterCount: 50
+
+coordinator:
+  replicas: 3
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 4Gi }
+
+shard:
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 3600
+
+# Runner-only directive: scaletest-runner reads this, so it isn't
+# applied at chart render time.
+runnerActions:
+  - { atSeconds: 600,  action: kill-coordinator-leader }
+  - { atSeconds: 1200, action: kill-coordinator-leader }
+
+costEstimate:
+  vCPU: 30
+  memoryGB: 35
+  awsSpotUsdPerHour: 5.00
+  notes: "M5 Max kind or homelab. 60 min run. Tests static stability."

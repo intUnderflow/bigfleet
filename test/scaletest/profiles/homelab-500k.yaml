@@ -1,0 +1,32 @@
+# homelab-500k — typical homelab ceiling. 500 simulated clusters × 1K CRs.
+
+kwok:
+  clusterCount: 500
+
+shard:
+  replicas: 5
+  resources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 8, memory: 16Gi }
+
+coordinator:
+  replicas: 3
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 3600
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 16Gi }
+
+costEstimate:
+  vCPU: 280
+  memoryGB: 280
+  awsSpotUsdPerHour: 15.00
+  notes: "Designed for a homelab with ~300 GB total RAM. ~60 min run. Cloud cost shown is what it would cost on EKS spot."
