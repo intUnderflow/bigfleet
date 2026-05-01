@@ -268,7 +268,7 @@ func (d *driver) createOne(ctx context.Context) error {
 	intr := resource.MustParse("8192")
 	recl := resource.MustParse("65536")
 	cr := &bfv1alpha1.CapacityRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: bfv1alpha1.CapacityRequestSpec{
 			Requirements: []corev1.NodeSelectorRequirement{{
 				Key:      "node.kubernetes.io/instance-type",
@@ -295,7 +295,7 @@ func (d *driver) createOne(ctx context.Context) error {
 }
 
 func (d *driver) deleteOne(ctx context.Context, name string) error {
-	cr := &bfv1alpha1.CapacityRequest{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	cr := &bfv1alpha1.CapacityRequest{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
 	if err := d.k.Delete(ctx, cr); err != nil && !errIsNotFound(err) {
 		return err
 	}
