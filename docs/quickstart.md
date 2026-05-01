@@ -127,4 +127,4 @@ kind delete cluster --name bigfleet-quickstart
 - Real install (multi-cluster, three coordinator replicas, in-cluster shard): [`operator-guide.md`](operator-guide.md).
 - Sizing for production: [`scaling-guide.md`](scaling-guide.md).
 - Writing your own provider: [`provider-author-guide.md`](provider-author-guide.md).
-- The full design rationale: [`papers/bigfleet.md`](papers/bigfleet.md).
+- The full design rationale: the [BigFleet paper](https://lucy.sh/bigfleet) (vendored at [`papers/bigfleet.md`](papers/bigfleet.md)).

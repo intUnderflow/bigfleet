@@ -21,7 +21,7 @@ hero:
 
 ## What BigFleet is
 
-BigFleet is a **fleet-level infrastructure autoscaler**. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It's the reference implementation of the design described in the [BigFleet paper](/papers/bigfleet/) and the [Fleet-Scale Kubernetes paper](/papers/fleet-scale-kubernetes/).
+BigFleet is a **fleet-level infrastructure autoscaler**. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It's the reference implementation of the design described in two papers — [BigFleet](https://lucy.sh/bigfleet) (architecture) and [Fleet-Scale Kubernetes](https://lucy.sh/fleet-scale-kubernetes) (operating model). Both are also vendored in this site under [/papers/bigfleet/](/papers/bigfleet/) and [/papers/fleet-scale-kubernetes/](/papers/fleet-scale-kubernetes/).
 
 BigFleet is **not** a scheduler. It does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission. It sits one layer below the cluster autoscaler.
 

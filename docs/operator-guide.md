@@ -4,7 +4,7 @@ For the human running BigFleet — installing it, monitoring it, responding when
 
 ## Architecture in one paragraph
 
-BigFleet is two tiers. The **coordinator** (Tier 1) owns Raft-replicated fleet state — shard membership, cluster→shard map, topology-domain→shard assignments, quota allocations, provider registry. The **shards** (Tier 2) own machines and make provisioning decisions on their hot path. Per-cluster **operators** dial a shard over a long-lived bidirectional gRPC stream. The coordinator does *not* make provisioning decisions; shards do. Static stability is the load-bearing safety property: clusters keep running with BigFleet entirely down. (See `docs/papers/bigfleet.md` for the full architecture.)
+BigFleet is two tiers. The **coordinator** (Tier 1) owns Raft-replicated fleet state — shard membership, cluster→shard map, topology-domain→shard assignments, quota allocations, provider registry. The **shards** (Tier 2) own machines and make provisioning decisions on their hot path. Per-cluster **operators** dial a shard over a long-lived bidirectional gRPC stream. The coordinator does *not* make provisioning decisions; shards do. Static stability is the load-bearing safety property: clusters keep running with BigFleet entirely down. (See the [BigFleet paper](https://lucy.sh/bigfleet) for the full architecture, also vendored at `docs/papers/bigfleet.md`.)
 
 ## Components
 
@@ -117,8 +117,8 @@ Rolling. The Shard.Session stream is reconnect-safe; in-flight bootstrap request
 
 ## Cross-references
 
-- Architecture: `docs/papers/bigfleet.md`
-- Operating model: `docs/papers/fleet-scale-kubernetes.md`
+- Architecture: [BigFleet paper](https://lucy.sh/bigfleet) (vendored at `docs/papers/bigfleet.md`)
+- Operating model: [Fleet-Scale Kubernetes paper](https://lucy.sh/fleet-scale-kubernetes) (vendored at `docs/papers/fleet-scale-kubernetes.md`)
 - Implementation plan: `docs/plan.md`
 - Provider authoring: `docs/provider-author-guide.md`
 - Scaling sizing: `docs/scaling-guide.md`

@@ -76,8 +76,8 @@ The simulator (`make sim`) and soak (`make soak`) are deterministic — same tra
 
 ## Cross-references
 
-- Architecture: `docs/papers/bigfleet.md`
-- Operating model: `docs/papers/fleet-scale-kubernetes.md`
+- Architecture: [BigFleet paper](https://lucy.sh/bigfleet) (vendored at `docs/papers/bigfleet.md`)
+- Operating model: [Fleet-Scale Kubernetes paper](https://lucy.sh/fleet-scale-kubernetes) (vendored at `docs/papers/fleet-scale-kubernetes.md`)
 - Implementation plan + scalability concerns: `docs/plan.md` §10
 - Operator runbook: `docs/operator-guide.md`
 - Provider authoring: `docs/provider-author-guide.md`

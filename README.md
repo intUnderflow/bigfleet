@@ -1,6 +1,9 @@
 # BigFleet
 
-BigFleet is a fleet-level infrastructure autoscaler. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It is the reference implementation of the design in [`docs/papers/bigfleet.md`](docs/papers/bigfleet.md) and the operating model in [`docs/papers/fleet-scale-kubernetes.md`](docs/papers/fleet-scale-kubernetes.md).
+BigFleet is a fleet-level infrastructure autoscaler. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It is the reference implementation of the design described in two papers:
+
+- [BigFleet](https://lucy.sh/bigfleet) — the system architecture (also vendored in this repo at [`docs/papers/bigfleet.md`](docs/papers/bigfleet.md)).
+- [Fleet-Scale Kubernetes](https://lucy.sh/fleet-scale-kubernetes) — the operating model BigFleet plugs into (also at [`docs/papers/fleet-scale-kubernetes.md`](docs/papers/fleet-scale-kubernetes.md)).
 
 BigFleet is **not** a scheduler. It does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission. It sits one layer below the cluster autoscaler: many clusters, one fleet, one decision engine.
 
@@ -52,7 +55,7 @@ For real installs: [`docs/operator-guide.md`](docs/operator-guide.md).
 | [`docs/provider-author-guide.md`](docs/provider-author-guide.md) | Writing a `CapacityProvider` |
 | [`docs/plan.md`](docs/plan.md) | Implementation plan (milestones, scale ceilings) |
 | [`docs/adr/`](docs/adr/) | Architecture decision records |
-| [`docs/papers/`](docs/papers/) | Source papers (BigFleet, Fleet-Scale Kubernetes) |
+| [`docs/papers/`](docs/papers/) | Vendored copies of the source papers ([BigFleet](https://lucy.sh/bigfleet), [Fleet-Scale Kubernetes](https://lucy.sh/fleet-scale-kubernetes)) |
 
 ## Development
 

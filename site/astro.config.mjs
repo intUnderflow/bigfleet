@@ -53,11 +53,21 @@ export default defineConfig({
           items: [
             { label: "Implementation plan", link: "/plan/" },
             {
-              label: "BigFleet paper",
+              label: "BigFleet paper (canonical)",
+              link: "https://lucy.sh/bigfleet",
+              attrs: { target: "_blank", rel: "noopener" },
+            },
+            {
+              label: "Fleet-Scale Kubernetes paper (canonical)",
+              link: "https://lucy.sh/fleet-scale-kubernetes",
+              attrs: { target: "_blank", rel: "noopener" },
+            },
+            {
+              label: "BigFleet paper (vendored)",
               link: "/papers/bigfleet/",
             },
             {
-              label: "Fleet-Scale Kubernetes paper",
+              label: "Fleet-Scale Kubernetes paper (vendored)",
               link: "/papers/fleet-scale-kubernetes/",
             },
             { label: "ADR index", link: "/adr/" },

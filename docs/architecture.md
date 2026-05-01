@@ -1,6 +1,6 @@
 # BigFleet architecture
 
-This is the synthesis. The full design is in [`papers/bigfleet.md`](papers/bigfleet.md); read this first if you want a tour, the paper if you want the rationale.
+This is the synthesis. The full design is in the [BigFleet paper](https://lucy.sh/bigfleet) (vendored at [`papers/bigfleet.md`](papers/bigfleet.md)); read this first if you want a tour, the paper if you want the rationale.
 
 ## The shape
 
@@ -123,7 +123,7 @@ Walk configured machines whose cluster no longer needs them. Drain to Idle. The 
 
 ### Why phases, not a single optimiser
 
-A single LP-style optimiser could in principle replace all three phases. We don't, for two reasons in the paper: (a) deterministic phase ordering makes the engine debuggable; (b) victim selection's "drain grace" interaction with effective-cost arithmetic doesn't fit a single objective without knobs. See [`papers/bigfleet.md`](papers/bigfleet.md) §8.
+A single LP-style optimiser could in principle replace all three phases. We don't, for two reasons in the paper: (a) deterministic phase ordering makes the engine debuggable; (b) victim selection's "drain grace" interaction with effective-cost arithmetic doesn't fit a single objective without knobs. See the [BigFleet paper](https://lucy.sh/bigfleet) §8 (or [`papers/bigfleet.md`](papers/bigfleet.md)).
 
 ## Static stability
 

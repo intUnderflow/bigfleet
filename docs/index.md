@@ -22,8 +22,8 @@ Start here.
 
 ## Background and history
 
-- [`papers/bigfleet.md`](papers/bigfleet.md) — the design paper (canonical)
-- [`papers/fleet-scale-kubernetes.md`](papers/fleet-scale-kubernetes.md) — operating model paper (canonical)
+- [BigFleet paper](https://lucy.sh/bigfleet) — the design paper (canonical; vendored here at [`papers/bigfleet.md`](papers/bigfleet.md))
+- [Fleet-Scale Kubernetes paper](https://lucy.sh/fleet-scale-kubernetes) — operating model paper (canonical; vendored here at [`papers/fleet-scale-kubernetes.md`](papers/fleet-scale-kubernetes.md))
 - [`plan.md`](plan.md) — full implementation plan, milestones, scale ceilings
 - [`adr/`](adr/) — architecture decision records
 
