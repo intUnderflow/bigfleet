@@ -1,0 +1,42 @@
+---
+title: BigFleet
+description: A fleet-level infrastructure autoscaler. Many clusters, one fleet, one decision engine.
+template: splash
+hero:
+  tagline: Many Kubernetes clusters. One fleet. One decision engine.
+  actions:
+    - text: Quickstart
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: Architecture
+      link: /architecture/
+      icon: external
+      variant: secondary
+    - text: GitHub
+      link: https://github.com/intUnderflow/bigfleet
+      icon: external
+      variant: minimal
+---
+
+## What BigFleet is
+
+BigFleet is a **fleet-level infrastructure autoscaler**. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It's the reference implementation of the design described in the [BigFleet paper](/papers/bigfleet/) and the [Fleet-Scale Kubernetes paper](/papers/fleet-scale-kubernetes/).
+
+BigFleet is **not** a scheduler. It does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission. It sits one layer below the cluster autoscaler.
+
+## Where to go next
+
+- **[Quickstart](/quickstart/)** — bring up BigFleet on a kind cluster in five minutes.
+- **[Concepts](/concepts/)** — Need, Profile, Penalty, Cost, the three Phases, victim score.
+- **[Architecture](/architecture/)** — two-tier design, decision engine phases, static stability.
+- **[API reference](/api-reference/)** — CRDs and gRPC services.
+- **[Operator guide](/operator-guide/)** — install, metrics, runbook.
+- **[Scaling guide](/scaling-guide/)** — sizing for 10K to 100M machines.
+- **[Provider author guide](/provider-author-guide/)** — implementing a `CapacityProvider`.
+
+## Status
+
+**v1 feature-complete.** Tested via race-detector unit tests, multi-cluster e2e on kind, deterministic simulator with golden traces, long-running soak, provider conformance suite, and Helm chart render smoke tests. See the [implementation plan](/plan/) for milestone history.
+
+Real provider implementations (AWS, GCP, Azure, bare-metal) live in separate repos by design — see the [provider author guide](/provider-author-guide/).

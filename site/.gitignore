@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.astro/
+.env
+.env.production
+.DS_Store
+
+# Synced from ../docs/ at build time. The canonical content lives in /docs.
+src/content/docs/architecture.md
+src/content/docs/concepts.md
+src/content/docs/api-reference.md
+src/content/docs/operator-guide.md
+src/content/docs/scaling-guide.md
+src/content/docs/provider-author-guide.md
+src/content/docs/quickstart.md
+src/content/docs/plan.md
+src/content/docs/papers/
+src/content/docs/adr/
