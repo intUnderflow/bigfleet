@@ -1,0 +1,53 @@
+# scaleway-50k — 50K-CR run on a Scaleway Kapsule cluster.
+#
+# Sized for a single PRO2-M node (16 vCPU / 64 GB RAM). The bumped
+# resource requests vs local-50k mean the kwok pods aren't fighting
+# CFS throttling — this is the production-shape harness that should
+# pass the operator rollup p99 ≤ 1 s SLO.
+#
+# Provisioning (once the scw CLI is configured):
+#   scw k8s cluster create name=bigfleet-scaletest \
+#     version=1.30.4 cni=cilium type=kapsule \
+#     pools.0.name=default pools.0.node-type=PRO2-M \
+#     pools.0.size=1 pools.0.min-size=1 pools.0.max-size=1
+#   scw k8s kubeconfig get bigfleet-scaletest > $HOME/.kube/scaleway.kubeconfig
+#
+# After the run, tear the cluster down to stop billing:
+#   scw k8s cluster delete bigfleet-scaletest
+#
+# Cost (Scaleway hourly, May 2026): PRO2-M is €0.21/hr. A 30-min
+# scale run + 5-min ramp + 5-min teardown ≈ 40 min ≈ €0.14 / ~$0.15.
+
+kwok:
+  clusterCount: 50
+  # Production-shape resourcing: each kwok pod gets its own CPU + memory
+  # cgroup with real headroom, so the operator's rollup isn't fighting
+  # kine + apiserver for cycles.
+  resources:
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 1, memory: 1Gi }
+
+shard:
+  replicas: 1
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+
+coordinator:
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+prometheus:
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits:   { cpu: 2, memory: 8Gi }
+
+costEstimate:
+  vCPU: 60
+  memoryGB: 60
+  awsSpotUsdPerHour: 0.25
+  notes: "1× Scaleway PRO2-M (16 vCPU / 64 GB) at ~€0.21/hr. ~$0.15 for a 40-min run end-to-end."

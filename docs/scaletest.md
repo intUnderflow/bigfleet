@@ -44,8 +44,11 @@ Resource budget rule: **(cluster total RAM in GB) × 5 = max KWOK pod count**. A
 | Laptop kind | dev-5k, failover-soak | $0 |
 | M5 Max kind | dev-5k, local-50k, failover-soak | $0 |
 | Homelab k3s/Talos | up to homelab-500k, thundering-herd | $0 |
+| Scaleway Kapsule | scaleway-50k baseline, up to homelab-500k | ~ $0.15/run for 50K, ~ $25/hr for cloud-5m equivalent |
 | GKE Autopilot | up to homelab-500k (cost ~ Standard tier) | ~ $1.50/vCPU-hr |
 | EKS spot | every profile incl. cloud-5m | ~ $0.20–0.30/vCPU-hr |
+
+**Scaleway Kapsule** is the cheapest cloud option that's still a real Kubernetes cluster: free control plane on the Essential tier, per-second billing, ~$0.055/vCPU-hr on PRO2 instances. The `scaleway-50k` profile is sized for one PRO2-M node (16 vCPU / 64 GB / €0.21/hr); see the profile YAML for the `scw` CLI commands to provision and tear down a cluster.
 
 Nothing in the harness assumes a specific distro; pure Helm + standard Kubernetes APIs. GKE Autopilot is OK because the combined image runs as non-root and declares its ports.
 

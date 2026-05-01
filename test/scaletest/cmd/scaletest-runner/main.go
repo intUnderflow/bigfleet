@@ -270,6 +270,8 @@ func classifyTarget(context string) string {
 		return "cloud"
 	case strings.Contains(context, "aks"), strings.Contains(context, "azure"):
 		return "cloud"
+	case strings.Contains(context, "scw"), strings.Contains(context, "scaleway"), strings.Contains(context, "kapsule"):
+		return "cloud"
 	default:
 		return "unknown"
 	}
