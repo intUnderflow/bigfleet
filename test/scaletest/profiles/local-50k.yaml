@@ -2,6 +2,18 @@
 
 kwok:
   clusterCount: 50
+  # Each kwok pod runs five processes (kine, apiserver, kwok-controller,
+  # operator, load-driver) on shared CPU. The operator's rollup p99 is
+  # extremely sensitive to throttling — at 1K CRs/cluster, in-process
+  # work is ~5 ms but observed p99 hit 1.85 s (M11.12) under the
+  # default 800m limit. Allow up to 2 vCPU per pod so rollups aren't
+  # competing with the kine+apiserver write storm during ramp.
+  # Requests low so the kind node's allocatable CPU isn't exhausted at
+  # 50 pods × 200m = 10 CPU — limits high so each pod can burst into
+  # spare cycles when the load-driver is idle.
+  resources:
+    requests: { cpu: 100m, memory: 300Mi }
+    limits:   { cpu: 2, memory: 1500Mi }
 
 shard:
   replicas: 1
@@ -15,7 +27,7 @@ loadProfile:
   durationSeconds: 1800
 
 costEstimate:
-  vCPU: 30
-  memoryGB: 35
-  awsSpotUsdPerHour: 1.00
-  notes: "Free on M5 Max (18C/64GB). ~30 min run."
+  vCPU: 100
+  memoryGB: 75
+  awsSpotUsdPerHour: 3.00
+  notes: "Free on M5 Max (18C/64GB). ~30 min run. 50 × 2 vCPU pods = 100 vCPU peak; M5 Max has 18 cores, so kwok pods will burst into Docker Desktop's CFS throttling at peak. Adequate for 50 clusters; tighter at higher counts."

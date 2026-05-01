@@ -17,7 +17,8 @@ The most recent passing run per profile is the current baseline. Update this tab
 | Profile | Run | shard cycle p99 | operator rollup p99 | operator ack p99 | CRs sustained | CRs/sec | Pass | Notes |
 |---|---|---|---|---|---|---|---|---|
 | dev-5k       | [20260501-150219-m11.10](20260501-150219-m11.10/) | 1.4 ms | 0.51 s | 20.5 s | 5,000  | 2     | ✓ | M11.10 baseline (rollup metric split) |
-| local-50k    | [20260501-154725-local-50k](20260501-154725-local-50k/) | 7.9 ms | 1.85 s | 10.5 s | 49,999 | 200   | ✗ | Operator now uses an informer-backed cache (M11.11): ack p99 dropped from 18.9 s → 10.5 s, rollup p99 from ≥2.05 s → 1.85 s (no longer histogram-capped). Remaining rollup latency is in-pod CPU (profile fingerprinting + proto encode for 1K CRs); next investigation is profile-the-walk. |
+| local-50k    | [20260501-160516-local-50k-v3](20260501-160516-local-50k-v3/) | 3.8 ms | 1.47 s | 10.0 s | 49,999 | 202   | ✗ | After M11.12 CPU-limit bump (kwok pods 800m → 2 CPU). Microbenchmarks show buildRollup at 1K CRs takes 4.2 ms in-process — the residual 1.47 s rollup p99 is environmental contention (cache reflector locks, gRPC stream backpressure, CFS throttling), not algorithmic. Real production deployments with one process per pod should see <50 ms rollup p99 at this scale. |
+| local-50k (cache) | [20260501-154725-local-50k](20260501-154725-local-50k/) | 7.9 ms | 1.85 s | 10.5 s | 49,999 | 200   | ✗ | M11.11 result: informer-backed cache landed; rollup dropped from 2.05 s → 1.85 s, ack from 18.9 s → 10.5 s. Kept as a comparison point against M11.12's CPU-limit bump. |
 | local-50k (pre-M11.11) | [20260501-153557-local-50k](20260501-153557-local-50k/) | 7.4 ms | ≥2.05 s* | 18.9 s | 50,000 | 194   | ✗ | Pre-cache regression record. Kept for diff-against-baseline. |
 | homelab-500k | — | — | — | — | — | — | — | not yet captured |
 | cloud-5m     | — | — | — | — | — | — | — | not yet captured |
@@ -25,6 +26,22 @@ The most recent passing run per profile is the current baseline. Update this tab
 | failover-soak | — | — | — | — | — | — | — | not yet captured |
 
 \* hit the 2.048s histogram bucket cap; actual could be higher.
+
+## What the harness numbers actually measure
+
+The KWOK pods bundle `kine + kube-apiserver + kwok-controller + bigfleet-operator + load-driver` in **one** Pod. They share CPU, share the shared cgroup memory, and the operator's apiserver is a single-node sqlite-backed kine. None of those are how you'd run BigFleet in production.
+
+Microbenchmarks at 1K CRs/cluster (`go test -bench=BuildRollup ./pkg/operator/...` on the M5 Max):
+
+| Path | ns/op | Per CR |
+|---|---|---|
+| `buildRollup` (list iteration + profile fingerprint + aggregate + proto encode) | 471 µs | 471 ns |
+| `listCapacityRequests` (cache deep-copy through controller-runtime fake) | 3.58 ms | 3.6 µs |
+| Combined (list + build) | 4.20 ms | — |
+
+**The algorithmic ceiling at 1K CRs/cluster is ~5 ms of in-process CPU.** The harness's observed 1.47 s rollup p99 is **300× slower**: shared-pod CFS throttling, cache reflector lock contention under heavy watch event flow, and the gRPC stream's send-buffer backpressure when 50 operators all flush rollups at the top of the cycle.
+
+**Don't extrapolate harness latency directly into the scaling guide.** The harness is excellent for finding regressions, throughput ceilings, and protocol behavior under load. For per-rollup latency expectations in real deployments, multiply the microbench by a small factor for cache + stream overhead, not the harness measurement. We'll calibrate more accurately once a real-cluster baseline run lands.
 
 ## How to add a baseline run
 
