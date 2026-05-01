@@ -10,16 +10,58 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/machine"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
 )
+
+// seedFakeInventory mints n synthetic idle machines into the in-process
+// fake provider AND seeds them into the shard's inventory so Phase 1
+// can pick from them on the first cycle. Used by the scale-test
+// harness to populate the shard with a realistic-shape pool without a
+// real provider.
+//
+// Spread: round-robin across 5 instance types × 3 zones × bare-metal
+// capacity type. Profile fingerprints are stable so the per-fingerprint
+// pool cache (M11.16) sees real diversity instead of one giant bucket.
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, n int, logger *slog.Logger) {
+	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
+	zones := []string{"zone-a", "zone-b", "zone-c"}
+	resources := map[string]map[string]string{
+		"a3-highgpu-8g":  {"nvidia.com/gpu": "8"},
+		"m6i.large":      {"cpu": "2", "memory": "8Gi"},
+		"c6i.4xlarge":    {"cpu": "16", "memory": "32Gi"},
+		"n2-standard-32": {"cpu": "32", "memory": "128Gi"},
+		"r6i.xlarge":     {"cpu": "4", "memory": "32Gi"},
+	}
+	logger.Info("seeding fake inventory", "count", n)
+	for i := 0; i < n; i++ {
+		t := types[i%len(types)]
+		z := zones[i%len(zones)]
+		profile := machine.Profile{
+			InstanceType: t,
+			Zone:         z,
+			CapacityType: machine.CapacityTypeBareMetal,
+			Resources:    resources[t],
+		}
+		id := machine.ID("seed-" + strconv.Itoa(i))
+		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
+		_ = sh.SeedInventory(machine.Machine{
+			ID:      id,
+			State:   machine.StateIdle,
+			Profile: profile,
+		})
+	}
+	logger.Info("seed complete", "count", n)
+}
 
 // runShard runs the shard controller. The in-process fake provider
 // lives at pkg/provider/fake and is used here for laptop / kind / dev
@@ -32,6 +74,7 @@ func runShard(args []string) error {
 	metricsAddr := fs.String("metrics-addr", ":8780", "address for the Prometheus /metrics endpoint (\"0\" disables)")
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
+	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -61,6 +104,10 @@ func runShard(args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	if *seedMachines > 0 {
+		seedFakeInventory(prov, sh, *seedMachines, logger)
 	}
 
 	srv := grpc.NewServer()

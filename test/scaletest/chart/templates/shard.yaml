@@ -28,6 +28,7 @@ spec:
             - --metrics-addr=:8780
             - --id=$(POD_NAME)
             - --data-dir=/var/lib/bigfleet
+            - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }

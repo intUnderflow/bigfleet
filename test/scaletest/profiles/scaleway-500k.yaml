@@ -1,0 +1,73 @@
+# scaleway-500k — production-shape 500K-machine scale test on Scaleway.
+#
+# Sized for a multi-PRO2-M Kapsule cluster:
+#   shard:        1 pod, 4 vCPU / 6 GiB    (holds 500K-machine inventory)
+#   coordinator:  1 pod, 1 vCPU / 1 GiB
+#   prometheus:   1 pod, 2 vCPU / 4 GiB
+#   kwok pods:   50 × 0.2 vCPU / 400 MiB   (50 simulated clusters)
+#   total:       ~17 vCPU req / ~25 GiB   (one PRO2-M is enough)
+#
+# But the shard at 500K seeded inventory needs ~250 MB raw + indexes +
+# sort buffers ≈ 1–2 GiB live, plus per-cycle pool allocations.
+# Provisioning a 5-node Kapsule pool for headroom on this run:
+#
+#   scw k8s cluster create name=bigfleet-scaletest \
+#     version=1.35.3 cni=cilium type=kapsule \
+#     pools.0.name=default pools.0.node-type=PRO2-M \
+#     pools.0.size=5 pools.0.min-size=5 pools.0.max-size=5 \
+#     region=nl-ams project-id=<bigfleet-project-id>
+#
+# Expected cost on Scaleway nl-ams: 5× PRO2-M × €0.21/hr ≈ €1.05/hr.
+# A 30-min run + setup + teardown = ~50 min ≈ €0.88 (~$0.95).
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: IfNotPresent
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: IfNotPresent
+
+kwok:
+  clusterCount: 50
+  resources:
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 1, memory: 1Gi }
+
+shard:
+  replicas: 1
+  # 500K idle machines pre-seeded so Phase 1 has a real population to
+  # match against. Without this the harness measures rollup latency
+  # only, not the algorithmic ceiling we actually want to test.
+  seedMachines: 500000
+  resources:
+    requests: { cpu: 2, memory: 3Gi }
+    limits:   { cpu: 6, memory: 12Gi }
+
+coordinator:
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 12Gi }
+
+costEstimate:
+  vCPU: 75
+  memoryGB: 80
+  awsSpotUsdPerHour: 1.05
+  notes: "5× Scaleway PRO2-M (16 vCPU / 64 GB each). 500K seeded inventory + 50K demand. ~$0.95 for a 50-min run end-to-end."

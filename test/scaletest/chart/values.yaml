@@ -35,6 +35,11 @@ shard:
   resources:
     requests: { cpu: 1, memory: 2Gi }
     limits:   { cpu: 4, memory: 8Gi }
+  # Pre-seed the in-process fake provider with N synthetic idle
+  # machines spread across instance types. Used by larger profiles
+  # (e.g. scaleway-500k) to populate the inventory without a real
+  # provider; 0 = no seeding.
+  seedMachines: 0
 
 provider:
   resources:
