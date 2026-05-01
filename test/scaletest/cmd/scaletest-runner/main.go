@@ -465,11 +465,33 @@ func kArgs(kubeconfig string, rest ...string) []string {
 	return rest
 }
 
+// pass enforces the runner's SLO budget. Each threshold is the best
+// observed value (across passing baseline runs) plus a small variance
+// margin — they're regression detectors, not aspirational targets.
+//
+//   - shardCycleDurationP99 ≤ 100 ms.   Best observed: 1.8 ms (scaleway-50k).
+//     Headroom is large because the decision engine is intrinsically fast;
+//     a regression that pushed past 100 ms would be a real architectural
+//     problem, not a tuning issue.
+//
+//   - operatorRollupP99 ≤ 1 s.          Best observed: 122 ms (scaleway-50k).
+//     One rollup pipeline turn (list CRs, aggregate, enqueue) must finish
+//     well within the 10 s rollup interval at any reasonable cluster size.
+//
+//   - operatorAckP99 ≤ 12 s.            Best observed: 9.97 s (scaleway-50k).
+//     This batch is bounded by the operator's per-CR status-write QPS
+//     against the apiserver. A 1 K-CR ramp at QPS=50/Burst=100 needs ~10 s
+//     of wall-clock just for the writes; 12 s allows ~20 % run-to-run
+//     variance. Tighten when the operator gains batched status writes
+//     or its QPS budget is raised on profile.
 func pass(m map[string]float64) bool {
 	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 0.1 {
 		return false
 	}
 	if v, ok := m["operatorRollupP99Seconds"]; ok && v > 1.0 {
+		return false
+	}
+	if v, ok := m["operatorAckP99Seconds"]; ok && v > 12.0 {
 		return false
 	}
 	return true

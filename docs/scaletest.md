@@ -110,10 +110,13 @@ docker run --rm -p 9090:9090 -v /tmp/replay:/prometheus prom/prometheus:v2.55.0 
 
 ## Pass/fail SLOs
 
-The runner marks a run failed if any of:
+The runner marks a run failed if any of these p99 thresholds are exceeded. Each one is the best observed value from a passing baseline run plus a small variance margin — they detect regressions, they're not aspirational targets.
 
-- `bigfleet_shard_cycle_duration_seconds` p99 > **100 ms**
-- `bigfleet_operator_rollup_duration_seconds` p99 > **1 s**
+| Metric | Threshold | Best observed | Notes |
+|---|---|---|---|
+| `bigfleet_shard_cycle_duration_seconds` | **100 ms** | 1.8 ms (scaleway-50k) | Decision engine; large headroom intentional. |
+| `bigfleet_operator_rollup_duration_seconds` | **1 s** | 122 ms (scaleway-50k) | One rollup pipeline turn must finish well within the 10 s rollup interval. |
+| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (scaleway-50k) | Bounded by operator status-write QPS against the apiserver. 1 K-CR ramp at QPS=50/Burst=100 needs ~10 s of writes; 12 s allows ~20 % run-to-run variance. Tightens when the operator gains batched status writes or higher per-profile QPS. |
 
 Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
 
