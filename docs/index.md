@@ -5,6 +5,7 @@ Start here.
 ## Orientation
 
 - [`../README.md`](../README.md) — what BigFleet is, status, repo layout
+- [`user-stories.md`](user-stories.md) — what life is like with BigFleet, by role
 - [`architecture.md`](architecture.md) — two-tier architecture, decision engine, static stability
 - [`concepts.md`](concepts.md) — glossary of every domain term you'll see in code and protos
 

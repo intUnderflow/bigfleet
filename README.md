@@ -42,6 +42,7 @@ For real installs: [`docs/operator-guide.md`](docs/operator-guide.md).
 | Doc | What it covers |
 |---|---|
 | [`docs/index.md`](docs/index.md) | Documentation map |
+| [`docs/user-stories.md`](docs/user-stories.md) | Day-in-the-life user stories, by role |
 | [`docs/architecture.md`](docs/architecture.md) | Two-tier architecture, decision engine phases, static stability |
 | [`docs/concepts.md`](docs/concepts.md) | Glossary: Need, Profile, Penalty, Cost, Phase 1/2/3, victim score |
 | [`docs/api-reference.md`](docs/api-reference.md) | CRDs and gRPC services |
