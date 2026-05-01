@@ -82,12 +82,20 @@ e2e: ## Run kind-based end-to-end tests. Requires kind, kubectl, and a running D
 	$(GO) test -count=1 -tags=e2e -timeout=30m -v ./test/e2e/...
 
 .PHONY: sim
-sim: ## Run the simulator scenario suite.
-	$(GO) test -race -count=1 -tags=sim ./sim/...
+sim: ## Run the simulator scenario suite + verify recorded goldens.
+	$(GO) test -race -count=1 ./sim/...
+	$(GO) build -o $(BIN)/fauxctl ./cmd/fauxctl
+	@for s in $$(ls sim/golden/*.jsonl 2>/dev/null | xargs -n1 basename | sed 's/\.jsonl//'); do \
+		$(BIN)/fauxctl verify $$s || exit 1; \
+	done
 
 .PHONY: scale
 scale: ## Run scale ceiling tests (slow; tagged "scale"). Designed for the M5 Max + Docker Desktop budget; not part of PR CI by default.
 	$(GO) test -count=1 -tags=scale -timeout=30m ./test/scale/...
+
+.PHONY: soak
+soak: ## Run the simulator soak test (tagged "soak"). Long; nightly CI only.
+	$(GO) test -count=1 -tags=soak -timeout=10m ./sim/...
 
 .PHONY: conformance
 conformance: ## Run the provider conformance suite (TARGET=addr:port).
