@@ -76,9 +76,11 @@ var (
 	// large ramp. Status-write latency is exposed separately as
 	// OperatorAcknowledgeDuration.
 	OperatorRollupDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "bigfleet_operator_rollup_duration_seconds",
-		Help:    "Wall-clock duration of one operator rollup: list CRs, aggregate by Profile, enqueue the stream message. Excludes the post-rollup status-write batch.",
-		Buckets: prometheus.ExponentialBuckets(0.001, 2, 12), // 1ms → 4s
+		Name: "bigfleet_operator_rollup_duration_seconds",
+		Help: "Wall-clock duration of one operator rollup: list CRs, aggregate by Profile, enqueue the stream message. Excludes the post-rollup status-write batch.",
+		// 1ms → ~32s. Top buckets give headroom to measure tail
+		// latency at large CR counts before the histogram saturates.
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
 	})
 
 	// OperatorAcknowledgeDuration is the time spent transitioning a
@@ -87,9 +89,12 @@ var (
 	// run for several seconds on the first rollup after a large CR
 	// burst. Operationally interesting; not on the rollup hot path.
 	OperatorAcknowledgeDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "bigfleet_operator_acknowledge_duration_seconds",
-		Help:    "Wall-clock duration of one acknowledgement batch (Pending → Acknowledged status writes for the rollup's newly-included CRs).",
-		Buckets: prometheus.ExponentialBuckets(0.01, 2, 12), // 10ms → 40s
+		Name: "bigfleet_operator_acknowledge_duration_seconds",
+		Help: "Wall-clock duration of one acknowledgement batch (Pending → Acknowledged status writes for the rollup's newly-included CRs).",
+		// 10ms → ~5min. Status writes against a slow apiserver
+		// (kine + sqlite, throttled flow control) can take minutes
+		// for thousand-CR batches; we want measurement, not a cap.
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
 	})
 
 	OperatorAcknowledgedTotal = promauto.NewCounter(prometheus.CounterOpts{

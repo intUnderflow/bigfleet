@@ -20,6 +20,10 @@ Start here.
 - [`provider-author-guide.md`](provider-author-guide.md) — implementing a `CapacityProvider`
 - [`api-reference.md`](api-reference.md) — CRDs and gRPC services
 
+## Scale-test history
+
+- [`../test/scaletest/results/README.md`](../test/scaletest/results/README.md) — baseline table per profile + how to add new runs
+
 ## Background and history
 
 - [BigFleet paper](https://lucy.sh/bigfleet) — the design paper (canonical; vendored here at [`papers/bigfleet.md`](papers/bigfleet.md))

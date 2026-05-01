@@ -69,6 +69,10 @@ The runner will:
 4. **Always run teardown**, even on Ctrl-C, via `defer helm uninstall`.
 5. **Tag every cloud resource** the chart creates with `bigfleet-scaletest-run=<run-id>` (via Helm `runId` value). If anything escapes, AWS-side cleanup is one filtered terminate-instances call.
 
+## Captured results
+
+Past runs are committed under [`test/scaletest/results/`](../test/scaletest/results/). Each profile has a current baseline (most recent passing run) tracked in that directory's `README.md`. New runs add a new directory; the baseline table moves only when a passing run beats the previous one.
+
 ## What gets emitted per run
 
 `<output>/summary.json`:
