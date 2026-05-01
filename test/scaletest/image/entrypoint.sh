@@ -153,13 +153,20 @@ kwok \
 KWOK_PID=$!
 
 # ---- 7. start bigfleet-operator ----
-log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR)"
-bigfleet-operator \
-  --cluster-id="$CLUSTER_ID" \
-  --shard-addr="$BIGFLEET_SHARD_ADDR" \
-  --kubeconfig="$KCFG" \
-  --metrics-addr="0.0.0.0:8770" \
-  >"$WORK/logs/operator.log" 2>&1 &
+# Per-profile tunables come from chart values via env vars. Empty /
+# unset values are fine — bigfleet-operator's flag defaults take over.
+op_args=(
+  --cluster-id="$CLUSTER_ID"
+  --shard-addr="$BIGFLEET_SHARD_ADDR"
+  --kubeconfig="$KCFG"
+  --metrics-addr="0.0.0.0:8770"
+)
+[[ -n "${OPERATOR_QPS:-}"             ]] && op_args+=(--qps="$OPERATOR_QPS")
+[[ -n "${OPERATOR_BURST:-}"           ]] && op_args+=(--burst="$OPERATOR_BURST")
+[[ -n "${OPERATOR_ACK_CONCURRENCY:-}" ]] && op_args+=(--ack-concurrency="$OPERATOR_ACK_CONCURRENCY")
+[[ -n "${OPERATOR_ROLLUP_INTERVAL:-}" && "$OPERATOR_ROLLUP_INTERVAL" != "0s" ]] && op_args+=(--rollup-interval="$OPERATOR_ROLLUP_INTERVAL")
+log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPERATOR_QPS:-default} ack=${OPERATOR_ACK_CONCURRENCY:-default})"
+bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
 OPERATOR_PID=$!
 
 # ---- 8. start the load-driver ----

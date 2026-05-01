@@ -48,6 +48,16 @@ kwok:
     requests: { cpu: 200m, memory: 400Mi }
     limits:   { cpu: 800m, memory: 1Gi }
 
+# Operator tunables. Profiles override to push the apiserver budget
+# higher when the underlying apiserver can absorb more (Scaleway PRO2
+# vs M5 Max kine, for example). Defaults match cmd/operator's
+# production-safe defaults.
+operator:
+  qps: 50
+  burst: 100
+  ackConcurrency: 16
+  rollupInterval: 0s    # 0 means use the operator binary's default (10s)
+
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.
 loadProfile:

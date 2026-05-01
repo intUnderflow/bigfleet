@@ -47,6 +47,10 @@ func run(args []string) error {
 	shardAddr := fs.String("shard-addr", "", "host:port of the BigFleet shard's gRPC endpoint (required)")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster config or $KUBECONFIG)")
 	metricsAddr := fs.String("metrics-addr", ":8770", "address for the Prometheus /metrics endpoint (\"0\" disables)")
+	qps := fs.Float64("qps", 50, "client-go QPS budget for apiserver requests; raise for scale-test profiles whose apiserver can absorb more")
+	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
+	ackConcurrency := fs.Int("ack-concurrency", 16, "max parallel CR Pending→Acknowledged status writes per rollup")
+	rollupInterval := fs.Duration("rollup-interval", 0, "interval between rollups; 0 means use the operator default (10s)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -69,16 +73,18 @@ func run(args []string) error {
 		cancel()
 	}()
 
-	kc, err := newKubeClient(ctx, *kubeconfig)
+	kc, err := newKubeClient(ctx, *kubeconfig, float32(*qps), *burst)
 	if err != nil {
 		return fmt.Errorf("kube client: %w", err)
 	}
 
 	op, err := operator.New(operator.Config{
-		ClusterID:    machine.ClusterID(*clusterID),
-		ShardAddress: *shardAddr,
-		KubeClient:   kc,
-		Logger:       logger,
+		ClusterID:              machine.ClusterID(*clusterID),
+		ShardAddress:           *shardAddr,
+		KubeClient:             kc,
+		AcknowledgeConcurrency: *ackConcurrency,
+		RollupInterval:         *rollupInterval,
+		Logger:                 logger,
 	})
 	if err != nil {
 		return err
@@ -109,7 +115,10 @@ func run(args []string) error {
 // Honours the standard kubeconfig discovery chain (--kubeconfig flag
 // → $KUBECONFIG → in-cluster). The cache is started in a goroutine
 // tied to ctx; the function blocks until the initial sync completes.
-func newKubeClient(ctx context.Context, explicitPath string) (client.Client, error) {
+//
+// qps/burst override the client-go rate limit. The default 50/100 is a
+// safe production value; scale-test profiles raise it.
+func newKubeClient(ctx context.Context, explicitPath string, qps float32, burst int) (client.Client, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if explicitPath != "" {
 		rules.ExplicitPath = explicitPath
@@ -120,12 +129,11 @@ func newKubeClient(ctx context.Context, explicitPath string) (client.Client, err
 		return nil, err
 	}
 	// Default client-go QPS/Burst (5/10) is too low for the operator's
-	// per-cycle status updates on Acknowledged transitions when a
-	// cluster has thousands of CRs. Raise to a level kubebuilder uses
-	// for controllers (50/100) — well within most apiservers' default
-	// flow-control budget.
-	restCfg.QPS = 50
-	restCfg.Burst = 100
+	// per-cycle status updates on Acknowledged transitions. Caller
+	// passes a profile-aware budget; defaults are 50/100 (safe for
+	// most apiservers' default flow-control).
+	restCfg.QPS = qps
+	restCfg.Burst = burst
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

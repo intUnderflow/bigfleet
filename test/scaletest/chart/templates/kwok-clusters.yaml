@@ -54,6 +54,16 @@ spec:
               value: {{ include "scaletest.shardAddr" . | quote }}
             - name: LOAD_PROFILE
               value: /etc/loadgen/profile.yaml
+            # Operator tunables. Read by entrypoint.sh and forwarded as
+            # bigfleet-operator flags.
+            - name: OPERATOR_QPS
+              value: "{{ .Values.operator.qps }}"
+            - name: OPERATOR_BURST
+              value: "{{ .Values.operator.burst }}"
+            - name: OPERATOR_ACK_CONCURRENCY
+              value: "{{ .Values.operator.ackConcurrency }}"
+            - name: OPERATOR_ROLLUP_INTERVAL
+              value: "{{ .Values.operator.rollupInterval }}"
           ports:
             - { name: operator-met, containerPort: 8770 }
             - { name: loadgen-met,  containerPort: 8771 }

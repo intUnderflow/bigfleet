@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -259,28 +260,36 @@ func profileToCapacityNeed(p needs.Profile, count int32) *pb.CapacityNeed {
 }
 
 // markAcknowledged transitions a CR from Pending to Acknowledged via
-// status subresource. Idempotent: re-running on an already-Acknowledged
-// CR is a no-op.
+// a JSON merge-patch on the status subresource. Idempotent: re-running
+// on an already-Acknowledged CR is a no-op.
+//
+// Implementation note: this used to be a Get + Status().Update round
+// trip (two apiserver calls per CR). For a 1K-CR ramp burst that
+// doubled the apiserver load on the operator's path. The merge-patch
+// version is one call per CR, with no resource-version conflicts
+// since merge-patch doesn't carry a precondition. JSON merge-patch
+// (not strategic merge) because CRDs don't support strategic merge.
 func (o *Operator) markAcknowledged(ctx context.Context, cr bfv1alpha1.CapacityRequest) error {
 	if cr.Status.Phase == bfv1alpha1.CapacityRequestAcknowledged {
 		return nil
 	}
-	// Refetch to avoid status conflicts with whichever controller
-	// created the CR most recently.
-	var fresh bfv1alpha1.CapacityRequest
-	if err := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: cr.Name}, &fresh); err != nil {
+	now := metav1.Now()
+	patch, err := json.Marshal(map[string]any{
+		"status": map[string]any{
+			"phase":          string(bfv1alpha1.CapacityRequestAcknowledged),
+			"acknowledgedAt": now.Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	target := &bfv1alpha1.CapacityRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: cr.Name, Namespace: cr.Namespace},
+	}
+	if err := o.cfg.KubeClient.Status().Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil // CR garbage-collected since the rollup; fine.
 		}
-		return err
-	}
-	if fresh.Status.Phase == bfv1alpha1.CapacityRequestAcknowledged {
-		return nil
-	}
-	fresh.Status.Phase = bfv1alpha1.CapacityRequestAcknowledged
-	now := metav1.Now()
-	fresh.Status.AcknowledgedAt = &now
-	if err := o.cfg.KubeClient.Status().Update(ctx, &fresh); err != nil {
 		return err
 	}
 	metrics.OperatorAcknowledgedTotal.Inc()
