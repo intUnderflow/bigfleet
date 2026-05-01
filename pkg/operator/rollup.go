@@ -46,12 +46,10 @@ func (o *Operator) rollupLoop(ctx context.Context, sess *session) error {
 
 // runRollup performs one rollup cycle.
 func (o *Operator) runRollup(ctx context.Context, sess *session) error {
-	start := time.Now()
-	defer func() {
-		metrics.OperatorRollupDuration.Observe(time.Since(start).Seconds())
-	}()
+	rollupStart := time.Now()
 	crs, err := o.listCapacityRequests(ctx)
 	if err != nil {
+		metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
 		return fmt.Errorf("list CapacityRequests: %w", err)
 	}
 
@@ -59,15 +57,21 @@ func (o *Operator) runRollup(ctx context.Context, sess *session) error {
 	if err := sess.enqueue(ctx, &pb.OperatorMessage{
 		Payload: &pb.OperatorMessage_Rollup{Rollup: rollup},
 	}); err != nil {
+		metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
 		return fmt.Errorf("enqueue rollup: %w", err)
 	}
+	// Rollup hot path is done. Record before the (potentially long)
+	// acknowledgement batch — its duration is exposed separately.
+	metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
 
 	// Mark the included Pending CRs Acknowledged. Single status write
 	// per CR, ever — the paper specifies the transition is one-way.
 	// Run in parallel up to AcknowledgeConcurrency to absorb status
 	// writes on large rollup batches without blocking the next cycle.
 	if len(pending) > 0 {
+		ackStart := time.Now()
 		o.acknowledgeAll(ctx, pending)
+		metrics.OperatorAcknowledgeDuration.Observe(time.Since(ackStart).Seconds())
 	}
 	return nil
 }

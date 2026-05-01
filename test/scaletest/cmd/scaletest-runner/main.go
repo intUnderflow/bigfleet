@@ -394,6 +394,7 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) (map[string]floa
 	queries := map[string]string{
 		"shardCycleDurationP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))`,
 		"operatorRollupP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":        `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":    `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
 		"shardShortfalls":              `sum(bigfleet_shard_shortfalls)`,
 		"loadgenCRsActive":             `sum(scaletest_loadgen_cr_active)`,
