@@ -61,6 +61,19 @@ type Config struct {
 
 	// Logger receives structured events. nil → discard.
 	Logger *slog.Logger
+
+	// OnActions, if set, is called with the union of actions emitted
+	// each cycle. Intended for the simulator's trace capture. Must
+	// not block; the cycle path is the hot path. nil → no-op.
+	OnActions func([]decision.Action)
+
+	// LocalBootstrap, if set, is called by the executor to produce a
+	// kubelet bootstrap blob in lieu of round-tripping through the
+	// operator's Shard.Session stream. Used by the simulator and by
+	// any test that wants to exercise the engine without an operator.
+	// Production deployments leave this nil so the operator stream
+	// remains the canonical source.
+	LocalBootstrap func(ctx context.Context, cluster machine.ClusterID, requirements []needs.Requirement) ([]byte, error)
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -188,10 +201,24 @@ func (s *Shard) triggerCycle() {
 	}
 }
 
+// Step runs exactly one cycle synchronously and returns the actions
+// emitted across all three phases. Used by the simulator to drive a
+// shard through a scenario without a real time.Ticker. The Run loop
+// calls runCycle (which wraps Step) for production scheduling.
+func (s *Shard) Step(ctx context.Context) []decision.Action {
+	return s.runCycleCapturing(ctx)
+}
+
 // runCycle is the body of one worker cycle. Snapshot, decide, execute,
 // reconcile. Errors during action execution are logged but do not abort
 // the cycle — the next cycle will retry naturally.
 func (s *Shard) runCycle(ctx context.Context) {
+	_ = s.runCycleCapturing(ctx)
+}
+
+// runCycleCapturing runs the cycle and returns the union of actions
+// emitted across phases. Shared by Run (production) and Step (simulator).
+func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	cycleCtx, cancel := context.WithTimeout(ctx, s.cfg.CycleInterval)
 	defer cancel()
 
@@ -232,6 +259,18 @@ func (s *Shard) runCycle(ctx context.Context) {
 		seeds = append(seeds, shortfallSeed{Profile: u.Need.Profile, Count: u.Deficit})
 	}
 	s.recordShortfalls(seeds)
+
+	// Return the union of emitted actions for Step's caller. Cheap to
+	// build — the action slices are small relative to the cycle's
+	// real cost (provider RPCs, transitions).
+	all := make([]decision.Action, 0, len(p1.Actions)+len(p2.Actions)+len(p3.Actions))
+	all = append(all, p1.Actions...)
+	all = append(all, p2.Actions...)
+	all = append(all, p3.Actions...)
+	if s.cfg.OnActions != nil {
+		s.cfg.OnActions(all)
+	}
+	return all
 }
 
 // applyTransition advances a machine to the given state in the inventory,

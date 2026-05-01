@@ -90,11 +90,6 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		return fmt.Errorf("bootstrap: machine %s in state %s; expected Idle", a.MachineID, cur.State)
 	}
 
-	sess := s.lookupSession(a.Cluster)
-	if sess == nil {
-		return fmt.Errorf("bootstrap: no active operator session for cluster %s", a.Cluster)
-	}
-
 	// Idle → Configuring (record the destination cluster early so
 	// observers can see it).
 	if err := s.applyTransition(a.MachineID, machine.StateConfiguring, func(m *machine.Machine) {
@@ -103,15 +98,34 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		return formatErr("bootstrap: → Configuring", err)
 	}
 
-	// Pull a kubelet bootstrap blob from the operator.
+	// Pull a kubelet bootstrap blob. Either via the operator's
+	// Shard.Session stream (production) or via the LocalBootstrap
+	// hook (simulator / test).
 	blobCtx, cancel := context.WithTimeout(ctx, s.cfg.BootstrapTimeout)
 	defer cancel()
-	blob, err := sess.requestBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
-	if err != nil {
-		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
-			m.LastError = "bootstrap: " + err.Error()
-		})
-		return formatErr("bootstrap: requestBootstrap", err)
+	var blob []byte
+	if s.cfg.LocalBootstrap != nil {
+		var err error
+		blob, err = s.cfg.LocalBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
+		if err != nil {
+			_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
+				m.LastError = "bootstrap: " + err.Error()
+			})
+			return formatErr("bootstrap: LocalBootstrap", err)
+		}
+	} else {
+		sess := s.lookupSession(a.Cluster)
+		if sess == nil {
+			return fmt.Errorf("bootstrap: no active operator session for cluster %s", a.Cluster)
+		}
+		var err error
+		blob, err = sess.requestBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
+		if err != nil {
+			_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
+				m.LastError = "bootstrap: " + err.Error()
+			})
+			return formatErr("bootstrap: requestBootstrap", err)
+		}
 	}
 
 	ack, err := s.cfg.Provider.Configure(ctx, provider.ConfigureRequest{
