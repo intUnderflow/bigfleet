@@ -18,6 +18,20 @@
 # Cost (Scaleway hourly, May 2026): PRO2-M is €0.21/hr. A 30-min
 # scale run + 5-min ramp + 5-min teardown ≈ 40 min ≈ €0.14 / ~$0.15.
 
+# Scaleway pulls images from a registry (no kind side-load), so point
+# at the GHCR-published copies. These are public; the Kapsule cluster
+# pulls anonymously.
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: IfNotPresent
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: IfNotPresent
+
 kwok:
   clusterCount: 50
   # Production-shape resourcing: each kwok pod gets its own CPU + memory
