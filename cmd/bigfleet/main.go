@@ -28,8 +28,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "coordinator":
-		fmt.Fprintln(os.Stderr, "coordinator: not yet implemented (M6)")
-		os.Exit(2)
+		if err := runCoordinator(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "bigfleet coordinator:", err)
+			os.Exit(1)
+		}
 	case "all-in-one":
 		fmt.Fprintln(os.Stderr, "all-in-one: not yet implemented (M6)")
 		os.Exit(2)
