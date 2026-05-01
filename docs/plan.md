@@ -459,6 +459,19 @@ Each milestone is shippable and demoable; the next milestone subsumes the previo
 - `bigfleet-unschedulable-pod-controller` creates CRs from unschedulable pods; we observe roll-up → fake provisioning → UpcomingNode → kubelet (simulated) join → schedule.
 - Static-stability test: kill BigFleet, observe pods continue.
 
+### Deferred to post-v1: real cross-shard machine reassignment
+
+The M6 rebalancer emits `TransferOwnership` instructions, the M6.3 shard adapter stubs the corresponding handlers (no-op + ack), and M8 demonstrates that the *protocol loop* closes correctly. What is **not** in v1 is real machine movement across shard boundaries — i.e., a donor shard actually picking specific `machine_ids` of a requested profile, draining them through the provider, and the recipient shard claiming them.
+
+Doing it properly requires:
+
+1. **Coordinator-side machine-id discovery**: the coordinator only sees per-shard summaries, not per-machine inventory. A donor-side query (new RPC or a piggyback on `ReportShard`) is needed to ask "give me N specific machine_ids of profile X you can spare."
+2. **Donor adapter** in `pkg/shard/coordclient` for `OnCrossShardDrain` that scores victims via the existing Phase 2 logic, drains them through the provider, and returns the freed machine_ids.
+3. **Recipient adapter** for `OnTransferOwnership` that claims the listed machine_ids and drives Configure through the provider.
+4. **Provider ownership semantics**: either machines are unowned at the provider layer (BigFleet bookkeeping is the only source of truth — current model) or the provider gains a Transfer RPC. The current model is fine; the conformance suite (M9) just needs to spell it out.
+
+The paper §6 acknowledges cross-shard preemption is "intentionally expensive… intentionally rare." V1 ships in-shard preemption (M5 + M8) which covers the common case, plus the protocol scaffolding for cross-shard work to land cleanly later. A post-v1 milestone — call it `Mx. Cross-shard machine reassignment` — picks this up. Implementation is roughly the size of M6.
+
 ### M6. Coordinator + multi-shard
 - `cmd/bigfleet coordinator` (Raft + BoltDB).
 - Shard registers, sends reports.
