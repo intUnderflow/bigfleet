@@ -84,7 +84,34 @@ type Shard struct {
 	// collapse into a single cycle.
 	wakeup chan struct{}
 
+	// shortfalls tracks unresolved demand across cycles for reporting
+	// up to the coordinator. Keyed by profile fingerprint; aged in
+	// cycles. Bounded to keep the report compact (top-N by priority).
+	shortfallMu sync.Mutex
+	shortfalls  map[string]*shortfallEntry
+
+	// assignedDomains is the set of topology domains the coordinator
+	// has assigned to this shard. Empty = take everything (dev mode).
+	// Mutated by AssignDomain / UnassignDomain instruction handlers.
+	domainsMu       sync.Mutex
+	assignedDomains map[domainKey]struct{}
+
 	log *slog.Logger
+}
+
+// domainKey is a (label-key, label-value) tuple identifying a topology
+// domain assigned to this shard.
+type domainKey struct {
+	Key   string
+	Value string
+}
+
+// shortfallEntry is one tracked unresolved need.
+type shortfallEntry struct {
+	Profile                   needs.Profile
+	Count                     int
+	AgeCycles                 int
+	InterruptionPenaltyBucket needs.PenaltyBucket
 }
 
 // New constructs a Shard from cfg. Returns an error if required fields
@@ -119,6 +146,8 @@ func New(cfg Config) (*Shard, error) {
 		term:              fencing.NewCoordinatorTerm(),
 		sessionsByCluster: make(map[machine.ClusterID]*operatorSession),
 		wakeup:            make(chan struct{}, 1),
+		shortfalls:        make(map[string]*shortfallEntry),
+		assignedDomains:   make(map[domainKey]struct{}),
 		log:               log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
 }
@@ -194,6 +223,15 @@ func (s *Shard) runCycle(ctx context.Context) {
 			s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
 		}
 	}
+
+	// Persist any unresolved needs as shortfalls for the next
+	// ReportShard call. Phase 2 returns the post-preempt residual;
+	// anything still here cannot be resolved within this shard.
+	seeds := make([]shortfallSeed, 0, len(p2.Unresolved))
+	for _, u := range p2.Unresolved {
+		seeds = append(seeds, shortfallSeed{Profile: u.Need.Profile, Count: u.Deficit})
+	}
+	s.recordShortfalls(seeds)
 }
 
 // applyTransition advances a machine to the given state in the inventory,
