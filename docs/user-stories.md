@@ -1,167 +1,230 @@
-# BigFleet user stories
+# Working with BigFleet
 
-How BigFleet shows up in the day-to-day of the people who depend on it. Each story walks from "what life was like before" to "what they actually do now" to "what they gain." Names are fictional; the workflows are concrete.
+What it's actually like to interact with BigFleet from each role. These walk through the commands, CRs, dashboards, and decision points — not abstractions or pitches. If a section feels obvious, it probably is for that role; skip ahead.
 
-## 1. Maya submits a training job and her pod schedules in 90 seconds
+## Submitting a workload (application developer)
 
-**Role**: ML researcher at a mid-sized AI lab. She runs ~5 fine-tuning jobs a week, each needing 8×H100s for 4 hours.
-
-**Before BigFleet** — Maya's lab ran a single autoscaler per cluster. When she submitted a 8-GPU pod and the cluster's GPU pool was at capacity, the autoscaler eventually noticed (every 60s), eventually called AWS to ask for a node (90s API call), and eventually the node joined and the kubelet became Ready (4–8 min). Total: 6–10 minutes of pod-pending while she stared at `kubectl get pods`. If the cluster had no a3-highgpu-8g quota left in `us-west-2`, the pod sat pending forever and Maya had to manually file a ticket to the platform team to switch regions.
-
-**With BigFleet** — Maya creates a `Pod` with `priorityClass: ml-research` and `nvidia.com/gpu: 8` like she always has. She doesn't know BigFleet exists. The cluster's `bigfleet-unschedulable-pod-controller` notices her pending pod and creates a `CapacityRequest` CR. The operator includes that request in the next 10s rollup to its shard. The shard's Phase 1 either:
-
-- finds an existing Idle a3-highgpu-8g machine and configures it for her cluster (~30 seconds), or
-- asks the AWS provider to provision a fresh one from a *pre-warmed Speculative pool* the platform team maintains (45 seconds for AWS to ack + 30 seconds for kubelet join = ~90 seconds), or
-- preempts a low-priority `priorityClass: nightly-eval` job from another team's job whose `interruptionPenalty` is lower than her workload's value to BigFleet (~20 seconds — Phase 2).
-
-**The win**: Maya's median time-to-pod-running went from 7 minutes to 90 seconds. When the cluster's GPU pool is saturated, BigFleet quietly preempts lower-priority workloads instead of failing — so she stops needing the platform team's intervention. Maya never has to learn what BigFleet *is*; the experience is just "kubectl apply, pod runs."
+You're writing a Pod spec like you would on any Kubernetes cluster. BigFleet enters the picture only if the cluster runs the optional `bigfleet-unschedulable-pod-controller` and your Pod can't schedule on the existing node pool.
 
 ```yaml
-# What Maya writes
 apiVersion: v1
 kind: Pod
 metadata:
-  name: finetune-llama-7b-2026-05-01
+  name: trainer-2026-05-01-a
 spec:
-  priorityClassName: ml-research          # 1,000,000
-  containers: [...]
+  priorityClassName: ml-research
   nodeSelector:
     node.kubernetes.io/instance-type: a3-highgpu-8g
-  resources: { limits: { nvidia.com/gpu: 8 } }
+  containers:
+    - name: trainer
+      image: internal/trainer:v42
+      resources:
+        limits: { nvidia.com/gpu: 8 }
 ```
 
+If the cluster has no a3-highgpu-8g idle, the controller observes your Pod's `Pending` status and the scheduler's `0/N nodes available` message, and creates a `CapacityRequest` with the matching profile derived from the Pod:
+
 ```yaml
-# What the unschedulable-pod-controller creates (auto, not Maya's job)
 apiVersion: bigfleet.lucy.sh/v1alpha1
 kind: CapacityRequest
 metadata:
-  name: pod-finetune-llama-7b-2026-05-01
-  ownerReferences: [{ kind: Pod, name: finetune-llama-7b-2026-05-01 }]
+  name: pod-trainer-2026-05-01-a
+  ownerReferences: [{ kind: Pod, name: trainer-2026-05-01-a, ... }]
 spec:
   count: 1
   profile:
     requirements:
       - { key: node.kubernetes.io/instance-type, operator: In, values: [a3-highgpu-8g] }
     resources: { nvidia.com/gpu: "8" }
-    priority: 1000000
-    interruptionPenalty: 8192
-    reclamationPenalty: 65536
+    priority: 1000000                # mapped from PriorityClass "ml-research"
+    interruptionPenalty: 8192        # cluster default for this PriorityClass
+    reclamationPenalty: 65536        # ditto
 ```
 
-## 2. Sven launches a 256-GPU job at 9am Tuesday and BigFleet rebalances 3 clusters around it
+You watch `kubectl get pods -w`. The pod transitions Pending → Running once a node joins. The CR's `.status.phase` walks `Pending → Acknowledged`. If BigFleet can't satisfy (cloud quota exhausted, no preemptable victims at this priority), `.status.phase=Shortfall` and `.status.conditions` carries a reason.
 
-**Role**: ML platform engineer running a 12-cluster fleet. He owns the team's 256-GPU training reservations.
+What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted.
 
-**Before BigFleet** — Sven's 256-GPU jobs were launched once a week, and the routine was: at 8:55am, manually drain low-priority workloads from `cluster-prod-us-west-2a` and `cluster-prod-us-west-2b` to free capacity. Coordinate with two on-call engineers. Watch the autoscaler crawl. Ten percent of the time, capacity wasn't fully available because an unrelated pod had grabbed an a3 node in the last hour and Sven had to file a one-off cordon request. The 256-GPU job started 20–40 minutes after he hit submit, and his 5-engineer team waited.
+## Running a high-priority job (ML platform engineer)
 
-**With BigFleet** — Sven's 256-GPU `Job` has `priorityClass: ml-research-flagship` (priority 100M) and `interruptionPenalty: 1048576` ($1M, signalling "do not interrupt this once started"). The unschedulable-pod-controller creates 32 CRs (one per pod for the 8-GPU per-pod shape). His shard sees 32 high-priority requests against its NeedsTable's existing population.
+You're submitting a Job whose Pods need to run together — N pods, each with the same Profile. From BigFleet's view this is N CRs with the same Profile fingerprint, aggregated to one row in the shard's NeedsTable.
 
-Phase 1 finds 156 GPUs idle. Phase 2 walks the shortfall and finds 100 candidate victims across 4 different clusters running `priorityClass: nightly-eval` (priority 1000), all with `interruptionPenalty: 256` — these workloads' owners explicitly *signed up* to be preemptable in exchange for cheaper effective cost. Phase 2 issues drain instructions to the 4 cluster operators in parallel; each operator gracefully drains its victim pods (PDBs respected, drain grace 10 min) and acknowledges the reclaim. The 4 clusters' freed nodes are reassigned to Sven's flagship cluster across the next two cycles.
+If you want this run to *not* be interruptible once started, raise `interruptionPenalty`. The shard uses it in:
 
-**The win**: Sven submits at 8:59am and his 32 pods are all running by 9:08am — a 9-minute spinup with no human coordination. The nightly-eval team's owners get a Slack message (via their team's monitoring on `bigfleet_shard_actions_total{kind="Reclaim"}`) and adjust their job timestamps for tomorrow. Sven's team stops losing 30 minutes a week to capacity orchestration. Annual savings: ~25 hours of senior-engineer time per quarter, plus ~$2K of GPU-hours that used to be reserved-but-idle in the "drain and prep" window.
+- **Phase 2 victim score**: `interruption_penalty + reclamation_penalty + drain_grace_remaining × hourly_cost`. A high score makes you a poor victim — Phase 2 will preempt other workloads first, even ones at slightly higher priority but with low penalties.
+- **Phase 1 cost selection**: `effective_cost = price + (interruption_probability × interruption_penalty)`. A high penalty steers Phase 1 away from spot capacity (high `interruption_probability`) toward reserved/on-demand.
 
-## 3. Priya runs `cluster-prod-eu` and stops thinking about autoscaler tuning
-
-**Role**: SRE owning two production clusters in EU regions.
-
-**Before BigFleet** — Priya owned `cluster-autoscaler` configuration for her two clusters: per-node-group `min`/`max`/`scale-down-delay-after-add`/`balance-similar-node-groups`. Each cluster had ~15 instance types across 3 zones, each with its own `MachineSet`. Tuning was per-cluster and the autoscaler couldn't see what was happening in `cluster-prod-us`. She'd often see `cluster-prod-eu-1` over-provision while `cluster-prod-us-1` was at capacity. She maintained per-cluster runbooks, per-cluster Grafana dashboards, per-cluster on-call.
-
-**With BigFleet** — Priya runs the `bigfleet-operator` Helm chart in each of her clusters. The operator has 3 settings: `clusterID`, `shardAddress`, and a kubeconfig. She doesn't tune anything else per-cluster. BigFleet's shard owns the decision-making, including preferring to satisfy demand from a freshly-Idle US node over creating a new EU one when EU spot capacity is constrained.
-
-Priya's runbook is now one page: "If `bigfleet_operator_session_reconnects_total` is rising, check the operator's stream connectivity to the shard." Everything else delegates to the platform team that owns BigFleet.
-
-**The win**: Priya stops being an autoscaler expert. She owns less code, has fewer alerts, and her clusters' fleet-level utilisation is consistently 5–10 percentage points higher because BigFleet rebalances across her clusters and the US/APAC regions she doesn't even own. When a new instance type ships (say, GH200), the platform team adds it to BigFleet's provider config once, and her cluster gets it for free with no MachineSet edit on her end.
-
-## 4. Marcus owns BigFleet for a 200-cluster company and watches utilisation climb 33 percentage points
-
-**Role**: Principal platform engineer at a large AI/SaaS company. Marcus owns BigFleet's deployment, the provider implementations, and the fleet-level capacity model.
-
-**Before BigFleet** — Marcus's 200 production clusters each ran their own cluster-autoscaler. Average GPU utilisation was 45% — meaning 55% of the company's $20M/yr GPU spend was idle capacity sitting in clusters that didn't currently need it. Per-cluster autoscalers couldn't share. Marcus had spent 18 months on a homegrown "cross-cluster scheduler" that mostly didn't work.
-
-**With BigFleet** — Marcus deploys BigFleet's coordinator (3 replicas) and 4 shards (one per region). Each cluster runs an operator. Three weeks of adoption later, he can show an executive dashboard:
-
-- Fleet-level GPU utilisation: **78%** (up from 45%).
-- Mean time to schedule a high-priority pod: **84 seconds** (down from 8 min).
-- Number of clusters where humans manually drain workloads to make room for high-priority work: **0** (down from ~50/week).
-- Cost of capacity that's idle but-could-have-served-demand-elsewhere: **$340K/yr** (down from $9M/yr).
-
-The 33-percentage-point utilisation lift translates to **$6.6M/yr saved** — roughly 30× the 5-engineer cost of running BigFleet itself. Marcus's metrics dashboard, [`docs/operator-guide.md` runbook](operator-guide.md), and the [scaling guide](scaling-guide.md) are now the company's standard references for "how the fleet works."
-
-**The win**: Marcus retired his homegrown cross-cluster scheduler. BigFleet's static-stability guarantee meant the migration was incremental — clusters could opt in one at a time without ripping out their existing CAs first. The CFO's quarterly review now includes a specific BigFleet line item.
-
-## 5. Elena uses penalty buckets to identify $400K of overprovisioned interruption-penalty
-
-**Role**: FinOps analyst. Owns the quarterly cost review.
-
-**Before BigFleet** — Elena could see GPU spend by cluster, but not by *workload*. She knew the company spent $20M/yr on compute, but couldn't tell which 30% of jobs were paying premium for "must not be interrupted" guarantees they didn't actually need. The cluster-autoscaler model had no concept of "cost of interrupting this workload."
-
-**With BigFleet** — Every `CapacityRequest` carries an `interruptionPenalty: $X`. The cost is bucketed (powers of 2 from $0.50 to $8.4M) and exported as a Prometheus metric: `bigfleet_shard_inventory_machines{interruption_penalty_bucket=...}`. Elena queries:
+What you watch:
 
 ```promql
+# Are my CRs being satisfied or sitting in Shortfall?
+sum by (cluster) (
+  bigfleet_capacity_requests{phase="Shortfall", cluster=~"$cluster"}
+)
+
+# Did Phase 2 preempt anything to make room?
+sum by (cluster) (rate(bigfleet_shard_actions_total{kind="Reclaim"}[5m]))
+```
+
+If you see Reclaims firing on other clusters, look at which workloads got drained — their owners get a `NodeStateUpdate` of state `Draining` for nodes they were using. There's no global "you preempted these workloads" alert; teams instrument their own monitoring on the operator's `bigfleet_operator_node_state_updates_total{state="Draining"}` counter.
+
+## Per-cluster operator install (cluster owner)
+
+You own one or more clusters. The platform team owns the BigFleet shard. Your job is the operator chart:
+
+```sh
+helm install bigfleet-operator deploy/helm/bigfleet-operator \
+  --namespace bigfleet-system --create-namespace \
+  --set clusterID=cluster-prod-eu-1 \
+  --set shardAddress=bigfleet-shard.bigfleet-system.svc:7780
+```
+
+The operator dials the shard from inside the cluster (outbound only — no inbound listener). After install, check:
+
+```sh
+kubectl -n bigfleet-system logs deploy/bigfleet-operator | head
+# expect: "operator started ... rollup_interval=10s"
+
+kubectl get availablecapacity
+# CRs auto-written by the operator. If empty after 30s, the rollup loop hasn't synced.
+```
+
+You don't tune autoscaler parameters per-cluster anymore — there are none in the operator chart. The shard owns those. What stays your responsibility:
+
+- The PriorityClasses your cluster offers (and the operator's mapping to BigFleet `priority` int values).
+- Per-cluster compliance: which `nodeSelector` keys your `BootstrapTemplate` knows how to render userdata for.
+- Pod Disruption Budgets your workloads carry — the operator respects them when handling `ReclaimInstruction`.
+
+Watch `bigfleet_operator_session_reconnects_total`: a steady non-zero rate means the stream to the shard is unstable.
+
+## Operating BigFleet itself (platform engineer)
+
+You're running the coordinator + shards on a management cluster. Day-to-day work splits into three modes:
+
+**Mode 1 — capacity-tier changes.** Adding a new instance type or capacity reservation means updating the provider's static config (it lives in the provider repo, separate from BigFleet) and the provider redeploys. BigFleet itself doesn't need to change. The shard discovers new inventory via the next `provider.List` reconcile.
+
+**Mode 2 — rebalancing decisions.** When demand patterns shift (a region grows, another shrinks), you adjust shard count and topology-domain assignments. The coordinator owns those — you push a config change through Raft via the coordinator's gRPC admin endpoint, and the next `ReportShard` cycle distributes the new assignments.
+
+**Mode 3 — incident response.** A shard's hot path is in-process; if it OOMs, restart it. State is recoverable from the provider's `List`. The bigger pathology to watch for is *coordinator quorum loss* — at that point new cross-shard rebalancing pauses, but every shard keeps running on its existing assignments. Static stability is the load-bearing property; you don't need to scramble.
+
+Useful queries:
+
+```promql
+# Are any shards falling behind?
+histogram_quantile(0.99,
+  sum by (le, shard_id) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))
+)
+
+# Coordinator throughput.
+sum(rate(bigfleet_coordinator_apply_total[5m]))
+
+# Any cluster sessions flapping?
+sum by (cluster) (rate(bigfleet_operator_session_reconnects_total[5m])) > 0
+```
+
+The shape of the day depends on whether anything is alarming. Most days: nothing.
+
+## Cost analysis with penalty buckets (FinOps)
+
+The penalty bucket field on `Profile` is the lever for cost analysis. Penalties are quantised to powers of 2 from $0.50 to $8.4M, so the cardinality is bounded and aggregations are stable. Useful queries:
+
+```promql
+# How much capacity sits behind each interruption-penalty tier?
 sum by (interruption_penalty_bucket) (
   bigfleet_shard_inventory_machines{state="Configured"}
 )
+
+# Which clusters' workloads are clustered at high-penalty buckets?
+sum by (cluster, interruption_penalty_bucket) (
+  bigfleet_shard_needs_table_count
+)
+
+# Spot vs on-demand ratio per shard.
+sum by (capacity_type) (bigfleet_shard_inventory_machines{state="Configured"})
+  / ignoring(capacity_type) group_left
+sum(bigfleet_shard_inventory_machines{state="Configured"})
 ```
 
-She finds: 14% of configured machines belong to workloads with `interruptionPenalty: $1,048,576` (bucket 20) — but on inspection, half of those workloads are *batch nightly evaluations* whose engineers blindly copied their `interruptionPenalty` from the production training jobs' values.yaml.
+Things to look for:
 
-Elena raises a tracking ticket. Three teams audit and drop their `interruptionPenalty` to $1024 (bucket 10), which moves them to a cheaper effective-cost tier where BigFleet is willing to schedule them on spot capacity. Q-on-Q the company's spot-vs-on-demand mix shifts from 18% spot to 41% spot.
+- A bucket-distribution that's bimodal at very high values, with no middle. Usually means teams copied a default value from somewhere and never tuned it. Worth checking against actual workload tolerance.
+- Workloads at high `interruption_penalty` running on `capacity_type=spot`. The cost formula already discourages this, but if the price gap is small and the probability is low it can still happen — and is worth surfacing for review.
+- Per-cluster aggregations that diverge from the fleet average. A cluster whose workloads are systematically higher-penalty than peers is a candidate for either dedicated reserved capacity or a conversation with the cluster owner.
 
-**The win**: $400K/yr of compute reallocated from on-demand to spot, with no impact on the workloads (because they were always preemptable; their owners just hadn't expressed it). Elena's quarterly review is the first time the company has had per-workload cost-of-interruption visibility.
+## Triaging a capacity-stockout page (on-call)
 
-## 6. Devon gets paged at 3am — capacity stockout, fleet-wide
+The standard alert is `bigfleet_shard_shortfalls > 0 for 5m`. The runbook:
 
-**Role**: SRE on call for the platform team.
+```sh
+# 1. Which clusters / Profiles are unsatisfied?
+kubectl get capacityrequests -A \
+  -o jsonpath='{range .items[?(@.status.phase=="Shortfall")]}{.metadata.namespace}/{.metadata.name}: priority={.spec.profile.priority}{"\n"}{end}'
 
-**Before BigFleet** — A 3am page about "GPU capacity stockout" used to mean Devon manually checking 12 cluster autoscalers' status, identifying which clouds/regions had no quota left, deciding whether to file an emergency quota increase, and manually evicting low-priority work. Average resolution: 90 minutes. Average mean-time-to-page-someone-else: 25 minutes.
+# 2. Is it a Phase-1 problem (no inventory) or a topology problem
+#    (inventory present but constraint can't be satisfied within a shard)?
+kubectl exec -n bigfleet-system bigfleet-shard-0 -- \
+  /usr/local/bin/bigfleet shard dump-shortfalls
+```
 
-**With BigFleet** — The page fires off a single Prometheus alert: `bigfleet_shard_shortfalls > 0 for 5m`. Devon opens the runbook ([operator-guide §runbook](operator-guide.md#runbook)) and follows the playbook:
+Decision tree:
 
-1. `kubectl get capacityrequests --all-namespaces -o jsonpath='{.items[?(@.status.phase=="Shortfall")]...}'` to see which workloads are unsatisfied.
-2. Check `bigfleet_shard_inventory_machines{state="Idle"}` to confirm the fleet *can't* satisfy without new provisioning.
-3. Check the AWS provider's Get RPCs in Prometheus to see if cloud quota is the actual bottleneck.
+- **Phase 1, no idle inventory, provider out of capacity.** File a quota-increase request, wait. Optionally raise the priorities of the shortfalled CRs above some other workloads — but only if you can justify the preemption to the affected teams.
+- **Phase 1, no idle inventory, provider has capacity but isn't being asked.** Likely a Speculative-pool sizing issue. Check the coordinator's quota assignments for this shard.
+- **Topology unsatisfiable within a shard.** A `Same`-rack request that the current shard can't fulfil. Cross-shard topology resolution is deliberately out of scope (per ADR); the workload either needs a different topology constraint or a different shard binding. This is rare in steady state.
+- **Aging shortfalls escalating.** The shortfall buffer has a max age before it pages louder. Long-aged shortfalls usually mean a cluster's been mis-bound to a shard that doesn't have the right capacity profiles.
 
-Within 8 minutes Devon identifies that `nvidia.com/gpu` quota in `us-west-2` is exhausted and `eu-west-1`'s spot price has spiked. He files a one-line quota request for us-west-2 and lets the eu-west-1 spot constraint resolve naturally over the next hour as workloads finish. He goes back to bed.
+## Implementing a CapacityProvider (provider author)
 
-**The win**: The 90-minute incident becomes an 8-minute one. Devon doesn't have to know per-cluster autoscaler internals — there's one fleet-level metric that tells him "is BigFleet currently failing to satisfy demand, and if so, why." Annual on-call burden drops by ~40% for capacity-related pages.
+You're writing a separate process that implements `CapacityProvider`. Six RPCs, no Watch.
 
-## 7. Lin implements an `IronicProvider` and ships it the same week
+```sh
+# Stub it out:
+go mod init github.com/yourcorp/your-provider
+# Copy the .proto from the BigFleet repo, generate Go bindings.
+# Implement Create/Configure/Drain/Delete/Get/List against your backend.
 
-**Role**: Engineer on a private-cloud team. They run thousands of bare-metal nodes via Ironic and want them to participate in the BigFleet fleet alongside the AWS/GCP nodes.
+# Run the conformance suite against your endpoint:
+make conformance-build
+./bin/conformance --provider-addr=localhost:9001
+```
 
-**Before BigFleet** — A "new cluster autoscaler provider" used to mean forking `cluster-autoscaler`, adding their backend, and shipping a custom build per cluster. The fork was a maintenance burden the team carried for years. They couldn't merge upstream because the provider was internal.
+The suite walks ~50 scenarios. Categories:
 
-**With BigFleet** — Lin reads [`provider-author-guide.md`](provider-author-guide.md), runs `make conformance` against a stub on her laptop to confirm she understands the protocol, then implements `Create`/`Configure`/`Drain`/`Delete`/`Get`/`List` in a new repo (`github.com/initial-orange/bigfleet-ironic-provider`). The proto contract is fixed; her code never touches BigFleet itself.
+- **Idempotency**: re-issue the same `Create` 100x with the same machine_id. Should return the same op_id every time and only act once.
+- **Transitional-state recovery**: kill the provider mid-`Configure`. Restart. The shard's next `List + Get` should observe the in-progress state correctly.
+- **Cursor correctness**: if you support `since_revision`, the suite verifies that List with a cursor returns only deltas, that the cursor advances monotonically, and that resuming from an old cursor still works.
+- **Drain-grace handling**: a Drain that's interrupted partway must end up in `Failed` with `last_error`, not silently revert.
 
-She points the BigFleet conformance suite at her provider's gRPC endpoint. It runs 47 test scenarios (idempotency, transitional-state recovery, since_revision cursor correctness, drain interruption handling). Three pass on day one; she fixes the failures in the rest over two days. By Friday she's running her provider in staging alongside the AWS provider — both registered in BigFleet's coordinator, both serving capacity.
+What the suite *won't* catch: backend-specific edge cases (AWS quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The suite establishes that your provider is *protocol-correct*.
 
-**The win**: Two developer-weeks instead of months. Her provider repo is independent — she ships releases on her cadence, BigFleet ships on its own. When Ironic adds a new feature, she lands it in her provider without an upstream BigFleet PR. The conformance suite gives her ongoing confidence that her provider stays compatible as BigFleet evolves.
+## Capacity planning (capacity planner)
 
-## 8. Theo plans next quarter's capacity and trusts the projection
-
-**Role**: Capacity planner / FinOps. Owns the quarterly hardware plan that the procurement team uses.
-
-**Before BigFleet** — Theo used per-cluster utilisation metrics to project quarterly capacity. The output was always too conservative because each cluster's autoscaler was unaware of cross-cluster demand. He'd reserve 30% headroom per cluster — totalling 30% of fleet — but only ~12% headroom was ever needed in practice (because peaks didn't align across clusters). The over-reservation cost the company ~$1.8M/yr.
-
-**With BigFleet** — Theo queries the BigFleet shard-level history:
+Your input is fleet-level demand history. The query is the aggregate, not the per-cluster sum:
 
 ```promql
 quantile_over_time(0.99,
-  sum(bigfleet_shard_inventory_machines{state=~"Configured|Configuring"})[90d]
+  sum(bigfleet_shard_inventory_machines{state=~"Configured|Configuring"})[90d:1h]
+)
+
+# Decompose by capacity type, since reserved vs spot vs on-demand
+# have different lead times and commitment shapes.
+quantile_over_time(0.99,
+  sum by (capacity_type) (
+    bigfleet_shard_inventory_machines{state=~"Configured|Configuring"}
+  )[90d:1h]
 )
 ```
 
-He sees the *fleet-level* p99 demand, not per-cluster. From that, he applies a 12% headroom buffer (informed by [`scaling-guide.md`](scaling-guide.md)'s tier-by-tier sizing tables). He shares the projection with Marcus's team and the procurement team in a single Confluence page.
+The headroom buffer you apply to the p99 is a policy choice. Two factors push it up:
 
-**The win**: $1.8M/yr saved by reserving headroom against the *aggregate* demand peak rather than the sum of per-cluster peaks. The plan is auditable — each cluster's contribution is visible — and rolls forward by quarter. A fight that used to take a week of Theo + 3 cluster owners arguing now takes 2 hours.
+- **Provisioning lead time of the underlying capacity**. If your cloud takes 4 minutes to bring a node up and your workloads spike on a 2-minute timescale, you need static headroom for the gap.
+- **Demand bursts that are correlated across clusters**. The point of the fleet-aggregate query is that uncorrelated peaks cancel out — but if your fleet has a daily synchronised batch job, that's a correlated peak that won't smooth.
 
-## 9. Aisha runs the failover-soak before every release and sleeps better
+The scaling guide ([`scaling-guide.md`](scaling-guide.md)) tabulates per-tier sizing assumptions; calibrate against it, then look at your actual demand to decide where you actually sit.
 
-**Role**: Reliability engineer on the platform team. Owns BigFleet's release process.
+## Pre-release validation with failover-soak (reliability)
 
-**Before BigFleet** — Pre-release validation for the cluster-autoscaler stack used to involve manually killing the running CA pod in staging, watching the cluster, and "feeling out" whether anything broke. There was no quantitative answer to "does the system survive this failure mode."
-
-**With BigFleet** — Aisha runs the `failover-soak` profile from the [scale-test harness](scaletest.md) before every BigFleet release:
+You're gating the release on the static-stability invariant: clusters keep running with BigFleet entirely down. The `failover-soak` profile does this quantitatively.
 
 ```sh
 scaletest-runner \
@@ -170,36 +233,26 @@ scaletest-runner \
   --output=./results/$(date +%Y%m%d)-failover/
 ```
 
-The profile spins up 50 simulated clusters (KWOK), holds steady at 50K demand for 10 minutes, then kills the coordinator's Raft leader. It does this twice during the run. The runner's `summary.json` shows whether the cluster operators reconnected within the SLO and whether *any* configured machine flipped state during the coordinator outage.
+The profile spins up 50 KWOK-faked clusters at 1K CRs each, holds steady for 10 minutes, then kills the coordinator's Raft leader. It does this twice. The runner asserts:
 
-The expected outcome — and the one that's confirmed every release — is that **zero cluster-side errors occur during 60s of leader churn**. Static stability holds. If it didn't, the release blocks.
+- `bigfleet_shard_inventory_machines{state="Configured"}` total is unchanged across the leader-kill window.
+- `bigfleet_operator_session_reconnects_total` increases by ≤ 1 per cluster (the unavoidable post-leader-election reconnection).
+- No `CapacityRequest.status.phase` transitions backward (Acknowledged → Pending) during the kill window.
 
-**The win**: Every release is gated by an automatic, quantitative "does static stability still hold" check. Aisha can answer "what happens if Raft is wedged for 30 seconds" with a number, not a hand wave. Trust in the deploy process goes from "we hope" to "we measured 32 times this quarter and it held."
+If any assertion fails, the run is marked failed and the release is blocked. The `summary.json` and the Prometheus snapshot get archived for post-mortem.
 
-## 10. Hiroshi never learns BigFleet exists
+This isn't a sales pitch for static stability — it's a check that the property still holds after every change to `pkg/coordinator` or `pkg/shard`. The property is easy to break accidentally; the check is cheap.
 
-**Role**: Backend engineer on the company's core product team. Submits ~20 pods a week as part of a long-running stateful service.
+## Notes that aren't role-specific
 
-**Before BigFleet** — Hiroshi's experience was "submit pod, wait, sometimes file a ticket if it doesn't schedule." He learned the names of the cluster-autoscaler's failure modes the hard way.
+- **Priority + interruption-penalty + reclamation-penalty are the three numbers everyone looks at.** Different roles read them differently — workload owners as a self-description, BigFleet operators as inputs to the engine, FinOps as a cost lever — but it's the same fields.
+- **Static stability is felt as the absence of incidents.** Most users never see BigFleet's failure modes because the property holds; the people who *do* see it are the ones running BigFleet itself, and even then mostly in pre-release tests.
+- **Out-of-tree providers means the platform team's provider release cadence is decoupled from BigFleet's.** When BigFleet ships a new version, you don't have to redeploy your provider; when your provider ships, you don't have to coordinate with BigFleet maintainers.
 
-**With BigFleet** — Hiroshi's pods specify `priorityClassName: prod-stateful` (priority 10000), `nvidia.com/gpu: 0`, plenty of CPU and memory, no special signals. The unschedulable-pod-controller creates a CR for him. The operator includes it in the rollup. The shard's Phase 1 satisfies his demand from existing Idle inventory in his cluster every single time, in under a second.
+## See also
 
-Hiroshi never reads BigFleet docs. He never sees a BigFleet alert. He never gets paged about capacity. The system is invisible to him — which is the highest possible compliment.
-
-**The win**: For the 95% of the company who isn't a platform engineer, BigFleet is *not noticed*. The other 5% (Maya, Sven, Marcus, Devon, Elena, Theo, Aisha, Lin, Priya) get the leverage that makes the 95% experience seamless.
-
----
-
-## Common patterns across these stories
-
-- **Static stability is felt as "the system never bites me when it has problems."** Priya, Hiroshi, and Maya never see BigFleet outages because clusters keep running. Devon's 3am page is about *the fleet being out of capacity*, not about *BigFleet being broken*.
-- **Priority + interruption-penalty is the language everyone speaks.** Sven uses it to express "don't interrupt my flagship job." Elena uses it to find overprovisioning. The nightly-eval team uses it to opt into spot-pricing in exchange for preemptability. The same two numbers carry signal across roles.
-- **Out-of-tree providers mean the platform team can ship fast.** Lin's two-week Ironic provider would have been a multi-quarter fork in the cluster-autoscaler world.
-- **Fleet-level visibility unlocks decisions per-cluster autoscalers can't see.** Marcus's 33-point utilisation lift, Theo's $1.8M reservation reduction, and Elena's $400K spot-shift all come from looking at the fleet, not summing the clusters.
-
-## Where to go next
-
-- New to BigFleet? Start with the [quickstart](quickstart/).
-- Curious how the engine works? [Architecture](architecture/).
-- Ready to operate it? [Operator guide](operator-guide/).
-- Writing a provider? [Provider author guide](provider-author-guide/).
+- [Quickstart](quickstart/) — bring up BigFleet on a kind cluster.
+- [Architecture](architecture/) — how the engine works.
+- [Operator guide](operator-guide/) — install and runbook.
+- [Provider author guide](provider-author-guide/) — writing your own CapacityProvider.
+- [Scale-test runbook](scaletest/) — running the scenarios above against any cluster.
