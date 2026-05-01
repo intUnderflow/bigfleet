@@ -1,0 +1,28 @@
+{
+  "runId": "20260501-133558-local-50k",
+  "profile": "local-50k",
+  "target": {
+    "context": "kind-bigfleet-scaletest",
+    "kind": "kind"
+  },
+  "cost": {
+    "estimatedUsd": 0.08333333333333333,
+    "hours": 0.08333333333333333
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000
+  },
+  "metrics": {
+    "coordinatorApplyOpsPerSec": -1,
+    "loadgenCRsActive": 50000,
+    "loadgenCRsCreatedPerSec": 194.0670707036056,
+    "operatorAckP99Seconds": 18.91013710502434,
+    "operatorRollupP99Seconds": 2.048,
+    "shardCycleDurationP99Seconds": 0.007392727272727273,
+    "shardShortfalls": 3
+  },
+  "passed": false,
+  "failure": "one or more SLO thresholds exceeded"
+}
