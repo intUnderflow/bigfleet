@@ -102,6 +102,10 @@ conformance: ## Run the provider conformance suite (TARGET=addr:port).
 	@if [ -z "$$TARGET" ]; then echo "TARGET=addr:port required"; exit 1; fi
 	$(GO) test -count=1 -tags=conformance -run . ./test/conformance/... -target=$$TARGET
 
+.PHONY: conformance-self
+conformance-self: ## Run the conformance suite against pkg/provider/fake (no TARGET needed).
+	$(GO) test -count=1 -tags=conformance -run TestConformance_SelfTest_OnFake ./test/conformance/...
+
 ##@ Lint
 
 .PHONY: lint
