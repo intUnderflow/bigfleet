@@ -31,6 +31,7 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
@@ -219,6 +220,10 @@ func (s *Shard) runCycle(ctx context.Context) {
 // runCycleCapturing runs the cycle and returns the union of actions
 // emitted across phases. Shared by Run (production) and Step (simulator).
 func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
+	cycleStart := time.Now()
+	defer func() {
+		metrics.ShardCycleDuration.Observe(time.Since(cycleStart).Seconds())
+	}()
 	cycleCtx, cancel := context.WithTimeout(ctx, s.cfg.CycleInterval)
 	defer cancel()
 
@@ -267,6 +272,18 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	all = append(all, p1.Actions...)
 	all = append(all, p2.Actions...)
 	all = append(all, p3.Actions...)
+	for _, a := range all {
+		metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
+	}
+	// Inventory state gauge.
+	stateCounts := map[machine.State]int{}
+	for _, m := range snap.All() {
+		stateCounts[m.State]++
+	}
+	for st := machine.StateSpeculative; st <= machine.StateFailed; st++ {
+		metrics.ShardInventoryMachines.WithLabelValues(st.String()).Set(float64(stateCounts[st]))
+	}
+	metrics.ShardShortfalls.Set(float64(len(s.Shortfalls())))
 	if s.cfg.OnActions != nil {
 		s.cfg.OnActions(all)
 	}

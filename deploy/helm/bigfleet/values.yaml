@@ -1,0 +1,65 @@
+# Default values for the bigfleet control-plane chart.
+#
+# Renders into a StatefulSet for the coordinator (Raft state on a PVC)
+# and a Deployment for the shards. Real production deployments should
+# (a) raise replica counts, (b) attach mTLS via a sidecar or a custom
+# values overlay, (c) wire ServiceMonitor / PodMonitor for Prometheus.
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet
+  tag: ""             # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+namespace: bigfleet-system
+
+coordinator:
+  enabled: true
+  replicas: 3                   # ADR-0002: single Raft group, 3 voters
+  bootstrap: true               # set false on subsequent helm upgrades
+  dataDir: /var/lib/bigfleet
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  storage:
+    size: 10Gi                  # Raft logs + snapshots; ~500MB at 100M nodes per plan §10
+    storageClassName: ""        # "" = default StorageClass
+  service:
+    grpcPort: 7790
+    raftPort: 7791
+    metricsPort: 8790
+  rebalanceInterval: 5s
+
+shard:
+  enabled: true
+  replicas: 1                   # bump per fleet size; see docs/scaling-guide.md
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  service:
+    grpcPort: 7780
+    metricsPort: 8780
+  dataDir: /var/lib/bigfleet-shard
+
+# rbac toggles whether ClusterRole / ClusterRoleBinding are rendered.
+# Disable if your cluster admin manages RBAC out-of-band.
+rbac:
+  create: true
+
+# serviceAccount.create=true makes the chart mint a ServiceAccount;
+# false reuses an existing one named .Values.serviceAccount.name.
+serviceAccount:
+  create: true
+  name: ""
+
+# podMonitor wires Prometheus Operator scraping. Off by default to keep
+# the chart's hard dependencies minimal.
+podMonitor:
+  enabled: false

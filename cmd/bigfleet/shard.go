@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
@@ -27,6 +30,7 @@ func runShard(args []string) error {
 	fs := flag.NewFlagSet("shard", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	listen := fs.String("listen", ":7780", "address to listen on for the Shard.Session gRPC service")
+	metricsAddr := fs.String("metrics-addr", ":8780", "address for the Prometheus /metrics endpoint (\"0\" disables)")
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
 	if err := fs.Parse(args); err != nil {
@@ -75,9 +79,17 @@ func runShard(args []string) error {
 	cancelSig, sigs := signalContext()
 	defer cancelSig()
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() { errCh <- sh.Run(ctx) }()
 	go func() { errCh <- srv.Serve(lis) }()
+	if *metricsAddr != "0" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		logger.Info("metrics serving", "addr", *metricsAddr)
+		go func() { errCh <- metricsSrv.ListenAndServe() }()
+		defer func() { _ = metricsSrv.Shutdown(context.Background()) }()
+	}
 
 	select {
 	case <-sigs:

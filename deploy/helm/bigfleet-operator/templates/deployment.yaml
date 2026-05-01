@@ -1,0 +1,98 @@
+{{- if not .Values.clusterID }}
+{{- fail "bigfleet-operator: .Values.clusterID is required" }}
+{{- end }}
+{{- if not .Values.shardAddress }}
+{{- fail "bigfleet-operator: .Values.shardAddress is required" }}
+{{- end }}
+{{- if .Values.serviceAccount.create -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "bigfleet-operator.serviceAccountName" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet-operator.labels" . | nindent 4 }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bigfleet-operator.serviceAccountName" . }}
+  labels:
+    {{- include "bigfleet-operator.labels" . | nindent 4 }}
+rules:
+  # Read CapacityRequests, write status (Pending → Acknowledged).
+  - apiGroups: ["bigfleet.lucy.sh"]
+    resources: ["capacityrequests"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["bigfleet.lucy.sh"]
+    resources: ["capacityrequests/status"]
+    verbs: ["update", "patch"]
+  # Upsert UpcomingNodes from NodeStateUpdate frames.
+  - apiGroups: ["bigfleet.lucy.sh"]
+    resources: ["upcomingnodes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["bigfleet.lucy.sh"]
+    resources: ["upcomingnodes/status"]
+    verbs: ["update", "patch"]
+  # Optional: AvailableCapacity writes (M4 stub today).
+  - apiGroups: ["bigfleet.lucy.sh"]
+    resources: ["availablecapacities"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read nodes / pods for the reclaim handler's cordon / kubelet
+  # graceful-shutdown signalling.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bigfleet-operator.serviceAccountName" . }}
+  labels:
+    {{- include "bigfleet-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bigfleet-operator.serviceAccountName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bigfleet-operator.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bigfleet-operator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet-operator.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bigfleet-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bigfleet-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "bigfleet-operator.serviceAccountName" . }}
+      containers:
+        - name: operator
+          image: {{ include "bigfleet-operator.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --cluster-id={{ .Values.clusterID }}
+            - --shard-addr={{ .Values.shardAddress }}
+            - --metrics-addr=:{{ .Values.metricsPort }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metricsPort }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

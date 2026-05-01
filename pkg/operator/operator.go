@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 )
 
 // Config configures an Operator. ClusterID and ShardAddress are
@@ -162,6 +163,7 @@ func (o *Operator) Run(ctx context.Context) error {
 		if err == nil || errors.Is(err, context.Canceled) {
 			return nil
 		}
+		metrics.OperatorSessionReconnects.Inc()
 		o.log.Warn("session ended, reconnecting", "err", err, "backoff", backoff)
 		select {
 		case <-ctx.Done():

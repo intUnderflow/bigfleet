@@ -113,6 +113,14 @@ lint: tools ## Run linters.
 	$(BIN)/golangci-lint run ./...
 	$(BIN)/buf lint
 
+.PHONY: helm-render
+helm-render: ## Render all three Helm charts to /dev/null as a smoke check.
+	@command -v helm >/dev/null || { echo "helm not on PATH"; exit 1; }
+	helm template bigfleet deploy/helm/bigfleet --namespace bigfleet-system >/dev/null
+	helm template bf-op deploy/helm/bigfleet-operator --namespace bigfleet-system --set clusterID=test --set shardAddress=bigfleet-shard:7780 >/dev/null
+	helm template bf-cr deploy/helm/bigfleet-unschedulable-pod-controller --namespace bigfleet-system >/dev/null
+	@echo "all three charts rendered"
+
 .PHONY: vet
 vet: ## Run go vet.
 	$(GO) vet ./...

@@ -1,0 +1,16 @@
+apiVersion: v2
+name: bigfleet-unschedulable-pod-controller
+description: BigFleet's optional per-pod CapacityRequest controller. Watches Pods; for each PodScheduled=False/reason=Unschedulable, creates a CapacityRequest owned by the pod. Optional — operators driving CRs from Kueue or a custom admission controller don't need it.
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+home: https://github.com/intUnderflow/bigfleet
+sources:
+  - https://github.com/intUnderflow/bigfleet
+maintainers:
+  - name: Lucy Sweet
+keywords:
+  - bigfleet
+  - kubernetes
+  - autoscaler
+  - pod-controller

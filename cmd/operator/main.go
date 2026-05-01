@@ -12,9 +12,13 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +45,7 @@ func run(args []string) error {
 	clusterID := fs.String("cluster-id", "", "stable identifier for this cluster (required)")
 	shardAddr := fs.String("shard-addr", "", "host:port of the BigFleet shard's gRPC endpoint (required)")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster config or $KUBECONFIG)")
+	metricsAddr := fs.String("metrics-addr", ":8770", "address for the Prometheus /metrics endpoint (\"0\" disables)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -77,6 +82,15 @@ func run(args []string) error {
 		logger.Info("signal received, shutting down")
 		cancel()
 	}()
+
+	if *metricsAddr != "0" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		logger.Info("metrics serving", "addr", *metricsAddr)
+		go func() { _ = metricsSrv.ListenAndServe() }()
+		defer func() { _ = metricsSrv.Shutdown(context.Background()) }()
+	}
 
 	if err := op.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err

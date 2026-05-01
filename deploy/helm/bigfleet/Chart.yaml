@@ -1,0 +1,16 @@
+apiVersion: v2
+name: bigfleet
+description: BigFleet control plane (coordinator + shards). Tier 1 + Tier 2 of the architecture described in docs/papers/bigfleet.md.
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+home: https://github.com/intUnderflow/bigfleet
+sources:
+  - https://github.com/intUnderflow/bigfleet
+maintainers:
+  - name: Lucy Sweet
+keywords:
+  - bigfleet
+  - autoscaler
+  - kubernetes
+  - fleet-management

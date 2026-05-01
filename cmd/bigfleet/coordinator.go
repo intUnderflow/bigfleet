@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
 	"github.com/intUnderflow/bigfleet/pkg/coordinator"
@@ -20,6 +23,7 @@ func runCoordinator(args []string) error {
 	fs := flag.NewFlagSet("coordinator", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	listen := fs.String("listen", ":7790", "address for the coordinator gRPC service (shard ↔ coordinator chatter)")
+	metricsAddr := fs.String("metrics-addr", ":8790", "address for the Prometheus /metrics endpoint (\"0\" disables)")
 	raftBind := fs.String("raft-bind", ":7791", "address for the Raft transport to bind on")
 	raftAdvertise := fs.String("raft-advertise", "", "address advertised to Raft peers (defaults to --raft-bind)")
 	nodeID := fs.String("id", "node-1", "stable per-replica identifier")
@@ -63,9 +67,17 @@ func runCoordinator(args []string) error {
 	cancelSig, sigs := signalContext()
 	defer cancelSig()
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 	go func() { errCh <- c.Run(ctx) }()
 	go func() { errCh <- gsrv.Serve(lis) }()
+	if *metricsAddr != "0" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		logger.Info("metrics serving", "addr", *metricsAddr)
+		go func() { errCh <- metricsSrv.ListenAndServe() }()
+		defer func() { _ = metricsSrv.Shutdown(context.Background()) }()
+	}
 
 	if *rebalanceInterval != 0 || true {
 		rb := coordinator.NewRebalancer(c, srv, coordinator.RebalancerConfig{

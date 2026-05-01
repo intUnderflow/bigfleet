@@ -14,6 +14,7 @@ import (
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/conv"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
@@ -45,6 +46,10 @@ func (o *Operator) rollupLoop(ctx context.Context, sess *session) error {
 
 // runRollup performs one rollup cycle.
 func (o *Operator) runRollup(ctx context.Context, sess *session) error {
+	start := time.Now()
+	defer func() {
+		metrics.OperatorRollupDuration.Observe(time.Since(start).Seconds())
+	}()
 	crs, err := o.listCapacityRequests(ctx)
 	if err != nil {
 		return fmt.Errorf("list CapacityRequests: %w", err)
@@ -271,7 +276,11 @@ func (o *Operator) markAcknowledged(ctx context.Context, cr bfv1alpha1.CapacityR
 	fresh.Status.Phase = bfv1alpha1.CapacityRequestAcknowledged
 	now := metav1.Now()
 	fresh.Status.AcknowledgedAt = &now
-	return o.cfg.KubeClient.Status().Update(ctx, &fresh)
+	if err := o.cfg.KubeClient.Status().Update(ctx, &fresh); err != nil {
+		return err
+	}
+	metrics.OperatorAcknowledgedTotal.Inc()
+	return nil
 }
 
 // (avoid unused import warnings if buildRollup doesn't reach client)

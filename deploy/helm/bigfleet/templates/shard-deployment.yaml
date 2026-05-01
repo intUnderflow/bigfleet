@@ -1,0 +1,65 @@
+{{- if .Values.shard.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  selector:
+    {{- include "bigfleet.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+  ports:
+    - name: grpc
+      port: {{ .Values.shard.service.grpcPort }}
+      targetPort: grpc
+    - name: metrics
+      port: {{ .Values.shard.service.metricsPort }}
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  replicas: {{ .Values.shard.replicas }}
+  selector:
+    matchLabels:
+      {{- include "bigfleet.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: shard
+  template:
+    metadata:
+      labels:
+        {{- include "bigfleet.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: shard
+    spec:
+      serviceAccountName: {{ include "bigfleet.serviceAccountName" . }}
+      containers:
+        - name: shard
+          image: {{ include "bigfleet.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - shard
+            - --listen=:{{ .Values.shard.service.grpcPort }}
+            - --metrics-addr=:{{ .Values.shard.service.metricsPort }}
+            - --id=$(POD_NAME)
+            - --data-dir={{ .Values.shard.dataDir }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.shard.service.grpcPort }}
+            - name: metrics
+              containerPort: {{ .Values.shard.service.metricsPort }}
+          resources:
+            {{- toYaml .Values.shard.resources | nindent 12 }}
+{{- end }}

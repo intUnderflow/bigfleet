@@ -1,0 +1,23 @@
+image:
+  repository: ghcr.io/intunderflow/bigfleet-unschedulable-pod-controller
+  tag: ""
+  pullPolicy: IfNotPresent
+
+namespace: bigfleet-system
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+metricsPort: 8080
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""

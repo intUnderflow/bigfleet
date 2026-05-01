@@ -1,0 +1,39 @@
+# Default values for the bigfleet-operator chart.
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-operator
+  tag: ""             # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+namespace: bigfleet-system
+
+# clusterID is this cluster's stable identifier as known to BigFleet.
+# Required.
+clusterID: ""
+
+# shardAddress is host:port of the BigFleet shard's gRPC endpoint.
+# Required.
+shardAddress: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+metricsPort: 8770
+
+# crds.install controls whether the chart installs the bigfleet.lucy.sh
+# CRDs (CapacityRequest, UpcomingNode, AvailableCapacity). Disable on
+# clusters where another operator already installed them.
+crds:
+  install: true
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""

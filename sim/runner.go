@@ -54,6 +54,11 @@ type Scenario struct {
 	// Assertions evaluate against the final state after all events
 	// have run.
 	Assertions []Assertion
+
+	// BeforeRun, if non-nil, runs once after the fake provider has
+	// been seeded but before any cycle fires. Fault-injection
+	// scenarios use this hook to queue Provider.FailNext entries.
+	BeforeRun func(prov *fake.Provider)
 }
 
 // SeedMachine describes one machine to seed into the fake provider
@@ -172,6 +177,10 @@ func Run(ctx context.Context, sc Scenario) (*Result, error) {
 			InstanceType: m.InstanceType, Zone: m.Zone, CapacityType: m.CapacityType,
 			Resources: m.Resources,
 		}, m.CapacityType, m.PricePerHour, m.InterruptionP)
+	}
+
+	if sc.BeforeRun != nil {
+		sc.BeforeRun(prov)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "bigfleet-sim-"+sc.Name+"-")

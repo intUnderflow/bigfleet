@@ -1,0 +1,92 @@
+{{- if .Values.coordinator.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-coordinator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  clusterIP: None  # headless; needed for stable Raft peer addresses
+  selector:
+    {{- include "bigfleet.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+  ports:
+    - name: grpc
+      port: {{ .Values.coordinator.service.grpcPort }}
+      targetPort: grpc
+    - name: raft
+      port: {{ .Values.coordinator.service.raftPort }}
+      targetPort: raft
+    - name: metrics
+      port: {{ .Values.coordinator.service.metricsPort }}
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bigfleet-coordinator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  serviceName: bigfleet-coordinator
+  replicas: {{ .Values.coordinator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "bigfleet.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: coordinator
+  template:
+    metadata:
+      labels:
+        {{- include "bigfleet.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: coordinator
+    spec:
+      serviceAccountName: {{ include "bigfleet.serviceAccountName" . }}
+      containers:
+        - name: coordinator
+          image: {{ include "bigfleet.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - coordinator
+            - --listen=:{{ .Values.coordinator.service.grpcPort }}
+            - --raft-bind=:{{ .Values.coordinator.service.raftPort }}
+            - --raft-advertise=$(POD_NAME).bigfleet-coordinator.{{ .Values.namespace }}.svc:{{ .Values.coordinator.service.raftPort }}
+            - --id=$(POD_NAME)
+            - --data-dir={{ .Values.coordinator.dataDir }}
+            - --metrics-addr=:{{ .Values.coordinator.service.metricsPort }}
+            - --rebalance-interval={{ .Values.coordinator.rebalanceInterval }}
+            {{- if .Values.coordinator.bootstrap }}
+            - --bootstrap
+            {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.coordinator.service.grpcPort }}
+            - name: raft
+              containerPort: {{ .Values.coordinator.service.raftPort }}
+            - name: metrics
+              containerPort: {{ .Values.coordinator.service.metricsPort }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.coordinator.dataDir }}
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.coordinator.storage.storageClassName }}
+        storageClassName: {{ .Values.coordinator.storage.storageClassName }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.coordinator.storage.size }}
+{{- end }}

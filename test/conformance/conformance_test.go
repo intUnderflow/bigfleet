@@ -353,4 +353,3 @@ func mustReachState(t *testing.T, cli pb.CapacityProviderClient, ctx context.Con
 	t.Fatalf("machine %s did not reach %s within %v (final state: %s)",
 		id, want, timeout, m.GetState())
 }
-

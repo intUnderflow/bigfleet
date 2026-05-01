@@ -13,6 +13,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 )
 
 // Config configures a Coordinator.
@@ -239,13 +241,16 @@ func (c *Coordinator) Apply(ctx context.Context, cmd Command) error {
 	}
 	f := c.raft.Apply(data, timeout)
 	if err := f.Error(); err != nil {
+		metrics.CoordinatorApplyTotal.WithLabelValues("error").Inc()
 		return err
 	}
 	if resp := f.Response(); resp != nil {
 		if e, ok := resp.(error); ok && e != nil {
+			metrics.CoordinatorApplyTotal.WithLabelValues("fsm_error").Inc()
 			return e
 		}
 	}
+	metrics.CoordinatorApplyTotal.WithLabelValues("success").Inc()
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -118,6 +119,8 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 
 	// Build response: include any still-pending instructions.
 	pending := g.snapshotPending(shardID)
+	metrics.CoordinatorPendingInstructions.WithLabelValues(string(shardID)).Set(float64(len(pending)))
+	metrics.CoordinatorRaftTerm.Set(float64(g.c.RaftTerm()))
 	return &pb.ReportAck{
 		Acknowledged:    true,
 		CoordinatorTerm: g.c.RaftTerm(),
