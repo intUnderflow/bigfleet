@@ -46,10 +46,10 @@ import (
 // engine + rollup pipeline are fast enough.
 func TestM4Scale_TenThousandCRs_AggregateAndCycle(t *testing.T) {
 	const (
-		numCRs       = 10_000
-		numProfiles  = 10 // → ~10 CapacityNeed entries after aggregation
-		cycleBudget  = 100 * time.Millisecond
-		warmCycles   = 10
+		numCRs      = 10_000
+		numProfiles = 10 // → ~10 CapacityNeed entries after aggregation
+		cycleBudget = 100 * time.Millisecond
+		warmCycles  = 10
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

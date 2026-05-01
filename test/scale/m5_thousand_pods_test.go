@@ -14,9 +14,10 @@
 // BigFleet CRDs installed.
 //
 // Run:
-//   make scale
-//   # or
-//   go test -tags='scale kind' -run TestM5Scale_ ./test/scale/...
+//
+//	make scale
+//	# or
+//	go test -tags='scale kind' -run TestM5Scale_ ./test/scale/...
 package scale_test
 
 import (
@@ -52,10 +53,10 @@ import (
 
 func TestM5Scale_Kind_ThousandUnschedulablePods(t *testing.T) {
 	const (
-		numPods    = 1_000
-		ceiling    = 60 * time.Second
-		ackBudget  = 90 * time.Second
-		gpuPerPod  = 1
+		numPods   = 1_000
+		ceiling   = 60 * time.Second
+		ackBudget = 90 * time.Second
+		gpuPerPod = 1
 	)
 
 	scheme := apiruntime.NewScheme()
