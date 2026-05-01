@@ -27,15 +27,12 @@ type UnsatisfiedNeed struct {
 // configured) and Provision (speculative → configured) actions to fill
 // each cluster's deficit.
 //
-// Performance: per-Need candidate scans use the inventory's
-// instance-type index when the Need's selector pins to one or more
-// instance types — turning the dominant per-Need walk from O(N) over
-// total inventory into O(K) over the matching type's bucket. Bench:
-// pkg/shard/cycle_bench_test.go shows ~2× cycle-time improvement at
-// 50K inventory vs the unindexed baseline. Going further (caching
-// per-Profile candidate pools across needs that share fingerprints) is
-// tracked as M11.16; doing it correctly requires coordinating claims
-// across overlapping Profiles, which is a deeper refactor.
+// Performance: backed by phase1Allocator, which caches per-Profile
+// candidate pools across the Needs loop and shares a global claimed set
+// so high-priority Needs drain inventory before low-priority ones see
+// it. Bench (pkg/shard/cycle_bench_test.go) at 500K inventory + 50K
+// demand: ~948 s pre-M11.16 (just the M11.15 instance-type index) vs
+// the new allocator's expected order-of-magnitude improvement.
 func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	sorted := make([]needs.Need, len(allNeeds))
 	copy(sorted, allNeeds)
@@ -43,7 +40,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		return sorted[i].Profile.Priority() > sorted[j].Profile.Priority()
 	})
 
-	claimed := newClaimSet()
+	alloc := newPhase1Allocator(snap)
 
 	result := Phase1Result{}
 	for _, n := range sorted {
@@ -52,13 +49,11 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		if deficit <= 0 {
 			continue
 		}
-
-		idleCands := candidatesFromList(candidatePool(snap, machine.StateIdle, n.Profile), n.Profile, claimed)
-		sortIdleCandidates(idleCands)
-		take := minInt(len(idleCands), deficit)
 		profile := n.Profile
-		for _, m := range idleCands[:take] {
-			claimed.add(m.ID)
+
+		// Idle first: cheapest path (one Configure call, no Create).
+		idle := alloc.take(machine.StateIdle, profile, deficit, sortIdleCandidates)
+		for _, m := range idle {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindBootstrap,
 				MachineID:     m.ID,
@@ -67,17 +62,17 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				Reason:        "phase1.idle",
 			})
 		}
-		deficit -= take
+		deficit -= len(idle)
 		if deficit == 0 {
 			continue
 		}
 
-		specCands := candidatesFromList(candidatePool(snap, machine.StateSpeculative, n.Profile), n.Profile, claimed)
-		penalty := BucketUpperBoundDollars(n.Profile.InterruptionPenaltyBucket())
-		sortSpeculativeCandidates(specCands, penalty)
-		take = minInt(len(specCands), deficit)
-		for _, m := range specCands[:take] {
-			claimed.add(m.ID)
+		// Fall back to speculative: pick by lowest effective_cost.
+		penalty := BucketUpperBoundDollars(profile.InterruptionPenaltyBucket())
+		spec := alloc.take(machine.StateSpeculative, profile, deficit, func(s []machine.Machine) {
+			sortSpeculativeCandidates(s, penalty)
+		})
+		for _, m := range spec {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindProvision,
 				MachineID:     m.ID,
@@ -86,7 +81,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				Reason:        "phase1.speculative",
 			})
 		}
-		deficit -= take
+		deficit -= len(spec)
 
 		if deficit > 0 {
 			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
@@ -97,22 +92,6 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	}
 
 	return result
-}
-
-// claimSet tracks which machines a Phase 1 pass has already promised
-// out, so two competing needs in the same cycle don't double-book.
-type claimSet struct {
-	claims map[machine.ID]struct{}
-}
-
-func newClaimSet() *claimSet {
-	return &claimSet{claims: make(map[machine.ID]struct{})}
-}
-
-func (c *claimSet) add(id machine.ID) { c.claims[id] = struct{}{} }
-func (c *claimSet) has(id machine.ID) bool {
-	_, ok := c.claims[id]
-	return ok
 }
 
 // candidatePool returns the inventory slice to consider for a given
@@ -152,22 +131,6 @@ func pinnedInstanceTypes(p needs.Profile) []string {
 		return nil
 	}
 	return nil
-}
-
-// candidatesFromList filters the input slice to machines whose profile
-// satisfies the need and that haven't been claimed already.
-func candidatesFromList(in []machine.Machine, p needs.Profile, claimed *claimSet) []machine.Machine {
-	out := make([]machine.Machine, 0, len(in))
-	for _, m := range in {
-		if claimed.has(m.ID) {
-			continue
-		}
-		if !MatchProfile(p, m) {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
 }
 
 func sortIdleCandidates(s []machine.Machine) {
