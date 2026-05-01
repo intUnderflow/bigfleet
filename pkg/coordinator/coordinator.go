@@ -254,6 +254,27 @@ func (c *Coordinator) IsLeader() bool {
 	return c.raft != nil && c.raft.State() == raft.Leader
 }
 
+// RaftTerm returns the current Raft term as known to this replica.
+// Used by the gRPC server to stamp ReportAcks.
+func (c *Coordinator) RaftTerm() int64 {
+	if c.raft == nil {
+		return 0
+	}
+	stats := c.raft.Stats()
+	if v, ok := stats["term"]; ok {
+		var n int64
+		// stats values are decimal strings.
+		for i := 0; i < len(v); i++ {
+			if v[i] < '0' || v[i] > '9' {
+				return 0
+			}
+			n = n*10 + int64(v[i]-'0')
+		}
+		return n
+	}
+	return 0
+}
+
 // LeaderAddress returns the current leader's advertised address, if
 // known. Empty string when no leader is currently elected.
 func (c *Coordinator) LeaderAddress() string {

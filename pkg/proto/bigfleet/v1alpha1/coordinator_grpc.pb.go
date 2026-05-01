@@ -29,7 +29,6 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Coordinator_ReportShard_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ReportShard"
-	Coordinator_Instruct_FullMethodName    = "/bigfleet.v1alpha1.Coordinator/Instruct"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -37,10 +36,13 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type CoordinatorClient interface {
 	// Shards push periodic reports. Idempotent per (shard_id, cycle).
+	// The response carries any pending CoordinatorInstruction messages
+	// the shard should execute, plus the coordinator's current term.
+	// The shard piggybacks acks for previously-received instructions on
+	// its next ReportShard call (ShardReport.instruction_acks). This
+	// keeps the v1 wire surface to one unary RPC; a streaming
+	// Instructions RPC may land in a future revision.
 	ReportShard(ctx context.Context, in *ShardReport, opts ...grpc.CallOption) (*ReportAck, error)
-	// Coordinator-issued instructions. Shards may receive these via
-	// streaming in future revisions; the v1 surface is request/response.
-	Instruct(ctx context.Context, in *CoordinatorInstruction, opts ...grpc.CallOption) (*InstructAck, error)
 }
 
 type coordinatorClient struct {
@@ -61,25 +63,18 @@ func (c *coordinatorClient) ReportShard(ctx context.Context, in *ShardReport, op
 	return out, nil
 }
 
-func (c *coordinatorClient) Instruct(ctx context.Context, in *CoordinatorInstruction, opts ...grpc.CallOption) (*InstructAck, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(InstructAck)
-	err := c.cc.Invoke(ctx, Coordinator_Instruct_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // CoordinatorServer is the server API for Coordinator service.
 // All implementations must embed UnimplementedCoordinatorServer
 // for forward compatibility.
 type CoordinatorServer interface {
 	// Shards push periodic reports. Idempotent per (shard_id, cycle).
+	// The response carries any pending CoordinatorInstruction messages
+	// the shard should execute, plus the coordinator's current term.
+	// The shard piggybacks acks for previously-received instructions on
+	// its next ReportShard call (ShardReport.instruction_acks). This
+	// keeps the v1 wire surface to one unary RPC; a streaming
+	// Instructions RPC may land in a future revision.
 	ReportShard(context.Context, *ShardReport) (*ReportAck, error)
-	// Coordinator-issued instructions. Shards may receive these via
-	// streaming in future revisions; the v1 surface is request/response.
-	Instruct(context.Context, *CoordinatorInstruction) (*InstructAck, error)
 	mustEmbedUnimplementedCoordinatorServer()
 }
 
@@ -92,9 +87,6 @@ type UnimplementedCoordinatorServer struct{}
 
 func (UnimplementedCoordinatorServer) ReportShard(context.Context, *ShardReport) (*ReportAck, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportShard not implemented")
-}
-func (UnimplementedCoordinatorServer) Instruct(context.Context, *CoordinatorInstruction) (*InstructAck, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Instruct not implemented")
 }
 func (UnimplementedCoordinatorServer) mustEmbedUnimplementedCoordinatorServer() {}
 func (UnimplementedCoordinatorServer) testEmbeddedByValue()                     {}
@@ -135,24 +127,6 @@ func _Coordinator_ReportShard_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Coordinator_Instruct_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CoordinatorInstruction)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CoordinatorServer).Instruct(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Coordinator_Instruct_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServer).Instruct(ctx, req.(*CoordinatorInstruction))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // Coordinator_ServiceDesc is the grpc.ServiceDesc for Coordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -163,10 +137,6 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportShard",
 			Handler:    _Coordinator_ReportShard_Handler,
-		},
-		{
-			MethodName: "Instruct",
-			Handler:    _Coordinator_Instruct_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

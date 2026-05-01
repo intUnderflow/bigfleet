@@ -15,11 +15,13 @@ import "bigfleet/v1alpha1/provider.proto";
 
 service Coordinator {
   // Shards push periodic reports. Idempotent per (shard_id, cycle).
+  // The response carries any pending CoordinatorInstruction messages
+  // the shard should execute, plus the coordinator's current term.
+  // The shard piggybacks acks for previously-received instructions on
+  // its next ReportShard call (ShardReport.instruction_acks). This
+  // keeps the v1 wire surface to one unary RPC; a streaming
+  // Instructions RPC may land in a future revision.
   rpc ReportShard(ShardReport) returns (ReportAck);
-
-  // Coordinator-issued instructions. Shards may receive these via
-  // streaming in future revisions; the v1 surface is request/response.
-  rpc Instruct(CoordinatorInstruction) returns (InstructAck);
 }
 
 // ShardReport is what each shard sends every ~30s. Stateless: the
@@ -45,6 +47,14 @@ message ShardReport {
   // Top-N unresolved needs, ranked by priority. Bounded to 100 per
   // §3.5 / shortfall protocol.
   repeated Shortfall shortfalls = 6;
+
+  // Acknowledgements for instructions previously delivered to this
+  // shard via ReportAck.instructions. Shards include the result for
+  // each instruction they've finished acting on (or rejected). The
+  // coordinator uses the acks to clear the pending-instruction queue
+  // and to learn outcomes (term-rejected, semantically-invalid,
+  // failed). Bounded by the shard's outstanding-instruction set.
+  repeated InstructAck instruction_acks = 7;
 }
 
 // ShardSummary is a coarse-grained snapshot of a shard's inventory and
@@ -92,11 +102,18 @@ message Shortfall {
 
 message ReportAck {
   // The coordinator's current term as observed at report time. The shard
-  // updates its high-water mark from this so subsequent Instruct frames
-  // can be checked against a known-good term.
+  // updates its high-water mark from this so subsequent CoordinatorInstruction
+  // frames can be checked against a known-good term.
   int64 coordinator_term = 1;
 
   bool acknowledged = 2;
+
+  // Pending instructions the coordinator wants this shard to execute.
+  // The shard processes each, then includes a matching InstructAck on
+  // its next ReportShard call. The coordinator may include the same
+  // instruction across multiple ReportAcks until it sees an ack —
+  // instruction_id is stable for deduplication.
+  repeated CoordinatorInstruction instructions = 3;
 }
 
 // CoordinatorInstruction is the shard-bound action the coordinator wants

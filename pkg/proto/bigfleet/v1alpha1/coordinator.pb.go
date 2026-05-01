@@ -103,9 +103,16 @@ type ShardReport struct {
 	Summary *ShardSummary `protobuf:"bytes,5,opt,name=summary,proto3" json:"summary,omitempty"`
 	// Top-N unresolved needs, ranked by priority. Bounded to 100 per
 	// §3.5 / shortfall protocol.
-	Shortfalls    []*Shortfall `protobuf:"bytes,6,rep,name=shortfalls,proto3" json:"shortfalls,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Shortfalls []*Shortfall `protobuf:"bytes,6,rep,name=shortfalls,proto3" json:"shortfalls,omitempty"`
+	// Acknowledgements for instructions previously delivered to this
+	// shard via ReportAck.instructions. Shards include the result for
+	// each instruction they've finished acting on (or rejected). The
+	// coordinator uses the acks to clear the pending-instruction queue
+	// and to learn outcomes (term-rejected, semantically-invalid,
+	// failed). Bounded by the shard's outstanding-instruction set.
+	InstructionAcks []*InstructAck `protobuf:"bytes,7,rep,name=instruction_acks,json=instructionAcks,proto3" json:"instruction_acks,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ShardReport) Reset() {
@@ -176,6 +183,13 @@ func (x *ShardReport) GetSummary() *ShardSummary {
 func (x *ShardReport) GetShortfalls() []*Shortfall {
 	if x != nil {
 		return x.Shortfalls
+	}
+	return nil
+}
+
+func (x *ShardReport) GetInstructionAcks() []*InstructAck {
+	if x != nil {
+		return x.InstructionAcks
 	}
 	return nil
 }
@@ -369,12 +383,18 @@ func (x *Shortfall) GetInterruptionPenaltyBucket() PenaltyBucket {
 type ReportAck struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The coordinator's current term as observed at report time. The shard
-	// updates its high-water mark from this so subsequent Instruct frames
-	// can be checked against a known-good term.
+	// updates its high-water mark from this so subsequent CoordinatorInstruction
+	// frames can be checked against a known-good term.
 	CoordinatorTerm int64 `protobuf:"varint,1,opt,name=coordinator_term,json=coordinatorTerm,proto3" json:"coordinator_term,omitempty"`
 	Acknowledged    bool  `protobuf:"varint,2,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Pending instructions the coordinator wants this shard to execute.
+	// The shard processes each, then includes a matching InstructAck on
+	// its next ReportShard call. The coordinator may include the same
+	// instruction across multiple ReportAcks until it sees an ack —
+	// instruction_id is stable for deduplication.
+	Instructions  []*CoordinatorInstruction `protobuf:"bytes,3,rep,name=instructions,proto3" json:"instructions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ReportAck) Reset() {
@@ -419,6 +439,13 @@ func (x *ReportAck) GetAcknowledged() bool {
 		return x.Acknowledged
 	}
 	return false
+}
+
+func (x *ReportAck) GetInstructions() []*CoordinatorInstruction {
+	if x != nil {
+		return x.Instructions
+	}
+	return nil
 }
 
 // CoordinatorInstruction is the shard-bound action the coordinator wants
@@ -922,7 +949,7 @@ var File_bigfleet_v1alpha1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"#bigfleet/v1alpha1/coordinator.proto\x12\x11bigfleet.v1alpha1\x1a bigfleet/v1alpha1/capacity.proto\x1a bigfleet/v1alpha1/provider.proto\"\x8a\x02\n" +
+	"#bigfleet/v1alpha1/coordinator.proto\x12\x11bigfleet.v1alpha1\x1a bigfleet/v1alpha1/capacity.proto\x1a bigfleet/v1alpha1/provider.proto\"\xd5\x02\n" +
 	"\vShardReport\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x14\n" +
 	"\x05cycle\x18\x02 \x01(\x03R\x05cycle\x120\n" +
@@ -932,7 +959,8 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\asummary\x18\x05 \x01(\v2\x1f.bigfleet.v1alpha1.ShardSummaryR\asummary\x12<\n" +
 	"\n" +
 	"shortfalls\x18\x06 \x03(\v2\x1c.bigfleet.v1alpha1.ShortfallR\n" +
-	"shortfalls\"\xb1\x04\n" +
+	"shortfalls\x12I\n" +
+	"\x10instruction_acks\x18\a \x03(\v2\x1e.bigfleet.v1alpha1.InstructAckR\x0finstructionAcks\"\xb1\x04\n" +
 	"\fShardSummary\x12%\n" +
 	"\x0etotal_machines\x18\x01 \x01(\x05R\rtotalMachines\x12#\n" +
 	"\rfree_machines\x18\x02 \x01(\x05R\ffreeMachines\x12s\n" +
@@ -953,10 +981,11 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x05count\x18\x04 \x01(\x05R\x05count\x12\x1d\n" +
 	"\n" +
 	"age_cycles\x18\x05 \x01(\x05R\tageCycles\x12`\n" +
-	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\"Z\n" +
+	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\"\xa9\x01\n" +
 	"\tReportAck\x12)\n" +
 	"\x10coordinator_term\x18\x01 \x01(\x03R\x0fcoordinatorTerm\x12\"\n" +
-	"\facknowledged\x18\x02 \x01(\bR\facknowledged\"\xba\x04\n" +
+	"\facknowledged\x18\x02 \x01(\bR\facknowledged\x12M\n" +
+	"\finstructions\x18\x03 \x03(\v2).bigfleet.v1alpha1.CoordinatorInstructionR\finstructions\"\xba\x04\n" +
 	"\x16CoordinatorInstruction\x12)\n" +
 	"\x10coordinator_term\x18\x01 \x01(\x03R\x0fcoordinatorTerm\x12'\n" +
 	"\x0fsequence_number\x18\x02 \x01(\x03R\x0esequenceNumber\x12%\n" +
@@ -994,10 +1023,9 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x10OUTCOME_ACCEPTED\x10\x01\x12\x1a\n" +
 	"\x16OUTCOME_REJECTED_STALE\x10\x02\x12\x1c\n" +
 	"\x18OUTCOME_REJECTED_INVALID\x10\x03\x12\x12\n" +
-	"\x0eOUTCOME_FAILED\x10\x042\xb1\x01\n" +
+	"\x0eOUTCOME_FAILED\x10\x042Z\n" +
 	"\vCoordinator\x12K\n" +
-	"\vReportShard\x12\x1e.bigfleet.v1alpha1.ShardReport\x1a\x1c.bigfleet.v1alpha1.ReportAck\x12U\n" +
-	"\bInstruct\x12).bigfleet.v1alpha1.CoordinatorInstruction\x1a\x1e.bigfleet.v1alpha1.InstructAckB\xdd\x01\n" +
+	"\vReportShard\x12\x1e.bigfleet.v1alpha1.ShardReport\x1a\x1c.bigfleet.v1alpha1.ReportAckB\xdd\x01\n" +
 	"\x15com.bigfleet.v1alpha1B\x10CoordinatorProtoP\x01ZMgithub.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1;bigfleetv1alpha1\xa2\x02\x03BXX\xaa\x02\x11Bigfleet.V1alpha1\xca\x02\x11Bigfleet\\V1alpha1\xe2\x02\x1dBigfleet\\V1alpha1\\GPBMetadata\xea\x02\x12Bigfleet::V1alpha1b\x06proto3"
 
 var (
@@ -1036,26 +1064,26 @@ var file_bigfleet_v1alpha1_coordinator_proto_goTypes = []any{
 var file_bigfleet_v1alpha1_coordinator_proto_depIdxs = []int32{
 	2,  // 0: bigfleet.v1alpha1.ShardReport.summary:type_name -> bigfleet.v1alpha1.ShardSummary
 	3,  // 1: bigfleet.v1alpha1.ShardReport.shortfalls:type_name -> bigfleet.v1alpha1.Shortfall
-	12, // 2: bigfleet.v1alpha1.ShardSummary.per_instance_type_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
-	13, // 3: bigfleet.v1alpha1.ShardSummary.per_zone_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
-	14, // 4: bigfleet.v1alpha1.Shortfall.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	15, // 5: bigfleet.v1alpha1.Shortfall.resources:type_name -> bigfleet.v1alpha1.Resources
-	16, // 6: bigfleet.v1alpha1.Shortfall.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
-	6,  // 7: bigfleet.v1alpha1.CoordinatorInstruction.assign_domain:type_name -> bigfleet.v1alpha1.AssignDomain
-	7,  // 8: bigfleet.v1alpha1.CoordinatorInstruction.unassign_domain:type_name -> bigfleet.v1alpha1.UnassignDomain
-	8,  // 9: bigfleet.v1alpha1.CoordinatorInstruction.reassign_speculative:type_name -> bigfleet.v1alpha1.ReassignSpeculative
-	9,  // 10: bigfleet.v1alpha1.CoordinatorInstruction.cross_shard_drain:type_name -> bigfleet.v1alpha1.CrossShardDrain
-	10, // 11: bigfleet.v1alpha1.CoordinatorInstruction.transfer_ownership:type_name -> bigfleet.v1alpha1.TransferOwnership
-	0,  // 12: bigfleet.v1alpha1.InstructAck.outcome:type_name -> bigfleet.v1alpha1.InstructAck.Outcome
-	1,  // 13: bigfleet.v1alpha1.Coordinator.ReportShard:input_type -> bigfleet.v1alpha1.ShardReport
-	5,  // 14: bigfleet.v1alpha1.Coordinator.Instruct:input_type -> bigfleet.v1alpha1.CoordinatorInstruction
-	4,  // 15: bigfleet.v1alpha1.Coordinator.ReportShard:output_type -> bigfleet.v1alpha1.ReportAck
-	11, // 16: bigfleet.v1alpha1.Coordinator.Instruct:output_type -> bigfleet.v1alpha1.InstructAck
-	15, // [15:17] is the sub-list for method output_type
-	13, // [13:15] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	11, // 2: bigfleet.v1alpha1.ShardReport.instruction_acks:type_name -> bigfleet.v1alpha1.InstructAck
+	12, // 3: bigfleet.v1alpha1.ShardSummary.per_instance_type_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
+	13, // 4: bigfleet.v1alpha1.ShardSummary.per_zone_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
+	14, // 5: bigfleet.v1alpha1.Shortfall.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	15, // 6: bigfleet.v1alpha1.Shortfall.resources:type_name -> bigfleet.v1alpha1.Resources
+	16, // 7: bigfleet.v1alpha1.Shortfall.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
+	5,  // 8: bigfleet.v1alpha1.ReportAck.instructions:type_name -> bigfleet.v1alpha1.CoordinatorInstruction
+	6,  // 9: bigfleet.v1alpha1.CoordinatorInstruction.assign_domain:type_name -> bigfleet.v1alpha1.AssignDomain
+	7,  // 10: bigfleet.v1alpha1.CoordinatorInstruction.unassign_domain:type_name -> bigfleet.v1alpha1.UnassignDomain
+	8,  // 11: bigfleet.v1alpha1.CoordinatorInstruction.reassign_speculative:type_name -> bigfleet.v1alpha1.ReassignSpeculative
+	9,  // 12: bigfleet.v1alpha1.CoordinatorInstruction.cross_shard_drain:type_name -> bigfleet.v1alpha1.CrossShardDrain
+	10, // 13: bigfleet.v1alpha1.CoordinatorInstruction.transfer_ownership:type_name -> bigfleet.v1alpha1.TransferOwnership
+	0,  // 14: bigfleet.v1alpha1.InstructAck.outcome:type_name -> bigfleet.v1alpha1.InstructAck.Outcome
+	1,  // 15: bigfleet.v1alpha1.Coordinator.ReportShard:input_type -> bigfleet.v1alpha1.ShardReport
+	4,  // 16: bigfleet.v1alpha1.Coordinator.ReportShard:output_type -> bigfleet.v1alpha1.ReportAck
+	16, // [16:17] is the sub-list for method output_type
+	15, // [15:16] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_coordinator_proto_init() }
