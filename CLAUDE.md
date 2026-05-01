@@ -14,6 +14,7 @@ BigFleet is not a scheduler. It does not place pods. It does not simulate kube-s
 2. **Author decisions in memory** — `MEMORY.md` indexes them. `project_design_decisions.md` is the authoritative list of things the author confirmed (cost formula, units, victim aggregation, etc.). Author is Lucy Sweet (`user_role.md`).
 3. **`docs/plan.md`** — the comprehensive implementation plan. Repo layout, wire formats, components, milestones, scalability concerns, decisions required before M0.
 4. **`docs/adr/`** — architecture decision records. Read recent ones before changing anything they cover.
+5. **`project_lessons_learned.md` (in memory)** — running log of empirical findings: things that surprised us, K8s/kind quirks, scale tuning. Read before debugging anything that "should just work". **Append a new entry whenever a new lesson surfaces** so the next milestone doesn't re-discover it.
 
 When the papers, the memory, and the plan disagree, the order above wins. Update memory or the plan when you discover a divergence.
 
