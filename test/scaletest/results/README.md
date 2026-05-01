@@ -22,7 +22,7 @@ The most recent passing run per profile is the current baseline. Update this tab
 | local-50k    | [20260501-160516-local-50k-v3](20260501-160516-local-50k-v3/) | 3.8 ms | 1.47 s | 10.0 s | 49,999 | 202   | ✗ | After M11.12 CPU-limit bump (kwok pods 800m → 2 CPU). Microbenchmarks show buildRollup at 1K CRs takes 4.2 ms in-process — the residual 1.47 s rollup p99 is environmental contention (cache reflector locks, gRPC stream backpressure, CFS throttling), not algorithmic. Real production deployments with one process per pod should see <50 ms rollup p99 at this scale. |
 | local-50k (cache) | [20260501-154725-local-50k](20260501-154725-local-50k/) | 7.9 ms | 1.85 s | 10.5 s | 49,999 | 200   | ✗ | M11.11 result: informer-backed cache landed; rollup dropped from 2.05 s → 1.85 s, ack from 18.9 s → 10.5 s. Kept as a comparison point against M11.12's CPU-limit bump. |
 | local-50k (pre-M11.11) | [20260501-153557-local-50k](20260501-153557-local-50k/) | 7.4 ms | ≥2.05 s* | 18.9 s | 50,000 | 194   | ✗ | Pre-cache regression record. Kept for diff-against-baseline. |
-| homelab-500k | — | — | — | — | — | — | — | not yet captured |
+| homelab-500k | — | — | — | — | — | — | — | **blocked** on M11.15 — current `pkg/decision` walk is O(N×M); microbench shows 80 s cycle at 50K seeded inventory. Cloud run not worth doing until Phase 1 inventory index lands. See `pkg/shard/cycle_bench_test.go`. |
 | cloud-5m     | — | — | — | — | — | — | — | not yet captured |
 | thundering-herd | — | — | — | — | — | — | — | not yet captured |
 | failover-soak | — | — | — | — | — | — | — | not yet captured |
