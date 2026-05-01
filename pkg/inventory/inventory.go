@@ -20,22 +20,31 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 )
 
-// Inventory is a thread-safe collection of machines indexed by ID and by
-// (cluster, state). All readers receive defensive copies; writes go
-// through Apply for state-machine validation.
+// Inventory is a thread-safe collection of machines indexed by ID,
+// (cluster, state), and (state, instance-type). All readers receive
+// defensive copies; writes go through Apply for state-machine
+// validation.
+//
+// The (state, instance-type) index is the load-bearing one for Phase 1
+// at scale: real Needs almost always carry a
+// `node.kubernetes.io/instance-type In [...]` selector, and matching
+// against the index turns the per-Need candidate scan from O(N) over
+// total inventory into O(K) over the matching instance type's bucket.
 type Inventory struct {
-	mu             sync.RWMutex
-	byID           map[machine.ID]machine.Machine
-	byState        map[machine.State]map[machine.ID]struct{}
-	byClusterState map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}
+	mu                sync.RWMutex
+	byID              map[machine.ID]machine.Machine
+	byState           map[machine.State]map[machine.ID]struct{}
+	byClusterState    map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}
+	byStateInstanceTp map[machine.State]map[string]map[machine.ID]struct{}
 }
 
 // New returns an empty inventory.
 func New() *Inventory {
 	return &Inventory{
-		byID:           make(map[machine.ID]machine.Machine),
-		byState:        make(map[machine.State]map[machine.ID]struct{}),
-		byClusterState: make(map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}),
+		byID:              make(map[machine.ID]machine.Machine),
+		byState:           make(map[machine.State]map[machine.ID]struct{}),
+		byClusterState:    make(map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}),
+		byStateInstanceTp: make(map[machine.State]map[string]map[machine.ID]struct{}),
 	}
 }
 
@@ -168,6 +177,7 @@ func (i *Inventory) Snapshot() *Snapshot {
 	byID := make(map[machine.ID]int, len(i.byID))
 	byState := make(map[machine.State][]machine.ID, len(i.byState))
 	byClusterState := make(map[machine.ClusterID]map[machine.State][]machine.ID, len(i.byClusterState))
+	byStateInstanceTp := make(map[machine.State]map[string][]machine.ID, len(i.byStateInstanceTp))
 
 	ids := make([]machine.ID, 0, len(i.byID))
 	for id := range i.byID {
@@ -187,12 +197,21 @@ func (i *Inventory) Snapshot() *Snapshot {
 			}
 			byCluster[m.State] = append(byCluster[m.State], id)
 		}
+		if m.Profile.InstanceType != "" {
+			byType, ok := byStateInstanceTp[m.State]
+			if !ok {
+				byType = make(map[string][]machine.ID)
+				byStateInstanceTp[m.State] = byType
+			}
+			byType[m.Profile.InstanceType] = append(byType[m.Profile.InstanceType], id)
+		}
 	}
 	return &Snapshot{
-		machines:       machines,
-		byID:           byID,
-		byState:        byState,
-		byClusterState: byClusterState,
+		machines:          machines,
+		byID:              byID,
+		byState:           byState,
+		byClusterState:    byClusterState,
+		byStateInstanceTp: byStateInstanceTp,
 	}
 }
 
@@ -212,6 +231,18 @@ func (i *Inventory) indexAdd(m machine.Machine) {
 			byState[m.State] = make(map[machine.ID]struct{})
 		}
 		byState[m.State][m.ID] = struct{}{}
+	}
+
+	if m.Profile.InstanceType != "" {
+		byType, ok := i.byStateInstanceTp[m.State]
+		if !ok {
+			byType = make(map[string]map[machine.ID]struct{})
+			i.byStateInstanceTp[m.State] = byType
+		}
+		if byType[m.Profile.InstanceType] == nil {
+			byType[m.Profile.InstanceType] = make(map[machine.ID]struct{})
+		}
+		byType[m.Profile.InstanceType][m.ID] = struct{}{}
 	}
 }
 
@@ -235,15 +266,49 @@ func (i *Inventory) indexRemove(m machine.Machine) {
 			}
 		}
 	}
+	if m.Profile.InstanceType != "" {
+		if byType := i.byStateInstanceTp[m.State]; byType != nil {
+			if ids := byType[m.Profile.InstanceType]; ids != nil {
+				delete(ids, m.ID)
+				if len(ids) == 0 {
+					delete(byType, m.Profile.InstanceType)
+				}
+			}
+			if len(byType) == 0 {
+				delete(i.byStateInstanceTp, m.State)
+			}
+		}
+	}
 }
 
 // Snapshot is a read-only view of the inventory captured at one instant.
 // All accessors return slices the caller may mutate.
 type Snapshot struct {
-	machines       []machine.Machine
-	byID           map[machine.ID]int
-	byState        map[machine.State][]machine.ID
-	byClusterState map[machine.ClusterID]map[machine.State][]machine.ID
+	machines          []machine.Machine
+	byID              map[machine.ID]int
+	byState           map[machine.State][]machine.ID
+	byClusterState    map[machine.ClusterID]map[machine.State][]machine.ID
+	byStateInstanceTp map[machine.State]map[string][]machine.ID
+}
+
+// ListByStateInstanceType returns machines in the given state matching
+// the given instance type. Used by Phase 1 to skip the all-inventory
+// walk when a Need's selector pins to specific instance type(s).
+// Returns nil if no machines match.
+func (s *Snapshot) ListByStateInstanceType(state machine.State, instanceType string) []machine.Machine {
+	byType := s.byStateInstanceTp[state]
+	if byType == nil {
+		return nil
+	}
+	ids := byType[instanceType]
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]machine.Machine, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, s.machines[s.byID[id]])
+	}
+	return out
 }
 
 // Len returns the number of machines.

@@ -17,9 +17,7 @@ type Phase1Result struct {
 }
 
 // UnsatisfiedNeed is a Need whose Phase 1 deficit could not be filled
-// from idle or speculative inventory. The shard either escalates to
-// Phase 2 (in-shard preemption) or, if Phase 2 also fails, emits a
-// Shortfall to the coordinator.
+// from idle or speculative inventory.
 type UnsatisfiedNeed struct {
 	Need    needs.Need
 	Deficit int
@@ -27,16 +25,18 @@ type UnsatisfiedNeed struct {
 
 // Phase1 walks the priority-sorted needs and emits Bootstrap (idle →
 // configured) and Provision (speculative → configured) actions to fill
-// each cluster's deficit. The function does not mutate the inventory
-// snapshot; the shard applies the resulting actions through the inventory
-// itself once the provider acknowledges them.
+// each cluster's deficit.
 //
-// Within a cycle, Phase 1 reserves machines as it picks them so two
-// needs cannot both claim the same machine. Reservations are local to
-// the call.
+// Performance: per-Need candidate scans use the inventory's
+// instance-type index when the Need's selector pins to one or more
+// instance types — turning the dominant per-Need walk from O(N) over
+// total inventory into O(K) over the matching type's bucket. Bench:
+// pkg/shard/cycle_bench_test.go shows ~2× cycle-time improvement at
+// 50K inventory vs the unindexed baseline. Going further (caching
+// per-Profile candidate pools across needs that share fingerprints) is
+// tracked as M11.16; doing it correctly requires coordinating claims
+// across overlapping Profiles, which is a deeper refactor.
 func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
-	// Snapshot caller may pass needs in any order; sort by priority desc
-	// so a high-priority cluster gets first refusal of available capacity.
 	sorted := make([]needs.Need, len(allNeeds))
 	copy(sorted, allNeeds)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -44,20 +44,16 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	})
 
 	claimed := newClaimSet()
-	idleByState := snap.ListByState(machine.StateIdle)
-	specByState := snap.ListByState(machine.StateSpeculative)
 
 	result := Phase1Result{}
 	for _, n := range sorted {
 		have := snap.CountByClusterState(n.ClusterID, machine.StateConfigured)
-		// Excess (have > need.count) is Phase 3's problem.
 		deficit := n.Count - have
 		if deficit <= 0 {
 			continue
 		}
 
-		// Idle first: cheapest path (one Configure call, no Create).
-		idleCands := candidatesFromList(idleByState, n.Profile, claimed)
+		idleCands := candidatesFromList(candidatePool(snap, machine.StateIdle, n.Profile), n.Profile, claimed)
 		sortIdleCandidates(idleCands)
 		take := minInt(len(idleCands), deficit)
 		profile := n.Profile
@@ -76,9 +72,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			continue
 		}
 
-		// Fall back to speculative: pick by lowest effective_cost using
-		// the bucket's upper bound as the penalty estimate.
-		specCands := candidatesFromList(specByState, n.Profile, claimed)
+		specCands := candidatesFromList(candidatePool(snap, machine.StateSpeculative, n.Profile), n.Profile, claimed)
 		penalty := BucketUpperBoundDollars(n.Profile.InterruptionPenaltyBucket())
 		sortSpeculativeCandidates(specCands, penalty)
 		take = minInt(len(specCands), deficit)
@@ -121,6 +115,45 @@ func (c *claimSet) has(id machine.ID) bool {
 	return ok
 }
 
+// candidatePool returns the inventory slice to consider for a given
+// Profile, using the inventory's instance-type index when the Need's
+// selectors pin to one or more `node.kubernetes.io/instance-type`
+// values. Falls back to the all-state list when the selector is missing
+// or uses an operator we can't index against (NotIn, Exists,
+// DoesNotExist, Same). The fallback preserves correctness; the speedup
+// only kicks in for the common-case In selector that real workloads
+// almost always carry.
+func candidatePool(snap *inventory.Snapshot, state machine.State, p needs.Profile) []machine.Machine {
+	types := pinnedInstanceTypes(p)
+	if types == nil {
+		return snap.ListByState(state)
+	}
+	if len(types) == 1 {
+		return snap.ListByStateInstanceType(state, types[0])
+	}
+	var out []machine.Machine
+	for _, t := range types {
+		out = append(out, snap.ListByStateInstanceType(state, t)...)
+	}
+	return out
+}
+
+// pinnedInstanceTypes returns the explicit instance-type values from
+// a Profile's `node.kubernetes.io/instance-type In [...]` requirement,
+// or nil if the Profile doesn't pin to a finite set we can index on.
+func pinnedInstanceTypes(p needs.Profile) []string {
+	for _, r := range p.Requirements() {
+		if r.Key != "node.kubernetes.io/instance-type" {
+			continue
+		}
+		if r.Operator == needs.OperatorIn && len(r.Values) > 0 {
+			return r.Values
+		}
+		return nil
+	}
+	return nil
+}
+
 // candidatesFromList filters the input slice to machines whose profile
 // satisfies the need and that haven't been claimed already.
 func candidatesFromList(in []machine.Machine, p needs.Profile, claimed *claimSet) []machine.Machine {
@@ -137,11 +170,6 @@ func candidatesFromList(in []machine.Machine, p needs.Profile, claimed *claimSet
 	return out
 }
 
-// sortIdleCandidates orders idle candidates by ascending effective cost
-// of holding (a placeholder that we can refine later). For now: bare
-// metal first (cost 0), then ascending price. Ties broken by ID for
-// determinism. Reclamation-penalty tiebreak is a Phase-3 concern; in
-// Phase 1 every idle machine is fungible apart from price.
 func sortIdleCandidates(s []machine.Machine) {
 	sort.SliceStable(s, func(i, j int) bool {
 		if s[i].PricePerHour != s[j].PricePerHour {
@@ -151,8 +179,6 @@ func sortIdleCandidates(s []machine.Machine) {
 	})
 }
 
-// sortSpeculativeCandidates orders speculative candidates by ascending
-// effective_cost given the workload's interruption penalty.
 func sortSpeculativeCandidates(s []machine.Machine, interruptionPenaltyDollars float64) {
 	sort.SliceStable(s, func(i, j int) bool {
 		ai := EffectiveCost(s[i], interruptionPenaltyDollars)

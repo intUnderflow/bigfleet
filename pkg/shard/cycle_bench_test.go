@@ -26,7 +26,7 @@ import (
 //
 // Run on the M5 Max with: go test -bench=ShardCycle ./pkg/shard/...
 func BenchmarkShardCycle_Steady(b *testing.B) {
-	for _, invSize := range []int{1_000, 10_000, 50_000} {
+	for _, invSize := range []int{1_000, 10_000, 50_000, 100_000, 500_000} {
 		b.Run(fmt.Sprintf("inv%d_demand50k", invSize), func(b *testing.B) {
 			s := buildShardForBench(b, invSize)
 			loadDemand(b, s, 50, 1000)
