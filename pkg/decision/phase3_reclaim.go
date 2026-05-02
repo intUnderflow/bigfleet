@@ -26,13 +26,25 @@ type Phase3Result struct {
 // is to release on-demand before reserved before bare-metal, and within
 // each cost tier to release the machines whose loss costs the operator
 // the least.
+//
+// Performance (M11.23): needs are pre-grouped per cluster by Profile
+// fingerprint with summed counts. The inner match loop calls
+// MatchProfile once per (configured, distinct fingerprint) instead of
+// once per (configured, need). At 1K configured × 1K needs × 50
+// clusters that's 50M calls collapsing to 50K when all needs in a
+// cluster share a single fingerprint (the common workload shape).
 func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 	out := Phase3Result{}
 
-	// Group needs by cluster.
-	byCluster := make(map[machine.ClusterID][]needs.Need)
+	// Group needs by cluster, then within each cluster collapse by
+	// Profile fingerprint and sum counts.
+	rawByCluster := make(map[machine.ClusterID][]needs.Need)
 	for _, n := range allNeeds {
-		byCluster[n.ClusterID] = append(byCluster[n.ClusterID], n)
+		rawByCluster[n.ClusterID] = append(rawByCluster[n.ClusterID], n)
+	}
+	byCluster := make(map[machine.ClusterID][]profileBudget, len(rawByCluster))
+	for cluster, ns := range rawByCluster {
+		byCluster[cluster] = collapseByFingerprint(ns)
 	}
 
 	// For each cluster present in the inventory, compute reclaim actions.
@@ -61,21 +73,16 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 			return configured[i].ID < configured[j].ID
 		})
 
-		// Track remaining budget per need; a machine "claims" a slot
-		// when a need can use it and the budget is non-zero.
-		remaining := make([]int, len(byCluster[cluster]))
-		for i, n := range byCluster[cluster] {
-			remaining[i] = n.Count
-		}
+		groups := byCluster[cluster] // nil for clusters with no needs
 
 		for _, m := range configured {
 			kept := false
-			for i, n := range byCluster[cluster] {
-				if remaining[i] <= 0 {
+			for i := range groups {
+				if groups[i].remaining <= 0 {
 					continue
 				}
-				if MatchProfile(n.Profile, m) {
-					remaining[i]--
+				if MatchProfile(groups[i].profile, m) {
+					groups[i].remaining--
 					kept = true
 					break
 				}
@@ -92,6 +99,39 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 		}
 	}
 
+	return out
+}
+
+// profileBudget is one row per distinct Profile fingerprint within a
+// cluster's needs: which Profile to MatchProfile against, and how many
+// machines that fingerprint can collectively claim.
+type profileBudget struct {
+	profile   needs.Profile
+	remaining int
+}
+
+// collapseByFingerprint collapses a cluster's needs into one row per
+// distinct fingerprint. Two needs sharing a fingerprint match the same
+// machines, so for Phase 3's purposes the counts add. Order is the
+// first-seen order of fingerprints in the input — deterministic given
+// allNeeds is stable, and the fingerprint-collision order doesn't
+// affect correctness because all groups satisfying a machine are
+// equivalent.
+func collapseByFingerprint(ns []needs.Need) []profileBudget {
+	if len(ns) == 0 {
+		return nil
+	}
+	idx := make(map[string]int, len(ns))
+	out := make([]profileBudget, 0, len(ns))
+	for _, n := range ns {
+		fp := n.Profile.Fingerprint()
+		if i, ok := idx[fp]; ok {
+			out[i].remaining += n.Count
+			continue
+		}
+		idx[fp] = len(out)
+		out = append(out, profileBudget{profile: n.Profile, remaining: n.Count})
+	}
 	return out
 }
 
