@@ -253,9 +253,11 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 
 	// Reconcile inventory against the provider before deciding so we're
 	// not making decisions against a stale view.
+	reconcileStart := time.Now()
 	if err := s.reconcile(cycleCtx); err != nil {
 		s.log.Warn("reconcile failed", "err", err)
 	}
+	metrics.ShardCyclePhaseDuration.WithLabelValues("reconcile").Observe(time.Since(reconcileStart).Seconds())
 
 	// CycleSnapshot returns the cached pointer from the inventory's
 	// background fold loop in O(1). Stale by at most foldDebounce +
@@ -265,9 +267,17 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	snap := s.inv.CycleSnapshot()
 	demand := s.needs.Snapshot()
 
+	p1Start := time.Now()
 	p1 := decision.Phase1(snap, demand)
+	metrics.ShardCyclePhaseDuration.WithLabelValues("phase1").Observe(time.Since(p1Start).Seconds())
+
+	p2Start := time.Now()
 	p2 := decision.Phase2(snap, p1.Unsatisfied, s.cfg.Phase2Options)
+	metrics.ShardCyclePhaseDuration.WithLabelValues("phase2").Observe(time.Since(p2Start).Seconds())
+
+	p3Start := time.Now()
 	p3 := decision.Phase3(snap, demand)
+	metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 
 	// Collapse all phases' actions into one queue. Phase 1/2/3 compute
 	// on the same snapshot, so their actions are independent; ordering
@@ -302,6 +312,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		conc = len(all)
 	}
 	if conc > 0 {
+		executeStart := time.Now()
 		jobs := make(chan decision.Action)
 		var wg sync.WaitGroup
 		for i := 0; i < conc; i++ {
@@ -323,6 +334,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		}
 		close(jobs)
 		wg.Wait()
+		metrics.ShardCyclePhaseDuration.WithLabelValues("execute").Observe(time.Since(executeStart).Seconds())
 	}
 	if deferred > 0 {
 		metrics.ShardActionsDeferred.Add(float64(deferred))

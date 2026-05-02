@@ -32,6 +32,18 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14), // 1ms → 16s
 	})
 
+	// ShardCyclePhaseDuration decomposes the cycle into its constituent
+	// phases so we can identify which one dominates p99 without
+	// re-running. Labelled phase ∈ {reconcile, phase1, phase2, phase3,
+	// execute}. Sum of per-cycle phase samples ≈ ShardCycleDuration; the
+	// small uncovered overhead is the snapshot/needs reads, action
+	// collation, and the deferred-actions follow-up trigger.
+	ShardCyclePhaseDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_cycle_phase_duration_seconds",
+		Help:    "Wall-clock duration of each phase within shard.runCycle.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14), // 1ms → 16s
+	}, []string{"phase"})
+
 	ShardActionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_shard_actions_total",
 		Help: "Count of decision-engine actions emitted, by kind (Bootstrap / Provision / Reclaim / Preempt).",
