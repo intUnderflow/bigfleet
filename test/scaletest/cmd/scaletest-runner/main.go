@@ -404,6 +404,14 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardShortfalls":              `sum(bigfleet_shard_shortfalls)`,
 		"loadgenCRsActive":             `sum(scaletest_loadgen_cr_active)`,
 		"loadgenCRsCreatedPerSec":      `sum(rate(scaletest_loadgen_cr_created_total[5m]))`,
+		// Per-phase p99s. Required to distinguish "the whole cycle is
+		// slow" from "one phase has a long tail" (M11.21 added the
+		// histogram; the runner's summary now surfaces it).
+		"shardPhaseReconcileP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="reconcile"}[5m])))`,
+		"shardPhase1P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase1"}[5m])))`,
+		"shardPhase2P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase2"}[5m])))`,
+		"shardPhase3P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase3"}[5m])))`,
+		"shardPhaseExecuteP99Seconds":   `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="execute"}[5m])))`,
 	}
 	out := make(map[string]float64, len(queries))
 	for k, q := range queries {
