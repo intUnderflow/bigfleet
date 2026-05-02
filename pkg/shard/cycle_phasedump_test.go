@@ -35,7 +35,7 @@ func TestCyclePhaseDump_500K(t *testing.T) {
 	_ = s.Inventory().Snapshot()
 	ctx := t.Context()
 
-	const cycles = 5
+	const cycles = 20
 	for i := 0; i < cycles; i++ {
 		_ = s.Step(ctx)
 	}
@@ -86,11 +86,12 @@ func setupBenchShard(t *testing.T, invSize, clusters, perCluster int) *Shard {
 	}
 	prov := fake.New(fake.Options{InstantTransitions: true, Seed: 1})
 	s, err := New(Config{
-		ID:               "phasedump",
-		Epoch:            epoch,
-		Provider:         prov,
-		CycleInterval:    1 * time.Second,
-		BootstrapTimeout: 1 * time.Second,
+		ID:                   "phasedump",
+		Epoch:                epoch,
+		Provider:             prov,
+		CycleInterval:        1 * time.Second,
+		BootstrapTimeout:     1 * time.Second,
+		IncrementalReconcile: true,
 		LocalBootstrap: func(ctx context.Context, _ machine.ClusterID, _ []needs.Requirement) ([]byte, error) {
 			return []byte("# phasedump\n"), nil
 		},

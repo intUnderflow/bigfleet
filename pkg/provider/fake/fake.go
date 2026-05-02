@@ -25,6 +25,14 @@ type Provider struct {
 
 	machines map[machine.ID]*machine.Machine
 
+	// lastModRev is the value of `rev` at the most recent mutation of
+	// each machine. Used to honour ListFilter.SinceRevision: a machine
+	// is included in a delta List iff its lastModRev is strictly greater
+	// than the cursor. The fake provider satisfies the §0.1 C "above
+	// conformance threshold" contract — `since_revision` is honoured and
+	// the response Revision is monotonically advancing.
+	lastModRev map[machine.ID]int
+
 	// ops maps (machine_id, kind) → operation_id for idempotency. An
 	// operation is "active" while the machine is at-or-progressing-to
 	// the kind's target state. Once the machine moves on to a different
@@ -67,6 +75,7 @@ func New(opts Options) *Provider {
 	}
 	return &Provider{
 		machines:           make(map[machine.ID]*machine.Machine),
+		lastModRev:         make(map[machine.ID]int),
 		ops:                make(map[opKey]string),
 		failNext:           make(map[failKey]error),
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
@@ -90,6 +99,7 @@ func (p *Provider) AddSpeculative(id machine.ID, profile machine.Profile, capTyp
 		InterruptionProbability: interruptionProb,
 	}
 	p.rev++
+	p.lastModRev[id] = p.rev
 }
 
 // AddIdle inserts an already-running, unbound machine. Used to model
@@ -110,6 +120,7 @@ func (p *Provider) AddIdle(id machine.ID, profile machine.Profile, capType machi
 		InterruptionProbability: interruptionProb,
 	}
 	p.rev++
+	p.lastModRev[id] = p.rev
 }
 
 // FailNext queues a single error to be returned the next time the
@@ -198,6 +209,7 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, postEffect func(*
 		postEffect(m)
 	}
 	p.rev++
+	p.lastModRev[id] = p.rev
 	return provider.TransitionAck{OperationID: op, Machine: *m}, nil
 }
 
@@ -212,14 +224,22 @@ func (p *Provider) Get(_ context.Context, id machine.ID) (machine.Machine, error
 	return *m, nil
 }
 
-// List implements provider.Provider.
+// List implements provider.Provider. Honours SinceRevision: when set
+// to the cursor returned by a prior call, only machines mutated after
+// that cursor are included. Cold start (empty cursor) returns the full
+// inventory.
 func (p *Provider) List(_ context.Context, filter provider.ListFilter) (provider.ListResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	since, hasSince := decodeRevision(filter.SinceRevision)
+
 	out := make([]machine.Machine, 0, len(p.machines))
-	for _, m := range p.machines {
+	for id, m := range p.machines {
 		if !matchesFilter(*m, filter) {
+			continue
+		}
+		if hasSince && p.lastModRev[id] <= since {
 			continue
 		}
 		out = append(out, *m)
@@ -231,6 +251,22 @@ func (p *Provider) List(_ context.Context, filter provider.ListFilter) (provider
 		Machines: out,
 		Revision: []byte(strconv.Itoa(p.rev)),
 	}, nil
+}
+
+// decodeRevision parses an opaque cursor previously emitted by List. An
+// empty cursor (cold start) returns hasSince=false; the caller treats
+// that as "include everything". A malformed cursor is also treated as
+// cold start — defensive against ever-changing wire encodings on the
+// real-provider side.
+func decodeRevision(b []byte) (int, bool) {
+	if len(b) == 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func matchesFilter(m machine.Machine, f provider.ListFilter) bool {

@@ -54,6 +54,11 @@ shard:
   # execute would still take ~10s. 128 parallel workers brings the
   # bottleneck back to actual local compute + apiserver concurrency.
   executeConcurrency: 128
+  # M11.22: delta-only reconcile. The phase-dump diagnostic at 500K
+  # showed reconcile was 87 % of the cycle on the full-List path; the
+  # in-process fake provider honours since_revision so the harness
+  # can opt in. Real-provider deployments validate per-provider.
+  incrementalReconcile: true
   # localBootstrap left false (default) so we exercise the real
   # operator-stream path. M11.18 should make that fast enough.
   resources:

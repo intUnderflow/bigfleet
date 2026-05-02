@@ -55,6 +55,12 @@ shard:
   # cluster-stream RTT serialization. Production must leave this
   # false; only set true in scaletest profiles measuring shard work.
   localBootstrap: false
+  # Opt into delta-only provider.List polling. Off = full List per
+  # cycle (works for any provider). On = trust the provider to honour
+  # SinceRevision (plan §10.6 above-conformance-threshold). The
+  # in-process fake provider this scaletest harness ships with does
+  # honour it; real-provider deployments must verify before enabling.
+  incrementalReconcile: false
 
 provider:
   resources:

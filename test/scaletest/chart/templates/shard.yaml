@@ -34,6 +34,9 @@ spec:
             {{- if .Values.shard.localBootstrap }}
             - --local-bootstrap
             {{- end }}
+            {{- if .Values.shard.incrementalReconcile }}
+            - --incremental-reconcile
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }

@@ -79,6 +79,7 @@ func runShard(args []string) error {
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
+	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -101,12 +102,13 @@ func runShard(args []string) error {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 
 	cfg := shard.Config{
-		ID:                 *shardID,
-		Epoch:              epoch,
-		Provider:           prov,
-		Logger:             logger,
-		MaxActionsPerCycle: *maxActionsPerCycle,
-		ExecuteConcurrency: *executeConcurrency,
+		ID:                   *shardID,
+		Epoch:                epoch,
+		Provider:             prov,
+		Logger:               logger,
+		MaxActionsPerCycle:   *maxActionsPerCycle,
+		ExecuteConcurrency:   *executeConcurrency,
+		IncrementalReconcile: *incrementalReconcile,
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {

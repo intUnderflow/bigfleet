@@ -144,3 +144,42 @@ func TestFake_RevisionAdvancesWithChanges(t *testing.T) {
 		t.Errorf("revision did not advance after Create")
 	}
 }
+
+// TestFake_List_SinceRevisionReturnsDeltasOnly covers the M11.22 path:
+// callers passing a prior cursor see only machines mutated since that
+// cursor. Cold start (empty cursor) still returns full state.
+func TestFake_List_SinceRevisionReturnsDeltasOnly(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+
+	// Seed two machines and snapshot the cursor.
+	p.AddIdle("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+	p.AddIdle("m-2", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+	cold, _ := p.List(ctx, provider.ListFilter{})
+	if len(cold.Machines) != 2 {
+		t.Fatalf("cold list = %d, want 2", len(cold.Machines))
+	}
+
+	// No mutations between calls → since_revision returns empty delta.
+	idle, _ := p.List(ctx, provider.ListFilter{SinceRevision: cold.Revision})
+	if len(idle.Machines) != 0 {
+		t.Errorf("idle delta = %d, want 0 (no mutations since cursor)", len(idle.Machines))
+	}
+
+	// Mutate m-1 only; delta should contain m-1 but not m-2.
+	if _, err := p.Configure(ctx, provider.ConfigureRequest{MachineID: "m-1", ClusterID: "cluster-a"}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	delta, _ := p.List(ctx, provider.ListFilter{SinceRevision: cold.Revision})
+	if len(delta.Machines) != 1 || delta.Machines[0].ID != "m-1" {
+		t.Errorf("delta = %+v, want exactly m-1", delta.Machines)
+	}
+
+	// A delta from the new cursor should be empty; the prior cursor
+	// must keep returning the same delta (cursors are immutable views).
+	delta2, _ := p.List(ctx, provider.ListFilter{SinceRevision: delta.Revision})
+	if len(delta2.Machines) != 0 {
+		t.Errorf("post-delta cursor = %d, want 0", len(delta2.Machines))
+	}
+}

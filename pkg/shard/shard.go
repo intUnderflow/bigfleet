@@ -99,6 +99,19 @@ type Config struct {
 	// provider are all thread-safe; raise this for any workload where
 	// a ramp burst dwarfs steady-state churn.
 	ExecuteConcurrency int
+
+	// IncrementalReconcile opts into delta-only provider.List polling
+	// using the SinceRevision cursor. Off by default — reconcile then
+	// performs a full List every cycle and walks the snapshot to find
+	// removals (correct for any provider). On, the shard pumps the
+	// cursor across cycles and only processes machines mutated since
+	// the last call; the snapshot-walk for removals is skipped, so
+	// providers that genuinely remove machines from inventory must
+	// emit tombstones (not yet wired — defer until a real provider
+	// needs it). Plan §10.6 frames this as the "above-conformance-
+	// threshold" path; only enable for providers that honour
+	// since_revision.
+	IncrementalReconcile bool
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -133,6 +146,12 @@ type Shard struct {
 	// Mutated by AssignDomain / UnassignDomain instruction handlers.
 	domainsMu       sync.Mutex
 	assignedDomains map[domainKey]struct{}
+
+	// reconcileCursor is the opaque revision returned by the most
+	// recent provider.List response. Pumped back into ListFilter.
+	// SinceRevision on the next cycle when Config.IncrementalReconcile
+	// is set. Only the cycle goroutine reads/writes this; no lock.
+	reconcileCursor []byte
 
 	log *slog.Logger
 }
