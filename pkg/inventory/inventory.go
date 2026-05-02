@@ -332,12 +332,35 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 			byType[m.Profile.InstanceType] = append(byType[m.Profile.InstanceType], id)
 		}
 	}
+	// Pre-build sorted per-(state, instance-type) buckets so the
+	// Phase 1 hot path can read O(1) without re-allocating + re-sorting
+	// per Need. See M11.20.
+	buckets := make(map[machine.State]map[string][]machine.Machine, len(byStateInstanceTp))
+	for state, byType := range byStateInstanceTp {
+		typed := make(map[string][]machine.Machine, len(byType))
+		for instType, idList := range byType {
+			ms := make([]machine.Machine, len(idList))
+			for k, id := range idList {
+				ms[k] = machines[byID[id]]
+			}
+			sort.Slice(ms, func(a, b int) bool {
+				if ms[a].PricePerHour != ms[b].PricePerHour {
+					return ms[a].PricePerHour < ms[b].PricePerHour
+				}
+				return ms[a].ID < ms[b].ID
+			})
+			typed[instType] = ms
+		}
+		buckets[state] = typed
+	}
+
 	return &Snapshot{
-		machines:          machines,
-		byID:              byID,
-		byState:           byState,
-		byClusterState:    byClusterState,
-		byStateInstanceTp: byStateInstanceTp,
+		machines:                 machines,
+		byID:                     byID,
+		byState:                  byState,
+		byClusterState:           byClusterState,
+		byStateInstanceTp:        byStateInstanceTp,
+		bucketsByStateInstanceTp: buckets,
 	}
 }
 
@@ -408,33 +431,48 @@ func (i *Inventory) indexRemove(m machine.Machine) {
 }
 
 // Snapshot is a read-only view of the inventory captured at one instant.
-// All accessors return slices the caller may mutate.
+//
+// Most accessors return freshly-allocated slices the caller may mutate.
+// ListByStateInstanceType is the exception: it returns the pre-sorted
+// shared bucket from bucketsByStateInstanceTp and the caller MUST NOT
+// mutate it. See M11.20 — the per-bucket sort is paid once per fold so
+// Phase 1's per-Need cursor consumption stays O(1) amortised.
 type Snapshot struct {
 	machines          []machine.Machine
 	byID              map[machine.ID]int
 	byState           map[machine.State][]machine.ID
 	byClusterState    map[machine.ClusterID]map[machine.State][]machine.ID
 	byStateInstanceTp map[machine.State]map[string][]machine.ID
+
+	// bucketsByStateInstanceTp holds, for each (state, instance-type)
+	// pair, a `[]machine.Machine` sorted by (price ascending, ID
+	// ascending). This is exactly the order Phase 1 wants for both
+	// idle and speculative single-type pools: same-type machines have
+	// the same `interruption_probability`, so EffectiveCost(m, penalty)
+	// is monotonic in price for any penalty, and id is the deterministic
+	// tiebreak. Multi-type pools still merge across types at allocator
+	// build time.
+	bucketsByStateInstanceTp map[machine.State]map[string][]machine.Machine
 }
 
 // ListByStateInstanceType returns machines in the given state matching
-// the given instance type. Used by Phase 1 to skip the all-inventory
-// walk when a Need's selector pins to specific instance type(s).
+// the given instance type, pre-sorted by (price ascending, ID
+// ascending). Used by Phase 1 to skip the all-inventory walk when a
+// Need's selector pins to specific instance type(s).
+//
+// The returned slice is the snapshot's shared, pre-sorted bucket. The
+// caller MUST NOT mutate it (in particular, MUST NOT re-sort it in
+// place). Phase 1's allocator copies the prefix it consumes; multi-type
+// pool builders concatenate copies of the per-type slices and only sort
+// the merged copy. See M11.20.
+//
 // Returns nil if no machines match.
 func (s *Snapshot) ListByStateInstanceType(state machine.State, instanceType string) []machine.Machine {
-	byType := s.byStateInstanceTp[state]
+	byType := s.bucketsByStateInstanceTp[state]
 	if byType == nil {
 		return nil
 	}
-	ids := byType[instanceType]
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([]machine.Machine, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, s.machines[s.byID[id]])
-	}
-	return out
+	return byType[instanceType]
 }
 
 // Len returns the number of machines.

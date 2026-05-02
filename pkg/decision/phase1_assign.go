@@ -52,7 +52,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		profile := n.Profile
 
 		// Idle first: cheapest path (one Configure call, no Create).
-		idle := alloc.take(machine.StateIdle, profile, deficit, sortIdleCandidates)
+		idle := alloc.take(machine.StateIdle, profile, deficit)
 		for _, m := range idle {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindBootstrap,
@@ -68,10 +68,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		}
 
 		// Fall back to speculative: pick by lowest effective_cost.
-		penalty := BucketUpperBoundDollars(profile.InterruptionPenaltyBucket())
-		spec := alloc.take(machine.StateSpeculative, profile, deficit, func(s []machine.Machine) {
-			sortSpeculativeCandidates(s, penalty)
-		})
+		spec := alloc.take(machine.StateSpeculative, profile, deficit)
 		for _, m := range spec {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindProvision,
@@ -92,29 +89,6 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	}
 
 	return result
-}
-
-// candidatePool returns the inventory slice to consider for a given
-// Profile, using the inventory's instance-type index when the Need's
-// selectors pin to one or more `node.kubernetes.io/instance-type`
-// values. Falls back to the all-state list when the selector is missing
-// or uses an operator we can't index against (NotIn, Exists,
-// DoesNotExist, Same). The fallback preserves correctness; the speedup
-// only kicks in for the common-case In selector that real workloads
-// almost always carry.
-func candidatePool(snap *inventory.Snapshot, state machine.State, p needs.Profile) []machine.Machine {
-	types := pinnedInstanceTypes(p)
-	if types == nil {
-		return snap.ListByState(state)
-	}
-	if len(types) == 1 {
-		return snap.ListByStateInstanceType(state, types[0])
-	}
-	var out []machine.Machine
-	for _, t := range types {
-		out = append(out, snap.ListByStateInstanceType(state, t)...)
-	}
-	return out
 }
 
 // pinnedInstanceTypes returns the explicit instance-type values from
