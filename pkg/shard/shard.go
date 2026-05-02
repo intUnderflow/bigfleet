@@ -257,7 +257,12 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		s.log.Warn("reconcile failed", "err", err)
 	}
 
-	snap := s.inv.Snapshot()
+	// CycleSnapshot returns the cached pointer from the inventory's
+	// background fold loop in O(1). Stale by at most foldDebounce +
+	// buildTime; safe because applyTransition rejects re-attempts on
+	// already-moved machines and Phase 1/2/3 re-derive any missed
+	// actions next cycle.
+	snap := s.inv.CycleSnapshot()
 	demand := s.needs.Snapshot()
 
 	p1 := decision.Phase1(snap, demand)

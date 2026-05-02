@@ -30,6 +30,12 @@ func BenchmarkShardCycle_Steady(b *testing.B) {
 		b.Run(fmt.Sprintf("inv%d_demand50k", invSize), func(b *testing.B) {
 			s := buildShardForBench(b, invSize)
 			loadDemand(b, s, 50, 1000)
+			// Force a synchronous snapshot to seed the cache that
+			// CycleSnapshot reads from on the cycle hot path. Without
+			// this, the first Step would race the background fold
+			// goroutine and the bench would either sleep for the
+			// fold or measure an empty snapshot.
+			_ = s.Inventory().Snapshot()
 			ctx := b.Context()
 
 			b.ResetTimer()
