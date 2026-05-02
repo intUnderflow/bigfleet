@@ -18,6 +18,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
@@ -76,6 +77,7 @@ func runShard(args []string) error {
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
+	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -97,13 +99,19 @@ func runShard(args []string) error {
 	// adapter once an out-of-tree provider is available.
 	prov := fake.New(fake.Options{InstantTransitions: true})
 
-	sh, err := shard.New(shard.Config{
+	cfg := shard.Config{
 		ID:                 *shardID,
 		Epoch:              epoch,
 		Provider:           prov,
 		Logger:             logger,
 		MaxActionsPerCycle: *maxActionsPerCycle,
-	})
+	}
+	if *localBootstrap {
+		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {
+			return []byte("# bigfleet scaletest stub bootstrap for " + string(cluster) + "\n"), nil
+		}
+	}
+	sh, err := shard.New(cfg)
 	if err != nil {
 		return err
 	}

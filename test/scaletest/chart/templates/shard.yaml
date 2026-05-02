@@ -30,6 +30,9 @@ spec:
             - --data-dir=/var/lib/bigfleet
             - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
             - --max-actions-per-cycle={{ .Values.shard.maxActionsPerCycle | default 0 }}
+            {{- if .Values.shard.localBootstrap }}
+            - --local-bootstrap
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }

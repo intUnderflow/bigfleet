@@ -45,6 +45,11 @@ shard:
   # bump this to bound the cycle wall-clock at the expense of taking
   # more cycles to fully converge after a burst.
   maxActionsPerCycle: 0
+  # Render bootstrap blobs locally instead of round-tripping through
+  # the operator stream. Decouples shard cycle benchmarks from
+  # cluster-stream RTT serialization. Production must leave this
+  # false; only set true in scaletest profiles measuring shard work.
+  localBootstrap: false
 
 provider:
   resources:

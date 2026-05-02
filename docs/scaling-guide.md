@@ -2,6 +2,18 @@
 
 How to size BigFleet for your fleet, and the knobs to reach for at each scale.
 
+## Per-shard machine ceiling (revised by scale tests)
+
+The plan §5.1 aspirational ceiling of 500K machines per shard does not hold at the runner's `shardCycleDurationP99 ≤ 100 ms` SLO. Empirical numbers from `pkg/shard/cycle_bench_test.go` and the Scaleway 500K real-cluster run:
+
+| Inventory size | Cycle p99 (M5 Max bench) | Cycle p99 (PRO2 cloud) |
+|---|---|---|
+| 50K | 245 ms | ~480 ms |
+| 100K | 412 ms | ~820 ms |
+| 500K | 2.15 s | 4.07 s |
+
+**Effective per-shard ceiling at the 100 ms SLO is ~25K–50K machines** depending on hardware single-thread speed. To reach plan §5.1's 100M-machine fleet target, the deployment needs 2–4K shards, not the 200 the original sizing implied. See M11.18 (parallel/batched execute) and any future M11.19+ work on incremental snapshots for the path to a higher per-shard number.
+
 ## Sizing table
 
 The table below maps fleet size to BigFleet's recommended deployment shape. Numbers come from the BigFleet paper §11 and the measured ceilings in `docs/plan.md` §5.1 + §10.
