@@ -1,0 +1,18 @@
+profile scaleway-500k on context admin@bigfleet-scaletest (kind=unknown)
+  scale: 50 clusters × 1000 CRs = 50000 total
+  duration: 30m0s
+  estimated cost (cloud baseline): $0.53
+Release "scaletest" does not exist. Installing it now.
+NAME: scaletest
+LAST DEPLOYED: Sat May  2 12:49:53 2026
+NAMESPACE: bigfleet-scaletest
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+steady state reached; soaking 30m0s
+wrote test/scaletest/results/20260502-104945-scaleway-500k-m1120/summary.json
+tearing down
+release "scaletest" uninstalled
+scaletest-runner: one or more SLO thresholds exceeded
+exit status 1
