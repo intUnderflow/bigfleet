@@ -45,6 +45,11 @@ shard:
   # bump this to bound the cycle wall-clock at the expense of taking
   # more cycles to fully converge after a burst.
   maxActionsPerCycle: 0
+  # Number of action executors running in parallel per cycle. 1 =
+  # serial (historical default). Each Bootstrap action blocks on a
+  # per-cluster gRPC RTT, so serial = N × stream RTT. Raise for
+  # ramp-burst workloads.
+  executeConcurrency: 1
   # Render bootstrap blobs locally instead of round-tripping through
   # the operator stream. Decouples shard cycle benchmarks from
   # cluster-stream RTT serialization. Production must leave this

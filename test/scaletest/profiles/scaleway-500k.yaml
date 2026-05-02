@@ -49,11 +49,13 @@ shard:
   # cycles instead of blowing the 100ms SLO with 50K Configure RPCs
   # in one cycle. 1000/cycle × ~50 cycles = full ramp in <1 min.
   maxActionsPerCycle: 1000
-  # Skip operator-stream bootstrap RTT — the harness was measuring
-  # serial gRPC stream latency through 50 cluster sessions, not the
-  # shard's algorithmic ceiling. M11.18 tracks the production fix
-  # (parallel/batched execute through streams).
-  localBootstrap: true
+  # M11.18: parallel execute through operator streams. With 1000
+  # actions/cycle and per-cluster stream RTTs of ~5-20ms, serial
+  # execute would still take ~10s. 128 parallel workers brings the
+  # bottleneck back to actual local compute + apiserver concurrency.
+  executeConcurrency: 128
+  # localBootstrap left false (default) so we exercise the real
+  # operator-stream path. M11.18 should make that fast enough.
   resources:
     requests: { cpu: 2, memory: 3Gi }
     limits:   { cpu: 6, memory: 12Gi }

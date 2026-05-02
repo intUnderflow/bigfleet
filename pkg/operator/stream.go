@@ -106,16 +106,23 @@ func (s *session) sendLoop(ctx context.Context) error {
 	}
 }
 
-// recvLoop reads frames from the stream and dispatches them.
+// recvLoop reads frames from the stream and dispatches them. Dispatch
+// runs in a goroutine per frame so a slow handler (CRD write,
+// kubelet-template render) doesn't block the stream's read pump.
+// Without this, the shard's parallel-execute (M11.18) just queues
+// behind the operator's serial recv loop and the cycle SLO blows
+// regardless of shard concurrency.
 func (s *session) recvLoop(ctx context.Context) error {
 	for {
 		msg, err := s.stream.Recv()
 		if err != nil {
 			return err
 		}
-		if err := s.dispatch(ctx, msg); err != nil {
-			s.op.log.Warn("dispatch failed", "err", err)
-		}
+		go func(msg *pb.ShardMessage) {
+			if err := s.dispatch(ctx, msg); err != nil {
+				s.op.log.Warn("dispatch failed", "err", err)
+			}
+		}(msg)
 	}
 }
 

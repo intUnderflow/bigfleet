@@ -89,6 +89,16 @@ type Config struct {
 	// into the next cycle: Phase 1/2/3 are idempotent given the same
 	// snapshot, so the next cycle picks up where this one left off.
 	MaxActionsPerCycle int
+
+	// ExecuteConcurrency caps the number of action executors running
+	// in parallel within a cycle. 0 / 1 = serial (historical default).
+	// Each Bootstrap action blocks on a per-cluster gRPC stream RTT
+	// (`requestBootstrap`), so a serial loop multiplies the cycle
+	// wall-clock by stream RTT × action count regardless of how cheap
+	// the local compute is. The operator session, inventory, and fake
+	// provider are all thread-safe; raise this for any workload where
+	// a ramp burst dwarfs steady-state churn.
+	ExecuteConcurrency int
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -254,27 +264,61 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	p2 := decision.Phase2(snap, p1.Unsatisfied, s.cfg.Phase2Options)
 	p3 := decision.Phase3(snap, demand)
 
-	// MaxActionsPerCycle bounds the per-cycle execute work so a ramp
-	// burst doesn't blow past the cycle SLO. Phase 1/2/3 are
-	// idempotent against the same inventory snapshot; surplus actions
-	// roll into the next cycle naturally.
-	executed, deferred := 0, 0
+	// Collapse all phases' actions into one queue. Phase 1/2/3 compute
+	// on the same snapshot, so their actions are independent; ordering
+	// between them doesn't matter at execute time. MaxActionsPerCycle
+	// caps total per-cycle work so a ramp burst doesn't blow the SLO;
+	// surplus actions defer to the next cycle (phases re-derive them
+	// since they're idempotent against an unchanged snapshot).
+	all := make([]decision.Action, 0, len(p1.Actions)+len(p2.Actions)+len(p3.Actions))
+	all = append(all, p1.Actions...)
+	all = append(all, p2.Actions...)
+	all = append(all, p3.Actions...)
+
 	limit := s.cfg.MaxActionsPerCycle
-	exec := func(actions []decision.Action) {
-		for _, a := range actions {
-			if limit > 0 && executed >= limit {
-				deferred++
-				continue
-			}
-			if err := s.execute(cycleCtx, a); err != nil {
-				s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
-			}
-			executed++
-		}
+	deferred := 0
+	if limit > 0 && len(all) > limit {
+		deferred = len(all) - limit
+		all = all[:limit]
 	}
-	exec(p1.Actions)
-	exec(p2.Actions)
-	exec(p3.Actions)
+
+	// Parallel execute: each Bootstrap action blocks on a per-cluster
+	// gRPC stream RTT (`requestBootstrap`), so a serial loop turns the
+	// cycle into N × stream RTT regardless of how cheap the local
+	// compute is. The operator session supports concurrent in-flight
+	// requests (sync.Map keyed by request_id), so we just need the
+	// shard to fire them in parallel. Inventory.Apply, the fake
+	// provider, and the operator session are all thread-safe.
+	conc := s.cfg.ExecuteConcurrency
+	if conc <= 0 {
+		conc = 1 // serial — preserves the historical default
+	}
+	if conc > len(all) {
+		conc = len(all)
+	}
+	if conc > 0 {
+		jobs := make(chan decision.Action)
+		var wg sync.WaitGroup
+		for i := 0; i < conc; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for a := range jobs {
+					if err := s.execute(cycleCtx, a); err != nil {
+						s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+					}
+				}
+			}()
+		}
+		for _, a := range all {
+			select {
+			case <-cycleCtx.Done():
+			case jobs <- a:
+			}
+		}
+		close(jobs)
+		wg.Wait()
+	}
 	if deferred > 0 {
 		metrics.ShardActionsDeferred.Add(float64(deferred))
 		// Schedule an immediate follow-up cycle so deferred work
@@ -292,13 +336,9 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	}
 	s.recordShortfalls(seeds)
 
-	// Return the union of emitted actions for Step's caller. Cheap to
-	// build — the action slices are small relative to the cycle's
-	// real cost (provider RPCs, transitions).
-	all := make([]decision.Action, 0, len(p1.Actions)+len(p2.Actions)+len(p3.Actions))
-	all = append(all, p1.Actions...)
-	all = append(all, p2.Actions...)
-	all = append(all, p3.Actions...)
+	// `all` was already populated above when we built the executor's
+	// queue; reuse it for metrics. (We also need to count any deferred
+	// actions not in `all` — they show up via ShardActionsDeferred.)
 	for _, a := range all {
 		metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
 	}
