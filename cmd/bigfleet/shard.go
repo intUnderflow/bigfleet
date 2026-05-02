@@ -75,6 +75,7 @@ func runShard(args []string) error {
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
+	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -97,10 +98,11 @@ func runShard(args []string) error {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 
 	sh, err := shard.New(shard.Config{
-		ID:       *shardID,
-		Epoch:    epoch,
-		Provider: prov,
-		Logger:   logger,
+		ID:                 *shardID,
+		Epoch:              epoch,
+		Provider:           prov,
+		Logger:             logger,
+		MaxActionsPerCycle: *maxActionsPerCycle,
 	})
 	if err != nil {
 		return err

@@ -43,6 +43,10 @@ shard:
   # match against. Without this the harness measures rollup latency
   # only, not the algorithmic ceiling we actually want to test.
   seedMachines: 500000
+  # Cap per-cycle work so a 50K-Need demand burst spreads across
+  # cycles instead of blowing the 100ms SLO with 50K Configure RPCs
+  # in one cycle. 1000/cycle × ~50 cycles = full ramp in <1 min.
+  maxActionsPerCycle: 1000
   resources:
     requests: { cpu: 2, memory: 3Gi }
     limits:   { cpu: 6, memory: 12Gi }

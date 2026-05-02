@@ -202,7 +202,7 @@ func run(args []string) error {
 	}
 
 	// Pull metrics summary.
-	metrics, _ := readKeyMetrics(context.Background(), *kubeconfig, namespace)
+	metrics := readKeyMetrics(context.Background(), *kubeconfig, namespace)
 
 	res := runResult{
 		RunID:   runID,
@@ -392,7 +392,10 @@ func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error 
 	return exec.CommandContext(ctx, "tar", "-czf", dest, "-C", filepath.Dir(tmp), filepath.Base(tmp)).Run()
 }
 
-func readKeyMetrics(ctx context.Context, kubeconfig, ns string) (map[string]float64, error) {
+// readKeyMetrics queries Prometheus for the runner's SLO metrics. Per-
+// query errors map to a -1 sentinel in the result so the summary makes
+// the gap visible without aborting the whole run.
+func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float64 {
 	queries := map[string]string{
 		"shardCycleDurationP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))`,
 		"operatorRollupP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
@@ -411,7 +414,7 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) (map[string]floa
 		}
 		out[k] = v
 	}
-	return out, nil
+	return out
 }
 
 // promQuery hits Prometheus through `kubectl exec wget` so we don't

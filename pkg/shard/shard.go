@@ -76,6 +76,19 @@ type Config struct {
 	// Production deployments leave this nil so the operator stream
 	// remains the canonical source.
 	LocalBootstrap func(ctx context.Context, cluster machine.ClusterID, requirements []needs.Requirement) ([]byte, error)
+
+	// MaxActionsPerCycle caps the total number of decision actions
+	// (Bootstrap + Provision + Reclaim + Preempt) the shard will
+	// execute in one cycle. 0 = unlimited (default, preserves prior
+	// behaviour). Phases run to completion regardless; only the
+	// execute step honours the cap.
+	//
+	// When a ramp lands a large demand burst, an unlimited cycle does
+	// O(actions) provider RPCs + inventory transitions, blowing past
+	// the cycle SLO. With a cap, the surplus actions naturally roll
+	// into the next cycle: Phase 1/2/3 are idempotent given the same
+	// snapshot, so the next cycle picks up where this one left off.
+	MaxActionsPerCycle int
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -241,20 +254,33 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	p2 := decision.Phase2(snap, p1.Unsatisfied, s.cfg.Phase2Options)
 	p3 := decision.Phase3(snap, demand)
 
-	for _, a := range p1.Actions {
-		if err := s.execute(cycleCtx, a); err != nil {
-			s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+	// MaxActionsPerCycle bounds the per-cycle execute work so a ramp
+	// burst doesn't blow past the cycle SLO. Phase 1/2/3 are
+	// idempotent against the same inventory snapshot; surplus actions
+	// roll into the next cycle naturally.
+	executed, deferred := 0, 0
+	limit := s.cfg.MaxActionsPerCycle
+	exec := func(actions []decision.Action) {
+		for _, a := range actions {
+			if limit > 0 && executed >= limit {
+				deferred++
+				continue
+			}
+			if err := s.execute(cycleCtx, a); err != nil {
+				s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+			}
+			executed++
 		}
 	}
-	for _, a := range p2.Actions {
-		if err := s.execute(cycleCtx, a); err != nil {
-			s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
-		}
-	}
-	for _, a := range p3.Actions {
-		if err := s.execute(cycleCtx, a); err != nil {
-			s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
-		}
+	exec(p1.Actions)
+	exec(p2.Actions)
+	exec(p3.Actions)
+	if deferred > 0 {
+		metrics.ShardActionsDeferred.Add(float64(deferred))
+		// Schedule an immediate follow-up cycle so deferred work
+		// doesn't wait for the next tick. The wakeup channel coalesces
+		// repeated triggers; at most one extra cycle gets queued.
+		s.triggerCycle()
 	}
 
 	// Persist any unresolved needs as shortfalls for the next

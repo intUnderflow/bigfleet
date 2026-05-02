@@ -46,6 +46,11 @@ var (
 		Name: "bigfleet_shard_shortfalls",
 		Help: "Number of unresolved shortfalls the shard is reporting up.",
 	})
+
+	ShardActionsDeferred = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_actions_deferred_total",
+		Help: "Count of decision actions deferred to a later cycle by MaxActionsPerCycle. Phase 1/2/3 are idempotent so deferred work re-derives next cycle.",
+	})
 )
 
 // Coordinator metrics.
