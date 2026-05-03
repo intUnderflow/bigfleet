@@ -97,6 +97,7 @@ type scriptedOperator struct {
 	// Captured frames for assertions.
 	bootstrapRequests   chan *pb.BootstrapRequest
 	reclaimInstructions chan *pb.ReclaimInstruction
+	availableCapacity   chan *pb.AvailableCapacityUpdate
 }
 
 func newScriptedOperator(t *testing.T, env *testEnv, cluster string) *scriptedOperator {
@@ -114,6 +115,7 @@ func newScriptedOperator(t *testing.T, env *testEnv, cluster string) *scriptedOp
 		cancel:              cancel,
 		bootstrapRequests:   make(chan *pb.BootstrapRequest, 64),
 		reclaimInstructions: make(chan *pb.ReclaimInstruction, 64),
+		availableCapacity:   make(chan *pb.AvailableCapacityUpdate, 64),
 	}
 	if err := stream.Send(&pb.OperatorMessage{
 		Payload: &pb.OperatorMessage_Hello{Hello: &pb.Hello{
@@ -153,6 +155,13 @@ func (op *scriptedOperator) readLoop() {
 					NodesStarted:  int32(len(p.ReclaimInstruction.GetNodes())),
 				}},
 			})
+		case *pb.ShardMessage_AvailableCapacity:
+			// Non-blocking; drop if the channel is full so a noisy
+			// emit loop doesn't deadlock the test.
+			select {
+			case op.availableCapacity <- p.AvailableCapacity:
+			default:
+			}
 		}
 	}
 }
@@ -354,4 +363,50 @@ func TestShard_PriorityInversion(t *testing.T) {
 		}
 	}
 	_ = decision.ActionKindPreempt // keep import live (used indirectly via shard)
+}
+
+// AvailableCapacity surfacing scenario: shard emits one
+// AvailableCapacityUpdate per (cluster, profile fingerprint) per cycle.
+// The scripted operator captures them and we assert the right
+// confidence / count / cost-per-hour reach the wire.
+func TestShard_AvailableCapacity_EmitsToOperator(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	// Two idle GPU machines at different prices — cheaper should win.
+	env.provider.AddIdle("gpu-a",
+		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+		machine.CapacityTypeBareMetal, 6.0, 0)
+	env.provider.AddIdle("gpu-b",
+		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+		machine.CapacityTypeBareMetal, 4.5, 0)
+
+	op := newScriptedOperator(t, env, "cluster-ac")
+	// Send a rollup that demands 1 GPU machine. Phase 1 will satisfy it
+	// from idle (consuming gpu-b, the cheaper one); the AC emit runs
+	// after Phase 3 and reflects the snapshot's pre-execute view.
+	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 1)})
+
+	// Wait for at least one AvailableCapacityUpdate frame.
+	var got *pb.AvailableCapacityUpdate
+	waitFor(t, 5*time.Second, func() bool {
+		select {
+		case got = <-op.availableCapacity:
+			return true
+		default:
+			return false
+		}
+	}, "first AvailableCapacityUpdate frame")
+
+	if got.GetConfidence() != pb.AvailableCapacityUpdate_CONFIDENCE_HIGH {
+		t.Errorf("confidence = %v, want HIGH", got.GetConfidence())
+	}
+	if got.GetAvailableCount() < 1 {
+		t.Errorf("available_count = %d, want >= 1", got.GetAvailableCount())
+	}
+	if got.GetCostPerHour() != 4.5 {
+		t.Errorf("cost_per_hour = %v, want 4.5 (cheapest of the two idle)", got.GetCostPerHour())
+	}
+	if got.GetSupersedesKey() == "" {
+		t.Errorf("supersedes_key empty")
+	}
 }

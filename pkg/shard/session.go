@@ -275,6 +275,15 @@ func (sess *operatorSession) SendNodeStateUpdate(u *pb.NodeStateUpdate) error {
 	return sess.send(&pb.ShardMessage{Payload: &pb.ShardMessage_NodeStateUpdate{NodeStateUpdate: u}})
 }
 
+// SendAvailableCapacityUpdate pushes a coalescing AvailableCapacityUpdate
+// frame down the stream. supersedes_key is conventionally
+// "available:<profile-fingerprint>" so successive updates for the same
+// profile dedup at the operator. Called by the shard's per-cycle
+// AvailableCapacity emission (paper §6.2).
+func (sess *operatorSession) SendAvailableCapacityUpdate(u *pb.AvailableCapacityUpdate) error {
+	return sess.send(&pb.ShardMessage{Payload: &pb.ShardMessage_AvailableCapacity{AvailableCapacity: u}})
+}
+
 // mintID returns a 16-character hex string suitable for a request_id /
 // instruction_id. Crypto-random; no collisions in practice.
 func mintID() string {

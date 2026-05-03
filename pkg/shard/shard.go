@@ -298,6 +298,13 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	p3 := decision.Phase3(snap, demand)
 	metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 
+	// Emit AvailableCapacity hints (paper §6.2). Eventually-consistent;
+	// runs after the decision phases so the snapshot view reflects any
+	// inventory mutations Phase 1/2/3 just made via execute (not yet
+	// run, but the snapshot is already cached and we read counts from
+	// the pre-built buckets — no per-cycle walk).
+	s.emitAvailableCapacity(snap, demand)
+
 	// Collapse all phases' actions into one queue. Phase 1/2/3 compute
 	// on the same snapshot, so their actions are independent; ordering
 	// between them doesn't matter at execute time. MaxActionsPerCycle

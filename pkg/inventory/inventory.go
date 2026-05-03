@@ -475,6 +475,23 @@ func (s *Snapshot) ListByStateInstanceType(state machine.State, instanceType str
 	return byType[instanceType]
 }
 
+// CountByStateInstanceType returns the number of machines in the
+// given (state, instance-type) bucket. O(1) — read of the pre-built
+// per-bucket slice.
+func (s *Snapshot) CountByStateInstanceType(state machine.State, instanceType string) int {
+	byType := s.bucketsByStateInstanceTp[state]
+	if byType == nil {
+		return 0
+	}
+	return len(byType[instanceType])
+}
+
+// CountByState returns the number of machines in the given state.
+// O(1) — read of the pre-built per-state slice.
+func (s *Snapshot) CountByState(state machine.State) int {
+	return len(s.byState[state])
+}
+
 // Len returns the number of machines.
 func (s *Snapshot) Len() int { return len(s.machines) }
 
