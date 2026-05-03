@@ -126,6 +126,13 @@ func (s *Shard) removeSession(cluster machine.ClusterID, sess *operatorSession) 
 		delete(s.sessionsByCluster, cluster)
 	}
 	sess.close()
+	// Forget AvailableCapacity dedup state so a reconnecting operator
+	// (which may have lost its CRs across an API-server restart)
+	// receives a fresh emit on the first cycle after reconnect rather
+	// than silently waiting for the next genuine state change.
+	if s.acCache != nil {
+		s.acCache.forget(cluster)
+	}
 }
 
 // lookupSession returns the active session for cluster, or nil if none

@@ -37,6 +37,9 @@ spec:
             {{- if .Values.shard.incrementalReconcile }}
             - --incremental-reconcile
             {{- end }}
+            {{- if .Values.shard.availableCapacityInterval }}
+            - --available-capacity-interval={{ .Values.shard.availableCapacityInterval }}
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }

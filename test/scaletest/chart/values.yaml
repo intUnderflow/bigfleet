@@ -61,6 +61,12 @@ shard:
   # in-process fake provider this scaletest harness ships with does
   # honour it; real-provider deployments must verify before enabling.
   incrementalReconcile: false
+  # Minimum interval between AvailableCapacityUpdate emits per
+  # (cluster, fingerprint). Empty = use the shard's default (5s).
+  # Below the cycle interval is wasteful (operator-side apiserver
+  # writes); much above 30s starts to feel stale to humans watching
+  # `kubectl get availablecapacity`.
+  availableCapacityInterval: ""
 
 provider:
   resources:

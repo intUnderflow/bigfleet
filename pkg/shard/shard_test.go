@@ -39,6 +39,9 @@ func newTestEnv(t *testing.T) *testEnv {
 		Provider:         prov,
 		CycleInterval:    50 * time.Millisecond,
 		BootstrapTimeout: 2 * time.Second,
+		// Tests assert on AC emit timing; nanosecond rate-limit lets
+		// every cycle emit so coalesce remains the only gate.
+		AvailableCapacityInterval: 1 * time.Nanosecond,
 	})
 	if err != nil {
 		t.Fatalf("shard.New: %v", err)

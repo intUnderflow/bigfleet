@@ -1,12 +1,107 @@
 package shard
 
 import (
+	"sync"
+	"time"
+
 	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
+
+// availableCapacityCache decides whether an AC emit should fire for a
+// given (cluster, fingerprint) on this cycle. Two layers:
+//
+//  1. Coalesce: if the (count, confidence, cost) tuple matches the
+//     last emit's tuple, skip. Saves the operator-side apiserver
+//     from writing CRs that just rewrite the existing state.
+//
+//  2. Rate-limit: even when the tuple changed, throttle emits to at
+//     most once per minInterval per (cluster, fingerprint). The
+//     shard cycle runs at ~10 Hz under load; AC is paper §6.2
+//     "eventually consistent" — operators see state changes within
+//     the rate-limit window, not every cycle. Without this, a 50-
+//     cluster harness emits 500 AC writes/sec into the operator-side
+//     kine sqlite, dwarfing the load that AC itself describes.
+//
+// Default interval is 5 seconds — far slower than a cycle, far
+// faster than a human looking at `kubectl get availablecapacity`.
+//
+// The cache survives session reconnects: a reconnect only resets
+// state for the affected cluster (via forget); other clusters keep
+// their dedup state, so reconnects don't trigger a fleet-wide AC
+// re-emit storm.
+type availableCapacityCache struct {
+	mu          sync.Mutex
+	entries     map[acCacheKey]acCacheEntry
+	minInterval time.Duration
+	now         func() time.Time // injectable for tests
+}
+
+type acCacheKey struct {
+	cluster machine.ClusterID
+	fp      string
+}
+
+type acCacheValue struct {
+	count      int32
+	confidence pb.AvailableCapacityUpdate_Confidence
+	cost       float64
+}
+
+type acCacheEntry struct {
+	value    acCacheValue
+	lastEmit time.Time
+}
+
+const defaultAvailableCapacityInterval = 5 * time.Second
+
+func newAvailableCapacityCache(interval time.Duration) *availableCapacityCache {
+	if interval <= 0 {
+		interval = defaultAvailableCapacityInterval
+	}
+	return &availableCapacityCache{
+		entries:     make(map[acCacheKey]acCacheEntry),
+		minInterval: interval,
+		now:         time.Now,
+	}
+}
+
+// shouldEmit reports whether to emit a frame for (cluster, fingerprint)
+// with the given tuple now. Returns false when the tuple is unchanged
+// from the last emit, or when the rate-limit window hasn't elapsed
+// since the last emit. On a positive return the cache is updated.
+func (c *availableCapacityCache) shouldEmit(cluster machine.ClusterID, fp string, v acCacheValue) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := acCacheKey{cluster, fp}
+	now := c.now()
+	prev, exists := c.entries[k]
+	if exists {
+		if prev.value == v {
+			return false // coalesce
+		}
+		if now.Sub(prev.lastEmit) < c.minInterval {
+			return false // rate-limit
+		}
+	}
+	c.entries[k] = acCacheEntry{value: v, lastEmit: now}
+	return true
+}
+
+// forget drops cached entries for a cluster (e.g., on session loss).
+// Best-effort: the next emit will re-establish the cache.
+func (c *availableCapacityCache) forget(cluster machine.ClusterID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k := range c.entries {
+		if k.cluster == cluster {
+			delete(c.entries, k)
+		}
+	}
+}
 
 // emitAvailableCapacity pushes one AvailableCapacityUpdate per
 // (cluster, distinct profile fingerprint) down the matching operator
@@ -53,6 +148,14 @@ func (s *Shard) emitAvailableCapacity(snap *inventory.Snapshot, demand []needs.N
 		}
 		for fp, profile := range fps {
 			upd := buildAvailableCapacityUpdate(snap, profile, fp)
+			v := acCacheValue{
+				count:      upd.GetAvailableCount(),
+				confidence: upd.GetConfidence(),
+				cost:       upd.GetCostPerHour(),
+			}
+			if !s.acCache.shouldEmit(cluster, fp, v) {
+				continue // coalesce + rate-limit
+			}
 			if err := sess.SendAvailableCapacityUpdate(upd); err != nil {
 				s.log.Debug("emitAvailableCapacity send failed", "cluster", cluster, "fp", fp, "err", err)
 			}

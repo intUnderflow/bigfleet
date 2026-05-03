@@ -2,12 +2,68 @@ package shard
 
 import (
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
+
+// Cache tests: coalesce (skip when tuple unchanged), rate-limit (skip
+// when interval not elapsed even if tuple changed), and forget (clear
+// cluster's entries on session loss so the reconnect re-emits).
+
+func TestACCache_CoalescesUnchangedTuple(t *testing.T) {
+	t.Parallel()
+	c := newAvailableCapacityCache(5 * time.Second)
+	v := acCacheValue{count: 10, confidence: pb.AvailableCapacityUpdate_CONFIDENCE_HIGH, cost: 6.0}
+	if !c.shouldEmit("c1", "fp1", v) {
+		t.Fatalf("first emit should fire")
+	}
+	if c.shouldEmit("c1", "fp1", v) {
+		t.Errorf("second emit with same tuple should be coalesced")
+	}
+}
+
+func TestACCache_RateLimitsChangedTuple(t *testing.T) {
+	t.Parallel()
+	c := newAvailableCapacityCache(5 * time.Second)
+	now := time.Now()
+	c.now = func() time.Time { return now }
+
+	v1 := acCacheValue{count: 10, confidence: pb.AvailableCapacityUpdate_CONFIDENCE_HIGH, cost: 6.0}
+	v2 := acCacheValue{count: 11, confidence: pb.AvailableCapacityUpdate_CONFIDENCE_HIGH, cost: 6.0}
+
+	if !c.shouldEmit("c1", "fp1", v1) {
+		t.Fatalf("first emit should fire")
+	}
+	now = now.Add(100 * time.Millisecond) // far less than the 5s interval
+	if c.shouldEmit("c1", "fp1", v2) {
+		t.Errorf("changed-but-too-soon emit should be rate-limited")
+	}
+	now = now.Add(5 * time.Second) // window elapsed
+	if !c.shouldEmit("c1", "fp1", v2) {
+		t.Errorf("changed-and-window-elapsed emit should fire")
+	}
+}
+
+func TestACCache_ForgetClustersDropsEntries(t *testing.T) {
+	t.Parallel()
+	c := newAvailableCapacityCache(5 * time.Second)
+	v := acCacheValue{count: 10, confidence: pb.AvailableCapacityUpdate_CONFIDENCE_HIGH, cost: 6.0}
+	_ = c.shouldEmit("c1", "fp1", v)
+	_ = c.shouldEmit("c2", "fp1", v)
+
+	c.forget("c1")
+
+	if !c.shouldEmit("c1", "fp1", v) {
+		t.Errorf("after forget, c1 should re-emit")
+	}
+	if c.shouldEmit("c2", "fp1", v) {
+		t.Errorf("c2 should still be coalesced (forget was scoped to c1)")
+	}
+}
 
 // Pure-function tests for buildAvailableCapacityUpdate. Cover the
 // confidence ladder, the cheapest-price computation, and both the

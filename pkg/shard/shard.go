@@ -100,6 +100,18 @@ type Config struct {
 	// a ramp burst dwarfs steady-state churn.
 	ExecuteConcurrency int
 
+	// AvailableCapacityInterval bounds how often the shard emits an
+	// AvailableCapacityUpdate for a given (cluster, fingerprint). The
+	// emit is "eventually consistent" by paper §6.2 — the operator
+	// surfaces it via an AvailableCapacity CR which a human or a
+	// controller polls — so a few-seconds rate limit is harmless and
+	// stops the cycle (~10 Hz under load) from rewriting the
+	// operator-side apiserver every cycle. Default 5 s. Set to a
+	// shorter value if a workload genuinely consumes AC reactively;
+	// set very large to effectively disable AC churn from steady
+	// state (the coalesce layer still blocks no-change rewrites).
+	AvailableCapacityInterval time.Duration
+
 	// IncrementalReconcile opts into delta-only provider.List polling
 	// using the SinceRevision cursor. Off by default — reconcile then
 	// performs a full List every cycle and walks the snapshot to find
@@ -153,6 +165,11 @@ type Shard struct {
 	// is set. Only the cycle goroutine reads/writes this; no lock.
 	reconcileCursor []byte
 
+	// acCache dedups per-(cluster, fingerprint) AvailableCapacity
+	// emits so the operator-side apiserver isn't re-written every
+	// cycle with the same tuple.
+	acCache *availableCapacityCache
+
 	log *slog.Logger
 }
 
@@ -205,6 +222,7 @@ func New(cfg Config) (*Shard, error) {
 		wakeup:            make(chan struct{}, 1),
 		shortfalls:        make(map[string]*shortfallEntry),
 		assignedDomains:   make(map[domainKey]struct{}),
+		acCache:           newAvailableCapacityCache(cfg.AvailableCapacityInterval),
 		log:               log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
 }

@@ -80,6 +80,7 @@ func runShard(args []string) error {
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
 	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
+	availableCapacityInterval := fs.Duration("available-capacity-interval", 0, "minimum interval between AvailableCapacityUpdate emits per (cluster, fingerprint). 0 = use the shard's default (5s). Below the cycle interval is wasteful (operator-side apiserver writes); much above 30s starts to feel stale to humans watching `kubectl get availablecapacity`.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -102,13 +103,14 @@ func runShard(args []string) error {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 
 	cfg := shard.Config{
-		ID:                   *shardID,
-		Epoch:                epoch,
-		Provider:             prov,
-		Logger:               logger,
-		MaxActionsPerCycle:   *maxActionsPerCycle,
-		ExecuteConcurrency:   *executeConcurrency,
-		IncrementalReconcile: *incrementalReconcile,
+		ID:                        *shardID,
+		Epoch:                     epoch,
+		Provider:                  prov,
+		Logger:                    logger,
+		MaxActionsPerCycle:        *maxActionsPerCycle,
+		ExecuteConcurrency:        *executeConcurrency,
+		IncrementalReconcile:      *incrementalReconcile,
+		AvailableCapacityInterval: *availableCapacityInterval,
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {
