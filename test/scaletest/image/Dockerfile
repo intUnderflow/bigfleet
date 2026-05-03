@@ -86,7 +86,11 @@ COPY --from=builder /out/load-driver /usr/local/bin/
 COPY api/crd/ /etc/bigfleet/crd/
 
 COPY test/scaletest/image/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY test/scaletest/image/entrypoint-apiserver.sh /usr/local/bin/entrypoint-apiserver.sh
+COPY test/scaletest/image/entrypoint-workload.sh  /usr/local/bin/entrypoint-workload.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+            /usr/local/bin/entrypoint-apiserver.sh \
+            /usr/local/bin/entrypoint-workload.sh
 
 # Run as a fixed unprivileged UID so the chart can drop capabilities and
 # the image is friendly to GKE Autopilot's PodSecurity baseline.

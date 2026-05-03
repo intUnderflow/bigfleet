@@ -35,9 +35,17 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  resources:
-    requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 1, memory: 1Gi }
+  # Split per-container budgets — the pre-split design pinned the
+  # apiserver+kine + operator+load-driver under a single 1-core
+  # limit and the operator-side write fan-in starved the apiserver,
+  # producing a 600 ms execute-side p99 tail in the M11.24a cloud
+  # run. With the split, each side gets its own cgroup CPU budget.
+  apiserverResources:
+    requests: { cpu: 300m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 2Gi }
+  workloadResources:
+    requests: { cpu: 200m, memory: 300Mi }
+    limits:   { cpu: 1,    memory: 1Gi }
 
 shard:
   replicas: 1

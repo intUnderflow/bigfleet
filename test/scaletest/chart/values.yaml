@@ -81,9 +81,16 @@ provider:
 # The defining knobs: how many simulated clusters and how big each.
 kwok:
   clusterCount: 5
-  resources:
+  # Per-container resource budgets. The pod splits the harness across
+  # two containers (apiserver-side and workload-side) sharing a single
+  # emptyDir; each gets its own cgroup CPU budget so neither side can
+  # starve the other under load.
+  apiserverResources:
     requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 800m, memory: 1Gi }
+    limits:   { cpu: 1,    memory: 1Gi }
+  workloadResources:
+    requests: { cpu: 100m, memory: 200Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
 
 # Operator tunables. Profiles override to push the apiserver budget
 # higher when the underlying apiserver can absorb more (Scaleway PRO2

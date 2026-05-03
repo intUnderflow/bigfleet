@@ -1,13 +1,25 @@
 {{/*
-N replicas of the combined harness image. Each pod is one
-self-contained KWOK cluster running its own apiserver + the
-bigfleet-operator dialling the shard + the load-driver emitting CR
-churn per loadProfile.
+N replicas of the harness pod. Each pod runs ONE simulated KWOK
+cluster split across two containers that share the pod's network
+namespace and an emptyDir at /var/scaletest:
 
-We use a Deployment because every pod is identical and stateless
-(state is in-pod sqlite, scrubbed on restart). For larger replica
-counts (5000+) we'd switch to a StatefulSet to get stable cluster IDs;
-for the M11 universal harness, Deployment + POD_NAME is sufficient.
+  - apiserver:  kine + kube-apiserver + kwok-controller
+  - workload:   bigfleet-operator + load-driver
+
+Splitting the bundle into two containers gives each side its own
+cgroup CPU budget. The pre-split design pinned the apiserver+kine
+under the same 1-core limit as the operator+load-driver, and the
+operator-side write fan-in (CR ack writes, AC upserts, NodeStateUpdate
+upserts) starved the apiserver. This was the dominant tail in the
+M11.24a cloud run.
+
+Coordination: the apiserver container writes the kubeconfig +
+admin certs to the shared volume and touches `apiserver-ready` once
+serving; the workload container blocks on that file before starting
+operator/load-driver.
+
+Deployment vs StatefulSet: still Deployment — POD_NAME provides a
+unique cluster ID per replica and state is scrubbed on restart.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -44,9 +56,21 @@ spec:
         prometheus.io/port: "8770"
     spec:
       containers:
-        - name: harness
+        - name: apiserver
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-apiserver.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          volumeMounts:
+            - { name: shared, mountPath: /var/scaletest }
+          resources:
+            {{- toYaml .Values.kwok.apiserverResources | nindent 12 }}
+        - name: workload
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-workload.sh"]
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
@@ -54,8 +78,6 @@ spec:
               value: {{ include "scaletest.shardAddr" . | quote }}
             - name: LOAD_PROFILE
               value: /etc/loadgen/profile.yaml
-            # Operator tunables. Read by entrypoint.sh and forwarded as
-            # bigfleet-operator flags.
             - name: OPERATOR_QPS
               value: "{{ .Values.operator.qps }}"
             - name: OPERATOR_BURST
@@ -69,9 +91,12 @@ spec:
             - { name: loadgen-met,  containerPort: 8771 }
           volumeMounts:
             - { name: profile, mountPath: /etc/loadgen, readOnly: true }
+            - { name: shared,  mountPath: /var/scaletest }
           resources:
-            {{- toYaml .Values.kwok.resources | nindent 12 }}
+            {{- toYaml .Values.kwok.workloadResources | nindent 12 }}
       volumes:
         - name: profile
           configMap:
             name: kwok-load-profile
+        - name: shared
+          emptyDir: {}

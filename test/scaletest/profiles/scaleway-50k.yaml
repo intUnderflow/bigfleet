@@ -34,12 +34,16 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  # Production-shape resourcing: each kwok pod gets its own CPU + memory
-  # cgroup with real headroom, so the operator's rollup isn't fighting
-  # kine + apiserver for cycles.
-  resources:
+  # Two-container split (post-M11.24a harness reshape): apiserver +
+  # kine + kwok-controller in one container, operator + load-driver in
+  # the other, each with its own cgroup CPU budget so they stop
+  # competing for one limit.
+  apiserverResources:
     requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 1, memory: 1Gi }
+    limits:   { cpu: 1,    memory: 1Gi }
+  workloadResources:
+    requests: { cpu: 100m, memory: 200Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
 
 shard:
   replicas: 1
