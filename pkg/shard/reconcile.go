@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
@@ -34,9 +33,9 @@ func (s *Shard) reconcile(ctx context.Context) error {
 	return s.reconcileFull(ctx)
 }
 
-// reconcileFull is the always-correct full-List path. Quadratic in the
-// inventory size at large scale (proto round-trip per machine, plus
-// snapshot walk for removals). Suitable for any provider.
+// reconcileFull is the always-correct full-List path. Linear in the
+// inventory size (one Get + state compare per returned machine, plus a
+// snapshot walk to find removals). Suitable for any provider.
 func (s *Shard) reconcileFull(ctx context.Context) error {
 	resp, err := s.cfg.Provider.List(ctx, provider.ListFilter{})
 	if err != nil {
@@ -45,14 +44,8 @@ func (s *Shard) reconcileFull(ctx context.Context) error {
 
 	seen := make(map[machine.ID]struct{}, len(resp.Machines))
 	for _, pm := range resp.Machines {
-		dm, err := conv.MachineFromProto(conv.MachineToProto(pm))
-		if err != nil {
-			return err
-		}
-		seen[dm.ID] = struct{}{}
-		if err := s.applyReconciledMachine(dm); err != nil {
-			return err
-		}
+		seen[pm.ID] = struct{}{}
+		s.applyReconciledMachine(pm)
 	}
 
 	for _, m := range s.inv.Snapshot().All() {
@@ -81,36 +74,47 @@ func (s *Shard) reconcileIncremental(ctx context.Context) error {
 		return err
 	}
 	for _, pm := range resp.Machines {
-		dm, err := conv.MachineFromProto(conv.MachineToProto(pm))
-		if err != nil {
-			return err
-		}
-		if err := s.applyReconciledMachine(dm); err != nil {
-			return err
-		}
+		s.applyReconciledMachine(pm)
 	}
 	s.reconcileCursor = resp.Revision
 	return nil
 }
 
 // applyReconciledMachine merges one machine from the provider into the
-// shard's inventory: preserve the assigned-* fields the provider
-// doesn't know about, skip the write when nothing changed, fall back to
-// Insert when the machine is new. Shared by both reconcile paths so the
-// merge logic stays in one place.
-func (s *Shard) applyReconciledMachine(dm machine.Machine) error {
+// shard's inventory.
+//
+// Fast path (M11.24a): when the local inventory already has the
+// machine in the same state as the provider returned, do nothing. This
+// is the common case at steady state and *especially* in the cycle
+// after execute fans out actions — execute already locally
+// `applyTransition`-ed each machine to the provider's TransitionAck
+// state, so the next reconcile sees state-match and skips. No proto
+// round-trip, no Apply, no allocation.
+//
+// Slow paths: state diverged → apply the new state; machine is new →
+// Insert. Both preserve the assigned-* fields (Priority,
+// InterruptionPenalty, ReclamationPenalty) which the provider doesn't
+// know about.
+//
+// The provider's domain types come pre-validated by either the fake
+// (constructs valid Machines directly) or grpcadapter (validates at
+// the proto-to-domain conversion). The pre-M11.24a code re-routed
+// every reconciled machine through MachineToProto+MachineFromProto
+// "to exercise the validation paths" — pure duplication that
+// dominated the cycle whenever execute had just fanned out a burst.
+// Trust the provider boundary; drop the round-trip.
+func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 	if existing, getErr := s.inv.Get(dm.ID); getErr == nil {
+		if existing.State == dm.State {
+			return
+		}
 		dm.AssignedPriority = existing.AssignedPriority
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
-		if existing.State == dm.State {
-			return nil
-		}
 		_ = s.inv.Apply(dm)
-		return nil
+		return
 	}
 	_ = s.inv.Insert(dm)
-	return nil
 }
 
 func equivalentErrNotFound(err error) bool {
