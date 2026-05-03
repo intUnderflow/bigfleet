@@ -67,6 +67,11 @@ shard:
   # writes); much above 30s starts to feel stale to humans watching
   # `kubectl get availablecapacity`.
   availableCapacityInterval: ""
+  # Skip cycle-duration + per-phase histogram observations for the
+  # first N cycles. 0 = record everything. Set to a small positive
+  # value (e.g., 5) to exclude the cold-start full-List cycle from
+  # the steady-state p99.
+  metricsWarmupCycles: 0
 
 provider:
   resources:

@@ -40,6 +40,9 @@ spec:
             {{- if .Values.shard.availableCapacityInterval }}
             - --available-capacity-interval={{ .Values.shard.availableCapacityInterval }}
             {{- end }}
+            {{- if .Values.shard.metricsWarmupCycles }}
+            - --metrics-warmup-cycles={{ .Values.shard.metricsWarmupCycles }}
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }

@@ -81,6 +81,7 @@ func runShard(args []string) error {
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
 	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
 	availableCapacityInterval := fs.Duration("available-capacity-interval", 0, "minimum interval between AvailableCapacityUpdate emits per (cluster, fingerprint). 0 = use the shard's default (5s). Below the cycle interval is wasteful (operator-side apiserver writes); much above 30s starts to feel stale to humans watching `kubectl get availablecapacity`.")
+	metricsWarmupCycles := fs.Int("metrics-warmup-cycles", 0, "skip cycle-duration + per-phase histogram observations for the first N cycles. Cycle 1 of any shard does a one-time full provider.List that is not representative of steady-state cycle cost; skipping it lets p99 reflect what the SLO actually measures. Counters are not affected.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -111,6 +112,7 @@ func runShard(args []string) error {
 		ExecuteConcurrency:        *executeConcurrency,
 		IncrementalReconcile:      *incrementalReconcile,
 		AvailableCapacityInterval: *availableCapacityInterval,
+		MetricsWarmupCycles:       *metricsWarmupCycles,
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {

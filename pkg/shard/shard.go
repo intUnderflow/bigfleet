@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
@@ -100,6 +101,18 @@ type Config struct {
 	// a ramp burst dwarfs steady-state churn.
 	ExecuteConcurrency int
 
+	// MetricsWarmupCycles skips histogram observations
+	// (bigfleet_shard_cycle_duration_seconds and the per-phase
+	// histograms) for the first N cycles. Cycle 1 of any shard does a
+	// full provider.List as it has no since_revision cursor and an
+	// empty inventory; on cold start that's a one-time cost (~700 ms
+	// at 500K on M5) that lands forever in the histogram and the
+	// 5-min rate window keeps it visible all run. Skipping it lets
+	// p99 reflect *steady state*, which is what the SLO is about.
+	// Counters (actions, shortfalls, etc.) are not affected.
+	// Default 0 = record every cycle (current behaviour).
+	MetricsWarmupCycles int
+
 	// AvailableCapacityInterval bounds how often the shard emits an
 	// AvailableCapacityUpdate for a given (cluster, fingerprint). The
 	// emit is "eventually consistent" by paper §6.2 — the operator
@@ -164,6 +177,11 @@ type Shard struct {
 	// SinceRevision on the next cycle when Config.IncrementalReconcile
 	// is set. Only the cycle goroutine reads/writes this; no lock.
 	reconcileCursor []byte
+
+	// cycleCount monotonically counts cycles since shard start. Used
+	// by the warmup gate on metric observations. atomic so a shard
+	// metrics-snapshot read from another goroutine is safe.
+	cycleCount atomic.Int64
 
 	// acCache dedups per-(cluster, fingerprint) AvailableCapacity
 	// emits so the operator-side apiserver isn't re-written every
@@ -282,8 +300,12 @@ func (s *Shard) runCycle(ctx context.Context) {
 // emitted across phases. Shared by Run (production) and Step (simulator).
 func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	cycleStart := time.Now()
+	cycleNum := s.cycleCount.Add(1)
+	recordMetrics := int(cycleNum) > s.cfg.MetricsWarmupCycles
 	defer func() {
-		metrics.ShardCycleDuration.Observe(time.Since(cycleStart).Seconds())
+		if recordMetrics {
+			metrics.ShardCycleDuration.Observe(time.Since(cycleStart).Seconds())
+		}
 	}()
 	cycleCtx, cancel := context.WithTimeout(ctx, s.cfg.CycleInterval)
 	defer cancel()
@@ -294,7 +316,9 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	if err := s.reconcile(cycleCtx); err != nil {
 		s.log.Warn("reconcile failed", "err", err)
 	}
-	metrics.ShardCyclePhaseDuration.WithLabelValues("reconcile").Observe(time.Since(reconcileStart).Seconds())
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("reconcile").Observe(time.Since(reconcileStart).Seconds())
+	}
 
 	// CycleSnapshot returns the cached pointer from the inventory's
 	// background fold loop in O(1). Stale by at most foldDebounce +
@@ -306,15 +330,21 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 
 	p1Start := time.Now()
 	p1 := decision.Phase1(snap, demand)
-	metrics.ShardCyclePhaseDuration.WithLabelValues("phase1").Observe(time.Since(p1Start).Seconds())
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("phase1").Observe(time.Since(p1Start).Seconds())
+	}
 
 	p2Start := time.Now()
 	p2 := decision.Phase2(snap, p1.Unsatisfied, s.cfg.Phase2Options)
-	metrics.ShardCyclePhaseDuration.WithLabelValues("phase2").Observe(time.Since(p2Start).Seconds())
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("phase2").Observe(time.Since(p2Start).Seconds())
+	}
 
 	p3Start := time.Now()
 	p3 := decision.Phase3(snap, demand)
-	metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
+	}
 
 	// Emit AvailableCapacity hints (paper §6.2). Eventually-consistent;
 	// runs after the decision phases so the snapshot view reflects any
@@ -378,7 +408,9 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		}
 		close(jobs)
 		wg.Wait()
-		metrics.ShardCyclePhaseDuration.WithLabelValues("execute").Observe(time.Since(executeStart).Seconds())
+		if recordMetrics {
+			metrics.ShardCyclePhaseDuration.WithLabelValues("execute").Observe(time.Since(executeStart).Seconds())
+		}
 	}
 	if deferred > 0 {
 		metrics.ShardActionsDeferred.Add(float64(deferred))
