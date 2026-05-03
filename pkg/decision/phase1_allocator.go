@@ -61,6 +61,10 @@ func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 
 // take returns up to n unclaimed, MatchProfile-passing machines from
 // the per-(state, fingerprint) pool. It claims them as it goes.
+//
+// When the profile carries a Same requirement (paper §8 co-location
+// signal), routing redirects through takeCoLocated which enforces
+// "all returned machines share the same value for the Same key."
 func (a *phase1Allocator) take(
 	state machine.State,
 	profile needs.Profile,
@@ -68,6 +72,9 @@ func (a *phase1Allocator) take(
 ) []machine.Machine {
 	if n <= 0 {
 		return nil
+	}
+	if key, ok := sameRequirementKey(profile); ok {
+		return a.takeCoLocated(state, profile, n, key)
 	}
 	pool := a.poolFor(state, profile)
 	if pool == nil {
@@ -87,6 +94,121 @@ func (a *phase1Allocator) take(
 		a.claimed[m.ID] = struct{}{}
 	}
 	return taken
+}
+
+// takeCoLocated honours a Profile's Same requirement (paper §8): all
+// returned machines share the same value for the Same key. Picks the
+// best single-value bucket: atomic-satisfiable (≥n machines) with the
+// cheapest head wins; falls back to the largest bucket for a partial
+// fill (the residual becomes a shortfall via the caller's deficit
+// arithmetic).
+//
+// Does NOT advance pool.head — bucketing implies we walk the whole
+// pool and skip the head cursor convention. Subsequent regular take()
+// calls on the same pool still behave normally; the global claimed set
+// catches anything we consumed.
+func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profile, n int, sameKey string) []machine.Machine {
+	pool := a.poolFor(state, profile)
+	if pool == nil {
+		return nil
+	}
+
+	// Bucket unclaimed, MatchProfile-passing candidates by the Same
+	// key's value. pool.src is pre-sorted by (price, id) so each
+	// bucket inherits that order.
+	buckets := make(map[string][]machine.Machine)
+	keys := make([]string, 0)
+	for _, m := range pool.src {
+		if _, claimed := a.claimed[m.ID]; claimed {
+			continue
+		}
+		if !MatchProfile(pool.profile, m) {
+			continue
+		}
+		v, ok := lookupAttribute(sameKey, m)
+		if !ok {
+			continue
+		}
+		if _, exists := buckets[v]; !exists {
+			keys = append(keys, v)
+		}
+		buckets[v] = append(buckets[v], m)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	// Pick the best bucket.
+	//   1. Atomic-satisfiable (≥ n) preferred.
+	//   2. Within atomic-satisfiable: cheapest head price wins; tie
+	//      breaks by smallest size (tighter packing) then by key.
+	//   3. If none atomic: pick the largest bucket (best partial fill);
+	//      tie breaks by cheapest head price then key.
+	var bestKey string
+	var best []machine.Machine
+	for _, k := range keys {
+		b := buckets[k]
+		if best == nil {
+			best, bestKey = b, k
+			continue
+		}
+		bestAtomic := len(best) >= n
+		bAtomic := len(b) >= n
+		switch {
+		case bAtomic && !bestAtomic:
+			best, bestKey = b, k
+		case bAtomic == bestAtomic:
+			better := false
+			if bAtomic {
+				// Both atomic: cheapest head, then smaller, then key.
+				switch {
+				case b[0].PricePerHour < best[0].PricePerHour:
+					better = true
+				case b[0].PricePerHour == best[0].PricePerHour && len(b) < len(best):
+					better = true
+				case b[0].PricePerHour == best[0].PricePerHour && len(b) == len(best) && k < bestKey:
+					better = true
+				}
+			} else {
+				// Both partial: largest, then cheapest head, then key.
+				switch {
+				case len(b) > len(best):
+					better = true
+				case len(b) == len(best) && b[0].PricePerHour < best[0].PricePerHour:
+					better = true
+				case len(b) == len(best) && b[0].PricePerHour == best[0].PricePerHour && k < bestKey:
+					better = true
+				}
+			}
+			if better {
+				best, bestKey = b, k
+			}
+		}
+	}
+
+	take := n
+	if take > len(best) {
+		take = len(best)
+	}
+	out := make([]machine.Machine, take)
+	for i := 0; i < take; i++ {
+		out[i] = best[i]
+		a.claimed[best[i].ID] = struct{}{}
+	}
+	return out
+}
+
+// sameRequirementKey returns the key of the first Same requirement on
+// the profile, if any. MVP: supports a single Same key; profiles with
+// multiple Same requirements would need the allocator to honour all of
+// them simultaneously, which is a follow-up.
+func sameRequirementKey(p needs.Profile) (string, bool) {
+	for _, r := range p.Requirements() {
+		if r.Operator == needs.OperatorSame {
+			return r.Key, true
+		}
+	}
+	return "", false
 }
 
 // poolFor returns the cached pool for (state, profile.fingerprint),

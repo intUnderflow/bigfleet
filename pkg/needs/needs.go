@@ -261,25 +261,43 @@ func (p Profile) computeFingerprint() string {
 
 // Need is one row of the NeedsTable: a count of identically-shaped
 // machines that one cluster currently wants.
+//
+// Group is an opaque per-Need co-location bucket. Two Needs with the
+// same (Cluster, Profile.Fingerprint) but different Group are kept
+// separate by Aggregate, so each group preserves its own Same-operator
+// co-location requirement. Empty Group means "no co-location group" and
+// aggregates with other empty-Group Needs sharing the fingerprint.
+//
+// Group is in-memory state; it is not part of the wire format. The
+// operator populates it from CR ownerReferences during rollup so that
+// CRs from different workloads (StatefulSets, Jobs, etc.) become
+// distinct wire-level CapacityNeeds even when their Profiles are
+// identical, and the Phase 1 allocator can co-locate each group
+// independently.
 type Need struct {
 	ClusterID        machine.ClusterID
 	Profile          Profile
 	Count            int
 	ArrivalUnixNanos int64
+	Group            string
 }
 
-// Aggregate groups a slice of Needs by (cluster, profile fingerprint),
-// summing counts. Useful in tests and when the operator wants to merge
-// raw per-CR observations into the wire-level Need representation.
+// Aggregate groups a slice of Needs by (cluster, profile fingerprint,
+// group), summing counts. Useful in tests and when the operator wants
+// to merge raw per-CR observations into the wire-level Need
+// representation. CRs from the same workload (same Group) collapse
+// into one Need; CRs from different workloads stay separate even if
+// they share a Profile fingerprint.
 func Aggregate(in []Need) []Need {
 	type key struct {
 		cluster machine.ClusterID
 		fp      string
+		group   string
 	}
 	idx := make(map[key]int, len(in))
 	out := make([]Need, 0, len(in))
 	for _, n := range in {
-		k := key{n.ClusterID, n.Profile.Fingerprint()}
+		k := key{n.ClusterID, n.Profile.Fingerprint(), n.Group}
 		if at, ok := idx[k]; ok {
 			out[at].Count += n.Count
 			// Keep earliest arrival time so age calculations are accurate.

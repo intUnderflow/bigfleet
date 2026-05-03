@@ -70,6 +70,14 @@ type Config struct {
 	// kind-based e2e in M5 actually joins kubelets.
 	BootstrapTemplate BootstrapRenderer
 
+	// CoLocationKey is the topology key the operator uses to translate
+	// owner-grouped CRs into Same requirements during rollup (paper §8:
+	// "the operator translates co-location signals to Same"). Empty
+	// disables Same emission. Default "topology.kubernetes.io/zone".
+	// Set to a different key (e.g., the rack label) when the cluster's
+	// topology spans a different domain shape than zones.
+	CoLocationKey string
+
 	// Logger receives structured events.
 	Logger *slog.Logger
 }
@@ -134,6 +142,9 @@ func New(cfg Config) (*Operator, error) {
 	}
 	if cfg.BootstrapTemplate == nil {
 		cfg.BootstrapTemplate = stubBootstrapRenderer
+	}
+	if cfg.CoLocationKey == "" {
+		cfg.CoLocationKey = "topology.kubernetes.io/zone"
 	}
 	log := cfg.Logger
 	if log == nil {

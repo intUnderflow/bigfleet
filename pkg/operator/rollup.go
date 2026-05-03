@@ -117,9 +117,18 @@ func (o *Operator) listCapacityRequests(ctx context.Context) ([]bfv1alpha1.Capac
 	return list.Items, nil
 }
 
-// buildRollup aggregates CRs by Profile fingerprint and builds the
-// proto message. Returns the rollup plus the list of CRs that were
-// Pending at observation time (for the Pending → Acknowledged write).
+// buildRollup aggregates CRs by Profile fingerprint and co-location
+// group, then builds the proto message. Returns the rollup plus the
+// list of CRs that were Pending at observation time.
+//
+// Co-location (paper §8): a CR's first OwnerReference UID is used as
+// its co-location group. CRs sharing an owner are co-located by the
+// shard via a Same(CoLocationKey) requirement appended to the
+// resulting Need's profile. CRs from different owners stay in
+// separate Needs even when their profiles are identical, so each
+// workload's machines can be co-located independently. CRs with no
+// OwnerReference get an empty group and fall back to plain
+// fingerprint aggregation.
 func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCapacityNeeds, []bfv1alpha1.CapacityRequest) {
 	pending := make([]bfv1alpha1.CapacityRequest, 0)
 	rawNeeds := make([]needs.Need, 0, len(crs))
@@ -130,10 +139,15 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 			o.log.Warn("skipping CR with bad profile", "cr", cr.Name, "ns", cr.Namespace, "err", err)
 			continue
 		}
+		group := coLocationGroup(cr)
+		if group != "" && o.cfg.CoLocationKey != "" {
+			profile = withSameRequirement(profile, o.cfg.CoLocationKey)
+		}
 		rawNeeds = append(rawNeeds, needs.Need{
 			ClusterID: o.cfg.ClusterID,
 			Profile:   profile,
 			Count:     1,
+			Group:     group,
 		})
 		if cr.Status.Phase == "" || cr.Status.Phase == bfv1alpha1.CapacityRequestPending {
 			pending = append(pending, *cr)
@@ -150,6 +164,32 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 		out.Needs = append(out.Needs, profileToCapacityNeed(n.Profile, int32(n.Count)))
 	}
 	return out, pending
+}
+
+// coLocationGroup returns a stable per-workload identifier from a CR's
+// ownerReferences. Conventionally the first ownerRef is the workload
+// (Pod owner: Job, StatefulSet, ReplicaSet, …). Empty string means
+// "no co-location group" — the CR aggregates with other ungrouped CRs
+// of identical profile.
+func coLocationGroup(cr *bfv1alpha1.CapacityRequest) string {
+	if len(cr.OwnerReferences) == 0 {
+		return ""
+	}
+	return string(cr.OwnerReferences[0].UID)
+}
+
+// withSameRequirement returns a copy of profile with a Same requirement
+// on key appended. Idempotent: if the profile already has a Same on
+// the same key, returns it unchanged.
+func withSameRequirement(p needs.Profile, key string) needs.Profile {
+	for _, r := range p.Requirements() {
+		if r.Operator == needs.OperatorSame && r.Key == key {
+			return p
+		}
+	}
+	reqs := append([]needs.Requirement(nil), p.Requirements()...)
+	reqs = append(reqs, needs.Requirement{Key: key, Operator: needs.OperatorSame})
+	return needs.NewProfile(reqs, p.Resources(), p.Spread(), p.Priority(), p.InterruptionPenaltyBucket(), p.ReclamationPenaltyBucket())
 }
 
 // profileFromCapacityRequest maps a CR's spec into a needs.Profile.
