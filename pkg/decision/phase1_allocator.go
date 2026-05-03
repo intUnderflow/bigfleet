@@ -62,9 +62,22 @@ func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 // take returns up to n unclaimed, MatchProfile-passing machines from
 // the per-(state, fingerprint) pool. It claims them as it goes.
 //
-// When the profile carries a Same requirement (paper §8 co-location
-// signal), routing redirects through takeCoLocated which enforces
-// "all returned machines share the same value for the Same key."
+// Topology routing (paper §8):
+//
+//   - Same requirement → takeCoLocated. All returned machines share
+//     the same value for the Same key.
+//
+//   - DoNotSchedule Spread → takeSpread. Returned machines respect
+//     the per-domain MaxSkew constraint; cheapest-eligible-bucket
+//     wins at each step.
+//
+//   - Both Same and Spread on the same Need → Same wins (it's the
+//     stronger constraint; spread across values is incompatible
+//     with co-location to one). The Spread is logged elsewhere if a
+//     warning surface exists; here we silently take the Same path.
+//
+//   - ScheduleAnyway Spread → standard take (no enforcement; spread
+//     is best-effort).
 func (a *phase1Allocator) take(
 	state machine.State,
 	profile needs.Profile,
@@ -75,6 +88,9 @@ func (a *phase1Allocator) take(
 	}
 	if key, ok := sameRequirementKey(profile); ok {
 		return a.takeCoLocated(state, profile, n, key)
+	}
+	if key, skew, ok := strictSpread(profile); ok {
+		return a.takeSpread(state, profile, n, key, skew)
 	}
 	pool := a.poolFor(state, profile)
 	if pool == nil {
@@ -209,6 +225,126 @@ func sameRequirementKey(p needs.Profile) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// strictSpread returns the topology key + max skew of the profile's
+// first DoNotSchedule TopologySpread entry, if any. MVP: supports a
+// single Spread key; profiles with multiple Spread entries would need
+// to honour all of them, which is a follow-up.
+//
+// ScheduleAnyway entries are intentionally not surfaced here — they
+// represent a soft preference that the allocator's standard
+// cheapest-first behaviour already approximates well enough for v1.
+func strictSpread(p needs.Profile) (string, int32, bool) {
+	for _, s := range p.Spread() {
+		if s.WhenUnsatisfiable == needs.WhenUnsatisfiableDoNotSchedule {
+			return s.TopologyKey, s.MaxSkew, true
+		}
+	}
+	return "", 0, false
+}
+
+// takeSpread enforces a DoNotSchedule TopologySpread: the per-bucket
+// pick count never exceeds (current minimum + maxSkew). At each step
+// it picks the cheapest head among buckets that are within the skew
+// envelope, so cost ordering is preserved within the constraint.
+//
+// MaxSkew clamps to ≥1 (a profile that asked for 0 would be
+// unsatisfiable by definition).
+//
+// Same as takeCoLocated, this does NOT advance pool.head — bucketing
+// implies a whole-pool walk, and the global claimed set handles
+// dedup across Needs.
+func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile, n int, key string, maxSkew int32) []machine.Machine {
+	pool := a.poolFor(state, profile)
+	if pool == nil {
+		return nil
+	}
+	skew := int(maxSkew)
+	if skew < 1 {
+		skew = 1
+	}
+
+	type bucketState struct {
+		machines []machine.Machine
+		head     int
+	}
+	buckets := make(map[string]*bucketState)
+	keys := make([]string, 0)
+	for _, m := range pool.src {
+		if _, claimed := a.claimed[m.ID]; claimed {
+			continue
+		}
+		if !MatchProfile(pool.profile, m) {
+			continue
+		}
+		v, ok := lookupAttribute(key, m)
+		if !ok {
+			continue
+		}
+		b, exists := buckets[v]
+		if !exists {
+			b = &bucketState{}
+			buckets[v] = b
+			keys = append(keys, v)
+		}
+		b.machines = append(b.machines, m)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int, len(keys))
+	out := make([]machine.Machine, 0, n)
+
+	for len(out) < n {
+		// minCount is the lowest pick count across ALL buckets in
+		// the topology domain — including exhausted buckets whose
+		// counts are frozen. The skew constraint is "max - min ≤
+		// maxSkew" over the whole domain, not just buckets that
+		// still have candidates.
+		minCount := -1
+		for _, k := range keys {
+			c := counts[k]
+			if minCount == -1 || c < minCount {
+				minCount = c
+			}
+		}
+
+		// Eligible: counts[k] ≤ minCount + skew - 1 AND has remaining.
+		// Pick cheapest head; tie-break on key for determinism.
+		var bestKey string
+		var bestPrice float64
+		bestSet := false
+		for _, k := range keys {
+			b := buckets[k]
+			if b.head >= len(b.machines) {
+				continue
+			}
+			if counts[k] > minCount+skew-1 {
+				continue
+			}
+			head := b.machines[b.head]
+			if !bestSet ||
+				head.PricePerHour < bestPrice ||
+				(head.PricePerHour == bestPrice && k < bestKey) {
+				bestSet = true
+				bestKey = k
+				bestPrice = head.PricePerHour
+			}
+		}
+		if !bestSet {
+			break
+		}
+
+		b := buckets[bestKey]
+		m := b.machines[b.head]
+		b.head++
+		out = append(out, m)
+		a.claimed[m.ID] = struct{}{}
+		counts[bestKey]++
+	}
+	return out
 }
 
 // poolFor returns the cached pool for (state, profile.fingerprint),
