@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"container/heap"
 	"sort"
 	"time"
 
@@ -47,7 +48,18 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 	// preemptors don't double-up on the same machine.
 	claimed := make(map[machine.ID]struct{})
 
-	configured := snap.ListByState(machine.StateConfigured)
+	// Lazy: only materialise the all-state Configured slice if a need
+	// reaches the unpinned fallback. With every-need-pinned (the common
+	// shape) we skip a 500K alloc.
+	var configured []machine.Machine
+	configuredOnce := false
+	getConfigured := func() []machine.Machine {
+		if !configuredOnce {
+			configured = snap.ListByState(machine.StateConfigured)
+			configuredOnce = true
+		}
+		return configured
+	}
 
 	// Sort unresolved by priority desc so the highest-priority preemptor
 	// gets first refusal of the cheapest victims.
@@ -61,12 +73,29 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 	for _, u := range resolved {
 		preemptorPriority := u.Need.Profile.Priority()
 
-		type scored struct {
-			m     machine.Machine
-			score float64
+		// Candidate slice: when the need pins to a single instance
+		// type, reuse the snapshot's pre-built bucket directly (no
+		// copy). Multi-type concatenates per-type buckets. Unpinned
+		// falls back to the all-state Configured slice (lazily
+		// materialised — see getConfigured).
+		var candidatePool []machine.Machine
+		switch types := pinnedInstanceTypes(u.Need.Profile); {
+		case len(types) == 1:
+			candidatePool = snap.ListByStateInstanceType(machine.StateConfigured, types[0])
+		case len(types) > 1:
+			for _, t := range types {
+				candidatePool = append(candidatePool, snap.ListByStateInstanceType(machine.StateConfigured, t)...)
+			}
+		default:
+			candidatePool = getConfigured()
 		}
-		var candidates []scored
-		for _, m := range configured {
+
+		// Min-heap of size Deficit holding the best candidates so far.
+		// Replaces the per-need full sort: we only need the top-K, and
+		// K (Deficit) is typically tiny relative to the candidate pool.
+		topK := &victimMinHeap{}
+
+		for _, m := range candidatePool {
 			if _, taken := claimed[m.ID]; taken {
 				continue
 			}
@@ -83,21 +112,28 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 				ReclamationPenalty:     m.AssignedReclamationPenaltyDollars,
 				EstimatedDrainDuration: opts.EstimatedDrainDuration,
 			}
-			candidates = append(candidates, scored{
-				m:     m,
-				score: VictimScore(preemptorPriority, cand, opts.Weights),
-			})
-		}
-		// Highest score = best victim.
-		sort.SliceStable(candidates, func(i, j int) bool {
-			if candidates[i].score != candidates[j].score {
-				return candidates[i].score > candidates[j].score
+			score := VictimScore(preemptorPriority, cand, opts.Weights)
+			if topK.Len() < u.Deficit {
+				heap.Push(topK, scoredVictim{m: m, score: score})
+				continue
 			}
-			return candidates[i].m.ID < candidates[j].m.ID
-		})
+			// Heap is full: replace the lowest score iff this candidate
+			// is better.
+			if (*topK)[0].score < score ||
+				((*topK)[0].score == score && m.ID < (*topK)[0].m.ID) {
+				(*topK)[0] = scoredVictim{m: m, score: score}
+				heap.Fix(topK, 0)
+			}
+		}
 
-		take := minInt(len(candidates), u.Deficit)
-		for _, c := range candidates[:take] {
+		// Drain the heap into highest-score-first order for stable
+		// emit ordering.
+		picks := make([]scoredVictim, topK.Len())
+		for i := len(picks) - 1; i >= 0; i-- {
+			picks[i] = heap.Pop(topK).(scoredVictim)
+		}
+
+		for _, c := range picks {
 			claimed[c.m.ID] = struct{}{}
 			out.Actions = append(out.Actions, Action{
 				Kind:              ActionKindPreempt,
@@ -108,12 +144,42 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 				Reason:            "phase2.inversion",
 			})
 		}
-		if take < u.Deficit {
+		if len(picks) < u.Deficit {
 			out.Unresolved = append(out.Unresolved, UnsatisfiedNeed{
 				Need:    u.Need,
-				Deficit: u.Deficit - take,
+				Deficit: u.Deficit - len(picks),
 			})
 		}
 	}
 	return out
+}
+
+// scoredVictim pairs a candidate machine with its VictimScore. Used
+// as the heap element type during Phase 2 top-K selection.
+type scoredVictim struct {
+	m     machine.Machine
+	score float64
+}
+
+// victimMinHeap orders by ascending score so the worst candidate is at
+// index 0 — when the heap is full and a better candidate arrives, we
+// replace [0] and heap.Fix. ID tiebreak keeps the heap deterministic
+// when scores tie.
+type victimMinHeap []scoredVictim
+
+func (h victimMinHeap) Len() int { return len(h) }
+func (h victimMinHeap) Less(i, j int) bool {
+	if h[i].score != h[j].score {
+		return h[i].score < h[j].score
+	}
+	return h[i].m.ID > h[j].m.ID
+}
+func (h victimMinHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *victimMinHeap) Push(x any)   { *h = append(*h, x.(scoredVictim)) }
+func (h *victimMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
 }

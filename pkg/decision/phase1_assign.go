@@ -126,10 +126,3 @@ func sortSpeculativeCandidates(s []machine.Machine, interruptionPenaltyDollars f
 		return s[i].ID < s[j].ID
 	})
 }
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
