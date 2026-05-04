@@ -175,11 +175,14 @@ func run(args []string) error {
 		}
 	}()
 
-	// Wait for steady state: every kwok pod's load-driver should report
-	// its target CR count. We give it (durationSeconds×0.2) or 5 min,
-	// whichever is bigger.
-	rampBudget := 5 * time.Minute
-	if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 5; t > rampBudget {
+	// Wait for steady state: every kwok pod's load-driver must reach
+	// the per-cluster target. Runs that ramp short of target are
+	// invalid (they measure the SLO against an under-loaded shard);
+	// the runner now requires the full target and fails the run if
+	// the budget elapses without reaching it. Budget: max(15min,
+	// durationSeconds×0.5) to give cold-start kine writes room.
+	rampBudget := 15 * time.Minute
+	if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > rampBudget {
 		rampBudget = t
 	}
 	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
@@ -216,10 +219,7 @@ func run(args []string) error {
 	res.Scale.KWOKClusters = prof.KWOK.ClusterCount
 	res.Scale.MachinesPerCR = prof.LoadProfile.Target
 	res.Scale.TotalCRs = prof.KWOK.ClusterCount * prof.LoadProfile.Target
-	res.Passed = pass(metrics)
-	if !res.Passed {
-		res.Failure = "one or more SLO thresholds exceeded"
-	}
+	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs)
 
 	summary := filepath.Join(*output, "summary.json")
 	b, _ := json.MarshalIndent(res, "", "  ")
@@ -327,11 +327,10 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
 	// Steady state requires (a) every kwok pod's containers all Ready
-	// and (b) load-driver has ramped to ≥ 90 % of its per-cluster
-	// target. Pre-fix this only checked containerStatuses[0].ready —
-	// missed the workload container in the harness-split shape and
-	// declared steady state before load-drivers had created any CRs.
-	target := int(0.9 * float64(clusterCount*perClusterTarget))
+	// and (b) load-driver has ramped to its full per-cluster target.
+	// Tests that soak against an under-loaded shard measure the wrong
+	// thing — runs that don't reach target fail outright at the gate.
+	target := clusterCount * perClusterTarget
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
@@ -526,17 +525,31 @@ func kArgs(kubeconfig string, rest ...string) []string {
 //     of wall-clock just for the writes; 12 s allows ~20 % run-to-run
 //     variance. Tighten when the operator gains batched status writes
 //     or its QPS budget is raised on profile.
-func pass(m map[string]float64) bool {
+func pass(m map[string]float64, totalCRs int) (bool, string) {
+	// Sustained-load floor: the run is invalid if loadgenCRsActive
+	// drifted away from the target during the soak. We already gate
+	// at the steady-state ramp, but a ramp that just-barely-passed
+	// and then collapsed under churn would still produce SLO numbers
+	// against an under-loaded shard. Allow ±5 % drift; below that
+	// the run isn't measuring what the SLO is about.
+	if totalCRs > 0 {
+		if v, ok := m["loadgenCRsActive"]; ok {
+			minActive := 0.95 * float64(totalCRs)
+			if v < minActive {
+				return false, fmt.Sprintf("loadgenCRsActive %.0f < %.0f (95%% of target %d) — run did not sustain target load", v, minActive, totalCRs)
+			}
+		}
+	}
 	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 0.1 {
-		return false
+		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > 100ms SLO", v)
 	}
 	if v, ok := m["operatorRollupP99Seconds"]; ok && v > 1.0 {
-		return false
+		return false, fmt.Sprintf("operatorRollupP99Seconds %.3fs > 1s SLO", v)
 	}
 	if v, ok := m["operatorAckP99Seconds"]; ok && v > 12.0 {
-		return false
+		return false, fmt.Sprintf("operatorAckP99Seconds %.3fs > 12s SLO", v)
 	}
-	return true
+	return true, ""
 }
 
 func confirm(prompt string) error {
