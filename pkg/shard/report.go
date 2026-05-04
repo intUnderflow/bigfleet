@@ -57,6 +57,15 @@ type Shortfall struct {
 	InterruptionPenaltyBucket needs.PenaltyBucket
 }
 
+// ShortfallCount returns the number of unresolved-need entries
+// currently tracked. O(1) — does not allocate. Use this for telemetry
+// gauges where the full Shortfalls() build is wasted work.
+func (s *Shard) ShortfallCount() int {
+	s.shortfallMu.Lock()
+	defer s.shortfallMu.Unlock()
+	return len(s.shortfalls)
+}
+
 // Shortfalls returns the current set of unresolved needs, sorted by
 // priority desc and bounded to the top maxPerReport entries (matches
 // paper §3.5 / shortfall protocol bound of 100 per shard).

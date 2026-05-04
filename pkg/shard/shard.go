@@ -325,8 +325,12 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// buildTime; safe because applyTransition rejects re-attempts on
 	// already-moved machines and Phase 1/2/3 re-derive any missed
 	// actions next cycle.
+	snapStart := time.Now()
 	snap := s.inv.CycleSnapshot()
 	demand := s.needs.Snapshot()
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("snapread").Observe(time.Since(snapStart).Seconds())
+	}
 
 	p1Start := time.Now()
 	p1 := decision.Phase1(snap, demand)
@@ -351,7 +355,11 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// inventory mutations Phase 1/2/3 just made via execute (not yet
 	// run, but the snapshot is already cached and we read counts from
 	// the pre-built buckets — no per-cycle walk).
+	emitStart := time.Now()
 	s.emitAvailableCapacity(snap, demand)
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("emit").Observe(time.Since(emitStart).Seconds())
+	}
 
 	// Collapse all phases' actions into one queue. Phase 1/2/3 compute
 	// on the same snapshot, so their actions are independent; ordering
@@ -435,15 +443,15 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	for _, a := range all {
 		metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
 	}
-	// Inventory state gauge.
-	stateCounts := map[machine.State]int{}
-	for _, m := range snap.All() {
-		stateCounts[m.State]++
-	}
+	// Inventory state gauge. The snapshot pre-builds per-state counts
+	// at fold time, so this is 9 O(1) reads instead of an O(N) walk +
+	// per-machine struct copy via snap.All() — at 500K inventory the
+	// walk was responsible for a meaningful chunk of the per-cycle
+	// non-phase overhead (~150 ms p99 in the M11 cloud runs).
 	for st := machine.StateSpeculative; st <= machine.StateFailed; st++ {
-		metrics.ShardInventoryMachines.WithLabelValues(st.String()).Set(float64(stateCounts[st]))
+		metrics.ShardInventoryMachines.WithLabelValues(st.String()).Set(float64(snap.CountByState(st)))
 	}
-	metrics.ShardShortfalls.Set(float64(len(s.Shortfalls())))
+	metrics.ShardShortfalls.Set(float64(s.ShortfallCount()))
 	if s.cfg.OnActions != nil {
 		s.cfg.OnActions(all)
 	}
