@@ -508,10 +508,12 @@ The paper §6 acknowledges cross-shard preemption is "intentionally expensive…
 
 Found by re-reading the plan against the 100M-node target. Each of these would bite at scale; mitigations are noted, but they need to be picked up as work items, not assumed.
 
-### 10.1 `machine_to_shard` granularity is too fine
-Plan §3.5 stores per-machine assignments in the coordinator's Raft state — 100M entries, ~500MB. We don't actually allocate machines individually; assignments happen at topology-domain granularity (whole racks, zone-slices), per the design memory. Storing per-machine inflates Raft state by ~3 orders of magnitude versus storing per-domain.
+### 10.1 `machine_to_shard` granularity is too fine — **resolved at code-time**
+Plan §3.5 was originally drafted with per-machine assignments (100M entries, ~500MB Raft state). The §0.1 A locked-in decision was per-topology-domain granularity, and the first coordinator cut implemented that directly: `pkg/coordinator/state.State.domainToShard map[DomainKey]ShardID`. ~100K entries at fleet scale.
 
-**Fix**: coordinator stores `topology_domain → shard`. Shards learn their machines from `provider.List()` filtered by domain. ~100K entries (~5MB). Snapshot cost drops accordingly.
+No per-machine FSM-state has ever existed. Verified by grep over `pkg/coordinator/`: the only `MachineID` reference is in `rebalance.go`'s `TransferOwnership` instruction payload, which is deliberately empty until the donor-side query lands.
+
+**Status**: concern resolved before the issue was tracked here. Nothing to do.
 
 ### 10.2 Coordinator write bursts during fleet events
 "~10 writes/sec steady state" is the median, not the worst case. Mass spot reclamation, an AZ failure, or a shard split flips many assignments at once. A 1M-machine spot revocation under per-machine assignments would be 1M Raft entries; even per-domain it could be tens of thousands. Snapshot cadence and disk IO need to keep up.
