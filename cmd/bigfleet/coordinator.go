@@ -30,6 +30,8 @@ func runCoordinator(args []string) error {
 	dataDir := fs.String("data-dir", "./coord-data", "directory for Raft logs / snapshots / BoltDB stores")
 	bootstrap := fs.Bool("bootstrap", false, "bootstrap a fresh single-node Raft cluster on first run (use only on the very first replica)")
 	rebalanceInterval := fs.Duration("rebalance-interval", 0, "rebalance loop interval (default 5s; 0 = disabled)")
+	snapshotExportDir := fs.String("snapshot-export-dir", "", "if set, the leader periodically writes Raft snapshots here for DR (paper §10.8). Conventionally a path mounted from durable object storage; empty disables export.")
+	snapshotExportInterval := fs.Duration("snapshot-export-interval", 0, "interval between snapshot exports (default 5m; ignored if --snapshot-export-dir is empty)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
 	}
@@ -40,12 +42,14 @@ func runCoordinator(args []string) error {
 		return fmt.Errorf("data-dir: %w", err)
 	}
 	c, err := coordinator.New(coordinator.Config{
-		NodeID:           *nodeID,
-		DataDir:          filepath.Clean(*dataDir),
-		RaftBindAddress:  *raftBind,
-		AdvertiseAddress: *raftAdvertise,
-		Bootstrap:        *bootstrap,
-		Logger:           logger,
+		NodeID:                 *nodeID,
+		DataDir:                filepath.Clean(*dataDir),
+		RaftBindAddress:        *raftBind,
+		AdvertiseAddress:       *raftAdvertise,
+		Bootstrap:              *bootstrap,
+		SnapshotExportDir:      *snapshotExportDir,
+		SnapshotExportInterval: *snapshotExportInterval,
+		Logger:                 logger,
 	})
 	if err != nil {
 		return err

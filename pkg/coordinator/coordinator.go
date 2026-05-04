@@ -43,6 +43,22 @@ type Config struct {
 	// Defaults to 2.
 	SnapshotRetention int
 
+	// SnapshotExportDir, if non-empty, is the directory the leader
+	// periodically exports Raft snapshots to (paper §10.8 — coordinator
+	// state DR). For a reference impl this is a local path; production
+	// operators point it at a path mounted from durable object storage
+	// (S3-compatible, FUSE, or a sidecar that uploads). Followers
+	// don't export — only the leader has a complete snapshot to share,
+	// and a regional outage that promotes a former follower will then
+	// resume exports.
+	SnapshotExportDir string
+
+	// SnapshotExportInterval bounds how often the leader exports a
+	// fresh snapshot. Defaults to 5 minutes (plan §10.8: state is
+	// small, snapshot every few minutes is trivial). Set to 0 to
+	// disable export entirely (useful for tests).
+	SnapshotExportInterval time.Duration
+
 	// Logger receives structured events.
 	Logger *slog.Logger
 }
@@ -89,6 +105,9 @@ func New(cfg Config) (*Coordinator, error) {
 	if cfg.SnapshotRetention == 0 {
 		cfg.SnapshotRetention = 2
 	}
+	if cfg.SnapshotExportInterval == 0 {
+		cfg.SnapshotExportInterval = 5 * time.Minute
+	}
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -121,6 +140,9 @@ func (c *Coordinator) Raft() *raft.Raft { return c.raft }
 func (c *Coordinator) Run(ctx context.Context) error {
 	defer c.close()
 	c.log.Info("coordinator started", "raft_bind", c.cfg.RaftBindAddress, "data_dir", c.cfg.DataDir)
+	if c.cfg.SnapshotExportDir != "" {
+		go c.snapshotExportLoop(ctx)
+	}
 	<-ctx.Done()
 	return ctx.Err()
 }
