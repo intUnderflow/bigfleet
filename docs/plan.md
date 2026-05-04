@@ -502,6 +502,57 @@ The paper §6 acknowledges cross-shard preemption is "intentionally expensive…
 - Documentation: operator guide, provider author guide, scaling guide.
 - Fault-injection CI (kill leader / shard / provider during scenarios).
 
+### M11. Single-shard scale-test harness + algorithmic ceiling
+Already shipped (see `project_lessons_learned.md` §M11.x). The end state: the harness runs a 50-cluster, 50K-CR, 500K-inventory production-shape scenario against a single shard on a 2-node Scaleway Kapsule and holds shard cycle p99 ≤100 ms with full sustained load, reproducible across six concurrent runs. The runner emits a snapshot + summary.json the site syncs into a public progression chart.
+
+The cap surfaced by M11: a single shard runs out of cycle headroom around 500K machines because Phase 3 walks the full inventory each cycle. Beyond that we can't improve a single shard's number — we have to scale the architecture, not the algorithm. That is M12.
+
+### M12. Multi-shard wiring (prerequisite for fleet-scale tests)
+**Goal:** make the helm chart, the shard binary, the operator binary, and the scaletest harness multi-shard-correct, so that a fleet test with N shards × ~500K each is a configuration question, not a code question.
+
+**Why this is its own milestone, not part of the next scale test:** today the chart's `shard.replicas: 1` is the only configuration we've ever exercised in the cloud. Bumping it produces silently-wrong behaviour: anonymous pods behind one round-robin Service, no per-shard DNS, no PVC, no coordinator registration on shard startup, and operators that get bound to whichever pod the Service routed them to first. Reconnect after a pod restart can land the operator on a different shard, which violates the "clusters are permanently bound to shards on first contact" hard rule. This is wrong enough that it can't be a side-quest of a scale test.
+
+**Scope:**
+1. Chart change: `shard-deployment.yaml` → StatefulSet with a headless Service for stable per-pod DNS (`bigfleet-shard-N.bigfleet-shard-headless.svc:7780`); plus a `volumeClaimTemplate` for the data dir so epoch + state survive pod restart.
+2. Shard binary: `--coordinator-addr` flag; on startup, the shard registers itself with the coordinator (idempotent — second registration of the same `shard_id` is a no-op heartbeat).
+3. Operator binary: documented support for being told its shard endpoint at deploy time; the harness's kwok chart wires `cluster-N` → `bigfleet-shard-(N % shardCount).bigfleet-shard-headless:7780` deterministically. No coordinator-driven routing in v1 — the operator's first connection establishes the binding.
+4. Coordinator domain assignment: `domainToShard` is already there; verify the existing Heartbeat + AssignDomain flow does the right thing once shards report what they own. Add an integration test that runs 3 shards + 3 operators and confirms each operator's domain stays on one shard across pod restarts.
+5. Harness: scaletest profiles gain a `shard.replicas` knob that propagates through both bigfleet and kwok charts. The runner reads it back to determine which shard endpoints to scrape and which to expect for each kwok cluster.
+
+**Validation:**
+- 2-shard cloud run: same per-shard SLO as M11's single-shard 500K. Cycle p99 ≤100 ms on each shard. Operator-to-shard binding survives a `kubectl rollout restart` of the shard StatefulSet.
+- Static stability still holds: kill the coordinator mid-run; both shards continue operating; existing AssignDomain entries persist via Raft snapshots.
+
+**Out of scope (deferred to M13+):**
+- Cross-shard reclaim or rebalance (per the hard rules, topology constraints don't cross shard boundaries).
+- Cross-region. ADR-0002 keeps single-region.
+- Coordinator-driven shard re-routing on the operator. Today's "first connection wins" is enough for v1; ADR if/when re-routing is needed.
+
+### M13. Fleet-scale realism test (5M, hundreds of clusters)
+**Gated on M12.** Tests the architecture's actual scale claim: many shards each at their known-good ceiling, with a realistic cluster fan-out instead of fewer fat clusters.
+
+**Target shape:**
+- 10 shards × 500K inventory each = **5M total machines under management**.
+- ~500 simulated clusters via KWOK (10× M11). Production fleets at 5M nodes have hundreds-to-thousands of clusters; the prior "stay at 50 fat clusters" sketch is rejected because it doesn't exercise per-cluster operator overhead, per-cluster gRPC stream lifecycle, the operator-to-shard fan-out, or the rollup-aggregation path's behaviour under realistic cluster counts. The whole point of testing on real Kapsule rather than `cmd/fauxctl` is realism; collapsing the cluster axis gives that up.
+- ~10K demand CRs per cluster × 500 clusters = 5M demand. Steady-state churn matches M11's 0.05 / minute.
+
+**Per-shard expectation:** each shard sees its M11-validated 500K inventory + ~50K demand. Cycle p99 ≤100 ms per shard. No shard sees cross-shard topology resolution; if a `Same`-rack request can't be served within a shard, it shortfalls (per the hard rule).
+
+**Coordinator expectation:** ~500 domain assignments × ~10 changes/min sustained — well within the Raft FSM's measured throughput. Coordinator apply ops/sec needs the harness chart updated to scrape it (currently the only metric still showing -1 in summary.json).
+
+**Cost / capacity (rough):**
+- KWOK pod budget: 500 pods × ~370 MiB observed = ~185 GiB. Plus shards (10 × 3 GiB) + coordinator (3 × 256 MiB) + prom (4 GiB) ≈ 220 GiB total memory.
+- CPU budget: 500 KWOK pods × 300m req = 150 vCPU; shards 10 × 2 vCPU = 20; total ~175 vCPU req.
+- Cloud sizing draft: Scaleway PRO2-XXL (32 vCPU / 128 GiB) × 8 nodes = 256 vCPU / 1024 GiB. Comfortable. Estimated ~€3.40 / hr; 50-min run ≈ €2.83 (~$3.00) per run.
+- Per-zone PRO2 quota will need raising — 8 nodes is above today's per-zone cap (10 — close to the limit) so request a quota increase before the run.
+
+**Validation gates:** the same SLO bar as M11, applied per shard. Sustained CRs ≥99.9 % of target. All metrics non-negative in summary.json (depends on coordinator scrape fix going in alongside).
+
+**Pre-flight work** (small):
+- Coordinator scrape config in the harness chart (one PodMonitor / Prometheus job, ~10 lines of yaml).
+- Kapsule per-zone quota raise.
+- Scale-test profile `scaleway-5m.yaml` defining the target shape above.
+
 ---
 
 ## 10. Scalability concerns
