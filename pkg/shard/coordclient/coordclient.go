@@ -30,6 +30,16 @@ type Config struct {
 	// CoordinatorAddress is the gRPC endpoint of the coordinator.
 	CoordinatorAddress string
 
+	// AdvertiseAddress is the host:port the coordinator should record
+	// as this shard's dial address (stamped on every ShardReport as
+	// shard_address). On first sight of an unknown shard_id, the
+	// coordinator Raft-Apply's AddShard with this address — that's how
+	// multi-shard deploys self-register without a separate RPC.
+	// Optional: when empty, the coordinator records an empty address
+	// (still useful for membership / domain assignment, just less
+	// helpful for admin tooling that wants to dial the shard).
+	AdvertiseAddress string
+
 	// View is the shard surface the client reports on and dispatches
 	// instructions back to. Tests can substitute a stub.
 	View ShardView
@@ -175,6 +185,7 @@ func (c *Client) runOnce(ctx context.Context, cli pb.CoordinatorClient) {
 	view := c.cfg.View
 	report := &pb.ShardReport{
 		ShardId:            view.ID(),
+		ShardAddress:       c.cfg.AdvertiseAddress,
 		Cycle:              cycle,
 		TimestampUnixNanos: time.Now().UnixNano(),
 		ShardEpoch:         view.Epoch(),

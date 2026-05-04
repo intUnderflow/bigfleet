@@ -22,6 +22,7 @@ import (
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
+	"github.com/intUnderflow/bigfleet/pkg/shard/coordclient"
 )
 
 // seedFakeInventory mints n synthetic idle machines into the in-process
@@ -152,7 +153,27 @@ func runShard(args []string) error {
 	errCh := make(chan error, 3)
 	go func() { errCh <- sh.Run(ctx) }()
 	go func() { errCh <- srv.Serve(lis) }()
-	go runCoordinatorHeartbeat(ctx, *coordinatorAddr, *shardID, *advertiseAddr, epoch, *heartbeatInterval, logger.With("component", "coordinator-heartbeat"))
+
+	// Coordinator client: registers this shard with the coordinator
+	// (carrying advertise-addr) and receives instructions back. Empty
+	// --coordinator-addr disables; the shard keeps running cycles
+	// against its existing inventory either way (static-stability
+	// hard rule). Owned by coordclient — pkg/shard does not import
+	// pkg/coordinator.
+	if *coordinatorAddr != "" {
+		cc, err := coordclient.New(coordclient.Config{
+			CoordinatorAddress: *coordinatorAddr,
+			AdvertiseAddress:   *advertiseAddr,
+			View:               coordclient.ViewFromShard(sh),
+			CoordinatorTerm:    sh.CoordinatorTerm(),
+			ReportInterval:     *heartbeatInterval,
+			Logger:             logger,
+		})
+		if err != nil {
+			return fmt.Errorf("coordclient: %w", err)
+		}
+		go func() { errCh <- cc.Run(ctx) }()
+	}
 	if *metricsAddr != "0" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
