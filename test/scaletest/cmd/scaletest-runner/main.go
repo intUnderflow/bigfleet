@@ -426,13 +426,15 @@ func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error 
 // the gap visible without aborting the whole run.
 func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float64 {
 	queries := map[string]string{
-		"shardCycleDurationP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))`,
-		"operatorRollupP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":        `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec":    `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":              `sum(bigfleet_shard_shortfalls)`,
-		"loadgenCRsActive":             `sum(scaletest_loadgen_cr_active)`,
-		"loadgenCRsCreatedPerSec":      `sum(rate(scaletest_loadgen_cr_created_total[5m]))`,
+		"shardCycleDurationP99Seconds":       `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))`,
+		"shardProvisioningLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m])))`,
+		"shardProvisioningLatencyP50Seconds": `histogram_quantile(0.50, sum by (le) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m])))`,
+		"operatorRollupP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":              `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec":          `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":                    `sum(bigfleet_shard_shortfalls)`,
+		"loadgenCRsActive":                   `sum(scaletest_loadgen_cr_active)`,
+		"loadgenCRsCreatedPerSec":            `sum(rate(scaletest_loadgen_cr_created_total[5m]))`,
 		// Per-phase p99s. Required to distinguish "the whole cycle is
 		// slow" from "one phase has a long tail" (M11.21 added the
 		// histogram; the runner's summary now surfaces it).

@@ -89,6 +89,7 @@ func (s *Shard) handleOperatorMessage(ctx context.Context, sess *operatorSession
 			return fmt.Errorf("rollup: %w", err)
 		}
 		s.needs.Replace(sess.cluster, domainNeeds)
+		s.observeRolledUpDemand(sess.cluster, domainNeeds)
 		s.triggerCycle()
 		_ = ctx
 		return sess.send(&pb.ShardMessage{

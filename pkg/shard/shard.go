@@ -188,6 +188,17 @@ type Shard struct {
 	// cycle with the same tuple.
 	acCache *availableCapacityCache
 
+	// demandObservedAt records the first-seen time for each (cluster,
+	// profile fingerprint) currently in this shard's NeedsTable. Used
+	// by the e2e provisioning-latency histogram (paper §10.7): when a
+	// machine reaches Configured for a cluster + source-profile
+	// fingerprint, we observe the time since the demand was first
+	// observed. Entries for fingerprints no longer in a cluster's
+	// rollup are pruned at rollup ingest. Reads/writes are guarded
+	// by demandMu.
+	demandMu         sync.Mutex
+	demandObservedAt map[machine.ClusterID]map[string]time.Time
+
 	log *slog.Logger
 }
 
@@ -241,6 +252,7 @@ func New(cfg Config) (*Shard, error) {
 		shortfalls:        make(map[string]*shortfallEntry),
 		assignedDomains:   make(map[domainKey]struct{}),
 		acCache:           newAvailableCapacityCache(cfg.AvailableCapacityInterval),
+		demandObservedAt:  make(map[machine.ClusterID]map[string]time.Time),
 		log:               log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
 }

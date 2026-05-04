@@ -32,6 +32,18 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14), // 1ms → 16s
 	})
 
+	// ShardProvisioningLatency is the wall-clock from the first
+	// rollup observing demand of a given (cluster, profile fingerprint)
+	// to the shard transitioning a matching machine to Configured.
+	// Plan §10.7: end-to-end provisioning latency was previously
+	// uninstrumented. Buckets bias toward sub-second since most
+	// transitions complete inside a single cycle in the harness.
+	ShardProvisioningLatency = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_provisioning_latency_seconds",
+		Help:    "Wall-clock from first rollup observing a (cluster, profile fingerprint) to a matching machine reaching Configured. Per-CR granularity is not preserved; this measures fingerprint-level fan-out latency.",
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
+	})
+
 	// ShardCyclePhaseDuration decomposes the cycle into its constituent
 	// phases so we can identify which one dominates p99 without
 	// re-running. Labelled phase ∈ {reconcile, phase1, phase2, phase3,

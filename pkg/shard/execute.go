@@ -156,6 +156,14 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	}); err != nil {
 		return formatErr("bootstrap: post-Configure transition", err)
 	}
+	// Paper §10.7: end-to-end provisioning latency from first
+	// rolled-up demand observation to Configured. Best-effort —
+	// silently skipped if the fingerprint isn't in demandObservedAt
+	// (e.g., the action was emitted by Phase 2 / Phase 3 paths that
+	// aren't gated on rolled-up demand).
+	if configured.State == machine.StateConfigured {
+		s.observeProvisioningLatency(a.Cluster, a.SourceProfile.Fingerprint())
+	}
 	return nil
 }
 
