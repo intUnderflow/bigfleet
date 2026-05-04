@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -520,15 +521,16 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 	return v, nil
 }
 
-func urlEncode(s string) string { return (&urlValues{q: s}).encode() }
-
-type urlValues struct{ q string }
-
-func (u *urlValues) encode() string {
-	r := strings.NewReplacer(" ", "%20", "(", "%28", ")", "%29",
-		",", "%2C", "[", "%5B", "]", "%5D", "+", "%2B")
-	return r.Replace(u.q)
-}
+// urlEncode percent-encodes a PromQL query for use as the value of
+// `?query=`. The previous hand-rolled implementation only escaped a
+// handful of characters and silently corrupted queries containing
+// `{label="value"}` — the `=` inside the matcher was interpreted as
+// a new query-string parameter boundary, causing the entire phase
+// histogram set (e.g. shardPhase{1,2,3,Execute,Reconcile}P99Seconds)
+// to return malformed → empty → -1 in summary.json. Any reserved
+// character outside the unreserved set gets percent-encoded by
+// net/url.QueryEscape, which is exactly the right contract here.
+func urlEncode(s string) string { return url.QueryEscape(s) }
 
 func kArgs(kubeconfig string, rest ...string) []string {
 	if kubeconfig != "" {
