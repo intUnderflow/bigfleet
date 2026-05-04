@@ -1,24 +1,35 @@
 # scaleway-500k — production-shape 500K-machine scale test on Scaleway.
 #
-# Sized for a multi-PRO2-M Kapsule cluster:
-#   shard:        1 pod, 4 vCPU / 6 GiB    (holds 500K-machine inventory)
-#   coordinator:  1 pod, 1 vCPU / 1 GiB
-#   prometheus:   1 pod, 2 vCPU / 4 GiB
-#   kwok pods:   50 × 0.2 vCPU / 400 MiB   (50 simulated clusters)
-#   total:       ~17 vCPU req / ~25 GiB   (one PRO2-M is enough)
+# Sized for a 2-node PRO2-M Kapsule pool. Total resource requests:
+#   shard:        1 pod, 2 vCPU / 3 GiB    (holds 500K-machine inventory)
+#   coordinator:  1 pod, default
+#   prometheus:   1 pod, 1 vCPU / 4 GiB
+#   kwok pods:   50 × 0.3 vCPU / 0.8 GiB   (apiserver + workload split)
+#                 → 15 vCPU / 40 GiB
+#   total:       ~18 vCPU req / ~48 GiB  → fits 2 PRO2-M (32 vCPU / 128 GiB)
+#                                          with ~30 % CPU + ~60 % memory headroom
 #
-# But the shard at 500K seeded inventory needs ~250 MB raw + indexes +
-# sort buffers ≈ 1–2 GiB live, plus per-cycle pool allocations.
-# Provisioning a 5-node Kapsule pool for headroom on this run:
+# Sizing history:
+#   - 5× PRO2-M (initial): cluster utilisation 5-15 %, ~80 % headroom paid for.
+#   - 3× PRO2-M (rightsize-1): observed kwok pods steady at ~115m per container
+#     vs 300m requested, total cluster CPU 9-11 % across 3 nodes. Reservation
+#     math forced a 3-node minimum (50 × 600m + 3.5 = 33.5 cores reserved,
+#     above 2-node 32-core capacity), but real CPU only used ~5 cores.
+#   - 2× PRO2-M (current): kwok per-container requests trimmed 300m → 150m
+#     (still 30 % above observed 115m). Reservations now ~18 cores → fits 2
+#     PRO2-M cleanly. Limits unchanged so kwok pods can still burst.
+#
+# Provisioning:
 #
 #   scw k8s cluster create name=bigfleet-scaletest \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-M \
-#     pools.0.size=5 pools.0.min-size=5 pools.0.max-size=5 \
+#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
 #     region=nl-ams project-id=<bigfleet-project-id>
 #
-# Expected cost on Scaleway nl-ams: 5× PRO2-M × €0.21/hr ≈ €1.05/hr.
-# A 30-min run + setup + teardown = ~50 min ≈ €0.88 (~$0.95).
+# Expected cost on Scaleway nl-ams: 2× PRO2-M × €0.21/hr ≈ €0.42/hr.
+# A 30-min run + setup + teardown ≈ 50 min ≈ €0.35 (~$0.38). 33 % cheaper
+# than the 3-node sizing, 60 % cheaper than the original 5-node.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -41,13 +52,17 @@ kwok:
   # producing a 600 ms execute-side p99 tail in the M11.24a cloud
   # run. With the split, each side gets its own cgroup CPU budget.
   apiserverResources:
-    requests: { cpu: 300m, memory: 500Mi }
+    # Observed steady-state on the 3-node rightsize run was ~115m per
+    # container; 150m gives ~30 % headroom above observed and lets 50
+    # kwok pods + bigfleet pods fit on 2× PRO2-M (32 vCPU). Limits
+    # unchanged — bursts up to 2 cores still allowed.
+    requests: { cpu: 150m, memory: 500Mi }
     # tmpfs sharedVolume (default 512Mi) plus kine + apiserver +
     # kwok-controller working set. 3Gi ceiling so the tmpfs has
     # headroom under steady churn.
     limits:   { cpu: 2,    memory: 3Gi }
   workloadResources:
-    requests: { cpu: 300m, memory: 300Mi }
+    requests: { cpu: 150m, memory: 300Mi }
     # Previous 500m → 1 cpu was too tight: load-driver couldn't keep
     # up (loadgenCRsActive 14,755 vs 50,000 target). 1.5 cores gives
     # operator + load-driver room under burst.
@@ -104,7 +119,7 @@ prometheus:
     limits:   { cpu: 4, memory: 12Gi }
 
 costEstimate:
-  vCPU: 75
-  memoryGB: 80
-  awsSpotUsdPerHour: 1.05
-  notes: "5× Scaleway PRO2-M (16 vCPU / 64 GB each). 500K seeded inventory + 50K demand. ~$0.95 for a 50-min run end-to-end."
+  vCPU: 32
+  memoryGB: 128
+  awsSpotUsdPerHour: 0.42
+  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 500K seeded inventory + 50K demand. ~$0.38 for a 50-min run end-to-end. Sized down twice from the original 5-node profile (cluster CPU was 5-15 %): rightsize-1 went 5→3 nodes, then trimming kwok requests 300m→150m per container freed enough reservation headroom to fit on 2 nodes while still leaving kwok pods their 1.5-core burst limit."
