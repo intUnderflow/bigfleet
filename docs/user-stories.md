@@ -1,6 +1,6 @@
 # Working with BigFleet
 
-What it's actually like to interact with BigFleet from each role. These walk through the commands, CRs, dashboards, and decision points — not abstractions or pitches. If a section feels obvious, it probably is for that role; skip ahead.
+What it's actually like to interact with BigFleet from each role. These walk through the commands, CRs, and decision points using only what the reference implementation actually ships today; sections that describe future tooling are flagged. If a section feels obvious for your role, it probably is — skip ahead.
 
 ## Submitting a workload (application developer)
 
@@ -22,7 +22,7 @@ spec:
         limits: { nvidia.com/gpu: 8 }
 ```
 
-If the cluster has no a3-highgpu-8g idle, the controller observes your Pod's `Pending` status and the scheduler's `0/N nodes available` message, and creates a `CapacityRequest` with the matching profile derived from the Pod:
+If the cluster has no `a3-highgpu-8g` idle, the controller observes your Pod's `Pending` status and the scheduler's `0/N nodes available` message, and creates a `CapacityRequest` with the matching profile derived from the Pod:
 
 ```yaml
 apiVersion: bigfleet.lucy.sh/v1alpha1
@@ -31,42 +31,48 @@ metadata:
   name: pod-trainer-2026-05-01-a
   ownerReferences: [{ kind: Pod, name: trainer-2026-05-01-a, ... }]
 spec:
-  count: 1
-  profile:
-    requirements:
-      - { key: node.kubernetes.io/instance-type, operator: In, values: [a3-highgpu-8g] }
-    resources: { nvidia.com/gpu: "8" }
-    priority: 1000000                # mapped from PriorityClass "ml-research"
-    interruptionPenalty: 8192        # cluster default for this PriorityClass
-    reclamationPenalty: 65536        # ditto
+  requirements:
+    - { key: node.kubernetes.io/instance-type, operator: In, values: [a3-highgpu-8g] }
+  resources:
+    nvidia.com/gpu: "8"
+  priority: 1000000           # mapped from PriorityClass "ml-research"
+  interruptionPenalty: "8192" # cluster default for this PriorityClass, in dollars
+  reclamationPenalty: "65536"
 ```
 
-You watch `kubectl get pods -w`. The pod transitions Pending → Running once a node joins. The CR's `.status.phase` walks `Pending → Acknowledged`. If BigFleet can't satisfy (cloud quota exhausted, no preemptable victims at this priority), `.status.phase=Shortfall` and `.status.conditions` carries a reason.
+You watch `kubectl get pods -w`. The Pod transitions Pending → Running once a node joins. The CR's `.status.phase` walks `Pending → Acknowledged` once the autoscaler has it in its NeedsTable; that's the only transition the lifecycle supports.
 
 What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted.
 
 ## Running a high-priority job (ML platform engineer)
 
-You're submitting a Job whose Pods need to run together — N pods, each with the same Profile. From BigFleet's view this is N CRs with the same Profile fingerprint, aggregated to one row in the shard's NeedsTable.
+You're submitting a Job whose Pods need to run together — N pods, each with the same Profile. From BigFleet's view this is N CRs with the same Profile fingerprint, aggregated into one row in the shard's NeedsTable.
 
-If you want this run to *not* be interruptible once started, raise `interruptionPenalty`. The shard uses it in:
+If you want this run to *not* be interruptible once started, raise `interruptionPenalty`. The shard uses it in two places:
 
-- **Phase 2 victim score**: `interruption_penalty + reclamation_penalty + drain_grace_remaining × hourly_cost`. A high score makes you a poor victim — Phase 2 will preempt other workloads first, even ones at slightly higher priority but with low penalties.
-- **Phase 1 cost selection**: `effective_cost = price + (interruption_probability × interruption_penalty)`. A high penalty steers Phase 1 away from spot capacity (high `interruption_probability`) toward reserved/on-demand.
+- **Phase 1 cost selection.** `effective_cost = price + interruption_probability × interruption_penalty`. A high penalty pushes Phase 1 away from spot capacity (high `interruption_probability`) and toward reserved or on-demand.
+- **Phase 2 victim score.** When some other workload's preemptor needs your machine, the shard scores possible victims and picks the highest-scoring ones. The score is built from *reciprocal* weights, so a high penalty on you contributes a *small* number, dragging your score down — making you a poor victim. The full formula:
+
+  ```text
+  score = priority_gap     × w_priority
+        + (1 / drain_seconds)        × w_drain
+        + (1 / interruption_penalty) × w_interrupt
+        + (1 / reclamation_penalty)  × w_reclaim
+  ```
+
+  All four weights are positive constants. Higher `priority_gap` (preemptor much higher priority) makes you a good victim; higher penalty values keep you safe.
 
 What you watch:
 
 ```promql
-# Are my CRs being satisfied or sitting in Shortfall?
-sum by (cluster) (
-  bigfleet_capacity_requests{phase="Shortfall", cluster=~"$cluster"}
-)
+# Are any shards reporting unresolved demand?
+bigfleet_shard_shortfalls > 0
 
 # Did Phase 2 preempt anything to make room?
-sum by (cluster) (rate(bigfleet_shard_actions_total{kind="Reclaim"}[5m]))
+sum by (kind) (rate(bigfleet_shard_actions_total{kind="Preempt"}[5m]))
 ```
 
-If you see Reclaims firing on other clusters, look at which workloads got drained — their owners get a `NodeStateUpdate` of state `Draining` for nodes they were using. There's no global "you preempted these workloads" alert; teams instrument their own monitoring on the operator's `bigfleet_operator_node_state_updates_total{state="Draining"}` counter.
+If you see Preempt actions firing, the affected nodes are written into per-cluster `UpcomingNode` CRs whose status walks toward `Draining` / `Drained`. You can watch your own cluster's nodes via `kubectl get upcomingnodes`.
 
 ## Per-cluster operator install (cluster owner)
 
@@ -91,7 +97,7 @@ kubectl get availablecapacity
 
 You don't tune autoscaler parameters per-cluster anymore — there are none in the operator chart. The shard owns those. What stays your responsibility:
 
-- The PriorityClasses your cluster offers (and the operator's mapping to BigFleet `priority` int values).
+- The PriorityClasses your cluster offers (and the unschedulable-pod-controller's mapping to BigFleet `priority` int values).
 - Per-cluster compliance: which `nodeSelector` keys your `BootstrapTemplate` knows how to render userdata for.
 - Pod Disruption Budgets your workloads carry — the operator respects them when handling `ReclaimInstruction`.
 
@@ -101,9 +107,9 @@ Watch `bigfleet_operator_session_reconnects_total`: a steady non-zero rate means
 
 You're running the coordinator + shards on a management cluster. Day-to-day work splits into three modes:
 
-**Mode 1 — capacity-tier changes.** Adding a new instance type or capacity reservation means updating the provider's static config (it lives in the provider repo, separate from BigFleet) and the provider redeploys. BigFleet itself doesn't need to change. The shard discovers new inventory via the next `provider.List` reconcile.
+**Mode 1 — capacity-tier changes.** Adding a new instance type or capacity reservation means updating the provider's static config (the provider lives in a separate repo, not in this one) and the provider redeploys. BigFleet itself doesn't need to change. The shard discovers new inventory via the next `provider.List` reconcile.
 
-**Mode 2 — rebalancing decisions.** When demand patterns shift (a region grows, another shrinks), you adjust shard count and topology-domain assignments. The coordinator owns those — you push a config change through Raft via the coordinator's gRPC admin endpoint, and the next `ReportShard` cycle distributes the new assignments.
+**Mode 2 — rebalancing decisions.** When demand patterns shift (a region grows, another shrinks), you adjust shard count and topology-domain assignments. The coordinator owns those — push a config change through Raft via the coordinator's gRPC admin endpoint, and the next `ReportShard` cycle distributes the new assignments.
 
 **Mode 3 — incident response.** A shard's hot path is in-process; if it OOMs, restart it. State is recoverable from the provider's `List`. The bigger pathology to watch for is *coordinator quorum loss* — at that point new cross-shard rebalancing pauses, but every shard keeps running on its existing assignments. Static stability is the load-bearing property; you don't need to scramble.
 
@@ -112,7 +118,12 @@ Useful queries:
 ```promql
 # Are any shards falling behind?
 histogram_quantile(0.99,
-  sum by (le, shard_id) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))
+  sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))
+)
+
+# Per-phase decomposition of the cycle (reconcile, phase1, phase2, phase3, execute).
+histogram_quantile(0.99,
+  sum by (le, phase) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket[5m]))
 )
 
 # Coordinator throughput.
@@ -124,58 +135,52 @@ sum by (cluster) (rate(bigfleet_operator_session_reconnects_total[5m])) > 0
 
 The shape of the day depends on whether anything is alarming. Most days: nothing.
 
-## Cost analysis with penalty buckets (FinOps)
+## Cost analysis (FinOps)
 
-The penalty bucket field on `Profile` is the lever for cost analysis. Penalties are quantised to powers of 2 from $0.50 to $8.4M, so the cardinality is bounded and aggregations are stable. Useful queries:
+The penalty bucket field on `Profile` is the cost-policy lever. Penalties are quantised to powers of 2 from $0.50 to $10M, so cardinality is bounded and aggregations are stable.
+
+What's in the operator's metrics today:
 
 ```promql
-# How much capacity sits behind each interruption-penalty tier?
-sum by (interruption_penalty_bucket) (
-  bigfleet_shard_inventory_machines{state="Configured"}
-)
+# Inventory by lifecycle state across the fleet.
+sum by (state) (bigfleet_shard_inventory_machines)
 
-# Which clusters' workloads are clustered at high-penalty buckets?
-sum by (cluster, interruption_penalty_bucket) (
-  bigfleet_shard_needs_table_count
-)
-
-# Spot vs on-demand ratio per shard.
-sum by (capacity_type) (bigfleet_shard_inventory_machines{state="Configured"})
-  / ignoring(capacity_type) group_left
-sum(bigfleet_shard_inventory_machines{state="Configured"})
+# Per-action throughput from the decision engine — useful for spotting
+# Reclaim or Preempt rates that look out of character.
+sum by (kind) (rate(bigfleet_shard_actions_total[5m]))
 ```
 
-Things to look for:
+What's *not* yet in the metrics: per-(`interruption_penalty_bucket`, `capacity_type`) breakdowns of inventory or demand. The shard knows these dimensions internally — they're in the `bigfleet_shard_actions_total` action-emit path — but `bigfleet_shard_inventory_machines` only carries the `state` label today, and the NeedsTable doesn't export a per-fingerprint gauge. The full FinOps view (penalty-bucket distributions, spot/on-demand ratio per shard, per-cluster penalty histograms) needs additional instrumentation that's not yet shipped. The shape of those queries lives in [`docs/scaling-guide.md`](scaling-guide.md) for when the labels arrive.
 
-- A bucket-distribution that's bimodal at very high values, with no middle. Usually means teams copied a default value from somewhere and never tuned it. Worth checking against actual workload tolerance.
-- Workloads at high `interruption_penalty` running on `capacity_type=spot`. The cost formula already discourages this, but if the price gap is small and the probability is low it can still happen — and is worth surfacing for review.
-- Per-cluster aggregations that diverge from the fleet average. A cluster whose workloads are systematically higher-penalty than peers is a candidate for either dedicated reserved capacity or a conversation with the cluster owner.
+For now, the production-observable signal of "are we paying for the right thing" is indirect: low `bigfleet_shard_shortfalls`, expected `bigfleet_shard_actions_total{kind="Provision"}` rates, and per-provider cloud-bill reconciliation outside of BigFleet.
 
 ## Triaging a capacity-stockout page (on-call)
 
 The standard alert is `bigfleet_shard_shortfalls > 0 for 5m`. The runbook:
 
 ```sh
-# 1. Which clusters / Profiles are unsatisfied?
+# 1. Which clusters / Profiles have CRs sitting Pending for longer
+#    than the runbook threshold? CRs with phase=Pending haven't
+#    been included in any rollup yet; phase=Acknowledged means the
+#    shard sees the demand but may still not have satisfied it.
 kubectl get capacityrequests -A \
-  -o jsonpath='{range .items[?(@.status.phase=="Shortfall")]}{.metadata.namespace}/{.metadata.name}: priority={.spec.profile.priority}{"\n"}{end}'
+  --field-selector=status.phase=Pending \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: priority={.spec.priority}{"\n"}{end}'
 
-# 2. Is it a Phase-1 problem (no inventory) or a topology problem
-#    (inventory present but constraint can't be satisfied within a shard)?
-kubectl exec -n bigfleet-system bigfleet-shard-0 -- \
-  /usr/local/bin/bigfleet shard dump-shortfalls
+# 2. The shard's own view of what it can't satisfy.
+kubectl -n bigfleet-system logs deploy/bigfleet-shard | grep -i shortfall | tail -50
 ```
 
 Decision tree:
 
 - **Phase 1, no idle inventory, provider out of capacity.** File a quota-increase request, wait. Optionally raise the priorities of the shortfalled CRs above some other workloads — but only if you can justify the preemption to the affected teams.
 - **Phase 1, no idle inventory, provider has capacity but isn't being asked.** Likely a Speculative-pool sizing issue. Check the coordinator's quota assignments for this shard.
-- **Topology unsatisfiable within a shard.** A `Same`-rack request that the current shard can't fulfil. Cross-shard topology resolution is deliberately out of scope (per ADR); the workload either needs a different topology constraint or a different shard binding. This is rare in steady state.
+- **Topology unsatisfiable within a shard.** A `Same`-rack request that the current shard can't fulfil. Cross-shard topology resolution is a hard rule of the design — it doesn't happen — so the workload either needs a different topology constraint or a different shard binding. Rare in steady state.
 - **Aging shortfalls escalating.** The shortfall buffer has a max age before it pages louder. Long-aged shortfalls usually mean a cluster's been mis-bound to a shard that doesn't have the right capacity profiles.
 
 ## Implementing a CapacityProvider (provider author)
 
-You're writing a separate process that implements `CapacityProvider`. Six RPCs, no Watch.
+You're writing a separate process that implements `CapacityProvider`. Six RPCs, no `Watch`.
 
 ```sh
 # Stub it out:
@@ -188,14 +193,14 @@ make conformance-build
 ./bin/conformance --provider-addr=localhost:9001
 ```
 
-The suite walks ~50 scenarios. Categories:
+The suite walks the lifecycle scenarios end-to-end. Categories:
 
 - **Idempotency**: re-issue the same `Create` 100x with the same machine_id. Should return the same op_id every time and only act once.
 - **Transitional-state recovery**: kill the provider mid-`Configure`. Restart. The shard's next `List + Get` should observe the in-progress state correctly.
 - **Cursor correctness**: if you support `since_revision`, the suite verifies that List with a cursor returns only deltas, that the cursor advances monotonically, and that resuming from an old cursor still works.
 - **Drain-grace handling**: a Drain that's interrupted partway must end up in `Failed` with `last_error`, not silently revert.
 
-What the suite *won't* catch: backend-specific edge cases (AWS quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The suite establishes that your provider is *protocol-correct*.
+What the suite *won't* catch: backend-specific edge cases (cloud quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The suite establishes that your provider is *protocol-correct*.
 
 ## Capacity planning (capacity planner)
 
@@ -204,14 +209,6 @@ Your input is fleet-level demand history. The query is the aggregate, not the pe
 ```promql
 quantile_over_time(0.99,
   sum(bigfleet_shard_inventory_machines{state=~"Configured|Configuring"})[90d:1h]
-)
-
-# Decompose by capacity type, since reserved vs spot vs on-demand
-# have different lead times and commitment shapes.
-quantile_over_time(0.99,
-  sum by (capacity_type) (
-    bigfleet_shard_inventory_machines{state=~"Configured|Configuring"}
-  )[90d:1h]
 )
 ```
 
@@ -222,26 +219,30 @@ The headroom buffer you apply to the p99 is a policy choice. Two factors push it
 
 The scaling guide ([`scaling-guide.md`](scaling-guide.md)) tabulates per-tier sizing assumptions; calibrate against it, then look at your actual demand to decide where you actually sit.
 
-## Pre-release validation with failover-soak (reliability)
+## Pre-release validation (reliability)
 
-You're gating the release on the static-stability invariant: clusters keep running with BigFleet entirely down. The `failover-soak` profile does this quantitatively.
+You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The standard way to validate this today is the existing scaletest harness plus a manual leader-kill:
 
 ```sh
+# 1. Bring up a soak.
 scaletest-runner \
   --profile=test/scaletest/profiles/failover-soak.yaml \
-  --duration=60m \
-  --output=./results/$(date +%Y%m%d)-failover/
+  --output=./results/$(date +%Y%m%d)-failover/ &
+
+# 2. After the runner reports steady state, kill the coordinator's
+#    Raft leader.
+kubectl -n bigfleet-scaletest delete pod \
+  $(kubectl -n bigfleet-scaletest get pods -l app=bigfleet-coordinator \
+      -o jsonpath='{.items[0].metadata.name}')
+
+# 3. Watch the soak finish. Expected:
+#    - bigfleet_shard_inventory_machines{state="Configured"} unchanged
+#      across the kill window.
+#    - bigfleet_operator_session_reconnects_total increases by ≤ 1
+#      per cluster (the unavoidable post-leader-election reconnect).
 ```
 
-The profile spins up 50 KWOK-faked clusters at 1K CRs each, holds steady for 10 minutes, then kills the coordinator's Raft leader. It does this twice. The runner asserts:
-
-- `bigfleet_shard_inventory_machines{state="Configured"}` total is unchanged across the leader-kill window.
-- `bigfleet_operator_session_reconnects_total` increases by ≤ 1 per cluster (the unavoidable post-leader-election reconnection).
-- No `CapacityRequest.status.phase` transitions backward (Acknowledged → Pending) during the kill window.
-
-If any assertion fails, the run is marked failed and the release is blocked. The `summary.json` and the Prometheus snapshot get archived for post-mortem.
-
-This isn't a sales pitch for static stability — it's a check that the property still holds after every change to `pkg/coordinator` or `pkg/shard`. The property is easy to break accidentally; the check is cheap.
+The runner has a placeholder `runnerActions` block in `failover-soak.yaml` for the kill action; **automating it inside the runner is not yet shipped**. Until that lands, treat this as a pre-release ritual the on-call performs by hand alongside the soak.
 
 ## Notes that aren't role-specific
 
