@@ -42,7 +42,10 @@ kwok:
   # run. With the split, each side gets its own cgroup CPU budget.
   apiserverResources:
     requests: { cpu: 300m, memory: 500Mi }
-    limits:   { cpu: 2,    memory: 2Gi }
+    # tmpfs sharedVolume (default 512Mi) plus kine + apiserver +
+    # kwok-controller working set. 3Gi ceiling so the tmpfs has
+    # headroom under steady churn.
+    limits:   { cpu: 2,    memory: 3Gi }
   workloadResources:
     requests: { cpu: 300m, memory: 300Mi }
     # Previous 500m → 1 cpu was too tight: load-driver couldn't keep

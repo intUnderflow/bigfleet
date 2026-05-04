@@ -99,4 +99,13 @@ spec:
           configMap:
             name: kwok-load-profile
         - name: shared
-          emptyDir: {}
+          # tmpfs (RAM-backed) emptyDir so kine's sqlite WAL fsyncs
+          # land in memory rather than the node's local disk. The
+          # per-cluster apiserver is the long-pole when load-driver
+          # ramps; disk-backed kine produced 4.6s ack p99 at 155
+          # CR/sec/fleet (M11.24a + snap-walk-removal cloud run).
+          # Memory cost: sized to 512Mi per pod; 50 pods × 512Mi =
+          # 25 GiB cluster-wide on a 320 GB Kapsule, fine.
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.kwok.sharedVolumeSizeLimit | default "512Mi" }}

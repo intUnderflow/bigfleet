@@ -81,6 +81,11 @@ provider:
 # The defining knobs: how many simulated clusters and how big each.
 kwok:
   clusterCount: 5
+  # The shared emptyDir between the apiserver and workload containers
+  # is tmpfs-backed so kine sqlite WAL fsyncs go to RAM instead of the
+  # node's local disk. Sized per pod; counts against the pod's memory
+  # request/limit so don't oversize on small nodes.
+  sharedVolumeSizeLimit: "512Mi"
   # Per-container resource budgets. The pod splits the harness across
   # two containers (apiserver-side and workload-side) sharing a single
   # emptyDir; each gets its own cgroup CPU budget so neither side can
