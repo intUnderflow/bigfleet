@@ -41,11 +41,7 @@ export default defineConfig({
             { label: "Operator guide", link: "/operator-guide/" },
             { label: "Scaling guide", link: "/scaling-guide/" },
             { label: "Scale-test runbook", link: "/scaletest/" },
-            {
-              label: "Scale-test results (GitHub)",
-              link: "https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results",
-              attrs: { target: "_blank", rel: "noopener" },
-            },
+            { label: "Scale-test results", link: "/scaletest-results/" },
           ],
         },
         {

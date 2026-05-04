@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" role="img" aria-label="scaleway-500k cycle p99 across milestones">
+  <text x="450" y="22" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="14" font-weight="600" fill="#222">scaleway-500k shard cycle p99 across milestones (log scale)</text>
+  <g transform="translate(70,40)">
+    <line x1="0" y1="250.0" x2="800" y2="250.0" stroke="#eee" stroke-dasharray="2 2" />
+<text x="-10" y="254.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555">10 ms</text>
+<line x1="0" y1="166.7" x2="800" y2="166.7" stroke="#eee" stroke-dasharray="2 2" />
+<text x="-10" y="170.7" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555">100 ms</text>
+<line x1="0" y1="83.3" x2="800" y2="83.3" stroke="#eee" stroke-dasharray="2 2" />
+<text x="-10" y="87.3" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555">1.00 s</text>
+<line x1="0" y1="0.0" x2="800" y2="0.0" stroke="#eee" stroke-dasharray="2 2" />
+<text x="-10" y="4.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555">10.00 s</text>
+<line x1="0" y1="166.7" x2="800" y2="166.7" stroke="#3498db" stroke-dasharray="6 4" />
+<text x="796" y="160.7" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#3498db">100 ms SLO</text>
+
+    <rect x="10.9" y="32.9" width="50.9" height="217.1" fill="#e74c3c" rx="2" />
+<text x="36.4" y="26.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.03 s</text>
+<rect x="83.6" y="32.5" width="50.9" height="217.5" fill="#e74c3c" rx="2" />
+<text x="109.1" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.07 s</text>
+<rect x="156.4" y="32.5" width="50.9" height="217.5" fill="#e74c3c" rx="2" />
+<text x="181.8" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.08 s</text>
+<rect x="229.1" y="36.1" width="50.9" height="213.9" fill="#e74c3c" rx="2" />
+<text x="254.5" y="30.1" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">3.69 s</text>
+<rect x="301.8" y="95.9" width="50.9" height="154.1" fill="#e74c3c" rx="2" />
+<text x="327.3" y="89.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">706 ms</text>
+<rect x="374.5" y="99.8" width="50.9" height="150.2" fill="#e74c3c" rx="2" />
+<text x="400.0" y="93.8" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">634 ms</text>
+<rect x="447.3" y="107.9" width="50.9" height="142.1" fill="#e74c3c" rx="2" />
+<text x="472.7" y="101.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">507 ms</text>
+<rect x="520.0" y="107.6" width="50.9" height="142.4" fill="#e74c3c" rx="2" />
+<text x="545.5" y="101.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">512 ms</text>
+<rect x="592.7" y="135.2" width="50.9" height="114.8" fill="#e74c3c" rx="2" />
+<text x="618.2" y="129.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">239 ms</text>
+<rect x="665.5" y="150.6" width="50.9" height="99.4" fill="#e74c3c" rx="2" />
+<text x="690.9" y="144.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">156 ms</text>
+<rect x="738.2" y="184.2" width="50.9" height="65.8" fill="#2ecc71" rx="2" />
+<text x="763.6" y="178.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">62 ms</text>
+
+    <text x="36.4" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 36.4 262.0)">scaleway-500k</text>
+<text x="109.1" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 109.1 262.0)">scaleway-500k-m1117</text>
+<text x="181.8" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 181.8 262.0)">scaleway-500k-m1118</text>
+<text x="254.5" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 254.5 262.0)">scaleway-500k-m1120</text>
+<text x="327.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 327.3 262.0)">scaleway-500k-m1122</text>
+<text x="400.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 400.0 262.0)">scaleway-500k-m1123</text>
+<text x="472.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 472.7 262.0)">scaleway-500k-m1124a</text>
+<text x="545.5" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 545.5 262.0)">scaleway-500k-warmup-split</text>
+<text x="618.2" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 618.2 262.0)">scaleway-500k-fakeidx</text>
+<text x="690.9" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 690.9 262.0)">scaleway-500k-snapall</text>
+<text x="763.6" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 763.6 262.0)">scaleway-500k-tmpfs</text>
+
+  </g>
+</svg>

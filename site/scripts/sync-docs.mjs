@@ -36,11 +36,19 @@ async function walk(dir) {
     const p = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       out.push(...(await walk(p)));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile()) {
       out.push(p);
     }
   }
   return out;
+}
+
+// Static assets (SVG, PNG) referenced by markdown pages get copied
+// alongside .md without any transformation. The sync writes them into
+// the same target path under src/content/docs/ so relative
+// `./foo.svg` references work as authored.
+function isAsset(file) {
+  return /\.(svg|png|jpg|jpeg|gif|webp)$/i.test(file);
 }
 
 function escapeYaml(s) {
@@ -91,6 +99,17 @@ async function processFile(absSrc) {
   if (rel === "index.md") return null;
   const relDir = path.dirname(rel);
   const dest = path.join(outRoot, rel);
+
+  // Static assets (SVG, PNG, …) ride along verbatim — the markdown
+  // that references them uses relative `./foo.svg` paths and Starlight
+  // resolves those relative to the page's source location.
+  if (isAsset(absSrc)) {
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.copyFile(absSrc, dest);
+    return rel;
+  }
+
+  if (!absSrc.endsWith(".md")) return null;
   const raw = await fs.readFile(absSrc, "utf8");
 
   const titleMatch = raw.match(/^#\s+.+$/m);
