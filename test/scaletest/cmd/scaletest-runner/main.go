@@ -182,7 +182,7 @@ func run(args []string) error {
 	if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 5; t > rampBudget {
 		rampBudget = t
 	}
-	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, rampBudget); err != nil {
+	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
 		return fmt.Errorf("steady state: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "steady state reached; soaking", duration)
@@ -322,19 +322,29 @@ func helmUninstall(ctx context.Context, kubeconfig, release, ns string) error {
 	return nil
 }
 
-func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount int, budget time.Duration) error {
+func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount int, perClusterTarget int, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
+	// Steady state requires (a) every kwok pod's containers all Ready
+	// and (b) load-driver has ramped to ≥ 90 % of its per-cluster
+	// target. Pre-fix this only checked containerStatuses[0].ready —
+	// missed the workload container in the harness-split shape and
+	// declared steady state before load-drivers had created any CRs.
+	target := int(0.9 * float64(clusterCount*perClusterTarget))
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
 		}
 		ready, err := countReadyKWOKPods(ctx, kubeconfig, ns)
+		active := -1
 		if err == nil && ready >= clusterCount {
-			return nil
+			active = readActiveCRs(ctx, kubeconfig, ns)
+			if active >= target {
+				return nil
+			}
 		}
-		fmt.Fprintf(os.Stderr, "  waiting: %d/%d kwok pods ready\n", ready, clusterCount)
+		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d\n", ready, clusterCount, active, target)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -343,11 +353,16 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	}
 }
 
+// countReadyKWOKPods returns the number of kwok-cluster pods whose
+// pod-level Ready condition is true (i.e., ALL containers in the pod
+// are Ready, not just the first). Pre-fix this only inspected
+// containerStatuses[0] — broken in the harness-split shape where the
+// pod has [apiserver, workload] containers.
 func countReadyKWOKPods(ctx context.Context, kubeconfig, ns string) (int, error) {
 	args := []string{
 		"-n", ns,
 		"get", "pods", "-l", "app.kubernetes.io/component=kwok-cluster",
-		"-o", `jsonpath={range .items[*]}{.status.containerStatuses[0].ready}{"\n"}{end}`,
+		"-o", `jsonpath={range .items[*]}{.status.conditions[?(@.type=='Ready')].status}{"\n"}{end}`,
 	}
 	if kubeconfig != "" {
 		args = append([]string{"--kubeconfig", kubeconfig}, args...)
@@ -358,11 +373,25 @@ func countReadyKWOKPods(ctx context.Context, kubeconfig, ns string) (int, error)
 	}
 	count := 0
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) == "true" {
+		if strings.TrimSpace(line) == "True" {
 			count++
 		}
 	}
 	return count, nil
+}
+
+// readActiveCRs returns the cluster-wide sum(scaletest_loadgen_cr_active)
+// from Prometheus, or -1 if unavailable. Best-effort: a transient
+// Prometheus query failure during ramp returns -1 and the caller
+// retries on the next tick.
+func readActiveCRs(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := promQuery(queryCtx, kubeconfig, ns, "sum(scaletest_loadgen_cr_active)")
+	if err != nil {
+		return -1
+	}
+	return int(v)
 }
 
 func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error {
