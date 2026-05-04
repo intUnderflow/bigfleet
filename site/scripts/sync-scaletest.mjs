@@ -26,26 +26,69 @@ async function readRuns() {
     if (!e.isDirectory()) continue;
     const summary = path.join(resultsDir, e.name, "summary.json");
     try {
-      const j = JSON.parse(await fs.readFile(summary, "utf8"));
+      const text = await fs.readFile(summary, "utf8");
+      if (!text.trim()) continue; // 0-byte / corrupt summary
+      const j = JSON.parse(text);
       runs.push({
         dir: e.name,
         runId: j.runId,
         profile: j.profile,
-        passed: !!j.passed,
-        cycleP99: j.metrics?.shardCycleDurationP99Seconds ?? null,
-        ackP99: j.metrics?.operatorAckP99Seconds ?? null,
-        rollupP99: j.metrics?.operatorRollupP99Seconds ?? null,
-        active: j.metrics?.loadgenCRsActive ?? null,
+        recordedPassed: !!j.passed, // what the runner said at the time
+        cycleP99: numericOrNull(j.metrics?.shardCycleDurationP99Seconds),
+        ackP99: numericOrNull(j.metrics?.operatorAckP99Seconds),
+        rollupP99: numericOrNull(j.metrics?.operatorRollupP99Seconds),
+        active: numericOrNull(j.metrics?.loadgenCRsActive),
         totalCRs: j.scale?.totalCrs ?? null,
       });
     } catch {
-      // dir without a summary.json (interrupted run, prom snapshot only).
-      // Skip silently.
+      // dir without a parseable summary.json — skip silently.
     }
+  }
+  for (const r of runs) {
+    r.targetMet = sustainedLoadMet(r);
+    r.passed = effectivePassed(r);
   }
   // Chronological order by directory prefix (UTC timestamp).
   runs.sort((a, b) => a.dir.localeCompare(b.dir));
   return runs;
+}
+
+// numericOrNull collapses the runner's -1 sentinel for "query failed"
+// and any non-finite junk into null so the page never claims a run
+// hit some impossible value.
+function numericOrNull(v) {
+  if (typeof v !== "number") return null;
+  if (!Number.isFinite(v)) return null;
+  if (v < 0) return null;
+  return v;
+}
+
+// sustainedLoadMet reports whether the run actually held target load
+// throughout the soak. A historical run with passed:true but active <<
+// target was an under-loaded measurement — the SLO numbers don't apply
+// to a shard that wasn't being driven. Returns null when we can't
+// tell (older summaries without loadgenCRsActive); the caller treats
+// null as "unknown, don't claim valid."
+function sustainedLoadMet(r) {
+  if (typeof r.active !== "number" || typeof r.totalCRs !== "number" || r.totalCRs <= 0) {
+    return null;
+  }
+  return r.active >= 0.999 * r.totalCRs;
+}
+
+// effectivePassed re-derives pass/fail under the *current* runner SLO
+// definition, regardless of what the original summary.json recorded.
+// Older runs were graded by an earlier runner that didn't gate on
+// sustained load, so several have passed:true despite measuring
+// against a 30%-loaded shard. The page uses this for chart colour and
+// the outcome column so readers see the correct call.
+function effectivePassed(r) {
+  if (r.targetMet === false) return false;
+  // SLO ceilings (kept in sync with test/scaletest/cmd/scaletest-runner/main.go pass()).
+  if (r.cycleP99 != null && r.cycleP99 > 0.1) return false;
+  if (r.rollupP99 != null && r.rollupP99 > 1.0) return false;
+  if (r.ackP99 != null && r.ackP99 > 12.0) return false;
+  return true;
 }
 
 // shortLabel: derive a compact milestone tag from the run dir suffix.
@@ -140,38 +183,64 @@ function renderSvg(progression) {
 
 function renderMarkdown(runs, progression) {
   const first = progression[0];
-  const last = progression[progression.length - 1];
+  // Headline is the most recent run that genuinely passes today's SLO
+  // (target load sustained + cycle/rollup/ack within ceilings), not
+  // whatever was last in the directory. Older "passed: true" runs that
+  // didn't hold target load are intentionally excluded — they were
+  // measuring against an under-loaded shard and the SLO numbers from
+  // them don't say anything about behaviour at the actual benchmark.
+  const validPasses = progression.filter((r) => r.passed);
+  const headline = validPasses[validPasses.length - 1] ?? null;
+
   let header = `# Scale-test results
 
 Each run is one full pass through the scaletest harness: chart install, ramp to steady state, soak, prometheus snapshot, summary. Runs live in [\`test/scaletest/results/\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results) on GitHub; this page is generated from each run's \`summary.json\` and refreshes whenever the site builds.
 
+Outcomes on this page are **re-evaluated under the current SLO definition** — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs that were recorded as \`passed: true\` by an earlier runner without a sustained-load gate appear here as ✗ when they didn't hold target load. Re-evaluation is intentional: the SLO numbers from an under-loaded run don't say anything about behaviour at the actual benchmark.
+
 `;
-  if (first && last) {
+  if (first) {
     header += `## Cumulative trajectory at 500K
 
-The scaleway-500k profile is the production-shape benchmark: 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on a 5-node Scaleway Kapsule (PRO2-M, nl-ams). Each milestone landed a real shard or harness change; the line below tracks shard cycle p99 over them.
+The scaleway-500k profile is the production-shape benchmark: 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on a 5-node Scaleway Kapsule (PRO2-M, nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across them.
 
-**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(last.cycleP99)}** (${(((first.cycleP99 - last.cycleP99) / first.cycleP99) * 100).toFixed(1)} % reduction across ${progression.length} runs).
+`;
+    if (headline) {
+      const reduction = (((first.cycleP99 - headline.cycleP99) / first.cycleP99) * 100).toFixed(1);
+      header += `**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(headline.cycleP99)}** (${reduction} % reduction). The most recent run that meets the SLO at full sustained load is [\`${shortLabel(headline.dir)}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${headline.dir}).
 
-![scaleway-500k cycle p99 across milestones](./scaletest-progress.svg)
+`;
+    } else {
+      header += `Headline numbers omitted — there is no run on this profile that currently meets the SLO at full sustained load.
 
-The 100 ms SLO line is the runner's gate. The first passing run was \`${last.dir}\`.
+`;
+    }
+    header += `![scaleway-500k cycle p99 across milestones](./scaletest-progress.svg)
+
+The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when the run held target load *and* hit every SLO ceiling.
 
 `;
   }
 
   let table = `## All runs
 
-| run | profile | cycle p99 | ack p99 | rollup p99 | active CRs | passed |
-|---|---|---|---|---|---|---|
+| run | profile | cycle p99 | ack p99 | rollup p99 | active CRs / target | target met | passed (current SLO) |
+|---|---|---|---|---|---|---|---|
 `;
   for (const r of runs) {
     const tag = shortLabel(r.dir);
+    const activeCol =
+      r.active != null && r.totalCRs != null
+        ? `${r.active} / ${r.totalCRs}`
+        : r.active != null
+          ? `${r.active}`
+          : "—";
+    const targetMet = r.targetMet == null ? "—" : r.targetMet ? "✓" : "✗";
     const pass = r.passed ? "✓" : "✗";
-    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${r.profile ?? "—"} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${r.active ?? "—"} | ${pass} |\n`;
+    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${r.profile ?? "—"} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${activeCol} | ${targetMet} | ${pass} |\n`;
   }
 
-  return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`.*\n`;
+  return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
 }
 
 async function main() {

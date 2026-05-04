@@ -12,40 +12,52 @@
 <line x1="0" y1="166.7" x2="800" y2="166.7" stroke="#3498db" stroke-dasharray="6 4" />
 <text x="796" y="160.7" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#3498db">100 ms SLO</text>
 
-    <rect x="10.9" y="32.9" width="50.9" height="217.1" fill="#e74c3c" rx="2" />
-<text x="36.4" y="26.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.03 s</text>
-<rect x="83.6" y="32.5" width="50.9" height="217.5" fill="#e74c3c" rx="2" />
-<text x="109.1" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.07 s</text>
-<rect x="156.4" y="32.5" width="50.9" height="217.5" fill="#e74c3c" rx="2" />
-<text x="181.8" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.08 s</text>
-<rect x="229.1" y="36.1" width="50.9" height="213.9" fill="#e74c3c" rx="2" />
-<text x="254.5" y="30.1" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">3.69 s</text>
-<rect x="301.8" y="95.9" width="50.9" height="154.1" fill="#e74c3c" rx="2" />
-<text x="327.3" y="89.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">706 ms</text>
-<rect x="374.5" y="99.8" width="50.9" height="150.2" fill="#e74c3c" rx="2" />
-<text x="400.0" y="93.8" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">634 ms</text>
-<rect x="447.3" y="107.9" width="50.9" height="142.1" fill="#e74c3c" rx="2" />
-<text x="472.7" y="101.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">507 ms</text>
-<rect x="520.0" y="107.6" width="50.9" height="142.4" fill="#e74c3c" rx="2" />
-<text x="545.5" y="101.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">512 ms</text>
-<rect x="592.7" y="135.2" width="50.9" height="114.8" fill="#e74c3c" rx="2" />
-<text x="618.2" y="129.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">239 ms</text>
-<rect x="665.5" y="150.6" width="50.9" height="99.4" fill="#e74c3c" rx="2" />
-<text x="690.9" y="144.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">156 ms</text>
-<rect x="738.2" y="184.2" width="50.9" height="65.8" fill="#2ecc71" rx="2" />
-<text x="763.6" y="178.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">62 ms</text>
+    <rect x="8.0" y="32.9" width="37.3" height="217.1" fill="#e74c3c" rx="2" />
+<text x="26.7" y="26.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.03 s</text>
+<rect x="61.3" y="32.5" width="37.3" height="217.5" fill="#e74c3c" rx="2" />
+<text x="80.0" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.07 s</text>
+<rect x="114.7" y="32.5" width="37.3" height="217.5" fill="#e74c3c" rx="2" />
+<text x="133.3" y="26.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">4.08 s</text>
+<rect x="168.0" y="36.1" width="37.3" height="213.9" fill="#e74c3c" rx="2" />
+<text x="186.7" y="30.1" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">3.69 s</text>
+<rect x="221.3" y="95.9" width="37.3" height="154.1" fill="#e74c3c" rx="2" />
+<text x="240.0" y="89.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">706 ms</text>
+<rect x="274.7" y="99.8" width="37.3" height="150.2" fill="#e74c3c" rx="2" />
+<text x="293.3" y="93.8" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">634 ms</text>
+<rect x="328.0" y="107.9" width="37.3" height="142.1" fill="#e74c3c" rx="2" />
+<text x="346.7" y="101.9" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">507 ms</text>
+<rect x="381.3" y="107.6" width="37.3" height="142.4" fill="#e74c3c" rx="2" />
+<text x="400.0" y="101.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">512 ms</text>
+<rect x="434.7" y="135.2" width="37.3" height="114.8" fill="#e74c3c" rx="2" />
+<text x="453.3" y="129.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">239 ms</text>
+<rect x="488.0" y="150.6" width="37.3" height="99.4" fill="#e74c3c" rx="2" />
+<text x="506.7" y="144.6" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">156 ms</text>
+<rect x="541.3" y="184.2" width="37.3" height="65.8" fill="#e74c3c" rx="2" />
+<text x="560.0" y="178.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">62 ms</text>
+<rect x="594.7" y="183.2" width="37.3" height="66.8" fill="#e74c3c" rx="2" />
+<text x="613.3" y="177.2" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">63 ms</text>
+<rect x="648.0" y="162.5" width="37.3" height="87.5" fill="#e74c3c" rx="2" />
+<text x="666.7" y="156.5" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">112 ms</text>
+<rect x="701.3" y="165.3" width="37.3" height="84.7" fill="#e74c3c" rx="2" />
+<text x="720.0" y="159.3" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">104 ms</text>
+<rect x="754.7" y="188.0" width="37.3" height="62.0" fill="#2ecc71" rx="2" />
+<text x="773.3" y="182.0" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="11" fill="#333">55 ms</text>
 
-    <text x="36.4" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 36.4 262.0)">scaleway-500k</text>
-<text x="109.1" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 109.1 262.0)">scaleway-500k-m1117</text>
-<text x="181.8" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 181.8 262.0)">scaleway-500k-m1118</text>
-<text x="254.5" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 254.5 262.0)">scaleway-500k-m1120</text>
-<text x="327.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 327.3 262.0)">scaleway-500k-m1122</text>
-<text x="400.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 400.0 262.0)">scaleway-500k-m1123</text>
-<text x="472.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 472.7 262.0)">scaleway-500k-m1124a</text>
-<text x="545.5" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 545.5 262.0)">scaleway-500k-warmup-split</text>
-<text x="618.2" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 618.2 262.0)">scaleway-500k-fakeidx</text>
-<text x="690.9" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 690.9 262.0)">scaleway-500k-snapall</text>
-<text x="763.6" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 763.6 262.0)">scaleway-500k-tmpfs</text>
+    <text x="26.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 26.7 262.0)">scaleway-500k</text>
+<text x="80.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 80.0 262.0)">scaleway-500k-m1117</text>
+<text x="133.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 133.3 262.0)">scaleway-500k-m1118</text>
+<text x="186.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 186.7 262.0)">scaleway-500k-m1120</text>
+<text x="240.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 240.0 262.0)">scaleway-500k-m1122</text>
+<text x="293.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 293.3 262.0)">scaleway-500k-m1123</text>
+<text x="346.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 346.7 262.0)">scaleway-500k-m1124a</text>
+<text x="400.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 400.0 262.0)">scaleway-500k-warmup-split</text>
+<text x="453.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 453.3 262.0)">scaleway-500k-fakeidx</text>
+<text x="506.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 506.7 262.0)">scaleway-500k-snapall</text>
+<text x="560.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 560.0 262.0)">scaleway-500k-tmpfs</text>
+<text x="613.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 613.3 262.0)">scaleway-500k-cleanup</text>
+<text x="666.7" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 666.7 262.0)">scaleway-500k-strictgate</text>
+<text x="720.0" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 720.0 262.0)">scaleway-500k-50kfloor</text>
+<text x="773.3" y="262.0" text-anchor="end" font-family="ui-sans-serif, system-ui" font-size="11" fill="#555" transform="rotate(-30 773.3 262.0)">scaleway-500k-cleangate</text>
 
   </g>
 </svg>

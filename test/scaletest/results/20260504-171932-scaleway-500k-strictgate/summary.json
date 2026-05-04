@@ -1,0 +1,35 @@
+{
+  "runId": "20260504-171932-scaleway-500k",
+  "profile": "scaleway-500k",
+  "target": {
+    "context": "admin@bigfleet-scaletest-2",
+    "kind": "unknown"
+  },
+  "cost": {
+    "estimatedUsd": 0.525,
+    "hours": 0.5
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000
+  },
+  "metrics": {
+    "coordinatorApplyOpsPerSec": -1,
+    "loadgenCRsActive": 35262,
+    "loadgenCRsCreatedPerSec": 150.97961005544576,
+    "operatorAckP99Seconds": 1.169599240683136,
+    "operatorRollupP99Seconds": 0.8670454334546869,
+    "shardCycleDurationP99Seconds": 0.11212190476190464,
+    "shardPhase1P99Seconds": -1,
+    "shardPhase2P99Seconds": -1,
+    "shardPhase3P99Seconds": -1,
+    "shardPhaseExecuteP99Seconds": -1,
+    "shardPhaseReconcileP99Seconds": -1,
+    "shardProvisioningLatencyP50Seconds": 327.68,
+    "shardProvisioningLatencyP99Seconds": 327.68,
+    "shardShortfalls": 0
+  },
+  "passed": false,
+  "failure": "loadgenCRsActive 35262 \u003c 49950 (99.9% of target 50000) — run did not sustain target load"
+}
