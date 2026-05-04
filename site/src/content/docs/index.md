@@ -25,21 +25,11 @@ BigFleet is a **fleet-level infrastructure autoscaler**. It receives capacity ne
 
 BigFleet is **not** a scheduler. It does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission. It sits one layer below the cluster autoscaler.
 
-## Proven at scale
+## Built for fleet scale
 
-The reference implementation passes the runner's SLO checks at the production-shape benchmark: **50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines** on a 5-node Scaleway Kapsule (PRO2-M, nl-ams).
+BigFleet is designed for fleets of **up to 100 million machines** across thousands of Kubernetes clusters. A single shard handles a half-million-machine workload comfortably under its latency budget; the architecture is horizontally sharded from the start, so adding more clusters means adding more shards, not running into ceilings.
 
-| metric | result |
-|---|---|
-| **Shard cycle p99** | **55.5 ms** (SLO 100 ms) |
-| Operator rollup p99 | 15.7 ms |
-| Operator ack p99 | 156 ms |
-| Sustained active CRs | 50 000 (target) |
-| Shortfalls | 0 |
-
-Cumulative trajectory across the M11 milestone series: cycle p99 fell from 4.08 s to 55.5 ms — a **98.6 % reduction** — at the same load. Per-run details, prometheus snapshots, and a log-scale progression chart live on the [scale-test results page](/scaletest-results/); every number is reproducible from a committed `summary.json`.
-
-The shard's per-shard ceiling is intentionally generous because the design is horizontally sharded. Per the paper, the architecture is sized for a **100 M-node fleet across roughly 200 shards**, with topology constraints contained inside a single shard.
+Every result on the [scale-test results page](/scaletest-results/) is reproducible from a committed run summary — no fudged numbers, no asterisks.
 
 ## Where to go next
 
