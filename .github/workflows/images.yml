@@ -1,32 +1,34 @@
 name: Images
 
-# Builds and publishes the two scaletest container images to GHCR on every
-# push to main and on PRs (PR builds skip the push to avoid leaking write
-# tokens to fork PRs). Tags applied:
+# Build the two scaletest container images. Behaviour:
 #
-#   :main         — moving tag, always points at the latest main build.
-#   :sha-<short>  — immutable; the helm chart can pin to it via
-#                   --set image.tag=sha-<short>.
+#   on push to main    — build AND push to GHCR with :main and
+#                        :sha-<short> tags.
+#   on pull_request    — build only (smoke test that the image still
+#                        builds at PR HEAD). Never logs in to GHCR;
+#                        never pushes. Avoids any write-token exposure
+#                        from fork or compromised-PR contents.
 #
-# Pre-workflow the cloud-test loop was: hand-run docker buildx --platform
-# linux/amd64 ... --push twice from a laptop, easy to forget --platform
-# (M5 Max defaults to arm64) and easy to overwrite :dev mid-flight from
-# parallel work. CI on ubuntu-latest is amd64 by default and tags
-# deterministically. See task #128 for context.
+# Tags pushed from main:
+#   :main          moving — always the latest main build.
+#   :sha-<short>   immutable; helm pins via --set image.tag=sha-<short>.
 
 on:
   push:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
-  packages: write
+# Default permissions = none. The push job below grants packages:write
+# only for itself; PR builds run with the read-only default.
+permissions: {}
 
 jobs:
-  build:
-    name: ${{ matrix.image }}
+  build-pr:
+    name: build (${{ matrix.image }})
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -37,45 +39,56 @@ jobs:
             dockerfile: test/scaletest/image/Dockerfile
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        # Skip the login step (and the push) on fork PRs — they don't have
-        # a GHCR write token. The build still runs as a smoke test.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute tags
-        id: tags
-        run: |
-          short_sha=$(git rev-parse --short=12 "$GITHUB_SHA")
-          base="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
-            echo "tags=${base}:main,${base}:sha-${short_sha}" >> "$GITHUB_OUTPUT"
-            echo "push=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=${base}:pr-${{ github.event.pull_request.number }}-${short_sha}" >> "$GITHUB_OUTPUT"
-            # Only push when the PR head is in the same repo (not a fork).
-            if [[ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]]; then
-              echo "push=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "push=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-      - name: Build${{ steps.tags.outputs.push == 'true' && ' and push' || '' }}
+      - name: Build (no push)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: ${{ steps.tags.outputs.push == 'true' }}
+          push: false
+          tags: ${{ matrix.image }}:pr
+          cache-from: type=gha
+
+  push-main:
+    name: push (${{ matrix.image }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: bigfleet
+            dockerfile: cmd/bigfleet/Dockerfile
+          - image: bigfleet-scaletest
+            dockerfile: test/scaletest/image/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          short_sha=$(git rev-parse --short=12 "$GITHUB_SHA")
+          base="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
+          echo "tags=${base}:main,${base}:sha-${short_sha}" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
