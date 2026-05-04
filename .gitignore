@@ -4,4 +4,7 @@ bin/
 dist/
 coverage.out
 coverage.html
-bigfleet
+# Anchored to repo root so it matches only the built binary at ./bigfleet,
+# not the source directory ./cmd/bigfleet/ which also happens to be named
+# "bigfleet". Pre-anchor `git add cmd/bigfleet/...` was rejected as ignored.
+/bigfleet
