@@ -3,6 +3,7 @@ package fake_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
@@ -142,6 +143,74 @@ func TestFake_RevisionAdvancesWithChanges(t *testing.T) {
 	r2, _ := p.List(ctx, provider.ListFilter{})
 	if string(r1.Revision) == string(r2.Revision) {
 		t.Errorf("revision did not advance after Create")
+	}
+}
+
+// TestFake_List_SinceRevisionDedupsRepeatedMutations: a machine
+// mutated twice within the cursor window should appear once in the
+// delta — the revLog index dedups by ID.
+func TestFake_List_SinceRevisionDedupsRepeatedMutations(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+	p.AddIdle("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+	cold, _ := p.List(ctx, provider.ListFilter{})
+
+	// Two mutations on the same machine: Configure then Drain.
+	if _, err := p.Configure(ctx, provider.ConfigureRequest{MachineID: "m-1", ClusterID: "c-1"}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if _, err := p.Drain(ctx, provider.DrainRequest{MachineID: "m-1"}); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	delta, _ := p.List(ctx, provider.ListFilter{SinceRevision: cold.Revision})
+	if len(delta.Machines) != 1 {
+		t.Fatalf("delta = %d machines, want 1 (deduped)", len(delta.Machines))
+	}
+	if delta.Machines[0].ID != "m-1" {
+		t.Errorf("got %s, want m-1", delta.Machines[0].ID)
+	}
+}
+
+// TestFake_ConcurrentListGet covers the RWMutex behaviour: many
+// concurrent List + Get calls succeed without deadlock or race
+// (catches the obvious regressions if the lock is downgraded
+// incorrectly).
+func TestFake_ConcurrentListGet(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+	for i := 0; i < 50; i++ {
+		p.AddIdle(machine.ID("m-"+strconv.Itoa(i)),
+			machine.Profile{InstanceType: "p5"},
+			machine.CapacityTypeOnDemand, 6.0, 0.0)
+	}
+
+	const goroutines = 8
+	const iterations = 200
+	done := make(chan struct{})
+	for g := 0; g < goroutines; g++ {
+		go func(gi int) {
+			defer func() { done <- struct{}{} }()
+			for i := 0; i < iterations; i++ {
+				if i%2 == 0 {
+					if _, err := p.List(ctx, provider.ListFilter{}); err != nil {
+						t.Errorf("List: %v", err)
+						return
+					}
+				} else {
+					id := machine.ID("m-" + strconv.Itoa((gi+i)%50))
+					if _, err := p.Get(ctx, id); err != nil {
+						t.Errorf("Get: %v", err)
+						return
+					}
+				}
+			}
+		}(g)
+	}
+	for g := 0; g < goroutines; g++ {
+		<-done
 	}
 }
 

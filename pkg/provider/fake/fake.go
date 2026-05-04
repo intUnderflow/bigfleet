@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -20,8 +21,14 @@ import (
 )
 
 // Provider is an in-memory CapacityProvider. Configurable via Options.
+//
+// Concurrency: an RWMutex protects all state. List and Get are readers
+// (RLock), so the shard's reconcile can run concurrently with itself
+// or with Get RPCs. Mutating RPCs (Create/Configure/Drain/Delete) and
+// the Add* / FailNext seed methods are writers (Lock); they serialise
+// with each other and with readers.
 type Provider struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	machines map[machine.ID]*machine.Machine
 
@@ -32,6 +39,21 @@ type Provider struct {
 	// conformance threshold" contract — `since_revision` is honoured and
 	// the response Revision is monotonically advancing.
 	lastModRev map[machine.ID]int
+
+	// revLog is an append-only sequence of (rev, id) entries written
+	// on every mutation. Used by List(SinceRevision=R) to find which
+	// machines have changed since R without scanning all of
+	// p.machines: binary-search for the first rev > R, walk forward,
+	// dedup IDs (a single machine may appear multiple times if mutated
+	// repeatedly), and emit the current state of each unique ID.
+	//
+	// At steady state with k changes/cycle and N inventory, this drops
+	// per-cycle reconcile cost from O(N) to O(k + uniqueIDs).
+	//
+	// Memory grows monotonically with mutation count; for a long-lived
+	// process this would need compaction, but the harness recreates
+	// the fake on each run.
+	revLog []revEntry
 
 	// ops maps (machine_id, kind) → operation_id for idempotency. An
 	// operation is "active" while the machine is at-or-progressing-to
@@ -58,6 +80,13 @@ type Provider struct {
 	// (Speculative→Idle on Create returns a machine in Idle state, not
 	// Creating). Used by tests that want to skip the staged transitions.
 	instantTransitions bool
+}
+
+// revEntry is one append to the revision log: which machine's
+// mutation produced this rev.
+type revEntry struct {
+	rev int
+	id  machine.ID
 }
 
 // Options configures a fake provider.
@@ -100,6 +129,7 @@ func (p *Provider) AddSpeculative(id machine.ID, profile machine.Profile, capTyp
 	}
 	p.rev++
 	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 }
 
 // AddIdle inserts an already-running, unbound machine. Used to model
@@ -121,6 +151,7 @@ func (p *Provider) AddIdle(id machine.ID, profile machine.Profile, capType machi
 	}
 	p.rev++
 	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 }
 
 // FailNext queues a single error to be returned the next time the
@@ -210,13 +241,14 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, postEffect func(*
 	}
 	p.rev++
 	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 	return provider.TransitionAck{OperationID: op, Machine: *m}, nil
 }
 
-// Get implements provider.Provider.
+// Get implements provider.Provider. Reader.
 func (p *Provider) Get(_ context.Context, id machine.ID) (machine.Machine, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	m, ok := p.machines[id]
 	if !ok {
 		return machine.Machine{}, fmt.Errorf("%w: %s", provider.ErrNotFound, id)
@@ -226,20 +258,56 @@ func (p *Provider) Get(_ context.Context, id machine.ID) (machine.Machine, error
 
 // List implements provider.Provider. Honours SinceRevision: when set
 // to the cursor returned by a prior call, only machines mutated after
-// that cursor are included. Cold start (empty cursor) returns the full
-// inventory.
+// that cursor are included via the per-mutation revLog index — O(k +
+// uniqueIDs) instead of O(N). Cold start (empty cursor) walks the
+// full inventory map.
+//
+// Reader (RLock); concurrent Lists do not block each other and do not
+// block Gets.
 func (p *Provider) List(_ context.Context, filter provider.ListFilter) (provider.ListResponse, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
 	since, hasSince := decodeRevision(filter.SinceRevision)
+	rev := []byte(strconv.Itoa(p.rev))
 
-	out := make([]machine.Machine, 0, len(p.machines))
-	for id, m := range p.machines {
-		if !matchesFilter(*m, filter) {
+	if !hasSince {
+		// Cold start: full scan.
+		out := make([]machine.Machine, 0, len(p.machines))
+		for _, m := range p.machines {
+			if !matchesFilter(*m, filter) {
+				continue
+			}
+			out = append(out, *m)
+			if filter.MaxResults > 0 && len(out) >= filter.MaxResults {
+				break
+			}
+		}
+		return provider.ListResponse{Machines: out, Revision: rev}, nil
+	}
+
+	// Delta: walk the revLog from the first entry with rev > since.
+	// Dedup IDs (a single machine may appear multiple times if mutated
+	// repeatedly within the cursor window) and emit current state.
+	start := sort.Search(len(p.revLog), func(i int) bool {
+		return p.revLog[i].rev > since
+	})
+	if start >= len(p.revLog) {
+		return provider.ListResponse{Revision: rev}, nil
+	}
+	seen := make(map[machine.ID]struct{}, len(p.revLog)-start)
+	out := make([]machine.Machine, 0, len(p.revLog)-start)
+	for i := start; i < len(p.revLog); i++ {
+		id := p.revLog[i].id
+		if _, dup := seen[id]; dup {
 			continue
 		}
-		if hasSince && p.lastModRev[id] <= since {
+		seen[id] = struct{}{}
+		m, ok := p.machines[id]
+		if !ok {
+			continue // genuinely deleted (no fake path triggers this today)
+		}
+		if !matchesFilter(*m, filter) {
 			continue
 		}
 		out = append(out, *m)
@@ -247,10 +315,7 @@ func (p *Provider) List(_ context.Context, filter provider.ListFilter) (provider
 			break
 		}
 	}
-	return provider.ListResponse{
-		Machines: out,
-		Revision: []byte(strconv.Itoa(p.rev)),
-	}, nil
+	return provider.ListResponse{Machines: out, Revision: rev}, nil
 }
 
 // decodeRevision parses an opaque cursor previously emitted by List. An
