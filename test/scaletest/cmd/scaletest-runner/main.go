@@ -30,6 +30,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -222,7 +223,14 @@ func run(args []string) error {
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs)
 
 	summary := filepath.Join(*output, "summary.json")
-	b, _ := json.MarshalIndent(res, "", "  ")
+	b, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		// Don't lose the run by silently writing 0 bytes — surface the
+		// marshal failure (NaN floats from prom queries are the usual
+		// culprit; promQuery now filters them but new metrics could
+		// reintroduce the issue).
+		return fmt.Errorf("marshal summary: %w", err)
+	}
 	if err := os.WriteFile(summary, b, 0o644); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
@@ -498,7 +506,18 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 	}
 	var v float64
 	_, err = fmt.Sscanf(s, "%f", &v)
-	return v, err
+	if err != nil {
+		return 0, err
+	}
+	// Prometheus returns "NaN" or "+Inf" / "-Inf" when a query has
+	// undefined output (e.g., histogram_quantile against an empty
+	// bucket window). These can't be JSON-marshalled — silently they
+	// cause the entire summary.json write to produce 0 bytes. Map to
+	// an error so readKeyMetrics records the existing -1 sentinel.
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("query returned non-finite (%s): %s", s, query)
+	}
+	return v, nil
 }
 
 func urlEncode(s string) string { return (&urlValues{q: s}).encode() }
