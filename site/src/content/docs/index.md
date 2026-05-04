@@ -27,25 +27,7 @@ BigFleet runs once for an entire Kubernetes fleet. Each cluster reports the capa
 
 Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch that. It's the tier above: it makes sure the right machines exist to be scheduled on, anywhere they're needed.
 
-```
-       cluster A             cluster B             cluster C
-   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-   │ kube-scheduler│      │ kube-scheduler│      │ kube-scheduler│
-   │  + operator  │      │  + operator  │      │  + operator  │
-   └──────┬───────┘      └──────┬───────┘      └──────┬───────┘
-          │                     │                     │
-          └─────────────────────┼─────────────────────┘
-                                │
-                       ┌────────┴────────┐
-                       │     BigFleet    │   ← provisions, reclaims,
-                       │  shards + coord │     rebalances across the
-                       └────────┬────────┘     entire fleet
-                                │
-                       ┌────────┴────────┐
-                       │  bare metal /   │
-                       │  cloud / spot   │
-                       └─────────────────┘
-```
+![BigFleet sits one tier above per-cluster autoscalers: each Kubernetes cluster runs an operator that reports capacity needs to BigFleet, which provisions from a fleet-wide pool of bare metal, cloud, and spot machines.](/architecture-diagram.svg)
 
 It's the reference implementation of two papers — the [operating model](/papers/fleet-scale-kubernetes/) (how cluster fleets should work) and the [architecture](/papers/bigfleet/) (how this autoscaler is built).
 
