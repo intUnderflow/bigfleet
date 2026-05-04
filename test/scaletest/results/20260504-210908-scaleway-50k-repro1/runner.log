@@ -1,0 +1,18 @@
+profile scaleway-50k on context admin@bigfleet-repro-1 (kind=unknown)
+  scale: 50 clusters × 1000 CRs = 50000 total
+  duration: 30m0s
+  estimated cost (cloud baseline): $0.12
+Release "scaletest" does not exist. Installing it now.
+NAME: scaletest
+LAST DEPLOYED: Mon May  4 23:09:09 2026
+NAMESPACE: bigfleet-scaletest
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+  waiting: pods 50/50 ready, active 32700/49950
+  waiting: pods 50/50 ready, active 49864/49950
+steady state reached; soaking 30m0s
+wrote test/scaletest/results/20260504-210908-scaleway-50k-repro1/summary.json
+tearing down
+release "scaletest" uninstalled
