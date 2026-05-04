@@ -1,0 +1,34 @@
+{
+  "runId": "20260504-225134-scaleway-500k",
+  "profile": "scaleway-500k",
+  "target": {
+    "context": "admin@bigfleet-rightsize",
+    "kind": "unknown"
+  },
+  "cost": {
+    "estimatedUsd": 0.315,
+    "hours": 0.5
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000
+  },
+  "metrics": {
+    "coordinatorApplyOpsPerSec": -1,
+    "loadgenCRsActive": 50000,
+    "loadgenCRsCreatedPerSec": 50,
+    "operatorAckP99Seconds": 0.15650945273631844,
+    "operatorRollupP99Seconds": 0.01585179487179487,
+    "shardCycleDurationP99Seconds": 0.061451779141104265,
+    "shardPhase1P99Seconds": 0.00099,
+    "shardPhase2P99Seconds": 0.00099,
+    "shardPhase3P99Seconds": 0.06080492307692304,
+    "shardPhaseExecuteP99Seconds": 0.0035449999999999943,
+    "shardPhaseReconcileP99Seconds": 0.00099,
+    "shardProvisioningLatencyP50Seconds": 327.68,
+    "shardProvisioningLatencyP99Seconds": 327.68,
+    "shardShortfalls": 0
+  },
+  "passed": true
+}

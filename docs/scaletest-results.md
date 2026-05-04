@@ -8,7 +8,7 @@ Outcomes on this page are **re-evaluated under the current SLO definition** — 
 
 The scaleway-500k profile is the production-shape benchmark: 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on a 5-node Scaleway Kapsule (PRO2-M, nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across them.
 
-**4.03 s → 55 ms** (98.6 % reduction). The most recent run that meets the SLO at full sustained load is [`scaleway-500k-cleangate`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-184208-scaleway-500k-cleangate).
+**4.03 s → 61 ms** (98.5 % reduction). The most recent run that meets the SLO at full sustained load is [`scaleway-500k-rightsize`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-005134-scaleway-500k-rightsize).
 
 ![scaleway-500k cycle p99 across milestones](./scaletest-progress.svg)
 
@@ -41,5 +41,16 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
 | [`scaleway-500k-50kfloor`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-175730-scaleway-500k-50kfloor) | scaleway-500k | 104 ms | 1.15 s | 894 ms | 30399 / 50000 | ✗ | ✗ |
 | [`scaleway-500k-cleangate`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-184208-scaleway-500k-cleangate) | scaleway-500k | 55 ms | 156 ms | 16 ms | 50000 / 50000 | ✓ | ✓ |
 | [`scaleway-50k-verify`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-202548-scaleway-50k-verify) | scaleway-50k | 16 ms | 255 ms | 15 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-50k-repro1`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-210908-scaleway-50k-repro1) | scaleway-50k | 16 ms | 252 ms | 15 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-50k-repro2`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-210908-scaleway-50k-repro2) | scaleway-50k | 16 ms | 236 ms | 15 ms | 49999 / 50000 | ✓ | ✓ |
+| [`scaleway-50k-repro3`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-210908-scaleway-50k-repro3) | scaleway-50k | 16 ms | 239 ms | 15 ms | 49999 / 50000 | ✓ | ✓ |
+| [`scaleway-50k-repro4`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-210908-scaleway-50k-repro4) | scaleway-50k | 16 ms | 244 ms | 15 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z1`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z1) | scaleway-500k | 61 ms | 202 ms | 26 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z2`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z2) | scaleway-500k | 60 ms | 156 ms | 24 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z3`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z3) | scaleway-500k | 61 ms | 217 ms | 16 ms | 49998 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z4`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z4) | scaleway-500k | 61 ms | 189 ms | 21 ms | 50000 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z5`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z5) | scaleway-500k | 62 ms | 181 ms | 20 ms | 49999 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-z6`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260504-221018-scaleway-500k-z6) | scaleway-500k | 54 ms | 146 ms | 16 ms | 49999 / 50000 | ✓ | ✓ |
+| [`scaleway-500k-rightsize`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-005134-scaleway-500k-rightsize) | scaleway-500k | 61 ms | 157 ms | 16 ms | 50000 / 50000 | ✓ | ✓ |
 
 *Generated from `test/scaletest/results/*/summary.json` by `site/scripts/sync-scaletest.mjs`. Outcomes recomputed under the current SLO bar.*
