@@ -1,22 +1,19 @@
 # scaleway-50k — 50K-CR run on a Scaleway Kapsule cluster.
 #
-# Sized for a single PRO2-M node (16 vCPU / 64 GB RAM). The bumped
-# resource requests vs local-50k mean the kwok pods aren't fighting
-# CFS throttling — this is the production-shape harness that should
-# pass the operator rollup p99 ≤ 1 s SLO.
+# Sized for a 2-node PRO2-M Kapsule pool (32 vCPU / 128 GB RAM total).
+# Pre-harness-split this fit on 1 node, but the 2-container split per
+# kwok pod (apiserver + workload) bumped per-pod CPU req from ~200m
+# to ~300m — 50 pods × 300m + shard + coordinator + prometheus
+# overflows a single 16-vCPU PRO2-M.
 #
-# Provisioning (once the scw CLI is configured):
+# Provisioning:
 #   scw k8s cluster create name=bigfleet-scaletest \
-#     version=1.30.4 cni=cilium type=kapsule \
+#     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-M \
-#     pools.0.size=1 pools.0.min-size=1 pools.0.max-size=1
-#   scw k8s kubeconfig get bigfleet-scaletest > $HOME/.kube/scaleway.kubeconfig
+#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2
 #
-# After the run, tear the cluster down to stop billing:
-#   scw k8s cluster delete bigfleet-scaletest
-#
-# Cost (Scaleway hourly, May 2026): PRO2-M is €0.21/hr. A 30-min
-# scale run + 5-min ramp + 5-min teardown ≈ 40 min ≈ €0.14 / ~$0.15.
+# Cost (Scaleway, May 2026): 2× PRO2-M × €0.21/hr ≈ €0.42/hr. A
+# 30-min run + ~5min ramp + teardown ≈ 40 min ≈ €0.28 / ~$0.30.
 
 # Scaleway pulls images from a registry (no kind side-load), so point
 # at the GHCR-published copies. These are public; the Kapsule cluster
