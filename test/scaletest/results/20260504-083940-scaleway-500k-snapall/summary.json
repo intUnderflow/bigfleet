@@ -1,0 +1,33 @@
+{
+  "runId": "20260504-083940-scaleway-500k",
+  "profile": "scaleway-500k",
+  "target": {
+    "context": "admin@bigfleet-scaletest",
+    "kind": "unknown"
+  },
+  "cost": {
+    "estimatedUsd": 0.525,
+    "hours": 0.5
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000
+  },
+  "metrics": {
+    "coordinatorApplyOpsPerSec": -1,
+    "loadgenCRsActive": 37329,
+    "loadgenCRsCreatedPerSec": 155.4745612989795,
+    "operatorAckP99Seconds": 4.636294736842091,
+    "operatorRollupP99Seconds": 0.9003200000000009,
+    "shardCycleDurationP99Seconds": 0.1558399999999978,
+    "shardPhase1P99Seconds": -1,
+    "shardPhase2P99Seconds": -1,
+    "shardPhase3P99Seconds": -1,
+    "shardPhaseExecuteP99Seconds": -1,
+    "shardPhaseReconcileP99Seconds": -1,
+    "shardShortfalls": 0
+  },
+  "passed": false,
+  "failure": "one or more SLO thresholds exceeded"
+}
