@@ -56,9 +56,13 @@ Most organisations now run tens to thousands of Kubernetes clusters and manage c
 
 ## Compared to the cluster autoscalers
 
-[Cluster Autoscaler](https://github.com/kubernetes/autoscaler) and [Karpenter](https://karpenter.sh/) run **inside each cluster** and provision capacity for that one cluster. They're necessary; BigFleet doesn't replace them.
+BigFleet replaces the **cluster-level capacity autoscaler** — [Cluster Autoscaler](https://github.com/kubernetes/autoscaler) or [Karpenter](https://karpenter.sh/). Both consume the same input signal (`PodScheduled=False, reason=Unschedulable`) and produce the same kind of output (a new node). Running them alongside BigFleet would have two deciders racing for the same trigger; one would always be undoing what the other just did.
 
-BigFleet runs **once across the fleet** and decides which clusters get which capacity. The cluster-level autoscaler is one valid backend for the per-cluster operator's bootstrap path; the fleet-level decisions sit a tier above. If your fleet is one cluster, you don't need BigFleet. If it's a hundred, you start to.
+The difference is *where* the decision happens. Cluster Autoscaler and Karpenter run inside each cluster and provision per-cluster, in isolation. BigFleet runs once across the fleet and makes the same kind of decision with full cross-cluster context — so a GPU rack idle in cluster A can satisfy a training job's unschedulable pods in cluster B without the rack having to be moved or re-provisioned.
+
+What BigFleet does **not** replace: kube-scheduler. Pod placement stays cluster-local, the same as it is today.
+
+If your fleet is one cluster, you don't need BigFleet. If it's a hundred, you start to.
 
 ## Where to go next
 
