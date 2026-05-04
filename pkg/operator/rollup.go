@@ -55,12 +55,13 @@ func (o *Operator) runRollup(ctx context.Context, sess *session) error {
 	}
 
 	rollup, pending := o.buildRollup(crs)
-	if err := sess.enqueue(ctx, &pb.OperatorMessage{
+	// enqueueRollup atomically replaces any pending older rollup (each
+	// rollup is full replacement per paper §3.1) so the operator never
+	// queues two rollups behind a slow stream. Never errors — the
+	// pending slot always accepts.
+	sess.enqueueRollup(&pb.OperatorMessage{
 		Payload: &pb.OperatorMessage_Rollup{Rollup: rollup},
-	}); err != nil {
-		metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
-		return fmt.Errorf("enqueue rollup: %w", err)
-	}
+	})
 	// Rollup hot path is done. Record before the (potentially long)
 	// acknowledgement batch — its duration is exposed separately.
 	metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())

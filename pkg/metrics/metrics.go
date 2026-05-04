@@ -114,6 +114,17 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
 	})
 
+	// OperatorOutboxDropped counts non-rollup messages dropped because
+	// the bounded session outbox was full (paper §10.5). Drops are
+	// recoverable: the shard re-issues on RPC timeout. A non-zero rate
+	// signals the operator's send pipeline is sustainedly behind its
+	// stream — investigate per-cluster apiserver throughput or stream
+	// RTT before raising outboxCap.
+	OperatorOutboxDropped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_operator_outbox_dropped_total",
+		Help: "Operator session-outbox messages dropped (BootstrapBlobResponse / ReclaimAck) because the bounded queue was full.",
+	})
+
 	OperatorAcknowledgedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "bigfleet_operator_acknowledged_total",
 		Help: "Count of CapacityRequests transitioned from Pending to Acknowledged.",

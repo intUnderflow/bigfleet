@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -59,42 +61,91 @@ func (o *Operator) runOnce(ctx context.Context) error {
 	return g.Wait()
 }
 
-// session is the per-connection state held by runOnce.
+// session is the per-connection state held by runOnce. The send path
+// has two queues with different drop policies (paper §10.5 — bound the
+// per-cluster outbox so a slow stream can't accumulate unbounded
+// memory):
+//
+//   - pendingRollup: a single-slot atomic.Pointer for ClusterCapacityNeeds
+//     rollups. Each rollup is full replacement (paper §3.1), so writing
+//     a fresh rollup atomically replaces and DROPS any pending older
+//     one. Coalesce-by-replace.
+//
+//   - outbox: a bounded channel for non-coalescing messages
+//     (BootstrapBlobResponse, ReclaimAck). Drops the new message with a
+//     metric when full — these are RPC responses tied to a shard
+//     request; the shard will re-issue on timeout, so drop-newest is
+//     correct (a queued-up response would only deliver after the
+//     shard has timed out anyway).
 type session struct {
 	op     *Operator
 	stream pb.Shard_SessionClient
 
-	// outbox is drained by sendLoop. Buffered so the rollup loop can
-	// enqueue without blocking; if the send side falls behind, the
-	// channel backpressures the producers (acceptable for M4).
-	outbox chan *pb.OperatorMessage
+	pendingRollup atomic.Pointer[pb.OperatorMessage]
+	rollupSignal  chan struct{}
+	outbox        chan *pb.OperatorMessage
 }
+
+const (
+	// outboxCap bounds queued response messages per session.
+	// Generous: above this the shard's RPC timeouts kick in
+	// regardless. Drop-newest under load is the documented behaviour
+	// (paper §10.5).
+	outboxCap = 256
+)
 
 func newSession(stream pb.Shard_SessionClient, op *Operator) *session {
 	return &session{
-		op:     op,
-		stream: stream,
-		outbox: make(chan *pb.OperatorMessage, 64),
+		op:           op,
+		stream:       stream,
+		rollupSignal: make(chan struct{}, 1),
+		outbox:       make(chan *pb.OperatorMessage, outboxCap),
 	}
 }
 
-// enqueue places a frame on the outbox. Blocks if the outbox is full.
+// enqueueRollup replaces the pending rollup atomically. Older pending
+// rollups are dropped — they're superseded by the new full-replacement
+// state.
+func (s *session) enqueueRollup(msg *pb.OperatorMessage) {
+	s.pendingRollup.Store(msg)
+	select {
+	case s.rollupSignal <- struct{}{}:
+	default:
+		// Signal already pending; sendLoop will pick up the latest
+		// rollup on its next iteration.
+	}
+}
+
+// enqueue places a non-rollup frame (BootstrapBlobResponse, ReclaimAck)
+// on the bounded outbox. Drops with a metric if the queue is full —
+// see the session-level doc for why drop-newest is correct.
 func (s *session) enqueue(ctx context.Context, msg *pb.OperatorMessage) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case s.outbox <- msg:
 		return nil
+	default:
+		metrics.OperatorOutboxDropped.Inc()
+		return errOutboxFull
 	}
 }
 
-// sendLoop drains the outbox into the stream. Returns when the stream
-// errors out or ctx is cancelled.
+var errOutboxFull = errors.New("operator: outbox full; dropped (shard will re-issue on timeout)")
+
+// sendLoop drains both the pending-rollup slot and the outbox into the
+// stream. Returns when the stream errors out or ctx is cancelled.
 func (s *session) sendLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-s.rollupSignal:
+			if msg := s.pendingRollup.Swap(nil); msg != nil {
+				if err := s.stream.Send(msg); err != nil {
+					return fmt.Errorf("stream.Send: %w", err)
+				}
+			}
 		case msg, ok := <-s.outbox:
 			if !ok {
 				return nil
