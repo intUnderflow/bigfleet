@@ -327,10 +327,14 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
 	// Steady state requires (a) every kwok pod's containers all Ready
-	// and (b) load-driver has ramped to its full per-cluster target.
-	// Tests that soak against an under-loaded shard measure the wrong
-	// thing — runs that don't reach target fail outright at the gate.
-	target := clusterCount * perClusterTarget
+	// and (b) load-driver has ramped to ≥ 99.9 % of target. Tests
+	// that soak against an under-loaded shard measure the wrong
+	// thing; runs that don't reach target fail at the gate. The
+	// 0.1 % slop absorbs transient create/delete races during the
+	// load-driver's churn phase (a single CR being recreated as
+	// the gate measures, etc.) — a hard 100 % is too tight in
+	// practice.
+	target := int(0.999 * float64(clusterCount*perClusterTarget))
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
@@ -530,13 +534,13 @@ func pass(m map[string]float64, totalCRs int) (bool, string) {
 	// drifted away from the target during the soak. We already gate
 	// at the steady-state ramp, but a ramp that just-barely-passed
 	// and then collapsed under churn would still produce SLO numbers
-	// against an under-loaded shard. Allow ±5 % drift; below that
+	// against an under-loaded shard. Allow 0.1 % drift; below that
 	// the run isn't measuring what the SLO is about.
 	if totalCRs > 0 {
 		if v, ok := m["loadgenCRsActive"]; ok {
-			minActive := 0.95 * float64(totalCRs)
+			minActive := 0.999 * float64(totalCRs)
 			if v < minActive {
-				return false, fmt.Sprintf("loadgenCRsActive %.0f < %.0f (95%% of target %d) — run did not sustain target load", v, minActive, totalCRs)
+				return false, fmt.Sprintf("loadgenCRsActive %.0f < %.0f (99.9%% of target %d) — run did not sustain target load", v, minActive, totalCRs)
 			}
 		}
 	}
