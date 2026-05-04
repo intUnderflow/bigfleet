@@ -122,6 +122,56 @@ func TestGRPCServer_ReportShard_DeliversPending(t *testing.T) {
 	}
 }
 
+// TestGRPCServer_ReportShard_SelfRegistersUnknownShard locks in the
+// M12 contract that an unknown shard's first ReportShard auto-registers
+// the shard in coordinator state (Raft-applied AddShard with the
+// dial address from the report) so multi-shard deployments don't need
+// an out-of-band registration step.
+func TestGRPCServer_ReportShard_SelfRegistersUnknownShard(t *testing.T) {
+	c, _, cli, ctx := startCoordinatorWithGRPC(t)
+
+	// No AddShard call. The shard is unknown.
+	if _, ok := c.State().Shard("shard-new"); ok {
+		t.Fatalf("precondition: shard-new must be unknown")
+	}
+
+	if _, err := cli.ReportShard(ctx, &pb.ShardReport{
+		ShardId:      "shard-new",
+		ShardAddress: "bigfleet-shard-2.bigfleet-shard-headless:7780",
+		Cycle:        1,
+	}); err != nil {
+		t.Fatalf("ReportShard: %v", err)
+	}
+
+	entry, ok := c.State().Shard("shard-new")
+	if !ok {
+		t.Fatalf("expected shard-new to be registered after first ReportShard")
+	}
+	if entry.Address != "bigfleet-shard-2.bigfleet-shard-headless:7780" {
+		t.Errorf("Address = %q, want the dial address from the report", entry.Address)
+	}
+	if entry.LastHeartbeat.IsZero() {
+		t.Errorf("LastHeartbeat must be set after registration")
+	}
+
+	// Second report from the same shard is a no-op on registration —
+	// we keep the original RegisteredAt and only refresh LastHeartbeat.
+	registeredAt := entry.RegisteredAt
+	time.Sleep(5 * time.Millisecond)
+	if _, err := cli.ReportShard(ctx, &pb.ShardReport{
+		ShardId: "shard-new", Cycle: 2,
+	}); err != nil {
+		t.Fatalf("second ReportShard: %v", err)
+	}
+	entry2, _ := c.State().Shard("shard-new")
+	if !entry2.RegisteredAt.Equal(registeredAt) {
+		t.Errorf("RegisteredAt drifted across heartbeats: %v -> %v", registeredAt, entry2.RegisteredAt)
+	}
+	if !entry2.LastHeartbeat.After(entry.LastHeartbeat) {
+		t.Errorf("LastHeartbeat did not advance: %v -> %v", entry.LastHeartbeat, entry2.LastHeartbeat)
+	}
+}
+
 func TestGRPCServer_ReportShard_RejectsNonLeader(t *testing.T) {
 	// Build a coordinator that never becomes leader (no Bootstrap).
 	c, err := coordinator.New(coordinator.Config{

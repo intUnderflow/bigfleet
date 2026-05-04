@@ -35,6 +35,11 @@ coordinator:
 
 shard:
   enabled: true
+  # M12: shards are deployed as a StatefulSet with stable per-pod DNS
+  # via the headless `bigfleet-shard-headless` Service. Operators must
+  # be bound to a specific shard ordinal at deploy time (see the
+  # provider author guide); the round-robin `bigfleet-shard` Service
+  # is retained for single-shard / admin paths only.
   replicas: 1                   # bump per fleet size; see docs/scaling-guide.md
   resources:
     requests:
@@ -47,6 +52,9 @@ shard:
     grpcPort: 7780
     metricsPort: 8780
   dataDir: /var/lib/bigfleet-shard
+  storage:
+    size: 1Gi                   # epoch counter + reserved space for future shard-local persistent state
+    storageClassName: ""        # "" = default StorageClass
 
 # rbac toggles whether ClusterRole / ClusterRoleBinding are rendered.
 # Disable if your cluster admin manages RBAC out-of-band.

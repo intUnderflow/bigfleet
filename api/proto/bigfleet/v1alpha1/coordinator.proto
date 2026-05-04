@@ -55,6 +55,17 @@ message ShardReport {
   // and to learn outcomes (term-rejected, semantically-invalid,
   // failed). Bounded by the shard's outstanding-instruction set.
   repeated InstructAck instruction_acks = 7;
+
+  // Shard's gRPC dial address as it would be reachable from operators
+  // and admin tools — typically `host:port`, e.g.
+  // `bigfleet-shard-2.bigfleet-shard-headless.bigfleet-system.svc:7780`.
+  // Carried on every ReportShard for forward-compat: if the coordinator
+  // sees an unknown shard_id, it Raft-Applies AddShard with this
+  // address and accepts subsequent reports as heartbeats. Optional for
+  // compat with shards that don't know their advertise address; when
+  // absent, the coordinator records an empty address (the registry
+  // entry is still useful for membership / domain assignment).
+  string shard_address = 8;
 }
 
 // ShardSummary is a coarse-grained snapshot of a shard's inventory and

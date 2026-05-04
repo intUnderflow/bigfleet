@@ -111,8 +111,18 @@ type ShardReport struct {
 	// and to learn outcomes (term-rejected, semantically-invalid,
 	// failed). Bounded by the shard's outstanding-instruction set.
 	InstructionAcks []*InstructAck `protobuf:"bytes,7,rep,name=instruction_acks,json=instructionAcks,proto3" json:"instruction_acks,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Shard's gRPC dial address as it would be reachable from operators
+	// and admin tools — typically `host:port`, e.g.
+	// `bigfleet-shard-2.bigfleet-shard-headless.bigfleet-system.svc:7780`.
+	// Carried on every ReportShard for forward-compat: if the coordinator
+	// sees an unknown shard_id, it Raft-Applies AddShard with this
+	// address and accepts subsequent reports as heartbeats. Optional for
+	// compat with shards that don't know their advertise address; when
+	// absent, the coordinator records an empty address (the registry
+	// entry is still useful for membership / domain assignment).
+	ShardAddress  string `protobuf:"bytes,8,opt,name=shard_address,json=shardAddress,proto3" json:"shard_address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShardReport) Reset() {
@@ -192,6 +202,13 @@ func (x *ShardReport) GetInstructionAcks() []*InstructAck {
 		return x.InstructionAcks
 	}
 	return nil
+}
+
+func (x *ShardReport) GetShardAddress() string {
+	if x != nil {
+		return x.ShardAddress
+	}
+	return ""
 }
 
 // ShardSummary is a coarse-grained snapshot of a shard's inventory and
@@ -949,7 +966,7 @@ var File_bigfleet_v1alpha1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"#bigfleet/v1alpha1/coordinator.proto\x12\x11bigfleet.v1alpha1\x1a bigfleet/v1alpha1/capacity.proto\x1a bigfleet/v1alpha1/provider.proto\"\xd5\x02\n" +
+	"#bigfleet/v1alpha1/coordinator.proto\x12\x11bigfleet.v1alpha1\x1a bigfleet/v1alpha1/capacity.proto\x1a bigfleet/v1alpha1/provider.proto\"\xfa\x02\n" +
 	"\vShardReport\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12\x14\n" +
 	"\x05cycle\x18\x02 \x01(\x03R\x05cycle\x120\n" +
@@ -960,7 +977,8 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\n" +
 	"shortfalls\x18\x06 \x03(\v2\x1c.bigfleet.v1alpha1.ShortfallR\n" +
 	"shortfalls\x12I\n" +
-	"\x10instruction_acks\x18\a \x03(\v2\x1e.bigfleet.v1alpha1.InstructAckR\x0finstructionAcks\"\xb1\x04\n" +
+	"\x10instruction_acks\x18\a \x03(\v2\x1e.bigfleet.v1alpha1.InstructAckR\x0finstructionAcks\x12#\n" +
+	"\rshard_address\x18\b \x01(\tR\fshardAddress\"\xb1\x04\n" +
 	"\fShardSummary\x12%\n" +
 	"\x0etotal_machines\x18\x01 \x01(\x05R\rtotalMachines\x12#\n" +
 	"\rfree_machines\x18\x02 \x01(\x05R\ffreeMachines\x12s\n" +

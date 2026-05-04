@@ -81,9 +81,32 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 	}
 	shardID := ShardID(req.GetShardId())
 
-	// Heartbeat the shard. Idempotent — accepts unknown shards
-	// silently so the first ReportShard from a fresh shard isn't
-	// rejected before its membership has been Apply'd.
+	// Self-registration. If the shard isn't already in coordinator
+	// state, Raft-Apply AddShard now so subsequent reports land as
+	// heartbeats and so domain assignments addressed at this shard
+	// have a registry entry to point at. The shard carries its dial
+	// address on every report; we record it on first sight only.
+	// Re-registration of an existing shard would return ErrShardExists
+	// — silently swallowed because the registration is by definition
+	// already done.
+	if _, ok := g.c.State().Shard(shardID); !ok {
+		entry := ShardEntry{
+			ID:      shardID,
+			Address: req.GetShardAddress(),
+		}
+		// AddShard goes through Raft so it survives leader failover
+		// and shows up in snapshots. Failure here is logged-only —
+		// we still want the heartbeat to land for soft-state.
+		if err := g.c.Apply(ctx, MakeAddShardCommand(entry)); err != nil && !errors.Is(err, ErrShardExists) {
+			// Don't fail the RPC: a transient Apply failure shouldn't
+			// stall the shard's report loop. Next ReportShard retries.
+			return nil, status.Errorf(codes.Unavailable, "coordinator: register shard: %v", err)
+		}
+	}
+
+	// Heartbeat the shard. MarkHeartbeat is a no-op if the shard
+	// somehow isn't registered (e.g. concurrent removal); the
+	// AddShard above ensures the common path is registered first.
 	g.c.State().MarkHeartbeat(shardID, time.Now().UTC())
 
 	// Persist soft state.
