@@ -16,7 +16,28 @@ name: Images
 on:
   push:
     branches: [main]
+    # The two images bundle Go binaries built from /cmd, /pkg, /api,
+    # /test/scaletest, and the Dockerfiles themselves; CRDs are also
+    # baked in. A push that only touches /docs, /site, /sim, or
+    # tests-with-no-image-impact (e.g. /test/conformance) shouldn't
+    # rebuild — keeps `:main` immutable when its content didn't move.
+    paths:
+      - "cmd/**"
+      - "pkg/**"
+      - "api/**"
+      - "test/scaletest/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/images.yml"
   pull_request:
+    paths:
+      - "cmd/**"
+      - "pkg/**"
+      - "api/**"
+      - "test/scaletest/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/images.yml"
 
 # Default permissions = none. The push job below grants packages:write
 # only for itself; PR builds run with the read-only default.
