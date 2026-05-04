@@ -99,9 +99,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Compute tags
         id: tags
+        # GHCR repository names must be lowercase. github.repository_owner
+        # is "intUnderflow" (mixed case), so lowercase it here before
+        # composing the tags.
         run: |
           short_sha=$(git rev-parse --short=12 "$GITHUB_SHA")
-          base="ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}"
+          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          base="ghcr.io/${owner_lc}/${{ matrix.image }}"
           echo "tags=${base}:main,${base}:sha-${short_sha}" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
