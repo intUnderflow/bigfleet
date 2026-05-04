@@ -6,9 +6,12 @@ hero:
   tagline: Many Kubernetes clusters. One fleet. One decision engine.
   actions:
     - text: Read the operating model
-      link: /papers/fleet-scale-kubernetes/
+      link: https://lucy.sh/fleet-scale-kubernetes
       icon: right-arrow
       variant: primary
+      attrs:
+        target: _blank
+        rel: noopener
     - text: Quickstart
       link: /quickstart/
       icon: external
