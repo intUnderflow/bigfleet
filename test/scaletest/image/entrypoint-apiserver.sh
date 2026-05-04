@@ -128,6 +128,8 @@ kube-apiserver \
   --allow-privileged=true \
   --disable-admission-plugins=ServiceAccount \
   --feature-gates=WatchList=true \
+  --max-requests-inflight=2000 \
+  --max-mutating-requests-inflight=1000 \
   >"$WORK/logs/apiserver.log" 2>&1 &
 APISERVER_PID=$!
 
