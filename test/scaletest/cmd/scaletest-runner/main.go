@@ -436,8 +436,16 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"operatorAckP99Seconds":              `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":          `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
 		"shardShortfalls":                    `sum(bigfleet_shard_shortfalls)`,
-		"loadgenCRsActive":                   `sum(scaletest_loadgen_cr_active)`,
-		"loadgenCRsCreatedPerSec":            `sum(rate(scaletest_loadgen_cr_created_total[5m]))`,
+		// loadgenCRsActive uses min_over_time across the last 5 min of
+		// soak so the post-soak gate catches "ramped to target then
+		// drifted below" runs without false-positiving on the very last
+		// scrape, which lands during teardown when kwok pods are being
+		// killed (the in-process sum trivially craters when half the
+		// pods stop reporting). One past run reported 30,399 active
+		// because of exactly this teardown artifact; in-soak the
+		// number was 49,999-50,000 throughout.
+		"loadgenCRsActive":        `min_over_time(sum(scaletest_loadgen_cr_active)[5m:15s])`,
+		"loadgenCRsCreatedPerSec": `sum(rate(scaletest_loadgen_cr_created_total[5m]))`,
 		// Per-phase p99s. Required to distinguish "the whole cycle is
 		// slow" from "one phase has a long tail" (M11.21 added the
 		// histogram; the runner's summary now surfaces it).

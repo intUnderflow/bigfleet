@@ -174,11 +174,13 @@ func (d *driver) run(ctx context.Context) error {
 		}
 	}
 
-	// Phase 3: steady-state churn until duration elapses (or forever).
-	deadline := time.Time{}
-	if d.prof.DurationSeconds > 0 {
-		deadline = time.Now().Add(time.Duration(d.prof.DurationSeconds) * time.Second)
-	}
+	// Phase 3: steady-state churn until ctx is cancelled. The runner
+	// owns lifecycle (helm uninstall on soak end); the load-driver
+	// MUST NOT self-terminate, because its exit cascades through the
+	// container supervise loop into pod death, which crashes the
+	// metric scrape during the very window the runner is reading
+	// post-soak metrics. profile.durationSeconds is now consumed only
+	// by the runner for the soak budget.
 
 	// Churn tick fires once per second. Replace a fraction of CRs sized
 	// to hit churnPerMinute averaged over each minute.
@@ -195,10 +197,6 @@ func (d *driver) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
-			if !deadline.IsZero() && time.Now().After(deadline) {
-				d.log.Info("duration reached, exiting")
-				return nil
-			}
 			if perTick > 0 {
 				d.churn(ctx, perTick)
 			}
