@@ -1,5 +1,26 @@
-apiVersion: apps/v1
-kind: Deployment
+# M12: shard runs as a StatefulSet with stable per-pod DNS via the
+# `bigfleet-shard-headless` Service. kwok-cluster pods derive their
+# shard endpoint as `bigfleet-shard-(N % shard.replicas)` from
+# POD_NAME so cluster→shard binding survives a rollout-restart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-shard-headless
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: shard
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - { name: grpc,    port: 7780, targetPort: grpc }
+    - { name: metrics, port: 8780, targetPort: metrics }
+---
+apiVersion: v1
+kind: Service
 metadata:
   name: bigfleet-shard
   namespace: {{ .Values.namespace }}
@@ -7,7 +28,25 @@ metadata:
     {{- include "scaletest.labels" . | nindent 4 }}
     app.kubernetes.io/component: shard
 spec:
+  selector:
+    app.kubernetes.io/component: shard
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - { name: grpc,    port: 7780, targetPort: grpc }
+    - { name: metrics, port: 8780, targetPort: metrics }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  serviceName: bigfleet-shard-headless
   replicas: {{ .Values.shard.replicas }}
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app.kubernetes.io/component: shard
@@ -28,6 +67,10 @@ spec:
             - --metrics-addr=:8780
             - --id=$(POD_NAME)
             - --data-dir=/var/lib/bigfleet
+            - --advertise-addr=$(POD_NAME).bigfleet-shard-headless.{{ .Values.namespace }}.svc:7780
+            {{- if .Values.coordinator.enabled }}
+            - --coordinator-addr=bigfleet-coordinator.{{ .Values.namespace }}.svc:7790
+            {{- end }}
             - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
             - --max-actions-per-cycle={{ .Values.shard.maxActionsPerCycle | default 0 }}
             - --execute-concurrency={{ .Values.shard.executeConcurrency | default 1 }}
@@ -56,19 +99,3 @@ spec:
       volumes:
         - name: data
           emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: bigfleet-shard
-  namespace: {{ .Values.namespace }}
-  labels:
-    {{- include "scaletest.labels" . | nindent 4 }}
-    app.kubernetes.io/component: shard
-spec:
-  selector:
-    app.kubernetes.io/component: shard
-    app.kubernetes.io/part-of: bigfleet-scaletest
-  ports:
-    - { name: grpc,    port: 7780, targetPort: grpc }
-    - { name: metrics, port: 8780, targetPort: metrics }

@@ -18,8 +18,13 @@ admin certs to the shared volume and touches `apiserver-ready` once
 serving; the workload container blocks on that file before starting
 operator/load-driver.
 
-Deployment vs StatefulSet: still Deployment — POD_NAME provides a
-unique cluster ID per replica and state is scrubbed on restart.
+StatefulSet (M12): predictable pod ordinals (kwok-cluster-N) so the
+workload entrypoint can derive a deterministic shard ordinal
+(`N % shard.replicas`) and the same kwok cluster always lands on the
+same shard across pod restarts. Required for the multi-shard test —
+the Deployment's randomised pod names would re-bind clusters to
+different shards on every restart and violate the
+"clusters-permanently-bound-on-first-contact" hard rule.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -32,8 +37,28 @@ data:
   profile.yaml: |
     {{- toYaml .Values.loadProfile | nindent 4 }}
 ---
+# Stub headless Service required by StatefulSet `serviceName`. Nothing
+# dials kwok pods externally; the Service exists only to give the
+# StatefulSet a value for spec.serviceName.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kwok-cluster-headless
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kwok-cluster
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: kwok-cluster
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - name: operator-met
+      port: 8770
+---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: kwok-cluster
   namespace: {{ .Values.namespace }}
@@ -41,7 +66,9 @@ metadata:
     {{- include "scaletest.labels" . | nindent 4 }}
     app.kubernetes.io/component: kwok-cluster
 spec:
+  serviceName: kwok-cluster-headless
   replicas: {{ .Values.kwok.clusterCount }}
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app.kubernetes.io/component: kwok-cluster
@@ -74,8 +101,17 @@ spec:
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
-            - name: BIGFLEET_SHARD_ADDR
-              value: {{ include "scaletest.shardAddr" . | quote }}
+            # Multi-shard endpoint resolution. The workload entrypoint
+            # picks an ordinal as `N % BIGFLEET_SHARD_REPLICAS` from
+            # POD_NAME and dials the per-pod headless DNS. Stable
+            # across pod restarts — required for cluster-to-shard
+            # binding to survive a StatefulSet rollout-restart.
+            - name: BIGFLEET_SHARD_HEADLESS_DNS
+              value: "bigfleet-shard-headless.{{ .Values.namespace }}.svc"
+            - name: BIGFLEET_SHARD_PORT
+              value: "7780"
+            - name: BIGFLEET_SHARD_REPLICAS
+              value: "{{ .Values.shard.replicas | default 1 }}"
             - name: LOAD_PROFILE
               value: /etc/loadgen/profile.yaml
             - name: OPERATOR_QPS

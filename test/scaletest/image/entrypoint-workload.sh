@@ -16,10 +16,37 @@
 set -euo pipefail
 
 : "${POD_NAME:?POD_NAME required}"
-: "${BIGFLEET_SHARD_ADDR:?BIGFLEET_SHARD_ADDR required}"
 : "${LOAD_PROFILE:?LOAD_PROFILE required (path to YAML)}"
 
 CLUSTER_ID="${POD_NAME}"
+
+# ---- multi-shard endpoint resolution ----
+#
+# When BIGFLEET_SHARD_HEADLESS_DNS is set, the harness is running
+# against a multi-shard StatefulSet. We pick a deterministic shard
+# ordinal from the kwok-cluster's StatefulSet ordinal so a pod restart
+# lands on the same shard, preserving cluster-to-shard binding (per
+# the "clusters are permanently bound to shards on first contact"
+# hard rule).
+#
+# POD_NAME convention: kwok-cluster-N (StatefulSet pod). If the pod
+# name doesn't end in -N (legacy Deployment install / ad-hoc), fall
+# back to ordinal 0.
+#
+# When BIGFLEET_SHARD_HEADLESS_DNS is unset, BIGFLEET_SHARD_ADDR must
+# already be set by the chart — the legacy single-shard path.
+if [[ -n "${BIGFLEET_SHARD_HEADLESS_DNS:-}" ]]; then
+  : "${BIGFLEET_SHARD_REPLICAS:?BIGFLEET_SHARD_REPLICAS required when BIGFLEET_SHARD_HEADLESS_DNS is set}"
+  : "${BIGFLEET_SHARD_PORT:?BIGFLEET_SHARD_PORT required when BIGFLEET_SHARD_HEADLESS_DNS is set}"
+  POD_ORDINAL="${POD_NAME##*-}"
+  if ! [[ "$POD_ORDINAL" =~ ^[0-9]+$ ]]; then
+    POD_ORDINAL=0
+  fi
+  SHARD_ORDINAL=$((POD_ORDINAL % BIGFLEET_SHARD_REPLICAS))
+  BIGFLEET_SHARD_ADDR="bigfleet-shard-${SHARD_ORDINAL}.${BIGFLEET_SHARD_HEADLESS_DNS}:${BIGFLEET_SHARD_PORT}"
+fi
+: "${BIGFLEET_SHARD_ADDR:?BIGFLEET_SHARD_ADDR required (or BIGFLEET_SHARD_HEADLESS_DNS + BIGFLEET_SHARD_REPLICAS + BIGFLEET_SHARD_PORT)}"
+
 WORK="${WORK:-/var/scaletest}"
 KCFG="$WORK/admin.kubeconfig"
 
