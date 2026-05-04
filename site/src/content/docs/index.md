@@ -19,11 +19,25 @@ hero:
       variant: minimal
 ---
 
-## What BigFleet is
+## Capacity is trapped inside clusters
 
-BigFleet is a **fleet-level infrastructure autoscaler**. It receives capacity needs from many Kubernetes clusters and provisions or reclaims machines through pluggable, **out-of-tree** `CapacityProvider` backends. It's the reference implementation of the design described in two papers — [BigFleet](https://lucy.sh/bigfleet) (architecture) and [Fleet-Scale Kubernetes](https://lucy.sh/fleet-scale-kubernetes) (operating model). Both are also vendored in this site under [/papers/bigfleet/](/papers/bigfleet/) and [/papers/fleet-scale-kubernetes/](/papers/fleet-scale-kubernetes/).
+Kubernetes was designed for a single cluster. Most organisations now run tens, hundreds, or thousands of clusters — and the capacity inside them is fragmented. One team's GPU rack sits idle while another team's training job is GPU-starved. There's no mechanism to rebalance.
 
-BigFleet is **not** a scheduler. It does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission. It sits one layer below the cluster autoscaler.
+Datadog's State of Cloud Costs report puts average enterprise CPU utilisation at around **18 %**, with overprovisioning factors of **2× to 5×** and waste estimates between **$50 000 and $500 000 per cluster per year**. The capacity is there. It's just stuck.
+
+The hyperscalers have fleet-level control planes (Borg, Twine). Most organisations manage their fleets with per-cluster GitOps and ad-hoc rebalancing.
+
+## What BigFleet does
+
+BigFleet sits one tier above the cluster autoscaler. Every cluster reports its capacity needs in a small standard contract — three CRDs and one protobuf message. BigFleet provisions, reclaims, and rebalances machines across the entire fleet, treating bare-metal, reserved, on-demand, and spot as a single fungible pool priced by `price + interruption_probability × interruption_penalty`.
+
+Three properties carry the design:
+
+- **Capacity is decoupled from cluster identity.** A GPU rack can serve any cluster that asks for one. "The GPU cluster" stops being a fixed thing; it's wherever GPUs are right now.
+- **Every cluster looks the same.** No snowflake configurations. The cluster is reduced to a scheduling domain — kube-scheduler still places pods, BigFleet just makes sure the right machines are there.
+- **Static stability.** Clusters keep running with BigFleet entirely down. Running pods, kubelet, kube-scheduler are unaffected; only new provisioning pauses. The autoscaler is not on the data-plane critical path.
+
+BigFleet is the reference implementation of two papers: the [operating model](/papers/fleet-scale-kubernetes/) (how cluster fleets should work) and the [architecture](/papers/bigfleet/) (how this autoscaler is built). It is **not** a scheduler — it does not place pods, simulate kube-scheduler, manage cluster lifecycle, or run quota / admission.
 
 ## Built for fleet scale
 
