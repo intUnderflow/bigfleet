@@ -205,22 +205,22 @@ Outcomes on this page are **re-evaluated under the current SLO definition** — 
 
 `;
   if (first) {
-    header += `## Cumulative trajectory at 500K
+    header += `## Per-shard 500K optimisation trajectory
 
-The scaleway-500k profile is the production-shape benchmark: 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on a 5-node Scaleway Kapsule (PRO2-M, nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across them.
+The paper sets 500K machines as the per-shard cycle ceiling (Phase 3 walks the inventory each cycle), so most BigFleet optimisation work happens against the scaleway-500k profile: a single shard, 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on Scaleway Kapsule (PRO2-M, fr-par / nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across those runs. Multi-shard tests (scaleway-1m, scaleway-5m) build on the per-shard ceiling validated here.
 
 `;
     if (headline) {
       const reduction = (((first.cycleP99 - headline.cycleP99) / first.cycleP99) * 100).toFixed(1);
-      header += `**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(headline.cycleP99)}** (${reduction} % reduction). The most recent run that meets the SLO at full sustained load is [\`${shortLabel(headline.dir)}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${headline.dir}).
+      header += `**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(headline.cycleP99)}** (${reduction} % reduction). The most recent single-shard run that meets the SLO at full sustained load is [\`${shortLabel(headline.dir)}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${headline.dir}).
 
 `;
     } else {
-      header += `Headline numbers omitted — there is no run on this profile that currently meets the SLO at full sustained load.
+      header += `Headline numbers omitted — there is no single-shard 500K run that currently meets the SLO at full sustained load.
 
 `;
     }
-    header += `![scaleway-500k cycle p99 across milestones](./scaletest-progress.svg)
+    header += `![per-shard 500K cycle p99 across milestones](./scaletest-progress.svg)
 
 The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when the run held target load *and* hit every SLO ceiling.
 

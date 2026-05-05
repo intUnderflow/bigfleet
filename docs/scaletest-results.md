@@ -4,13 +4,13 @@ Each run is one full pass through the scaletest harness: chart install, ramp to 
 
 Outcomes on this page are **re-evaluated under the current SLO definition** — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs that were recorded as `passed: true` by an earlier runner without a sustained-load gate appear here as ✗ when they didn't hold target load. Re-evaluation is intentional: the SLO numbers from an under-loaded run don't say anything about behaviour at the actual benchmark.
 
-## Cumulative trajectory at 500K
+## Per-shard 500K optimisation trajectory
 
-The scaleway-500k profile is the production-shape benchmark: 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on a 5-node Scaleway Kapsule (PRO2-M, nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across them.
+The paper sets 500K machines as the per-shard cycle ceiling (Phase 3 walks the inventory each cycle), so most BigFleet optimisation work happens against the scaleway-500k profile: a single shard, 50 simulated clusters, 50 000 demand CRs, 500 000 pre-seeded inventory machines on Scaleway Kapsule (PRO2-M, fr-par / nl-ams). Each milestone landed a real shard or harness change; the chart below tracks shard cycle p99 across those runs. Multi-shard tests (scaleway-1m, scaleway-5m) build on the per-shard ceiling validated here.
 
-**4.03 s → 48 ms** (98.8 % reduction). The most recent run that meets the SLO at full sustained load is [`scaleway-500k-2node`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-011213-scaleway-500k-2node).
+**4.03 s → 48 ms** (98.8 % reduction). The most recent single-shard run that meets the SLO at full sustained load is [`scaleway-500k-2node`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-011213-scaleway-500k-2node).
 
-![scaleway-500k cycle p99 across milestones](./scaletest-progress.svg)
+![per-shard 500K cycle p99 across milestones](./scaletest-progress.svg)
 
 The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when the run held target load *and* hit every SLO ceiling.
 
