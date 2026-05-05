@@ -53,6 +53,14 @@ func fireOneAction(soakCtx context.Context, kubeconfig, namespace string, soakSt
 		if err != nil {
 			r.FireError = err.Error()
 		}
+	case strings.HasPrefix(r.Action, "partition-coordinator-from-shard-"):
+		pod := strings.TrimPrefix(r.Action, "partition-coordinator-from-shard-")
+		err := partitionShardEgress(soakCtx, kubeconfig, namespace, pod, 60*time.Second)
+		r.FiredAt = time.Now().UTC().Format(time.RFC3339)
+		r.Assertion = fmt.Sprintf("shard pod %s keeps running cycles during 60s coordinator partition (static stability)", pod)
+		if err != nil {
+			r.FireError = err.Error()
+		}
 	default:
 		r.FireError = "unrecognised action"
 	}
@@ -92,6 +100,82 @@ func killPod(ctx context.Context, kubeconfig, namespace, podName string) error {
 		"delete", "pod", podName,
 		"--wait=false",
 	}
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// partitionShardEgress applies a NetworkPolicy that denies all egress
+// from the named shard pod, holds for the duration, then removes the
+// policy. The shard's gRPC server still receives operator-side
+// connections (those are inbound and unaffected by egress denials);
+// only the shard→coordinator coordclient is severed. That's the M17
+// "partition the data plane from the control plane" semantic.
+//
+// Vanilla NetworkPolicy is allowlist-only — the way to express "deny
+// all egress" is `policyTypes: [Egress]` with an empty `egress:` list.
+// This also breaks DNS resolution from the shard pod, but the
+// coordclient's gRPC connection is already established + cached so
+// the partition cleanly severs control-plane traffic without
+// disrupting the data plane.
+//
+// Cleanup runs even if ctx is cancelled — callers can rely on the
+// partition not outliving the runner. Uses a fresh context for the
+// teardown delete to handle the cancellation case.
+func partitionShardEgress(ctx context.Context, kubeconfig, namespace, shardPod string, hold time.Duration) error {
+	npName := "bigfleet-partition-" + shardPod
+	manifest := fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  podSelector:
+    matchLabels:
+      statefulset.kubernetes.io/pod-name: %s
+  policyTypes: [Egress]
+  egress: []
+`, npName, namespace, shardPod)
+
+	if err := kubectlApplyStdin(ctx, kubeconfig, manifest); err != nil {
+		return fmt.Errorf("apply NetworkPolicy: %w", err)
+	}
+
+	// Deferred cleanup uses a fresh context so a soak-side cancel
+	// can't leave the partition in place across teardown.
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := kubectlDeleteNetworkPolicy(cleanupCtx, kubeconfig, namespace, npName); err != nil {
+			fmt.Fprintf(os.Stderr, "partition cleanup: failed to remove NetworkPolicy %s: %v\n", npName, err)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(hold):
+	}
+	return nil
+}
+
+func kubectlApplyStdin(ctx context.Context, kubeconfig, manifest string) error {
+	args := []string{"apply", "-f", "-"}
+	if kubeconfig != "" {
+		args = append([]string{"--kubeconfig", kubeconfig}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.Stdin = strings.NewReader(manifest)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func kubectlDeleteNetworkPolicy(ctx context.Context, kubeconfig, namespace, name string) error {
+	args := []string{"-n", namespace, "delete", "networkpolicy", name, "--ignore-not-found"}
 	if kubeconfig != "" {
 		args = append([]string{"--kubeconfig", kubeconfig}, args...)
 	}
@@ -152,6 +236,25 @@ func assertRunnerActionOutcome(ctx context.Context, kubeconfig, namespace string
 			return
 		}
 		r.AssertError = fmt.Sprintf("shard %s not publishing cycle metrics post-kill (rate = %.4f)", pod, v)
+	case strings.HasPrefix(r.Action, "partition-coordinator-from-shard-"):
+		// During the 60 s partition the shard cannot reach the
+		// coordinator, but the data plane (cycle / inventory / Phase
+		// 1-3) MUST keep running. Verify the partitioned pod kept
+		// publishing cycle metrics throughout — a sudden zero in
+		// rate(...[2m]) at end-of-soak would mean the partition broke
+		// the static-stability invariant.
+		pod := strings.TrimPrefix(r.Action, "partition-coordinator-from-shard-")
+		q := fmt.Sprintf(`sum(rate(bigfleet_shard_cycle_duration_seconds_count{pod="%s"}[2m]))`, pod)
+		v, err := promQuery(ctx, kubeconfig, namespace, q)
+		if err != nil {
+			r.AssertError = fmt.Sprintf("prom query: %v", err)
+			return
+		}
+		if v > 0 {
+			r.Asserted = true
+			return
+		}
+		r.AssertError = fmt.Sprintf("shard %s stopped publishing cycle metrics post-partition (rate = %.4f) — static stability violation", pod, v)
 	default:
 		r.AssertError = "unrecognised action — no assertion to run"
 	}

@@ -1,0 +1,69 @@
+# failover-partition — M17.x static-stability regression check for a
+# control-plane partition. Two shards each carry ~25 KWOK clusters.
+# At t=600s the runner installs a NetworkPolicy that severs egress
+# from bigfleet-shard-1 to the rest of the cluster (including the
+# coordinator). The policy holds for 60 s and is then removed.
+#
+# Validates the load-bearing "static stability is non-negotiable" hard
+# rule end-to-end: the partitioned shard must continue running cycles
+# (Phase 1-3, execute, reconcile against in-process inventory) for the
+# duration of the partition. Re-establishment after heal is observed
+# implicitly via the rest-of-soak SLO numbers.
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: Always
+
+kwok:
+  clusterCount: 50
+  apiserverResources:
+    requests: { cpu: 150m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 3Gi }
+  workloadResources:
+    requests: { cpu: 150m, memory: 300Mi }
+    limits:   { cpu: 1500m, memory: 1Gi }
+
+shard:
+  replicas: 2
+  seedMachines: 0
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+
+coordinator:
+  enabled: true
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 12Gi }
+
+# M17.x runnerAction: partition bigfleet-shard-1 from the coordinator
+# for 60 s mid-soak. Asserts the shard kept publishing cycle metrics
+# throughout (data plane survives without the coordinator).
+runnerActions:
+  - { atSeconds: 600, action: partition-coordinator-from-shard-bigfleet-shard-1 }
+
+costEstimate:
+  vCPU: 32
+  memoryGB: 128
+  awsSpotUsdPerHour: 0.42
+  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 30-min soak with one 60-s control-plane partition mid-soak. ~$0.38 for a 50-min run end-to-end. Requires a CNI that enforces NetworkPolicy (Cilium on Kapsule does); kind clusters need explicit calico/cilium installs."
