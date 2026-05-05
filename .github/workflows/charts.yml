@@ -1,0 +1,106 @@
+name: Charts
+
+# Package and publish the helm charts. Mirrors images.yml in shape:
+#
+#   on push to main    — package AND push to GHCR as OCI artifacts
+#                        at oci://ghcr.io/<owner>/charts/<chart>.
+#                        Tag is the chart version from Chart.yaml
+#                        (helm OCI doesn't carry a moving "main" tag
+#                        the way docker does — bump Chart.yaml's
+#                        version field on every shippable change).
+#   on pull_request    — package only (smoke test that helm still
+#                        accepts the chart and the kubeVersion
+#                        constraint renders). No login, no push.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+      - "api/crd/**"
+      - ".github/workflows/charts.yml"
+  pull_request:
+    paths:
+      - "deploy/helm/**"
+      - "api/crd/**"
+      - ".github/workflows/charts.yml"
+
+permissions: {}
+
+jobs:
+  package-pr:
+    name: package (${{ matrix.chart }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - bigfleet
+          - bigfleet-operator
+          - bigfleet-unschedulable-pod-controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+      - name: Lint
+        run: helm lint deploy/helm/${{ matrix.chart }}
+      - name: Package (no push)
+        run: helm package deploy/helm/${{ matrix.chart }} -d /tmp/charts
+      - name: Render against minimum supported Kubernetes version
+        # The charts declare kubeVersion: ">= 1.31.0-0". A render at
+        # exactly the floor catches accidental use of newer-than-1.31
+        # API surfaces; helm template fails fast if the constraint is
+        # violated.
+        run: |
+          # Charts with required values (clusterID, shardAddress on
+          # bigfleet-operator) need stubs to render.
+          set -- foo deploy/helm/${{ matrix.chart }} --kube-version=1.31.0
+          if [ "${{ matrix.chart }}" = "bigfleet-operator" ]; then
+            set -- "$@" --set clusterID=test --set shardAddress=foo:7780
+          fi
+          helm template "$@" >/dev/null
+
+  push-main:
+    name: push (${{ matrix.chart }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - bigfleet
+          - bigfleet-operator
+          - bigfleet-unschedulable-pod-controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.0
+      - name: Compute target
+        id: target
+        # GHCR repository names must be lowercase.
+        run: |
+          owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "registry=oci://ghcr.io/${owner_lc}/charts" >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR (helm registry)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username "${{ github.actor }}" --password-stdin
+      - name: Package
+        run: helm package deploy/helm/${{ matrix.chart }} -d /tmp/charts
+      - name: Push
+        # `helm push` infers the chart name and version from the
+        # filename produced by `helm package`. Chart.yaml's `version`
+        # field is what gets pushed as the OCI tag — bump it on every
+        # shippable change. Pushes are immutable; re-pushing the same
+        # version is rejected by GHCR.
+        run: |
+          chart_tgz=$(ls /tmp/charts/${{ matrix.chart }}-*.tgz | head -1)
+          helm push "$chart_tgz" "${{ steps.target.outputs.registry }}"

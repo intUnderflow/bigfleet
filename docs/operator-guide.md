@@ -36,7 +36,7 @@ BigFleet is two tiers. The **coordinator** (Tier 1) owns Raft-replicated fleet s
 
 ## Install
 
-The coordinator and shards live in your management cluster (or a dedicated cluster). Each managed cluster runs its own operator.
+The coordinator and shards live in your management cluster (or a dedicated cluster). Each managed cluster runs its own operator. Charts are published to GHCR as OCI artefacts on every push to main; pin to the chart version (`Chart.yaml`'s `version` field) for reproducibility.
 
 ```sh
 # 1. Install the BigFleet CRDs into every cluster you want managed.
@@ -45,14 +45,16 @@ kubectl apply -f https://github.com/intUnderflow/bigfleet/raw/main/api/crd/bigfl
 kubectl apply -f https://github.com/intUnderflow/bigfleet/raw/main/api/crd/bigfleet.lucy.sh_availablecapacities.yaml
 
 # 2. Deploy the coordinator + shard control plane on the management cluster.
-helm install bigfleet ./deploy/helm/bigfleet \
+helm install bigfleet oci://ghcr.io/intunderflow/charts/bigfleet \
+  --version 0.1.0 \
   --namespace bigfleet-system --create-namespace \
   --set coordinator.replicas=3 \
   --set coordinator.bootstrap=true   # only for the first install
 # After the first install, helm upgrade with coordinator.bootstrap=false.
 
 # 3. On each managed cluster, install the per-cluster operator.
-helm install bigfleet-operator ./deploy/helm/bigfleet-operator \
+helm install bigfleet-operator oci://ghcr.io/intunderflow/charts/bigfleet-operator \
+  --version 0.1.0 \
   --namespace bigfleet-system --create-namespace \
   --set clusterID=cluster-prod-eu \
   --set shardAddress=bigfleet-shard.bigfleet-system:7780
@@ -60,12 +62,15 @@ helm install bigfleet-operator ./deploy/helm/bigfleet-operator \
 # 4. (Optional) Install the unschedulable-pod controller on clusters
 #    where you want BigFleet to react to Pod scheduling failures.
 helm install bigfleet-unschedulable-pod-controller \
-  ./deploy/helm/bigfleet-unschedulable-pod-controller \
+  oci://ghcr.io/intunderflow/charts/bigfleet-unschedulable-pod-controller \
+  --version 0.1.0 \
   --namespace bigfleet-system
 
 # 5. Register your providers with the coordinator (one CLI per provider).
 #    Provider authoring is documented in docs/provider-author-guide.md.
 ```
+
+Equivalent install commands using a git checkout (useful for development or air-gapped environments) replace `oci://ghcr.io/intunderflow/charts/<chart> --version <V>` with `./deploy/helm/<chart>` and drop the version flag.
 
 ## Day-2 observability
 
