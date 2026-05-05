@@ -39,6 +39,11 @@ async function readRuns() {
         rollupP99: numericOrNull(j.metrics?.operatorRollupP99Seconds),
         active: numericOrNull(j.metrics?.loadgenCRsActive),
         totalCRs: j.scale?.totalCrs ?? null,
+        // Multi-shard / inventory totals (M12 onwards). Pre-M12
+        // summaries don't carry these; default shardReplicas to 1
+        // so historical rows render unchanged.
+        shardReplicas: j.scale?.shardReplicas ?? 1,
+        aggregateInventory: j.scale?.aggregateInventory ?? null,
       });
     } catch {
       // dir without a parseable summary.json — skip silently.
@@ -51,6 +56,22 @@ async function readRuns() {
   // Chronological order by directory prefix (UTC timestamp).
   runs.sort((a, b) => a.dir.localeCompare(b.dir));
   return runs;
+}
+
+// renderInventoryCol formats the per-shard × replicas → aggregate
+// fleet size cell. Multi-shard runs render `2 × 500,000 = 1,000,000`;
+// single-shard runs render `500,000` (no multiplication clutter when
+// it's the same as the per-shard number).
+function renderInventoryCol(r) {
+  if (r.aggregateInventory == null || r.aggregateInventory <= 0) return "—";
+  const seed = r.aggregateInventory / r.shardReplicas;
+  if (r.shardReplicas <= 1) return fmtInt(seed);
+  return `${r.shardReplicas} × ${fmtInt(seed)} = ${fmtInt(r.aggregateInventory)}`;
+}
+
+function fmtInt(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return Math.round(n).toLocaleString("en-US");
 }
 
 // numericOrNull collapses the runner's -1 sentinel for "query failed"
@@ -224,8 +245,10 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
 
   let table = `## All runs
 
-| run | profile | cycle p99 | ack p99 | rollup p99 | active CRs / target | target met | passed (current SLO) |
-|---|---|---|---|---|---|---|---|
+The "shards × inventory" column reflects what the run actually exercised: shard.replicas × seedMachines per shard. Single-shard 500K runs show the same number twice; multi-shard runs make the aggregate fleet size explicit.
+
+| run | profile | shards × inventory | cycle p99 | ack p99 | rollup p99 | active CRs / target | target met | passed (current SLO) |
+|---|---|---|---|---|---|---|---|---|
 `;
   for (const r of runs) {
     const tag = shortLabel(r.dir);
@@ -237,7 +260,8 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
           : "—";
     const targetMet = r.targetMet == null ? "—" : r.targetMet ? "✓" : "✗";
     const pass = r.passed ? "✓" : "✗";
-    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${r.profile ?? "—"} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${activeCol} | ${targetMet} | ${pass} |\n`;
+    const inventoryCol = renderInventoryCol(r);
+    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${r.profile ?? "—"} | ${inventoryCol} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${activeCol} | ${targetMet} | ${pass} |\n`;
   }
 
   return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;

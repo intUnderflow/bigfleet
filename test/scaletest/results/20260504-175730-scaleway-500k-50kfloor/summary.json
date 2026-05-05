@@ -12,7 +12,10 @@
   "scale": {
     "kwokClusters": 50,
     "machinesPerCr": 1000,
-    "totalCrs": 50000
+    "totalCrs": 50000,
+    "shardReplicas": 1,
+    "seedMachinesPerShard": 500000,
+    "aggregateInventory": 500000
   },
   "metrics": {
     "coordinatorApplyOpsPerSec": -1,
@@ -31,5 +34,5 @@
     "shardShortfalls": 0
   },
   "passed": false,
-  "failure": "loadgenCRsActive 30399 \u003c 49950 (99.9% of target 50000) — run did not sustain target load"
+  "failure": "loadgenCRsActive 30399 < 49950 (99.9% of target 50000) \u2014 run did not sustain target load"
 }

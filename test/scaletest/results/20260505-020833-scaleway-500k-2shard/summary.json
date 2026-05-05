@@ -12,7 +12,10 @@
   "scale": {
     "kwokClusters": 50,
     "machinesPerCr": 1000,
-    "totalCrs": 50000
+    "totalCrs": 50000,
+    "shardReplicas": 2,
+    "seedMachinesPerShard": 500000,
+    "aggregateInventory": 1000000
   },
   "metrics": {
     "coordinatorApplyOpsPerSec": -1,

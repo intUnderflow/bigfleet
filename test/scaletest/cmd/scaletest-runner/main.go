@@ -55,6 +55,10 @@ type profileFile struct {
 	KWOK struct {
 		ClusterCount int `yaml:"clusterCount"`
 	} `yaml:"kwok"`
+	Shard struct {
+		Replicas     int `yaml:"replicas"`
+		SeedMachines int `yaml:"seedMachines"`
+	} `yaml:"shard"`
 	LoadProfile struct {
 		Target          int `yaml:"target"`
 		DurationSeconds int `yaml:"durationSeconds"`
@@ -77,6 +81,12 @@ type runResult struct {
 		KWOKClusters  int `json:"kwokClusters"`
 		MachinesPerCR int `json:"machinesPerCr"`
 		TotalCRs      int `json:"totalCrs"`
+		// Multi-shard / inventory totals (M12 onwards). Older runs
+		// have these as 0 and must be read as "shardReplicas defaults
+		// to 1 and seedMachines defaults to 0" when rendering.
+		ShardReplicas        int `json:"shardReplicas"`
+		SeedMachinesPerShard int `json:"seedMachinesPerShard"`
+		AggregateInventory   int `json:"aggregateInventory"`
 	} `json:"scale"`
 	Metrics map[string]float64 `json:"metrics"`
 	Passed  bool               `json:"passed"`
@@ -221,6 +231,14 @@ func run(args []string) error {
 	res.Scale.KWOKClusters = prof.KWOK.ClusterCount
 	res.Scale.MachinesPerCR = prof.LoadProfile.Target
 	res.Scale.TotalCRs = prof.KWOK.ClusterCount * prof.LoadProfile.Target
+	// shard.replicas defaults to 1 when omitted; older profiles
+	// rendered correctly under that assumption pre-M12.
+	res.Scale.ShardReplicas = prof.Shard.Replicas
+	if res.Scale.ShardReplicas == 0 {
+		res.Scale.ShardReplicas = 1
+	}
+	res.Scale.SeedMachinesPerShard = prof.Shard.SeedMachines
+	res.Scale.AggregateInventory = res.Scale.ShardReplicas * res.Scale.SeedMachinesPerShard
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs)
 
 	summary := filepath.Join(*output, "summary.json")
