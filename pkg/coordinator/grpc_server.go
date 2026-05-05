@@ -233,6 +233,109 @@ func (g *GRPCServer) clearAcked(shardID ShardID, acks []*pb.InstructAck) {
 	}
 }
 
+// AssignDomain pins a topology domain to a shard. Idempotent — see
+// state.AssignDomain. Re-assigning to the current shard is a no-op
+// success; assigning to a different shard returns AlreadyExists.
+//
+// The Raft Apply path goes through the FSM, which in turn calls
+// state.AssignDomain. Once committed, the next ReportShard from the
+// destination shard will pick up the assignment via the existing
+// CoordinatorInstruction path (not implemented here — this RPC just
+// records the binding in coordinator state).
+func (g *GRPCServer) AssignDomain(ctx context.Context, req *pb.AssignDomainRequest) (*pb.AssignDomainResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if req == nil || req.GetTopologyKey() == "" || req.GetTopologyValue() == "" || req.GetShardId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "topology_key, topology_value, shard_id all required")
+	}
+	d := DomainKey{Key: req.GetTopologyKey(), Value: req.GetTopologyValue()}
+	if err := g.c.Apply(ctx, MakeAssignDomainCommand(d, ShardID(req.GetShardId()))); err != nil {
+		if errors.Is(err, ErrDomainAlreadyAssigned) {
+			return nil, status.Error(codes.AlreadyExists, err.Error())
+		}
+		if errors.Is(err, ErrShardNotFound) {
+			return nil, status.Error(codes.NotFound, err.Error())
+		}
+		return nil, status.Errorf(codes.Unavailable, "AssignDomain: %v", err)
+	}
+	return &pb.AssignDomainResponse{}, nil
+}
+
+// UnassignDomain removes the binding. Idempotent.
+func (g *GRPCServer) UnassignDomain(ctx context.Context, req *pb.UnassignDomainRequest) (*pb.UnassignDomainResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if req == nil || req.GetTopologyKey() == "" || req.GetTopologyValue() == "" {
+		return nil, status.Error(codes.InvalidArgument, "topology_key and topology_value required")
+	}
+	d := DomainKey{Key: req.GetTopologyKey(), Value: req.GetTopologyValue()}
+	if err := g.c.Apply(ctx, MakeUnassignDomainCommand(d)); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "UnassignDomain: %v", err)
+	}
+	return &pb.UnassignDomainResponse{}, nil
+}
+
+// RemoveShard deletes a shard's registry entry. Cluster + domain
+// assignments pointing at it are cleaned up by state.RemoveShard.
+func (g *GRPCServer) RemoveShard(ctx context.Context, req *pb.RemoveShardRequest) (*pb.RemoveShardResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if req == nil || req.GetShardId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "shard_id required")
+	}
+	if err := g.c.Apply(ctx, MakeRemoveShardCommand(ShardID(req.GetShardId()))); err != nil {
+		if errors.Is(err, ErrShardNotFound) {
+			return nil, status.Error(codes.NotFound, err.Error())
+		}
+		return nil, status.Errorf(codes.Unavailable, "RemoveShard: %v", err)
+	}
+	return &pb.RemoveShardResponse{}, nil
+}
+
+// ListShards returns the registered shards. Read path — no Raft Apply.
+// The State guards itself with an RLock so this is safe on followers
+// too, but we still gate to leader-only for v1 to keep the read story
+// consistent (no stale-read footguns until we explicitly opt in).
+func (g *GRPCServer) ListShards(_ context.Context, _ *pb.ListShardsRequest) (*pb.ListShardsResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	entries := g.c.State().Shards()
+	out := make([]*pb.ShardRegistryEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, &pb.ShardRegistryEntry{
+			ShardId:             string(e.ID),
+			Address:             e.Address,
+			RegisteredAtUnixNs:  e.RegisteredAt.UnixNano(),
+			LastHeartbeatUnixNs: e.LastHeartbeat.UnixNano(),
+		})
+	}
+	return &pb.ListShardsResponse{Shards: out}, nil
+}
+
+// ListDomainAssignments returns the topology-domain → shard mapping.
+// Same leader-only contract as ListShards.
+func (g *GRPCServer) ListDomainAssignments(_ context.Context, _ *pb.ListDomainAssignmentsRequest) (*pb.ListDomainAssignmentsResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	entries := g.c.State().Shards()
+	out := make([]*pb.DomainAssignment, 0)
+	for _, e := range entries {
+		for _, d := range g.c.State().DomainsForShard(e.ID) {
+			out = append(out, &pb.DomainAssignment{
+				TopologyKey:   d.Key,
+				TopologyValue: d.Value,
+				ShardId:       string(e.ID),
+			})
+		}
+	}
+	return &pb.ListDomainAssignmentsResponse{Assignments: out}, nil
+}
+
 func cloneIntMap(in map[string]int32) map[string]int32 {
 	if in == nil {
 		return nil

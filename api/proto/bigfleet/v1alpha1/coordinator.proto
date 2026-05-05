@@ -22,6 +22,68 @@ service Coordinator {
   // keeps the v1 wire surface to one unary RPC; a streaming
   // Instructions RPC may land in a future revision.
   rpc ReportShard(ShardReport) returns (ReportAck);
+
+  // M15 admin surface. Each RPC is leader-only and returns
+  // FailedPrecondition on followers (the same redirect contract as
+  // ReportShard). v1 ships unauthenticated — the coordinator's gRPC
+  // service is a cluster-internal endpoint; exposing it externally
+  // requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
+  // intended client.
+  rpc AssignDomain(AssignDomainRequest) returns (AssignDomainResponse);
+  rpc UnassignDomain(UnassignDomainRequest) returns (UnassignDomainResponse);
+  rpc RemoveShard(RemoveShardRequest) returns (RemoveShardResponse);
+  rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
+  rpc ListDomainAssignments(ListDomainAssignmentsRequest) returns (ListDomainAssignmentsResponse);
+}
+
+// Admin RPCs: AssignDomain pins a topology domain (rack / zone /
+// region / etc.) to a specific shard. Idempotent — re-assigning a
+// domain to its current shard is a no-op success; assigning to a
+// *different* shard returns AlreadyExists with the current owner.
+message AssignDomainRequest {
+  string topology_key   = 1;
+  string topology_value = 2;
+  string shard_id       = 3;
+}
+message AssignDomainResponse {}
+
+// UnassignDomain removes the domain from coordinator state. Idempotent
+// — unassigning an already-absent domain is a no-op success.
+message UnassignDomainRequest {
+  string topology_key   = 1;
+  string topology_value = 2;
+}
+message UnassignDomainResponse {}
+
+// RemoveShard deletes the shard's registry entry and cascades cleanup
+// of any cluster / domain assignments pointing at it. Returns NotFound
+// if the shard isn't registered.
+message RemoveShardRequest {
+  string shard_id = 1;
+}
+message RemoveShardResponse {}
+
+// ListShards returns the registered shard set, sorted by ID.
+message ListShardsRequest {}
+message ListShardsResponse {
+  repeated ShardRegistryEntry shards = 1;
+}
+message ShardRegistryEntry {
+  string shard_id              = 1;
+  string address               = 2;
+  int64  registered_at_unix_ns = 3;
+  int64  last_heartbeat_unix_ns = 4;
+}
+
+// ListDomainAssignments returns the topology-domain → shard mapping.
+message ListDomainAssignmentsRequest {}
+message ListDomainAssignmentsResponse {
+  repeated DomainAssignment assignments = 1;
+}
+message DomainAssignment {
+  string topology_key   = 1;
+  string topology_value = 2;
+  string shard_id       = 3;
 }
 
 // ShardReport is what each shard sends every ~30s. Stateless: the

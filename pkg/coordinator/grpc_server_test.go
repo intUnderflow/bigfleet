@@ -172,6 +172,94 @@ func TestGRPCServer_ReportShard_SelfRegistersUnknownShard(t *testing.T) {
 	}
 }
 
+// TestGRPCServer_AdminRPCs_RoundTrip exercises the M15 admin surface
+// end-to-end: register a shard via ReportShard, list it, assign a
+// domain to it via the new AssignDomain RPC, list assignments, then
+// unassign + remove. Locks in the user-stories Mode-2 contract that
+// a platform engineer can drive coordinator state changes via gRPC
+// without restarting the coordinator with new bootstrap state.
+func TestGRPCServer_AdminRPCs_RoundTrip(t *testing.T) {
+	_, _, cli, ctx := startCoordinatorWithGRPC(t)
+
+	// 1. Self-register a shard via ReportShard so the registry is
+	// non-empty; AssignDomain refuses unknown shard ids.
+	if _, err := cli.ReportShard(ctx, &pb.ShardReport{
+		ShardId:      "shard-a",
+		ShardAddress: "shard-a.bigfleet-shard-headless:7780",
+		Cycle:        1,
+	}); err != nil {
+		t.Fatalf("ReportShard: %v", err)
+	}
+
+	// 2. ListShards sees it.
+	shards, err := cli.ListShards(ctx, &pb.ListShardsRequest{})
+	if err != nil {
+		t.Fatalf("ListShards: %v", err)
+	}
+	if len(shards.GetShards()) != 1 || shards.GetShards()[0].GetShardId() != "shard-a" {
+		t.Fatalf("ListShards = %v, want [shard-a]", shards.GetShards())
+	}
+
+	// 3. AssignDomain.
+	if _, err := cli.AssignDomain(ctx, &pb.AssignDomainRequest{
+		TopologyKey: "rack", TopologyValue: "r-1", ShardId: "shard-a",
+	}); err != nil {
+		t.Fatalf("AssignDomain: %v", err)
+	}
+
+	// 4. AssignDomain again to same shard is idempotent.
+	if _, err := cli.AssignDomain(ctx, &pb.AssignDomainRequest{
+		TopologyKey: "rack", TopologyValue: "r-1", ShardId: "shard-a",
+	}); err != nil {
+		t.Fatalf("AssignDomain (idempotent re-assign): %v", err)
+	}
+
+	// 5. AssignDomain to different shard fails AlreadyExists.
+	if _, err := cli.ReportShard(ctx, &pb.ShardReport{
+		ShardId: "shard-b", ShardAddress: "shard-b:7780", Cycle: 1,
+	}); err != nil {
+		t.Fatalf("ReportShard shard-b: %v", err)
+	}
+	_, err = cli.AssignDomain(ctx, &pb.AssignDomainRequest{
+		TopologyKey: "rack", TopologyValue: "r-1", ShardId: "shard-b",
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Errorf("re-assign to different shard: code = %v, want AlreadyExists", status.Code(err))
+	}
+
+	// 6. ListDomainAssignments sees the binding.
+	asn, err := cli.ListDomainAssignments(ctx, &pb.ListDomainAssignmentsRequest{})
+	if err != nil {
+		t.Fatalf("ListDomainAssignments: %v", err)
+	}
+	if len(asn.GetAssignments()) != 1 ||
+		asn.GetAssignments()[0].GetTopologyKey() != "rack" ||
+		asn.GetAssignments()[0].GetShardId() != "shard-a" {
+		t.Fatalf("ListDomainAssignments = %v, want one rack=r-1→shard-a", asn.GetAssignments())
+	}
+
+	// 7. UnassignDomain idempotent on absent.
+	if _, err := cli.UnassignDomain(ctx, &pb.UnassignDomainRequest{
+		TopologyKey: "zone", TopologyValue: "absent",
+	}); err != nil {
+		t.Errorf("UnassignDomain (absent) should be idempotent: %v", err)
+	}
+	if _, err := cli.UnassignDomain(ctx, &pb.UnassignDomainRequest{
+		TopologyKey: "rack", TopologyValue: "r-1",
+	}); err != nil {
+		t.Fatalf("UnassignDomain: %v", err)
+	}
+
+	// 8. RemoveShard cascades cleanup.
+	if _, err := cli.RemoveShard(ctx, &pb.RemoveShardRequest{ShardId: "shard-a"}); err != nil {
+		t.Fatalf("RemoveShard: %v", err)
+	}
+	_, err = cli.RemoveShard(ctx, &pb.RemoveShardRequest{ShardId: "shard-a"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("re-remove: code = %v, want NotFound", status.Code(err))
+	}
+}
+
 func TestGRPCServer_ReportShard_RejectsNonLeader(t *testing.T) {
 	// Build a coordinator that never becomes leader (no Bootstrap).
 	c, err := coordinator.New(coordinator.Config{

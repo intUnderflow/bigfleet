@@ -28,7 +28,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Coordinator_ReportShard_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ReportShard"
+	Coordinator_ReportShard_FullMethodName           = "/bigfleet.v1alpha1.Coordinator/ReportShard"
+	Coordinator_AssignDomain_FullMethodName          = "/bigfleet.v1alpha1.Coordinator/AssignDomain"
+	Coordinator_UnassignDomain_FullMethodName        = "/bigfleet.v1alpha1.Coordinator/UnassignDomain"
+	Coordinator_RemoveShard_FullMethodName           = "/bigfleet.v1alpha1.Coordinator/RemoveShard"
+	Coordinator_ListShards_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListShards"
+	Coordinator_ListDomainAssignments_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ListDomainAssignments"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -43,6 +48,17 @@ type CoordinatorClient interface {
 	// keeps the v1 wire surface to one unary RPC; a streaming
 	// Instructions RPC may land in a future revision.
 	ReportShard(ctx context.Context, in *ShardReport, opts ...grpc.CallOption) (*ReportAck, error)
+	// M15 admin surface. Each RPC is leader-only and returns
+	// FailedPrecondition on followers (the same redirect contract as
+	// ReportShard). v1 ships unauthenticated — the coordinator's gRPC
+	// service is a cluster-internal endpoint; exposing it externally
+	// requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
+	// intended client.
+	AssignDomain(ctx context.Context, in *AssignDomainRequest, opts ...grpc.CallOption) (*AssignDomainResponse, error)
+	UnassignDomain(ctx context.Context, in *UnassignDomainRequest, opts ...grpc.CallOption) (*UnassignDomainResponse, error)
+	RemoveShard(ctx context.Context, in *RemoveShardRequest, opts ...grpc.CallOption) (*RemoveShardResponse, error)
+	ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error)
+	ListDomainAssignments(ctx context.Context, in *ListDomainAssignmentsRequest, opts ...grpc.CallOption) (*ListDomainAssignmentsResponse, error)
 }
 
 type coordinatorClient struct {
@@ -63,6 +79,56 @@ func (c *coordinatorClient) ReportShard(ctx context.Context, in *ShardReport, op
 	return out, nil
 }
 
+func (c *coordinatorClient) AssignDomain(ctx context.Context, in *AssignDomainRequest, opts ...grpc.CallOption) (*AssignDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssignDomainResponse)
+	err := c.cc.Invoke(ctx, Coordinator_AssignDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) UnassignDomain(ctx context.Context, in *UnassignDomainRequest, opts ...grpc.CallOption) (*UnassignDomainResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnassignDomainResponse)
+	err := c.cc.Invoke(ctx, Coordinator_UnassignDomain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) RemoveShard(ctx context.Context, in *RemoveShardRequest, opts ...grpc.CallOption) (*RemoveShardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveShardResponse)
+	err := c.cc.Invoke(ctx, Coordinator_RemoveShard_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListShardsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListShards_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListDomainAssignments(ctx context.Context, in *ListDomainAssignmentsRequest, opts ...grpc.CallOption) (*ListDomainAssignmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDomainAssignmentsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListDomainAssignments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoordinatorServer is the server API for Coordinator service.
 // All implementations must embed UnimplementedCoordinatorServer
 // for forward compatibility.
@@ -75,6 +141,17 @@ type CoordinatorServer interface {
 	// keeps the v1 wire surface to one unary RPC; a streaming
 	// Instructions RPC may land in a future revision.
 	ReportShard(context.Context, *ShardReport) (*ReportAck, error)
+	// M15 admin surface. Each RPC is leader-only and returns
+	// FailedPrecondition on followers (the same redirect contract as
+	// ReportShard). v1 ships unauthenticated — the coordinator's gRPC
+	// service is a cluster-internal endpoint; exposing it externally
+	// requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
+	// intended client.
+	AssignDomain(context.Context, *AssignDomainRequest) (*AssignDomainResponse, error)
+	UnassignDomain(context.Context, *UnassignDomainRequest) (*UnassignDomainResponse, error)
+	RemoveShard(context.Context, *RemoveShardRequest) (*RemoveShardResponse, error)
+	ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error)
+	ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error)
 	mustEmbedUnimplementedCoordinatorServer()
 }
 
@@ -87,6 +164,21 @@ type UnimplementedCoordinatorServer struct{}
 
 func (UnimplementedCoordinatorServer) ReportShard(context.Context, *ShardReport) (*ReportAck, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportShard not implemented")
+}
+func (UnimplementedCoordinatorServer) AssignDomain(context.Context, *AssignDomainRequest) (*AssignDomainResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AssignDomain not implemented")
+}
+func (UnimplementedCoordinatorServer) UnassignDomain(context.Context, *UnassignDomainRequest) (*UnassignDomainResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UnassignDomain not implemented")
+}
+func (UnimplementedCoordinatorServer) RemoveShard(context.Context, *RemoveShardRequest) (*RemoveShardResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveShard not implemented")
+}
+func (UnimplementedCoordinatorServer) ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListShards not implemented")
+}
+func (UnimplementedCoordinatorServer) ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDomainAssignments not implemented")
 }
 func (UnimplementedCoordinatorServer) mustEmbedUnimplementedCoordinatorServer() {}
 func (UnimplementedCoordinatorServer) testEmbeddedByValue()                     {}
@@ -127,6 +219,96 @@ func _Coordinator_ReportShard_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Coordinator_AssignDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssignDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).AssignDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_AssignDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).AssignDomain(ctx, req.(*AssignDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_UnassignDomain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnassignDomainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).UnassignDomain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_UnassignDomain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).UnassignDomain(ctx, req.(*UnassignDomainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_RemoveShard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveShardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).RemoveShard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_RemoveShard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).RemoveShard(ctx, req.(*RemoveShardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListShards_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListShardsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListShards(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListShards_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListShards(ctx, req.(*ListShardsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListDomainAssignments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDomainAssignmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListDomainAssignments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListDomainAssignments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListDomainAssignments(ctx, req.(*ListDomainAssignmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Coordinator_ServiceDesc is the grpc.ServiceDesc for Coordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -137,6 +319,26 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportShard",
 			Handler:    _Coordinator_ReportShard_Handler,
+		},
+		{
+			MethodName: "AssignDomain",
+			Handler:    _Coordinator_AssignDomain_Handler,
+		},
+		{
+			MethodName: "UnassignDomain",
+			Handler:    _Coordinator_UnassignDomain_Handler,
+		},
+		{
+			MethodName: "RemoveShard",
+			Handler:    _Coordinator_RemoveShard_Handler,
+		},
+		{
+			MethodName: "ListShards",
+			Handler:    _Coordinator_ListShards_Handler,
+		},
+		{
+			MethodName: "ListDomainAssignments",
+			Handler:    _Coordinator_ListDomainAssignments_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
