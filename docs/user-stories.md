@@ -185,11 +185,12 @@ The standard alert is `bigfleet_shard_shortfalls > 0 for 5m`. The runbook:
 #    than the runbook threshold? CRs with phase=Pending haven't
 #    been included in any rollup yet; phase=Acknowledged means the
 #    shard sees the demand but may still not have satisfied it.
-#    CRDs don't support field-selectors on status.phase out of the
-#    box (the CRD would need to declare selectableFields under
-#    Kubernetes ≥1.30), so filter client-side with jq instead.
-kubectl get capacityrequests -A -o json \
-  | jq -r '.items[] | select(.status.phase=="Pending") | "\(.metadata.namespace)/\(.metadata.name): priority=\(.spec.priority)"'
+#    The CapacityRequest CRD declares status.phase as a selectable
+#    field (Kubernetes ≥1.31 — the SelectableFields feature went
+#    GA there), so kubectl --field-selector works directly.
+kubectl get capacityrequests -A \
+  --field-selector=status.phase=Pending \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: priority={.spec.priority}{"\n"}{end}'
 
 # 2. The shard's own view of what it can't satisfy. Each cycle with
 #    non-zero unresolved demand emits a "shortfalls detected" log
