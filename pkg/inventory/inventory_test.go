@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -214,4 +215,50 @@ func TestConcurrent_NoRace(t *testing.T) {
 
 func byteToID(prefix byte, n byte) string {
 	return string([]byte{prefix, '-', '0' + n/100, '0' + (n/10)%10, '0' + n%10})
+}
+
+// TestSnapshot_MinAssignedPriority covers the M30.1 indexes used by
+// Phase 2's short-circuit. Empty buckets must read math.MaxInt32; a
+// pinned bucket reads its own min; the per-state min covers all of
+// (state) including any machines without an instance type.
+func TestSnapshot_MinAssignedPriority(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	defer inv.Stop()
+	mk := func(id, instType string, priority int32) machine.Machine {
+		return machine.Machine{
+			ID:               machine.ID(id),
+			State:            machine.StateConfigured,
+			Host:             machine.HostRef{Provider: "fake", Ref: id},
+			Cluster:          machine.ClusterID("c-1"),
+			Profile:          machine.Profile{InstanceType: instType, Zone: "z-a", CapacityType: machine.CapacityTypeBareMetal},
+			AssignedPriority: priority,
+		}
+	}
+	if err := inv.Insert(mk("a-hi", "a3-highgpu-8g", 1_000_000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Insert(mk("a-lo", "a3-highgpu-8g", 100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := inv.Insert(mk("b-mid", "m6i.large", 500)); err != nil {
+		t.Fatal(err)
+	}
+	snap := inv.Snapshot()
+
+	if got := snap.MinAssignedPriorityByInstanceType(machine.StateConfigured, "a3-highgpu-8g"); got != 100 {
+		t.Errorf("a3 min = %d, want 100", got)
+	}
+	if got := snap.MinAssignedPriorityByInstanceType(machine.StateConfigured, "m6i.large"); got != 500 {
+		t.Errorf("m6i min = %d, want 500", got)
+	}
+	if got := snap.MinAssignedPriorityByInstanceType(machine.StateConfigured, "absent"); got != math.MaxInt32 {
+		t.Errorf("absent type min = %d, want MaxInt32", got)
+	}
+	if got := snap.MinAssignedPriority(machine.StateConfigured); got != 100 {
+		t.Errorf("StateConfigured min = %d, want 100", got)
+	}
+	if got := snap.MinAssignedPriority(machine.StateIdle); got != math.MaxInt32 {
+		t.Errorf("empty StateIdle min = %d, want MaxInt32", got)
+	}
 }

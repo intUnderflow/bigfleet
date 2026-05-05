@@ -98,21 +98,32 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 
 		sorted, hit := scoredCache[key]
 		if !hit {
-			// Build the candidate pool. When the need pins to one or
-			// more instance types, the snapshot's pre-built bucket
-			// gives us a much smaller starting set than the full
-			// Configured slice. Multi-type concatenates per-type
-			// buckets (no MatchProfile yet — that filter is below).
+			// M30.1 short-circuit: if the candidate pool's minimum
+			// AssignedPriority ≥ the preemptor's priority, no machine
+			// in the pool can be a victim (Phase 2 only preempts
+			// strictly lower priority). Skip the candidate-pool walk
+			// entirely and cache an empty result. At the M29 burst
+			// shape (450K Configured at 1000000, demand at 1000) this
+			// collapses Phase 2 from O(450K) per Need to O(1).
+			types := pinnedInstanceTypes(u.Need.Profile)
 			var candidatePool []machine.Machine
-			switch types := pinnedInstanceTypes(u.Need.Profile); {
-			case len(types) == 1:
-				candidatePool = snap.ListByStateInstanceType(machine.StateConfigured, types[0])
-			case len(types) > 1:
-				for _, t := range types {
-					candidatePool = append(candidatePool, snap.ListByStateInstanceType(machine.StateConfigured, t)...)
+			if !phase2BucketHasNoVictim(snap, types, preemptorPriority) {
+				// Build the candidate pool. When the need pins to one
+				// or more instance types, the snapshot's pre-built
+				// bucket gives us a much smaller starting set than
+				// the full Configured slice. Multi-type concatenates
+				// per-type buckets (no MatchProfile yet — that
+				// filter is below).
+				switch {
+				case len(types) == 1:
+					candidatePool = snap.ListByStateInstanceType(machine.StateConfigured, types[0])
+				case len(types) > 1:
+					for _, t := range types {
+						candidatePool = append(candidatePool, snap.ListByStateInstanceType(machine.StateConfigured, t)...)
+					}
+				default:
+					candidatePool = getConfigured()
 				}
-			default:
-				candidatePool = getConfigured()
 			}
 
 			// Score every candidate that passes the priority +
@@ -179,6 +190,34 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 		}
 	}
 	return out
+}
+
+// phase2BucketHasNoVictim reports whether the candidate pool for a
+// preemptor at preemptorPriority is provably empty given the snapshot's
+// pre-computed minimum AssignedPriority indexes. When the pool's min
+// priority ≥ preemptorPriority, no machine in the pool could be a
+// victim (Phase 2 only preempts strictly lower priorities), so the
+// per-Need MatchProfile walk can be skipped entirely.
+//
+// Returns true iff the pool is provably empty. A return of false
+// means "walk the pool to find out" — there might still be no
+// victims after MatchProfile filtering.
+func phase2BucketHasNoVictim(snap *inventory.Snapshot, pinnedTypes []string, preemptorPriority int32) bool {
+	switch len(pinnedTypes) {
+	case 0:
+		return snap.MinAssignedPriority(machine.StateConfigured) >= preemptorPriority
+	case 1:
+		return snap.MinAssignedPriorityByInstanceType(machine.StateConfigured, pinnedTypes[0]) >= preemptorPriority
+	default:
+		// Multi-type: pool is empty only if EVERY pinned type's bucket
+		// has no preemptable victim.
+		for _, t := range pinnedTypes {
+			if snap.MinAssignedPriorityByInstanceType(machine.StateConfigured, t) < preemptorPriority {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // scoredVictim pairs a candidate machine with its VictimScore. M27

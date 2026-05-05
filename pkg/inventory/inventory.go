@@ -14,6 +14,7 @@ package inventory
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -415,6 +416,46 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		clusterBuckets[cl] = stOut
 	}
 
+	// M30.1: pre-compute per-(state, instance-type) and per-state
+	// minimum AssignedPriority. Phase 2's preemption walk skips a
+	// candidate pool entirely when the bucket's min priority ≥ the
+	// preemptor's priority — i.e. there are no preemptable victims.
+	// At the M29 burst shape (450K Configured at priority 1000000,
+	// demand at priority 1000) this collapses the per-Need walk
+	// from O(450K) to O(1).
+	minPriorityByStateInstanceTp := make(map[machine.State]map[string]int32, len(buckets))
+	minPriorityByState := make(map[machine.State]int32, len(buckets))
+	for state, byType := range buckets {
+		stateMin := int32(math.MaxInt32)
+		typed := make(map[string]int32, len(byType))
+		for instType, ms := range byType {
+			tmin := int32(math.MaxInt32)
+			for _, m := range ms {
+				if m.AssignedPriority < tmin {
+					tmin = m.AssignedPriority
+				}
+			}
+			typed[instType] = tmin
+			if tmin < stateMin {
+				stateMin = tmin
+			}
+		}
+		minPriorityByStateInstanceTp[state] = typed
+		// Account for state machines without instance type (won't
+		// land in any per-type bucket but still walked by the
+		// unpinned fallback path).
+		for _, id := range byState[state] {
+			m := machines[byID[id]]
+			if m.Profile.InstanceType != "" {
+				continue
+			}
+			if m.AssignedPriority < stateMin {
+				stateMin = m.AssignedPriority
+			}
+		}
+		minPriorityByState[state] = stateMin
+	}
+
 	return &Snapshot{
 		machines:                        machines,
 		byID:                            byID,
@@ -424,6 +465,8 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		bucketsByStateInstanceTp:        buckets,
 		bucketsByClusterStateInstanceTp: clusterBuckets,
 		bucketsByClusterState:           clusterStateBuckets,
+		minPriorityByStateInstanceTp:    minPriorityByStateInstanceTp,
+		minPriorityByState:              minPriorityByState,
 	}
 }
 
@@ -537,6 +580,20 @@ type Snapshot struct {
 	// with a shared-slice read. Mutators MUST NOT modify the returned
 	// slice.
 	bucketsByClusterState map[machine.ClusterID]map[machine.State][]machine.Machine
+
+	// minPriorityByStateInstanceTp[state][instanceType] is the lowest
+	// AssignedPriority across all machines in that bucket. M30.1's
+	// Phase 2 short-circuit reads this to skip the candidate-pool
+	// walk when no machine could be a preemption victim. Empty buckets
+	// are absent from the map (callers treat absent as math.MaxInt32).
+	minPriorityByStateInstanceTp map[machine.State]map[string]int32
+
+	// minPriorityByState[state] is the lowest AssignedPriority across
+	// all machines in that state, including machines with no instance
+	// type. Used by Phase 2's unpinned fallback to short-circuit when
+	// the entire state has no preemptable victim. Empty state →
+	// absent (caller treats absent as math.MaxInt32).
+	minPriorityByState map[machine.State]int32
 }
 
 // ListByStateInstanceType returns machines in the given state matching
@@ -666,6 +723,34 @@ func (s *Snapshot) SortedClusterStateBucket(cluster machine.ClusterID, state mac
 
 // CountByClusterState returns the count of machines for the cluster in
 // the given state.
+// MinAssignedPriority returns the lowest AssignedPriority across all
+// machines in (state). Empty state → math.MaxInt32. Used by Phase 2's
+// unpinned fallback to skip the pool walk when no candidate could
+// possibly be preempted by a given preemptor.
+func (s *Snapshot) MinAssignedPriority(state machine.State) int32 {
+	v, ok := s.minPriorityByState[state]
+	if !ok {
+		return int32(math.MaxInt32)
+	}
+	return v
+}
+
+// MinAssignedPriorityByInstanceType returns the lowest AssignedPriority
+// across machines in (state, instanceType). Empty bucket →
+// math.MaxInt32. Phase 2 reads this to short-circuit the per-Need walk
+// when a pinned bucket has no preemptable victim.
+func (s *Snapshot) MinAssignedPriorityByInstanceType(state machine.State, instanceType string) int32 {
+	byType, ok := s.minPriorityByStateInstanceTp[state]
+	if !ok {
+		return int32(math.MaxInt32)
+	}
+	v, ok := byType[instanceType]
+	if !ok {
+		return int32(math.MaxInt32)
+	}
+	return v
+}
+
 func (s *Snapshot) CountByClusterState(cluster machine.ClusterID, state machine.State) int {
 	byState := s.byClusterState[cluster]
 	if byState == nil {
