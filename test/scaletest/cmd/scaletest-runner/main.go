@@ -84,6 +84,18 @@ type profileFile struct {
 	// effects.
 	RunnerActions []runnerAction `yaml:"runnerActions"`
 	CostEstimate  costEstimate   `yaml:"costEstimate"`
+
+	// SLO holds per-profile gate overrides. ADR-0014's defaults
+	// (bindingLatencyP99 ≤ 5s, cycle p99 ≤ 5s) target the in-process
+	// fake-provider tier. Profiles running at production-defensible
+	// settings (M39 conservative QPS, M40 30-60s rollup) raise these
+	// to match the priority-tier targets in ADR-0014's table.
+	SLO sloOverrides `yaml:"slo"`
+}
+
+type sloOverrides struct {
+	BindingLatencyP99Seconds     float64 `yaml:"bindingLatencyP99Seconds"`
+	ShardCycleDurationP99Seconds float64 `yaml:"shardCycleDurationP99Seconds"`
 }
 
 type runnerAction struct {
@@ -303,7 +315,7 @@ func run(args []string) error {
 			))
 		}
 	}
-	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas)
+	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas, prof.SLO)
 	if len(res.Failures) > 0 && res.Passed {
 		// SLO numbers passed but a runnerAction assertion didn't fire
 		// — the static-stability invariant requires both.
@@ -749,7 +761,15 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // Cycle wall-clock and per-phase histograms remain in summary.json as
 // informational metrics; they're alerted on by the operator's
 // monitoring stack but no longer block a release.
-func pass(m map[string]float64, totalCRs, shardReplicas int) (bool, string) {
+func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
+	bindingLatencyTarget := 5.0
+	if slo.BindingLatencyP99Seconds > 0 {
+		bindingLatencyTarget = slo.BindingLatencyP99Seconds
+	}
+	cycleEnvelopeTarget := 5.0
+	if slo.ShardCycleDurationP99Seconds > 0 {
+		cycleEnvelopeTarget = slo.ShardCycleDurationP99Seconds
+	}
 	// Sustained-load floor: the run is invalid if loadgenCRsActive
 	// drifted away from the target during the soak. We already gate
 	// at the steady-state ramp, but a ramp that just-barely-passed
@@ -776,14 +796,16 @@ func pass(m map[string]float64, totalCRs, shardReplicas int) (bool, string) {
 	// ADR-0014 release gate: binding latency. -1 means the metric was
 	// unavailable (Prometheus query failed); skip rather than gate on
 	// a sentinel.
-	if v, ok := m["bindingLatencyP99Seconds"]; ok && v >= 0 && v > 5.0 {
-		return false, fmt.Sprintf("bindingLatencyP99Seconds %.3fs > 5s SLO (ADR-0014 in-process tier — real-provider deployments add provider provisioning latency on top)", v)
+	if v, ok := m["bindingLatencyP99Seconds"]; ok && v >= 0 && v > bindingLatencyTarget {
+		return false, fmt.Sprintf("bindingLatencyP99Seconds %.3fs > %.1fs SLO (ADR-0014 — profile.slo override or in-process default)", v, bindingLatencyTarget)
 	}
 	// ADR-0014 throughput envelope: cycle p99 ≤ rollupInterval / 2 so
 	// the shard always finishes one snapshot before the next rollup
-	// arrives. Default rollupInterval is 10s → envelope = 5s.
-	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 5.0 {
-		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > 5s throughput envelope (rollupInterval/2; backlog will accumulate)", v)
+	// arrives. Default rollupInterval is 10s → envelope = 5s. Profile
+	// can raise via slo.shardCycleDurationP99Seconds (e.g. 30s rollup
+	// → 15s envelope).
+	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > cycleEnvelopeTarget {
+		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > %.1fs throughput envelope (rollupInterval/2; backlog will accumulate)", v, cycleEnvelopeTarget)
 	}
 	if v, ok := m["operatorRollupP99Seconds"]; ok && v > 1.0 {
 		return false, fmt.Sprintf("operatorRollupP99Seconds %.3fs > 1s SLO", v)

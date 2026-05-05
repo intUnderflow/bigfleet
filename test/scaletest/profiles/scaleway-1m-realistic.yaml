@@ -195,20 +195,30 @@ loadProfile:
       reclamationPenalty: 65536
 
 operator:
-  # M39 (Item 6): production-defensible client-go defaults. Earlier
-  # scaletest profiles raised QPS=200/Burst=400/AckConcurrency=64 to
-  # mask apiserver pressure as a "shard-only" measurement. Real
-  # operators run at the conservative client-go defaults and rely on
-  # apiserver flow-control. Running the test at the production rate
-  # surfaces the apiserver-pressure ceiling, not just the shard
-  # ceiling — the realistic profile measures both end-to-end.
+  # M39 (Item 6): production-defensible client-go defaults.
   qps: 50
   burst: 100
   ackConcurrency: 16
-  rollupInterval: 0s
-  # M37: route owner-grouped CRs through Same(rack). Seeded Configured
-  # machines carry this label per ADR-0015 §4 / shard.go seedFakeInventory.
+  # M40 (Item 7): real cluster operators run rollup intervals of
+  # 30-60s. The harness was at 10s, which artificially compresses
+  # the binding-latency floor users feel. 30s sits at the lower end
+  # of production practice; the binding-latency SLO (slo block
+  # below) is sized to match.
+  rollupInterval: 30s
+  # M37: route owner-grouped CRs through Same(rack).
   coLocationKey: topology.bigfleet/rack
+
+# M40 / ADR-0014: per-profile SLO overrides. The default release gate
+# (5s binding latency / 5s cycle envelope) targets the in-process
+# fake-provider tier with a 10s rollup. The realistic profile ramps
+# down through production-defensible operator settings and a 30s
+# rollup; binding latency includes ~30s rollup + cycle, so the
+# user-facing target is the services-tier ceiling from ADR-0014's
+# table (60s, on-demand provisioning). Cycle envelope = rollup/2
+# = 15s.
+slo:
+  bindingLatencyP99Seconds: 60
+  shardCycleDurationP99Seconds: 15
 
 prometheus:
   resources:
