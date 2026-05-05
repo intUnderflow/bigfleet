@@ -22,12 +22,14 @@ import (
 // cluster operator is responsible for sending canonicalised quantity
 // strings.
 func MatchProfile(p needs.Profile, m machine.Machine) bool {
-	for _, r := range p.Requirements() {
+	// RO accessors — the per-call defensive-copy alloc was the
+	// dominant cost at 450K Phase 3 candidates per cycle (M30.2).
+	for _, r := range p.RequirementsRO() {
 		if !matchRequirement(r, m) {
 			return false
 		}
 	}
-	for _, want := range p.Resources() {
+	for _, want := range p.ResourcesRO() {
 		got, ok := m.Profile.Resources[want.Name]
 		if !ok || got != want.Quantity {
 			return false

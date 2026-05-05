@@ -86,6 +86,52 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 			}
 		}
 
+		// M30.2 fast path: when there is exactly one group whose
+		// profile is "instance-type pin only" (no resources, no
+		// non-prefilter requirements) and its remaining budget covers
+		// every Configured machine of the pinned type, the prefilter
+		// alone suffices to decide kept/reclaim — MatchProfile is
+		// redundant for prefilter-matching machines. This is the
+		// dominant shape in the M29 burst regime: 1 group per cluster,
+		// pinned to a3-highgpu-8g, no resource requirements, ~9K
+		// Configured/cluster. Skips 450K MatchProfile calls per cycle
+		// at the M29 shape and emits reclaim actions only for
+		// configured machines whose instance type doesn't match the
+		// pin (zero in the burst test).
+		if len(groups) == 1 && len(resolved[0].pinnedTypes) > 0 && profileIsInstanceTypePinOnly(resolved[0].profile) {
+			matched := 0
+			for _, m := range configured {
+				for _, t := range resolved[0].pinnedTypes {
+					if t == m.Profile.InstanceType {
+						matched++
+						break
+					}
+				}
+			}
+			if groups[0].remaining >= matched {
+				groups[0].remaining -= matched
+				for _, m := range configured {
+					hit := false
+					for _, t := range resolved[0].pinnedTypes {
+						if t == m.Profile.InstanceType {
+							hit = true
+							break
+						}
+					}
+					if !hit {
+						out.Actions = append(out.Actions, Action{
+							Kind:        ActionKindReclaim,
+							MachineID:   m.ID,
+							Cluster:     cluster,
+							GracePeriod: 0,
+							Reason:      "phase3.excess",
+						})
+					}
+				}
+				continue
+			}
+		}
+
 		for _, m := range configured {
 			kept := false
 			for i := range groups {

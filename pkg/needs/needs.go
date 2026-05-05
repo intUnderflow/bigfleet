@@ -276,6 +276,24 @@ func (p Profile) Resources() []ResourceQty {
 	return out
 }
 
+// RequirementsRO returns the requirements slice without copying. The
+// returned slice MUST NOT be mutated. Used by hot match paths
+// (decision.MatchProfile) where the per-call defensive-copy alloc
+// dominates the cost — at 450K Phase 3 candidates × 1 alloc/call
+// the GC pressure visibly walked the cycle.
+//
+// Callers that may mutate the returned slice (or pass it on to code
+// that might) MUST use Requirements() instead.
+func (p Profile) RequirementsRO() []Requirement {
+	return p.requirements
+}
+
+// ResourcesRO returns the resources slice without copying. Same
+// contract as RequirementsRO — read-only.
+func (p Profile) ResourcesRO() []ResourceQty {
+	return p.resources
+}
+
 // Spread returns a defensive copy of the spread slice.
 func (p Profile) Spread() []TopologySpread {
 	out := make([]TopologySpread, len(p.spread))
