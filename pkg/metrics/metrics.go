@@ -71,6 +71,21 @@ var (
 		Help: "Number of unresolved shortfalls the shard is reporting up.",
 	})
 
+	// ShardShortfallsAged is the per-age-bucket count of currently
+	// unresolved shortfalls. Buckets are decimal cycle-counts:
+	//   "1-9"     fresh, normal-noise
+	//   "10-59"   sustained, worth a runbook check
+	//   "60-299"  long-lived, almost certainly a topology / quota problem
+	//   "300+"    pages-louder territory
+	// Alerts wired against `bigfleet_shard_shortfalls_aged{bucket="60-299"} > 0`
+	// or higher buckets surface the user-stories "max age before it
+	// pages louder" runbook entry without bolting an alerting policy
+	// into the shard binary itself.
+	ShardShortfallsAged = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_shortfalls_aged",
+		Help: "Count of unresolved shortfalls bucketed by AgeCycles. Used by alert rules to escalate long-aged unresolved demand.",
+	}, []string{"bucket"})
+
 	ShardActionsDeferred = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "bigfleet_shard_actions_deferred_total",
 		Help: "Count of decision actions deferred to a later cycle by MaxActionsPerCycle. Phase 1/2/3 are idempotent so deferred work re-derives next cycle.",

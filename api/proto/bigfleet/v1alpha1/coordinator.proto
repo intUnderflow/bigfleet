@@ -34,6 +34,25 @@ service Coordinator {
   rpc RemoveShard(RemoveShardRequest) returns (RemoveShardResponse);
   rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
   rpc ListDomainAssignments(ListDomainAssignmentsRequest) returns (ListDomainAssignmentsResponse);
+
+  // M24 quota inspection. Lets on-call surface "the coordinator's
+  // quota assignments for this shard" from the user-stories runbook
+  // without going into Raft state directly. SetQuota writes through
+  // the FSM (idempotent overwrite of the per-shard slice for a
+  // (provider, region) key); ListQuotas is a read.
+  rpc ListQuotas(ListQuotasRequest) returns (ListQuotasResponse);
+}
+
+message ListQuotasRequest {}
+message ListQuotasResponse {
+  repeated QuotaAllocation allocations = 1;
+}
+
+message QuotaAllocation {
+  string provider = 1;
+  string region   = 2;
+  // per_shard maps shard_id → speculative-pool slice size.
+  map<string, int32> per_shard = 3;
 }
 
 // Admin RPCs: AssignDomain pins a topology domain (rack / zone /

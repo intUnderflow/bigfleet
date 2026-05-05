@@ -479,13 +479,44 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		}
 		s.log.Warn("shortfalls detected", "count", n, "top_fingerprints", fps)
 		metrics.ShardShortfalls.Set(float64(n))
+		emitAgedShortfallBuckets(s.Shortfalls())
 	} else {
 		metrics.ShardShortfalls.Set(0)
+		emitAgedShortfallBuckets(nil)
 	}
 	if s.cfg.OnActions != nil {
 		s.cfg.OnActions(all)
 	}
 	return all
+}
+
+// emitAgedShortfallBuckets resets the per-bucket gauge and re-publishes
+// the current age distribution. Called every cycle so absent buckets
+// fall back to 0 — alerts that fire on `> 0` clear cleanly when the
+// shortfall resolves.
+func emitAgedShortfallBuckets(sfs []Shortfall) {
+	buckets := map[string]float64{
+		"1-9": 0, "10-59": 0, "60-299": 0, "300+": 0,
+	}
+	for _, sf := range sfs {
+		buckets[ageBucket(sf.AgeCycles)]++
+	}
+	for k, v := range buckets {
+		metrics.ShardShortfallsAged.WithLabelValues(k).Set(v)
+	}
+}
+
+func ageBucket(age int) string {
+	switch {
+	case age >= 300:
+		return "300+"
+	case age >= 60:
+		return "60-299"
+	case age >= 10:
+		return "10-59"
+	default:
+		return "1-9"
+	}
 }
 
 // applyTransition advances a machine to the given state in the inventory,

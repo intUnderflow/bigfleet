@@ -316,6 +316,36 @@ func (g *GRPCServer) ListShards(_ context.Context, _ *pb.ListShardsRequest) (*pb
 	return &pb.ListShardsResponse{Shards: out}, nil
 }
 
+// ListQuotas returns the speculative-pool slice for every
+// (provider, region) the coordinator has assigned. Read path; same
+// leader-only contract as ListShards / ListDomainAssignments. M24.
+func (g *GRPCServer) ListQuotas(_ context.Context, _ *pb.ListQuotasRequest) (*pb.ListQuotasResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	all := g.c.State().Quotas()
+	out := make([]*pb.QuotaAllocation, 0, len(all))
+	for k, a := range all {
+		perShard := make(map[string]int32, len(a.PerShard))
+		for sh, n := range a.PerShard {
+			perShard[string(sh)] = n
+		}
+		out = append(out, &pb.QuotaAllocation{
+			Provider: k.Provider,
+			Region:   k.Region,
+			PerShard: perShard,
+		})
+	}
+	// Stable order for tabwriter output downstream.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].GetProvider() != out[j].GetProvider() {
+			return out[i].GetProvider() < out[j].GetProvider()
+		}
+		return out[i].GetRegion() < out[j].GetRegion()
+	})
+	return &pb.ListQuotasResponse{Allocations: out}, nil
+}
+
 // ListDomainAssignments returns the topology-domain → shard mapping.
 // Same leader-only contract as ListShards.
 func (g *GRPCServer) ListDomainAssignments(_ context.Context, _ *pb.ListDomainAssignmentsRequest) (*pb.ListDomainAssignmentsResponse, error) {

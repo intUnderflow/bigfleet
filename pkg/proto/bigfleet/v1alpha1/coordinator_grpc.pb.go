@@ -34,6 +34,7 @@ const (
 	Coordinator_RemoveShard_FullMethodName           = "/bigfleet.v1alpha1.Coordinator/RemoveShard"
 	Coordinator_ListShards_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListShards"
 	Coordinator_ListDomainAssignments_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ListDomainAssignments"
+	Coordinator_ListQuotas_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListQuotas"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -59,6 +60,12 @@ type CoordinatorClient interface {
 	RemoveShard(ctx context.Context, in *RemoveShardRequest, opts ...grpc.CallOption) (*RemoveShardResponse, error)
 	ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error)
 	ListDomainAssignments(ctx context.Context, in *ListDomainAssignmentsRequest, opts ...grpc.CallOption) (*ListDomainAssignmentsResponse, error)
+	// M24 quota inspection. Lets on-call surface "the coordinator's
+	// quota assignments for this shard" from the user-stories runbook
+	// without going into Raft state directly. SetQuota writes through
+	// the FSM (idempotent overwrite of the per-shard slice for a
+	// (provider, region) key); ListQuotas is a read.
+	ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error)
 }
 
 type coordinatorClient struct {
@@ -129,6 +136,16 @@ func (c *coordinatorClient) ListDomainAssignments(ctx context.Context, in *ListD
 	return out, nil
 }
 
+func (c *coordinatorClient) ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListQuotasResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListQuotas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoordinatorServer is the server API for Coordinator service.
 // All implementations must embed UnimplementedCoordinatorServer
 // for forward compatibility.
@@ -152,6 +169,12 @@ type CoordinatorServer interface {
 	RemoveShard(context.Context, *RemoveShardRequest) (*RemoveShardResponse, error)
 	ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error)
 	ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error)
+	// M24 quota inspection. Lets on-call surface "the coordinator's
+	// quota assignments for this shard" from the user-stories runbook
+	// without going into Raft state directly. SetQuota writes through
+	// the FSM (idempotent overwrite of the per-shard slice for a
+	// (provider, region) key); ListQuotas is a read.
+	ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error)
 	mustEmbedUnimplementedCoordinatorServer()
 }
 
@@ -179,6 +202,9 @@ func (UnimplementedCoordinatorServer) ListShards(context.Context, *ListShardsReq
 }
 func (UnimplementedCoordinatorServer) ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDomainAssignments not implemented")
+}
+func (UnimplementedCoordinatorServer) ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListQuotas not implemented")
 }
 func (UnimplementedCoordinatorServer) mustEmbedUnimplementedCoordinatorServer() {}
 func (UnimplementedCoordinatorServer) testEmbeddedByValue()                     {}
@@ -309,6 +335,24 @@ func _Coordinator_ListDomainAssignments_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Coordinator_ListQuotas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListQuotasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListQuotas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListQuotas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListQuotas(ctx, req.(*ListQuotasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Coordinator_ServiceDesc is the grpc.ServiceDesc for Coordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -339,6 +383,10 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDomainAssignments",
 			Handler:    _Coordinator_ListDomainAssignments_Handler,
+		},
+		{
+			MethodName: "ListQuotas",
+			Handler:    _Coordinator_ListQuotas_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

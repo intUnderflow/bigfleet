@@ -47,7 +47,7 @@ func run(args []string) error {
 	}
 	rest := root.Args()
 	if len(rest) == 0 {
-		return fmt.Errorf("subcommand required: list-shards | list-domain-assignments | assign-domain | unassign-domain | remove-shard")
+		return fmt.Errorf("subcommand required: list-shards | list-domain-assignments | list-quotas | assign-domain | unassign-domain | remove-shard")
 	}
 
 	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -67,6 +67,8 @@ func run(args []string) error {
 		return cmdListShards(ctx, cli)
 	case "list-domain-assignments":
 		return cmdListDomainAssignments(ctx, cli)
+	case "list-quotas":
+		return cmdListQuotas(ctx, cli)
 	case "assign-domain":
 		return cmdAssignDomain(ctx, cli, subArgs)
 	case "unassign-domain":
@@ -105,6 +107,27 @@ func cmdListDomainAssignments(ctx context.Context, cli pb.CoordinatorClient) err
 	fmt.Fprintln(tw, "TOPOLOGY_KEY\tTOPOLOGY_VALUE\tSHARD")
 	for _, a := range resp.GetAssignments() {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", a.GetTopologyKey(), a.GetTopologyValue(), a.GetShardId())
+	}
+	return tw.Flush()
+}
+
+func cmdListQuotas(ctx context.Context, cli pb.CoordinatorClient) error {
+	resp, err := cli.ListQuotas(ctx, &pb.ListQuotasRequest{})
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "PROVIDER\tREGION\tSHARD\tSLICE")
+	for _, a := range resp.GetAllocations() {
+		// Stable per-shard ordering for human-readable output.
+		shards := make([]string, 0, len(a.GetPerShard()))
+		for sh := range a.GetPerShard() {
+			shards = append(shards, sh)
+		}
+		sortStrings(shards)
+		for _, sh := range shards {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", a.GetProvider(), a.GetRegion(), sh, a.GetPerShard()[sh])
+		}
 	}
 	return tw.Flush()
 }
@@ -165,6 +188,17 @@ func cmdRemoveShard(ctx context.Context, cli pb.CoordinatorClient, args []string
 	}
 	fmt.Printf("removed shard %s\n", *shard)
 	return nil
+}
+
+func sortStrings(s []string) {
+	// stdlib sort.Strings would do, but pulling in sort just for this
+	// pulls in a chunk of stdlib for the binary. Inline insertion sort
+	// is fine — list is bounded by shard count.
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 func fmtUnix(ns int64) string {

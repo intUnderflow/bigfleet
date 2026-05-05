@@ -304,6 +304,24 @@ func (s *State) Quota(k QuotaKey) (QuotaAllocations, bool) {
 	return QuotaAllocations{PerShard: cp}, true
 }
 
+// Quotas returns a deep copy of every quota allocation in coordinator
+// state, keyed by (provider, region). M24: lets bigfleetctl surface
+// the per-shard speculative-pool slices on-call docs reach for to
+// triage "Phase 1 has provider capacity but isn't being asked".
+func (s *State) Quotas() map[QuotaKey]QuotaAllocations {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[QuotaKey]QuotaAllocations, len(s.quotas))
+	for k, a := range s.quotas {
+		cp := make(map[ShardID]int32, len(a.PerShard))
+		for sh, n := range a.PerShard {
+			cp[sh] = n
+		}
+		out[k] = QuotaAllocations{PerShard: cp}
+	}
+	return out
+}
+
 // UpsertProvider adds or replaces a provider registry entry.
 func (s *State) UpsertProvider(p ProviderEntry) error {
 	if p.Name == "" {
