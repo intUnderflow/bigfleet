@@ -484,6 +484,7 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 		if err == nil && ready >= clusterCount {
 			active = readActiveCRs(ctx, kubeconfig, ns)
 			if active >= target {
+				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d (gate cleared)\n", ready, clusterCount, active, target)
 				return nil
 			}
 		}
