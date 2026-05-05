@@ -322,7 +322,14 @@ func helmInstall(ctx context.Context, kubeconfig, chart, valuesFile, release, ns
 		"--namespace", ns, "--create-namespace",
 		"--values", valuesFile,
 		"--set", "runId=" + runID,
-		"--wait", "--timeout", "10m",
+		// 20 min ceiling: 500 KWOK pods × 2 containers each is a real
+		// cold-install workload (image pull + kine init + apiserver
+		// bring-up per pod). Helm's --wait blocks on every pod
+		// reaching Ready; the dominant time at 5M scale is
+		// per-cluster apiserver readiness, not image pull. 10 min was
+		// fine through 50 KWOK pods; 20 gives headroom for 500 with
+		// budget left over to abort honestly if something deadlocks.
+		"--wait", "--timeout", "20m",
 	}
 	if kubeconfig != "" {
 		args = append([]string{"--kubeconfig", kubeconfig}, args...)
