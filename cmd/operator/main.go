@@ -52,6 +52,7 @@ func run(args []string) error {
 	ackConcurrency := fs.Int("ack-concurrency", 16, "max parallel CR Pending→Acknowledged status writes per rollup")
 	rollupInterval := fs.Duration("rollup-interval", 0, "interval between rollups; 0 means use the operator default (10s)")
 	bootstrapTemplateFile := fs.String("bootstrap-template-file", "", "path to a Go text/template file for kubelet userdata. Context: .ClusterID, .Requirements ([]{Key, Operator, Values}). Empty → use the built-in stub renderer (M21).")
+	coLocationKey := fs.String("co-location-key", "", "topology key the operator uses to translate owner-grouped CRs into Same requirements during rollup. Empty → use the operator default (topology.kubernetes.io/zone). Set to a per-rack key (e.g. topology.bigfleet/rack) to model tightly-coupled workloads. M37.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,6 +92,7 @@ func run(args []string) error {
 		AcknowledgeConcurrency: *ackConcurrency,
 		RollupInterval:         *rollupInterval,
 		BootstrapTemplate:      bootstrapRenderer,
+		CoLocationKey:          *coLocationKey,
 		Logger:                 logger,
 	})
 	if err != nil {

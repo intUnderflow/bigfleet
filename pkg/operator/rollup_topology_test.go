@@ -145,6 +145,59 @@ func TestBuildRollup_OwnerlessCRsAggregateNormally(t *testing.T) {
 	}
 }
 
+// TestBuildRollup_M37LoadDriverShape: end-to-end coverage for the
+// M37 fix. The scaletest load-driver attaches OwnerReferences to
+// sameRack CRs and the operator is configured with
+// CoLocationKey=topology.bigfleet/rack — together these must
+// produce a Need carrying Same(topology.bigfleet/rack).
+//
+// Pre-M37 the load-driver attached an Exists(rack) requirement
+// instead, which (correctly) does NOT trigger Same translation.
+// This test fails if anyone ever reverts to that mechanism.
+func TestBuildRollup_M37LoadDriverShape(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	op, err := New(Config{
+		ClusterID:     "test-cluster",
+		ShardAddress:  "127.0.0.1:7780",
+		KubeClient:    c,
+		CoLocationKey: "topology.bigfleet/rack",
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("operator.New: %v", err)
+	}
+
+	// Three CRs in one group + two in another — the shape the load-
+	// driver emits for a sameRack archetype with PickGroupSize=3..5.
+	crs := []bfv1alpha1.CapacityRequest{
+		gpuCR("g1-cr-1", "group-1"),
+		gpuCR("g1-cr-2", "group-1"),
+		gpuCR("g1-cr-3", "group-1"),
+		gpuCR("g2-cr-1", "group-2"),
+		gpuCR("g2-cr-2", "group-2"),
+	}
+	rollup, _ := op.buildRollup(crs)
+	if got := len(rollup.GetNeeds()); got != 2 {
+		t.Fatalf("needs len = %d, want 2 (one per group)", got)
+	}
+	for _, n := range rollup.GetNeeds() {
+		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
+			t.Errorf("Need missing Same(topology.bigfleet/rack) — M37 wiring is broken; got: %+v", n.GetRequirements())
+		}
+		// Spot-check: no stray Exists(rack) leaked from a prior
+		// implementation. Same is the only rack requirement.
+		for _, r := range n.GetRequirements() {
+			if r.GetKey() == "topology.bigfleet/rack" && r.GetOperator() != pb.NodeSelectorRequirement_OPERATOR_SAME {
+				t.Errorf("found non-Same requirement on rack key: %v", r)
+			}
+		}
+	}
+}
+
 func TestBuildRollup_CoLocationKeyConfigurable(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()

@@ -46,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -211,9 +212,17 @@ type driver struct {
 	picker     *archetype.Picker
 	archByName map[string]*archetype.Archetype
 
-	mu    sync.Mutex
-	known map[string]crMeta
-	seq   uint64
+	mu     sync.Mutex
+	known  map[string]crMeta
+	seq    uint64
+	groups map[string]*driverGroup // archetype name → current group
+}
+
+// driverGroup is a per-archetype Same-rack group. Stays open until
+// `remaining` CRs have been allocated, then a fresh group is minted.
+type driverGroup struct {
+	uid       string
+	remaining int
 }
 
 // crMeta records per-CR bookkeeping needed for ADR-0015 §2 lifetime
@@ -562,33 +571,43 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 	for k, v := range a.PickSize(d.rng) {
 		resources[corev1.ResourceName(k)] = resource.MustParse(v)
 	}
-	// ADR-0015 §4: tightly-coupled workloads emit a `Same` requirement
-	// on `topology.bigfleet/rack`. Per-CR Same is the per-machine
-	// match: the autoscaler's group-aware path enforces the actual
-	// co-location at admission time. We don't pin a rack value (that
-	// would defeat the purpose of `Same`); we just declare the
-	// requirement.
-	if a.SameRack {
-		reqs = append(reqs, corev1.NodeSelectorRequirement{
-			Key: "topology.bigfleet/rack",
-			// `Same` is protobuf-only — at the CRD level we use
-			// `Exists`, then the operator translates to `Same`
-			// during roll-up per ADR-0015 §4 / paper §6.2.
-			Operator: corev1.NodeSelectorOpExists,
-		})
-	}
+	// ADR-0015 §4 / M37: tightly-coupled workloads use the operator's
+	// owner-grouping path to trigger Same translation during rollup.
+	// The CRD doesn't carry the Same requirement directly; it carries
+	// an OwnerReference, and the operator (configured with
+	// CoLocationKey = "topology.bigfleet/rack") emits Same(rack) on
+	// the rolled-up Need. See pkg/operator/rollup.go withSameRequirement.
+	// (M33's earlier Exists-on-rack approach was wrong — Exists
+	// does NOT trigger Same translation; only OwnerRef-grouped CRs do.)
+	// The OwnerReferences are attached at the metadata level below;
+	// no requirement is added to the spec.
 	pri := int32(1000)
 	if len(a.PriorityClasses) > 0 {
 		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
 	}
 	intr := resource.MustParse(formatDollars(a.InterruptionPenalty))
 	recl := resource.MustParse(formatDollars(a.ReclamationPenalty))
+	meta := metav1.ObjectMeta{
+		Name:      name,
+		Namespace: "default",
+		Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
+	}
+	if a.SameRack {
+		// ADR-0015 §4 / M37: synthetic OwnerReference shared across
+		// the group triggers the operator's owner→Same translation.
+		// We allocate a new group UID every PickGroupSize CRs of this
+		// archetype on this driver so individual training-job-shaped
+		// groups stay distinct (each gets its own Same constraint).
+		gid := d.allocateOrGetGroupUID(a)
+		meta.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "scaletest.bigfleet/v1alpha1",
+			Kind:       "ScaletestWorkload",
+			Name:       fmt.Sprintf("%s-group-%s", a.Name, gid),
+			UID:        types.UID(gid),
+		}}
+	}
 	return &bfv1alpha1.CapacityRequest{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "default",
-			Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
-		},
+		ObjectMeta: meta,
 		Spec: bfv1alpha1.CapacityRequestSpec{
 			Requirements:        reqs,
 			Resources:           resources,
@@ -597,6 +616,30 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 			ReclamationPenalty:  &recl,
 		},
 	}
+}
+
+// allocateOrGetGroupUID returns a stable per-group UID for the
+// archetype. The driver tracks how many CRs of this archetype have
+// been emitted into the current group; once the group is full
+// (per archetype.PickGroupSize) a fresh UID is generated. M37 / ADR-
+// 0015 §4: this UID is the operator's co-location signal — every
+// CR sharing it gets a Same constraint after rollup.
+func (d *driver) allocateOrGetGroupUID(a *archetype.Archetype) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.groups == nil {
+		d.groups = map[string]*driverGroup{}
+	}
+	g, ok := d.groups[a.Name]
+	if !ok || g.remaining <= 0 {
+		g = &driverGroup{
+			uid:       fmt.Sprintf("%s-%s-grp-%d", d.clusterID, a.Name, d.seq),
+			remaining: a.PickGroupSize(d.rng),
+		}
+		d.groups[a.Name] = g
+	}
+	g.remaining--
+	return g.uid
 }
 
 // formatDollars renders a float-dollar penalty as a fixed-point

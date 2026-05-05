@@ -122,6 +122,13 @@ operator:
   burst: 100
   ackConcurrency: 16
   rollupInterval: 0s    # 0 means use the operator binary's default (10s)
+  # M37: topology key the operator uses to translate owner-grouped
+  # CRs into Same() requirements during rollup. Empty → use the
+  # operator binary's default (topology.kubernetes.io/zone). Set to
+  # `topology.bigfleet/rack` for profiles whose archetypes use
+  # sameRack — that's the key the seeded Configured machines
+  # carry as Profile.Labels.
+  coLocationKey: ""
 
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.

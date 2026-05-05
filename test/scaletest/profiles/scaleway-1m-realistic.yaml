@@ -197,6 +197,9 @@ operator:
   burst: 400
   ackConcurrency: 64
   rollupInterval: 0s
+  # M37: route owner-grouped CRs through Same(rack). Seeded Configured
+  # machines carry this label per ADR-0015 §4 / shard.go seedFakeInventory.
+  coLocationKey: topology.bigfleet/rack
 
 prometheus:
   resources:
