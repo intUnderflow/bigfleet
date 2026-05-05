@@ -63,6 +63,14 @@ type profileFile struct {
 		Target          int `yaml:"target"`
 		DurationSeconds int `yaml:"durationSeconds"`
 	} `yaml:"loadProfile"`
+	// RampBudget overrides the ramp-to-steady-state deadline. Format
+	// is any time.ParseDuration string ("30m", "1h45m"). Empty / unset
+	// → use the default formula (M22):
+	//   max(15min, totalCRs / 750 CR/sec, durationSeconds × 0.5).
+	// 750 CR/sec is sized 1.5× over the 1M de-risk's measured ~1110
+	// CR/sec aggregate, with a 15 min floor for small profiles where
+	// the formula would otherwise undershoot cold-start time.
+	RampBudget string `yaml:"rampBudget"`
 	// RunnerActions are fired by the runner during the soak window.
 	// AtSeconds is offset from steady-state-reached. Action is one of
 	//   kill-coordinator-leader: delete the coordinator's leader pod;
@@ -226,13 +234,11 @@ func run(args []string) error {
 	// Wait for steady state: every kwok pod's load-driver must reach
 	// the per-cluster target. Runs that ramp short of target are
 	// invalid (they measure the SLO against an under-loaded shard);
-	// the runner now requires the full target and fails the run if
-	// the budget elapses without reaching it. Budget: max(15min,
-	// durationSeconds×0.5) to give cold-start kine writes room.
-	rampBudget := 15 * time.Minute
-	if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > rampBudget {
-		rampBudget = t
-	}
+	// the runner requires the full target and fails the run if the
+	// budget elapses without reaching it.
+	totalCRs := prof.KWOK.ClusterCount * prof.LoadProfile.Target
+	rampBudget, rampSource := resolveRampBudget(prof, totalCRs)
+	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s)\n", rampBudget, rampSource)
 	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
 		return fmt.Errorf("steady state: %w", err)
 	}
@@ -416,6 +422,44 @@ func helmUninstall(ctx context.Context, kubeconfig, release, ns string) error {
 	// Best-effort namespace cleanup.
 	_ = exec.CommandContext(ctx, "kubectl", "delete", "ns", ns, "--wait=false").Run()
 	return nil
+}
+
+// resolveRampBudget picks the ramp-to-steady-state deadline.
+//
+// The default formula is the max of three terms (M22):
+//   - 15 min floor (cold-start kine writes, image-pull, kubelet
+//     bring-up across hundreds of pods are slow on first install)
+//   - totalCRs / 750 CR/sec — empirical floor from the 1M de-risk,
+//     which sustained ~1110 CR/sec aggregate; sizing at 750 gives
+//     ~1.5× headroom over observed throughput
+//   - durationSeconds × 0.5 — keeps profiles with very long soaks
+//     (e.g. failover-soak's 60min) from undershooting the ramp
+//
+// Profile-level `rampBudget: …` overrides everything when set. The
+// returned string explains which clause won so failed-at-deadline
+// runs can be diagnosed from runner.log without going back to the
+// profile YAML.
+func resolveRampBudget(prof profileFile, totalCRs int) (time.Duration, string) {
+	if prof.RampBudget != "" {
+		if d, err := time.ParseDuration(prof.RampBudget); err == nil && d > 0 {
+			return d, "from profile.rampBudget"
+		}
+	}
+	const minRamp = 15 * time.Minute
+	const sustainedFloorCRsPerSec = 750.0
+	budget, source := minRamp, "15-min floor"
+	if totalCRs > 0 {
+		t := time.Duration(float64(totalCRs)/sustainedFloorCRsPerSec*float64(time.Second)) + 1*time.Second
+		if t > budget {
+			budget = t
+			source = fmt.Sprintf("totalCRs %d / 750 CR/sec", totalCRs)
+		}
+	}
+	if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > budget {
+		budget = t
+		source = fmt.Sprintf("durationSeconds %d × 0.5", prof.LoadProfile.DurationSeconds)
+	}
+	return budget, source
 }
 
 func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount int, perClusterTarget int, budget time.Duration) error {

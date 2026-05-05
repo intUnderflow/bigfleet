@@ -80,6 +80,35 @@ The provider's `List` RPC carries an opaque `since_revision` cursor (per plan §
 
 The conformance suite (`make conformance TARGET=...`) reports whether your provider advances the revision; it's currently informational below the threshold and should become required above it. Provider authors: see `docs/provider-author-guide.md` for implementation guidance.
 
+## Scaletest ramp budget
+
+The scaletest-runner gates each profile with a "ramp-to-steady-state" deadline. If the load-driver fleet hasn't reached ≥ 99.9 % of `totalCRs` (= `kwok.clusterCount × loadProfile.target`) by the deadline, the runner aborts pre-soak and the run reports failure.
+
+Default formula (M22):
+
+```
+rampBudget = max(15 min, totalCRs / 750 CR/sec, durationSeconds × 0.5)
+```
+
+Resolved budgets for the in-tree profiles:
+
+| profile | totalCRs | resolved budget | which clause |
+|---|---|---|---|
+| `dev-5k` | 5K | 15 min | floor |
+| `local-50k` | 50K | 15 min | floor |
+| `scaleway-500k` | 50K | 15 min | floor |
+| `scaleway-1m` | 1M | ~22 min | 750 CR/sec |
+| `scaleway-5m` | 5M | ~112 min | 750 CR/sec |
+| `failover-soak` | 50K (60 min soak) | 30 min | durationSeconds × 0.5 |
+
+The 750 CR/sec floor is empirical: the 1M de-risk run sustained ~1110 CR/sec aggregate; sizing budget at 750 gives ~1.5× headroom over the observed throughput. If a real run is missing the gate by a small margin (the 1M de-risk landed at 998 975 / 999 000), the resolved budget value gets logged at runner startup so the failure mode is obvious from `runner.log`.
+
+Profile authors can override the formula directly:
+
+```yaml
+rampBudget: 45m
+```
+
 ## CI vs local hardware
 
 Scale ceilings (the numbers under `test/scale/`, build tag `scale`) are **measured on the M5 Max dev box** (18-core / 64 GB / Docker Desktop). They are not run on CI — `ubuntu-latest` is roughly 3× slower CPU and ¼ the RAM, and we don't want CI flakes from machine-speed-dependent timing.
