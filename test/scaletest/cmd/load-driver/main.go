@@ -669,6 +669,18 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 	// does NOT trigger Same translation; only OwnerRef-grouped CRs do.)
 	// The OwnerReferences are attached at the metadata level below;
 	// no requirement is added to the spec.
+
+	// M35 / Item 2: per-axis label requirements. PickLabels draws a
+	// random value per axis (e.g. "team-7", "app-42") and we emit
+	// `In [value]` for each. Multiplies per-CR fingerprint
+	// cardinality into the production range.
+	for k, v := range a.PickLabels(d.rng) {
+		reqs = append(reqs, corev1.NodeSelectorRequirement{
+			Key:      k,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{v},
+		})
+	}
 	pri := int32(1000)
 	if len(a.PriorityClasses) > 0 {
 		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]

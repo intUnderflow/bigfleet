@@ -97,6 +97,24 @@ type Archetype struct {
 	// machine — Same is then a no-op).
 	SameRack       bool   `yaml:"sameRack"`
 	GroupSizeRange [2]int `yaml:"groupSizeRange"`
+
+	// LabelAxes (M35 / Item 2) — per-archetype label dimensions
+	// that multiply per-CR fingerprint cardinality. Each axis
+	// declares a Key (the label name on the Configured machine /
+	// `In` requirement on the CR) and a Count (the value space:
+	// values are "{key}-0" through "{key}-{count-1}"). Per CR a
+	// uniform random value is drawn per axis; per seeded Configured
+	// machine the same draw populates Profile.Labels. Models real
+	// production CR shapes that pin to labels like
+	// `app=foo, team=search, version=v1.4` — with 50 teams × 200
+	// apps × 5 versions = 50_000 distinct fingerprints per cluster.
+	LabelAxes []LabelAxis `yaml:"labelAxes"`
+}
+
+// LabelAxis is one production-style label dimension.
+type LabelAxis struct {
+	Key   string `yaml:"key"`
+	Count int    `yaml:"count"`
 }
 
 // SizeBucket is one entry in an archetype's size distribution.
@@ -232,6 +250,25 @@ func (a *Archetype) PickSize(rng *rand.Rand) map[string]string {
 		}
 	}
 	return a.SizeBuckets[len(a.SizeBuckets)-1].Resources
+}
+
+// PickLabels returns a per-axis value draw, suitable both for setting
+// labels on a seeded Configured machine and for emitting `In [value]`
+// requirements on a CR. Returns nil when LabelAxes is empty.
+// M35 / Item 2.
+func (a *Archetype) PickLabels(rng *rand.Rand) map[string]string {
+	if len(a.LabelAxes) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(a.LabelAxes))
+	for _, ax := range a.LabelAxes {
+		count := ax.Count
+		if count <= 0 {
+			count = 1
+		}
+		out[ax.Key] = fmt.Sprintf("%s-%d", ax.Key, rng.Intn(count))
+	}
+	return out
 }
 
 // PickGroupSize returns the number of machines in a single Same-rack

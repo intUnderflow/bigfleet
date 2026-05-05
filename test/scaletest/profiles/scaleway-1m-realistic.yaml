@@ -162,6 +162,13 @@ loadProfile:
         - { weight: 35, resources: { cpu: "8",  memory: "16Gi" } }
         - { weight: 25, resources: { cpu: "16", memory: "32Gi" } }
         - { weight: 10, resources: { cpu: "32", memory: "64Gi" } }
+      # M35: production-shape label axes. Batch jobs typically
+      # carry team + queue labels; small Count values (10/20)
+      # multiply fingerprints without blowing past kine sqlite
+      # memory budgets in the harness pods.
+      labelAxes:
+        - { key: app.bigfleet/team, count: 10 }
+        - { key: app.bigfleet/queue, count: 20 }
       priorityClasses: [100]
       interruptionPenalty: 64
       reclamationPenalty: 256
@@ -176,6 +183,10 @@ loadProfile:
         - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
         - { weight: 20, resources: { cpu: "8",  memory: "32Gi" } }
         - { weight: 5,  resources: { cpu: "16", memory: "64Gi" } }
+      # M35: services tend to carry team + app labels.
+      labelAxes:
+        - { key: app.bigfleet/team, count: 10 }
+        - { key: app.bigfleet/app, count: 50 }
       priorityClasses: [1000]
       interruptionPenalty: 1024
       reclamationPenalty: 8192

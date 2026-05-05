@@ -251,6 +251,15 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 					// archetypes don't see it.
 					rackName := fmt.Sprintf("%s-rack-%d", z, idx%racksPerZone)
 					labels["topology.bigfleet/rack"] = rackName
+					// M35 / Item 2: per-axis label values matching the
+					// archetype's LabelAxes spec. The load-driver emits
+					// CRs with `In [value]` requirements drawn from the
+					// same axes, so MatchProfile passes for ~1/Count of
+					// seeded machines per CR — production-shaped
+					// fingerprint cardinality.
+					for k, v := range a.PickLabels(rng) {
+						labels[k] = v
+					}
 					profile = machine.Profile{
 						InstanceType: it,
 						Zone:         z,
