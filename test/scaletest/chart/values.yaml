@@ -20,6 +20,15 @@ bigfleet:
     pullPolicy: IfNotPresent
 
 coordinator:
+  # The scaletest chart always renders a coordinator (the template
+  # isn't gated). `enabled` controls whether the *shards* dial it via
+  # --coordinator-addr; turning this off in a profile produces a
+  # static-stability test (shards run, coordinator runs, but no
+  # registration / heartbeats fire). Keep `true` for normal runs;
+  # without it the shards skip ReportShard and Apply is never called,
+  # so bigfleet_coordinator_apply_total + pending_instructions
+  # never appear in /metrics (only the always-on raft_term gauge does).
+  enabled: true
   replicas: 1
   resources:
     requests: { cpu: 500m, memory: 1Gi }
