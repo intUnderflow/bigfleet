@@ -193,9 +193,13 @@ go mod init github.com/yourcorp/your-provider
 # Copy the .proto from the BigFleet repo, generate Go bindings.
 # Implement Create/Configure/Drain/Delete/Get/List against your backend.
 
-# Run the conformance suite against your endpoint:
-make conformance-build
-./bin/conformance --provider-addr=localhost:9001
+# Run the conformance suite against your endpoint. The suite is a
+# Go test under build tag `conformance`, not a built binary — wire
+# your provider up at TARGET=host:port.
+make conformance TARGET=localhost:9001
+
+# Smoke-test against the in-tree fake provider before shipping:
+make conformance-self
 ```
 
 The suite walks the lifecycle scenarios end-to-end. Categories:
@@ -226,28 +230,39 @@ The scaling guide ([`scaling-guide.md`](scaling-guide.md)) tabulates per-tier si
 
 ## Pre-release validation (reliability)
 
-You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The standard way to validate this today is the existing scaletest harness plus a manual leader-kill:
+You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The runner ships four failover profiles, each scoped to one type of disturbance. Pick by what you want to validate:
 
 ```sh
-# 1. Bring up a soak.
+# Single coordinator-leader-kill at t=600s. ~30 min, $0.38 on a
+# 2-node Kapsule.
 scaletest-runner \
-  --profile=test/scaletest/profiles/failover-soak.yaml \
-  --output=./results/$(date +%Y%m%d)-failover/ &
+  --profile=test/scaletest/profiles/failover-leader-kill.yaml \
+  --output=./results/$(date +%Y%m%d)-leader-kill/
 
-# 2. After the runner reports steady state, kill the coordinator's
-#    Raft leader.
-kubectl -n bigfleet-scaletest delete pod \
-  $(kubectl -n bigfleet-scaletest get pods -l app=bigfleet-coordinator \
-      -o jsonpath='{.items[0].metadata.name}')
+# Single shard-pod-kill (bigfleet-shard-1) at t=600s. Validates
+# StatefulSet recovery + cluster-to-shard binding stability.
+scaletest-runner --profile=test/scaletest/profiles/failover-shard-kill.yaml \
+  --output=./results/$(date +%Y%m%d)-shard-kill/
 
-# 3. Watch the soak finish. Expected:
-#    - bigfleet_shard_inventory_machines{state="Configured"} unchanged
-#      across the kill window.
-#    - bigfleet_operator_session_reconnects_total increases by ≤ 1
-#      per cluster (the unavoidable post-leader-election reconnect).
+# 60-second NetworkPolicy-based partition between bigfleet-shard-1
+# and the coordinator. Validates static stability under control-plane
+# disconnect. Requires a CNI that enforces NetworkPolicy (Cilium does).
+scaletest-runner --profile=test/scaletest/profiles/failover-partition.yaml \
+  --output=./results/$(date +%Y%m%d)-partition/
+
+# Belt-and-braces release run: 60-min soak with two leader-kills and
+# one shard-kill. Use this once before tagging a release.
+scaletest-runner --profile=test/scaletest/profiles/failover-soak.yaml \
+  --output=./results/$(date +%Y%m%d)-failover-soak/
 ```
 
-The runner has a placeholder `runnerActions` block in `failover-soak.yaml` for the kill action; **automating it inside the runner is not yet shipped**. Until that lands, treat this as a pre-release ritual the on-call performs by hand alongside the soak.
+Each profile's `runnerActions:` block declares actions with `atSeconds` offsets. The runner fires them during the soak and asserts the expected outcome via Prometheus queries (e.g. `delta(bigfleet_coordinator_raft_term[5m]) ≥ 1` after a leader-kill, `rate(bigfleet_shard_cycle_duration_seconds_count{pod=…}[1m]) > 0` after a shard-kill). The summary.json `failures: []` field is the regression signal: empty = the static-stability invariant held; non-empty = the run failed regardless of SLO numbers.
+
+What you're checking after a passing run:
+- `summary.json` `passed: true`
+- `summary.json` `failures: []`
+- `summary.json` `metrics.shardCycleDurationP99Seconds` ≤ 100 ms throughout
+- `summary.json` `metrics.loadgenCRsActive` ≥ 99.9 % of target throughout (sustained-load gate already in pass())
 
 ## Notes that aren't role-specific
 
