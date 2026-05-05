@@ -528,31 +528,6 @@ The cap surfaced by M11: a single shard runs out of cycle headroom around 500K m
 - Cross-region. ADR-0002 keeps single-region.
 - Coordinator-driven shard re-routing on the operator. Today's "first connection wins" is enough for v1; ADR if/when re-routing is needed.
 
-### M13. Fleet-scale realism test (5M, hundreds of clusters)
-**Gated on M12.** Tests the architecture's actual scale claim: many shards each at their known-good ceiling, with a realistic cluster fan-out instead of fewer fat clusters.
-
-**Target shape:**
-- 10 shards × 500K inventory each = **5M total machines under management**.
-- ~500 simulated clusters via KWOK (10× M11). Production fleets at 5M nodes have hundreds-to-thousands of clusters; the prior "stay at 50 fat clusters" sketch is rejected because it doesn't exercise per-cluster operator overhead, per-cluster gRPC stream lifecycle, the operator-to-shard fan-out, or the rollup-aggregation path's behaviour under realistic cluster counts. The whole point of testing on real Kapsule rather than `cmd/fauxctl` is realism; collapsing the cluster axis gives that up.
-- ~10K demand CRs per cluster × 500 clusters = 5M demand. Steady-state churn matches M11's 0.05 / minute.
-
-**Per-shard expectation:** each shard sees its M11-validated 500K inventory + ~50K demand. Cycle p99 ≤100 ms per shard. No shard sees cross-shard topology resolution; if a `Same`-rack request can't be served within a shard, it shortfalls (per the hard rule).
-
-**Coordinator expectation:** ~500 domain assignments × ~10 changes/min sustained — well within the Raft FSM's measured throughput. Coordinator apply ops/sec needs the harness chart updated to scrape it (currently the only metric still showing -1 in summary.json).
-
-**Cost / capacity (rough):**
-- KWOK pod budget: 500 pods × ~370 MiB observed = ~185 GiB. Plus shards (10 × 3 GiB) + coordinator (3 × 256 MiB) + prom (4 GiB) ≈ 220 GiB total memory.
-- CPU budget: 500 KWOK pods × 300m req = 150 vCPU; shards 10 × 2 vCPU = 20; total ~175 vCPU req.
-- Cloud sizing draft: Scaleway PRO2-XXL (32 vCPU / 128 GiB) × 8 nodes = 256 vCPU / 1024 GiB. Comfortable. Estimated ~€3.40 / hr; 50-min run ≈ €2.83 (~$3.00) per run.
-- Per-zone PRO2 quota will need raising — 8 nodes is above today's per-zone cap (10 — close to the limit) so request a quota increase before the run.
-
-**Validation gates:** the same SLO bar as M11, applied per shard. Sustained CRs ≥99.9 % of target. All metrics non-negative in summary.json (depends on coordinator scrape fix going in alongside).
-
-**Pre-flight work** (small):
-- Coordinator scrape config in the harness chart (one PodMonitor / Prometheus job, ~10 lines of yaml).
-- Kapsule per-zone quota raise.
-- Scale-test profile `scaleway-5m.yaml` defining the target shape above.
-
 ### M14. User-stories reconciliation (cheap)
 **Goal:** close the doc-vs-code gaps surfaced by the audit of `docs/user-stories.md`. Each is small enough that grouping makes sense.
 
@@ -670,6 +645,37 @@ if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > r
 **Validation:** re-run the 1M de-risk on the new defaults; confirm ramp completes inside the resolved budget with margin. Then proceed to M13 (5M) with confidence.
 
 **Out of scope:** dynamic per-cluster pacing (the load-driver's own QPS knob — already configurable). This milestone is just the runner's gate-time, not the load-driver's behaviour.
+
+### M13. Fleet-scale realism test (5M, hundreds of clusters)
+**Gated on M22 + a passing scaleway-1m run.** The 5M test is end-of-line: it's the most expensive run we ship (~$2.60-$8 depending on duration after M22's ramp budget bump) and the most likely to surface previously-unseen bottlenecks. Originally drafted right after M12; deferred behind everything else because (a) M14-M21 close real user-stories gaps, (b) M22 fixes the ramp-budget cliff that already failed the 1M de-risk by 25 CRs, and (c) re-running 1M cleanly is a much cheaper way to validate the per-cluster 10K-CR path before paying for 5M.
+
+**Pre-gate:** a passing `scaleway-1m` run on the M22 ramp budget. If 1M times out or otherwise misses the SLO bar, fix it before paying for 5M — same shape, one-fifth the cost (~$0.74/run).
+
+**Target shape:**
+- 10 shards × 500K inventory each = **5M total machines under management**.
+- ~500 simulated clusters via KWOK (10× M11). Production fleets at 5M nodes have hundreds-to-thousands of clusters; the prior "stay at 50 fat clusters" sketch is rejected because it doesn't exercise per-cluster operator overhead, per-cluster gRPC stream lifecycle, the operator-to-shard fan-out, or the rollup-aggregation path's behaviour under realistic cluster counts. The whole point of testing on real Kapsule rather than `cmd/fauxctl` is realism; collapsing the cluster axis gives that up.
+- ~10K demand CRs per cluster × 500 clusters = 5M demand. Steady-state churn matches M11's 0.05 / minute.
+
+**Per-shard expectation:** each shard sees its M11-validated 500K inventory + ~50K demand. Cycle p99 ≤100 ms per shard. No shard sees cross-shard topology resolution; if a `Same`-rack request can't be served within a shard, it shortfalls (per the hard rule).
+
+**Coordinator expectation:** ~500 domain assignments × ~10 changes/min sustained — well within the Raft FSM's measured throughput. Coordinator apply ops/sec is now scraped (M12.x chart fix) so the gate sees real data.
+
+**Cost / capacity (rough):**
+- KWOK pod budget: 500 pods × ~370 MiB observed = ~185 GiB. Plus shards (10 × 3 GiB) + coordinator (3 × 256 MiB) + prom (4 GiB) ≈ 220 GiB total memory.
+- CPU budget: 500 KWOK pods × 300m req = 150 vCPU; shards 10 × 2 vCPU = 20; total ~175 vCPU req.
+- Cloud sizing: 7× Scaleway PRO2-L (32 vCPU / 128 GiB) ≈ 224 vCPU / 896 GiB. Estimated ~€2.94 / hr; under the M22 ramp budget the run is ~110 min ramp + 30 min soak ≈ 2.5 hr ≈ €7.40 (~$7.85) end-to-end. Original 8× PRO2-XXL sketch was ~22 % more expensive at the same scale.
+- PRO2-L is a separate per-zone quota counter from PRO2-M; default 10/zone, we need 7. No quota raise required.
+
+**Validation gates:** the same SLO bar as M11, applied per shard. Sustained CRs ≥99.9 % of target. All metrics non-negative in summary.json. Per-shard runner queries (`max(by pod)`, M13.preflight 1ff1d27) catch a single overshooting shard that aggregate quantiles would dilute.
+
+**Pre-flight work** (small, mostly already done):
+- ✅ Coordinator scrape config in the harness chart (M12.x, commit 039bb62).
+- ✅ Per-shard runner queries (M13.preflight, commit 1ff1d27).
+- ✅ Provisioning-latency histogram fix + new gates (e886cbc).
+- ✅ Helm install timeout 10m → 20m for 500-pod ramp (32db605).
+- ✅ Profile `scaleway-5m.yaml` (1ff1d27, sized down 7077b6d).
+- ⏳ M22: ramp budget that scales with totalCRs, not hard-coded 15 min.
+- ⏳ Passing 1M run on the M22 budget (cheap re-validation of the de-risk).
 
 ---
 
