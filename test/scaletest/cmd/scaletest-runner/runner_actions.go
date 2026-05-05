@@ -207,10 +207,16 @@ func assertRunnerActionOutcome(ctx context.Context, kubeconfig, namespace string
 	}
 	switch {
 	case r.Action == "kill-coordinator-leader":
-		// Term should have advanced by ≥1 from a stable baseline. Use
-		// `delta()` over the last 5 min — at 30s scrape interval and
-		// a single re-election, delta should be 1.
-		v, err := promQuery(ctx, kubeconfig, namespace, `max(delta(bigfleet_coordinator_raft_term[5m]))`)
+		// Term should have advanced by ≥1 between the start of the
+		// soak and end-of-soak. Earlier versions used `delta(...[5m])`
+		// at end-of-soak — that missed the bump because the kill
+		// fires at atSeconds (typically t=600s) but the assertion runs
+		// at t≈soak-end (t≈1800s+), 20+ min later, well outside the
+		// 5-min window. max_over_time - min_over_time over a wide
+		// window catches the bump regardless of when the kill fired.
+		const window = "1h"
+		q := fmt.Sprintf(`max(max_over_time(bigfleet_coordinator_raft_term[%s]) - min_over_time(bigfleet_coordinator_raft_term[%s]))`, window, window)
+		v, err := promQuery(ctx, kubeconfig, namespace, q)
 		if err != nil {
 			r.AssertError = fmt.Sprintf("prom query: %v", err)
 			return
@@ -219,7 +225,7 @@ func assertRunnerActionOutcome(ctx context.Context, kubeconfig, namespace string
 			r.Asserted = true
 			return
 		}
-		r.AssertError = fmt.Sprintf("delta(bigfleet_coordinator_raft_term[5m]) = %.0f, want ≥1", v)
+		r.AssertError = fmt.Sprintf("max-min(bigfleet_coordinator_raft_term[%s]) = %.0f, want ≥1", window, v)
 	case strings.HasPrefix(r.Action, "kill-shard-"):
 		// The deleted pod's StatefulSet should have rescheduled it,
 		// and it should be publishing cycle metrics again. Use a
