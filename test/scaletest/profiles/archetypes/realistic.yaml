@@ -1,104 +1,135 @@
-# Production-realistic workload archetypes for the scaletest harness.
-# Each archetype represents a recurring workload pattern observed in
-# real fleets (Borg, Twine, Kubernetes-on-everything-else): GPU training,
-# GPU inference, CPU batch, CPU service, memory-bound DBs, critical
-# realtime. Weights are rough fleet-frequency estimates — not a
-# scientific distribution, but more honest than "one a3 GPU job for
-# everything."
+# Production-realistic workload archetypes for the scaletest harness
+# (ADR-0015). Each archetype represents a recurring workload pattern
+# observed in real fleets (Borg, Twine, Kubernetes-on-everything-else):
+# GPU training, GPU inference, CPU batch, CPU service, memory-bound
+# DBs, critical realtime. Weights are rough fleet-frequency estimates.
 #
 # Both the load-driver (which creates CRs) and the shard's Configured
 # seed read this same file so the seeded inventory matches the demand
-# the load-driver creates. If the catalog and the seed drift, Phase 3
-# will reclaim the seed every cycle and the test measures a
-# reprovisioning regime, not a steady-state.
+# the load-driver creates. Drift between the two = Phase 3 reclaims
+# the seed every cycle and the test measures reprovisioning, not
+# steady-state.
 #
 # Schema (per-archetype):
-#   name             : human-readable label, used for telemetry
-#   weight           : relative frequency vs other archetypes (any int > 0)
-#   instanceTypes    : list — translated to `node.kubernetes.io/instance-type In [...]`
-#   zones            : optional list — translated to `topology.kubernetes.io/zone In [...]`
-#   resources        : map — passed verbatim into CapacityRequest.spec.resources
-#   priorityClasses  : list of int32 — driver picks one uniformly per CR (per-archetype)
-#   interruptionPenalty : float64 dollars — passed into CR.spec.interruptionPenalty
-#   reclamationPenalty  : float64 dollars — passed into CR.spec.reclamationPenalty
-#   extraRequirements: list — additional NodeSelectorRequirement entries (rare)
+#   name                : human-readable label
+#   weight              : relative fleet frequency (any int > 0)
+#   instanceTypes       : `node.kubernetes.io/instance-type In [...]`
+#   zones               : `topology.kubernetes.io/zone In [...]`
+#   sizeBuckets         : ADR-0015 §1 — per-CR resources picked
+#                         weighted-random from this list. When set,
+#                         the flat `resources:` field is ignored.
+#                         Multiplies fingerprint cardinality to the
+#                         100-500 per cluster range real fleets carry.
+#   resources           : flat fallback when sizeBuckets is empty
+#   priorityClasses     : driver picks one uniformly per CR
+#   interruptionPenalty : float64 dollars
+#   reclamationPenalty  : float64 dollars
+#   meanLifetimeSeconds : ADR-0015 §2 — exponential-mean lifetime.
+#                         0 = effectively immortal (services). Short-
+#                         lived archetypes (batch, CI) carry positive
+#                         values; the load-driver ages them
+#                         independently.
+#   sameRack            : ADR-0015 §4 — when true, CR carries an
+#                         `Exists` requirement on
+#                         `topology.bigfleet/rack` (operator
+#                         translates to `Same` during roll-up).
+#                         Models tightly-coupled training / DB jobs.
+#   groupSizeRange      : [min, max] machines per Same-rack group.
 
 archetypes:
   - name: gpu-training
-    # Long-running multi-GPU training jobs. Rare but very high penalty
-    # to interrupt — production fleets keep priority above the bulk of
-    # work so spot reclaims don't take them down.
+    # Long-running multi-GPU training jobs. Tightly coupled (`Same`
+    # rack), high penalty to interrupt — production keeps these above
+    # the bulk of work. Days-long lifetimes ⇒ effectively immortal at
+    # scaletest timescales.
     weight: 5
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
-    resources:
-      nvidia.com/gpu: "8"
+    sizeBuckets:
+      - { weight: 70, resources: { nvidia.com/gpu: "8" } }
+      - { weight: 30, resources: { nvidia.com/gpu: "16" } }
     priorityClasses: [1000]
     interruptionPenalty: 65536
     reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [2, 8]
 
   - name: gpu-inference
-    # Latency-sensitive single-GPU inference. Not preempted by training
-    # but lives below the critical-realtime tier.
+    # Latency-sensitive single-GPU inference. Long-lived deployments
+    # (replica sets), no rack pinning.
     weight: 15
     instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
     zones: [zone-a, zone-b, zone-c]
-    resources:
-      nvidia.com/gpu: "1"
+    sizeBuckets:
+      - { weight: 60, resources: { nvidia.com/gpu: "1" } }
+      - { weight: 40, resources: { nvidia.com/gpu: "2" } }
     priorityClasses: [100, 1000]
     interruptionPenalty: 4096
     reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
 
   - name: cpu-batch
-    # Resumable batch jobs. The biggest population by count; lowest
-    # priority; cheap to interrupt (resubmit is fine).
+    # Resumable batch jobs. Biggest population by churn rate;
+    # shortest lifetime; cheapest to interrupt.
     weight: 35
     instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
     zones: [zone-a, zone-b, zone-c]
-    resources:
-      cpu: "16"
-      memory: "32Gi"
+    sizeBuckets:
+      - { weight: 30, resources: { cpu: "4",  memory: "8Gi"  } }
+      - { weight: 35, resources: { cpu: "8",  memory: "16Gi" } }
+      - { weight: 25, resources: { cpu: "16", memory: "32Gi" } }
+      - { weight: 10, resources: { cpu: "32", memory: "64Gi" } }
     priorityClasses: [100]
     interruptionPenalty: 64
     reclamationPenalty: 256
+    meanLifetimeSeconds: 600  # ~10-min batch
 
   - name: cpu-service
     # User-facing services with HPAs / fixed-replica deployments.
-    # Mid priority, mid penalty; the steady-state production majority.
+    # Mid priority, long-lived, biggest steady-state population by
+    # count. Resource sizes span 1c-16c.
     weight: 30
     instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
-    resources:
-      cpu: "4"
-      memory: "16Gi"
+    sizeBuckets:
+      - { weight: 40, resources: { cpu: "2",  memory: "8Gi"  } }
+      - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
+      - { weight: 20, resources: { cpu: "8",  memory: "32Gi" } }
+      - { weight: 5,  resources: { cpu: "16", memory: "64Gi" } }
     priorityClasses: [1000]
     interruptionPenalty: 1024
     reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
 
   - name: memory-db
-    # In-memory caches / DBs with persistent disk attached. High
-    # reclamation penalty (data is hot, draining is expensive) but
-    # tolerant of interruption (replication catches up).
+    # In-memory caches / DBs with persistent disk attached. Same-rack
+    # for replication coupling. Long-lived.
     weight: 10
     instanceTypes: [r6i.xlarge, r6i.2xlarge]
     zones: [zone-a, zone-b]
-    resources:
-      cpu: "4"
-      memory: "64Gi"
+    sizeBuckets:
+      - { weight: 50, resources: { cpu: "4", memory: "32Gi"  } }
+      - { weight: 30, resources: { cpu: "4", memory: "64Gi"  } }
+      - { weight: 20, resources: { cpu: "8", memory: "128Gi" } }
     priorityClasses: [1000]
     interruptionPenalty: 4096
     reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [3, 5]   # typical replication factor
 
   - name: critical-realtime
     # Top-priority workloads (control plane, telemetry hot path,
     # safety-critical services). Small population; can preempt
-    # everything else. The "1000000" priority class.
+    # everything else.
     weight: 5
     instanceTypes: [c6i.4xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
-    resources:
-      cpu: "8"
-      memory: "16Gi"
+    sizeBuckets:
+      - { weight: 70, resources: { cpu: "8",  memory: "16Gi" } }
+      - { weight: 30, resources: { cpu: "16", memory: "32Gi" } }
     priorityClasses: [1000000]
     interruptionPenalty: 65536
     reclamationPenalty: 65536
+    meanLifetimeSeconds: 0

@@ -102,3 +102,55 @@ func TestPicker_NilForEmptyInput(t *testing.T) {
 		t.Error("empty slice should produce nil picker")
 	}
 }
+
+func TestArchetype_PickSize_RespectsWeights(t *testing.T) {
+	t.Parallel()
+	a := archetype.Archetype{
+		Name: "cpu",
+		SizeBuckets: []archetype.SizeBucket{
+			{Weight: 90, Resources: map[string]string{"cpu": "2"}},
+			{Weight: 10, Resources: map[string]string{"cpu": "16"}},
+		},
+	}
+	rng := rand.New(rand.NewSource(1))
+	counts := map[string]int{}
+	for i := 0; i < 5_000; i++ {
+		r := a.PickSize(rng)
+		counts[r["cpu"]]++
+	}
+	if counts["2"] < 4200 || counts["2"] > 4700 {
+		t.Errorf("small=2 picks = %d, want ~4500 (90%%)", counts["2"])
+	}
+	if counts["16"] < 300 || counts["16"] > 800 {
+		t.Errorf("large=16 picks = %d, want ~500 (10%%)", counts["16"])
+	}
+}
+
+func TestArchetype_PickSize_FallsBackToFlatResources(t *testing.T) {
+	t.Parallel()
+	a := archetype.Archetype{
+		Name:      "gpu",
+		Resources: map[string]string{"nvidia.com/gpu": "8"},
+	}
+	rng := rand.New(rand.NewSource(1))
+	r := a.PickSize(rng)
+	if r["nvidia.com/gpu"] != "8" {
+		t.Errorf("PickSize without buckets = %v, want flat fallback", r)
+	}
+}
+
+func TestArchetype_PickGroupSize(t *testing.T) {
+	t.Parallel()
+	a := archetype.Archetype{GroupSizeRange: [2]int{2, 8}}
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 100; i++ {
+		got := a.PickGroupSize(rng)
+		if got < 2 || got > 8 {
+			t.Errorf("group size = %d, want 2-8", got)
+		}
+	}
+	zero := archetype.Archetype{}
+	if got := zero.PickGroupSize(rng); got != 1 {
+		t.Errorf("unset group size = %d, want 1", got)
+	}
+}

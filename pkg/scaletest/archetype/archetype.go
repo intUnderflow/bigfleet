@@ -41,6 +41,36 @@ type Archetype struct {
 	PriorityClasses     []int32           `yaml:"priorityClasses"`
 	InterruptionPenalty float64           `yaml:"interruptionPenalty"`
 	ReclamationPenalty  float64           `yaml:"reclamationPenalty"`
+
+	// SizeBuckets (ADR-0015 §1) — when non-empty, per-CR resources
+	// are picked weighted-random from this list and the top-level
+	// Resources field is ignored. Catalog-wide this multiplies the
+	// distinct-fingerprint count to production-shape (~hundreds per
+	// cluster instead of one per archetype).
+	SizeBuckets []SizeBucket `yaml:"sizeBuckets"`
+
+	// MeanLifetimeSeconds (ADR-0015 §2) — exponential-mean CR
+	// lifetime. 0 = effectively immortal (long-running services);
+	// the load-driver doesn't age these. Short-lived archetypes
+	// (batch jobs, CI) carry positive values.
+	MeanLifetimeSeconds int `yaml:"meanLifetimeSeconds"`
+
+	// SameRack (ADR-0015 §4) — when true, the load-driver emits
+	// CRs with a `Same` requirement on `topology.bigfleet/rack`,
+	// modelling tightly-coupled workloads (multi-GPU training,
+	// distributed-DB replicas). Group sizes drawn from
+	// GroupSizeRange (defaults to [1, 1] if unset, i.e. single-
+	// machine — Same is then a no-op).
+	SameRack       bool   `yaml:"sameRack"`
+	GroupSizeRange [2]int `yaml:"groupSizeRange"`
+}
+
+// SizeBucket is one entry in an archetype's size distribution.
+// Picked weighted-random per CR; supplies the Resources map that
+// would otherwise come from Archetype.Resources.
+type SizeBucket struct {
+	Weight    int               `yaml:"weight"`
+	Resources map[string]string `yaml:"resources"`
 }
 
 // LoadCatalog reads + parses the archetype catalog at path. Returns
@@ -125,4 +155,51 @@ func (p *Picker) Pick(rng *rand.Rand) *Archetype {
 		}
 	}
 	return p.by[len(p.by)-1]
+}
+
+// PickSize returns one of the archetype's size buckets, weighted by
+// each bucket's Weight field. Returns the archetype's flat Resources
+// map if SizeBuckets is empty (legacy single-shape).
+func (a *Archetype) PickSize(rng *rand.Rand) map[string]string {
+	if len(a.SizeBuckets) == 0 {
+		return a.Resources
+	}
+	full := 0
+	for _, b := range a.SizeBuckets {
+		w := b.Weight
+		if w <= 0 {
+			w = 1
+		}
+		full += w
+	}
+	r := rng.Intn(full)
+	cum := 0
+	for _, b := range a.SizeBuckets {
+		w := b.Weight
+		if w <= 0 {
+			w = 1
+		}
+		cum += w
+		if r < cum {
+			return b.Resources
+		}
+	}
+	return a.SizeBuckets[len(a.SizeBuckets)-1].Resources
+}
+
+// PickGroupSize returns the number of machines in a single Same-rack
+// group for this archetype. Returns 1 (no grouping) when GroupSizeRange
+// is unset.
+func (a *Archetype) PickGroupSize(rng *rand.Rand) int {
+	lo, hi := a.GroupSizeRange[0], a.GroupSizeRange[1]
+	if lo <= 0 {
+		lo = 1
+	}
+	if hi <= 0 || hi < lo {
+		hi = lo
+	}
+	if lo == hi {
+		return lo
+	}
+	return lo + rng.Intn(hi-lo+1)
 }

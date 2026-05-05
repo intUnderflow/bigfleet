@@ -136,6 +136,12 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 		// modification.
 		picker := archetype.NewPicker(archetypes)
 		rng := rand.New(rand.NewSource(int64(shardOrdinal) + 1))
+		// ADR-0015 §4: synthetic rack pool for `Same` workloads.
+		// 10 racks per zone matches a typical AZ-of-cells deployment.
+		// Configured machines get a deterministic rack label drawn
+		// from the pool so the load-driver's Same requirement has
+		// enough variety to schedule against.
+		const racksPerZone = 10
 		idx := 0
 		for c := shardOrdinal; c < totalClusters; c += clusterStride {
 			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
@@ -149,11 +155,23 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 					if len(a.Zones) > 0 {
 						z = a.Zones[idx%len(a.Zones)]
 					}
+					// ADR-0015 §1: per-machine resources picked from
+					// SizeBuckets when present (production-shape
+					// fingerprint multiplicity); falls back to the
+					// flat Resources map otherwise.
+					machineResources := a.PickSize(rng)
+					labels := map[string]string{}
+					// Every machine carries a rack label; Same-aware
+					// archetypes request it via Exists / Same. Other
+					// archetypes don't see it.
+					rackName := fmt.Sprintf("%s-rack-%d", z, idx%racksPerZone)
+					labels["topology.bigfleet/rack"] = rackName
 					profile = machine.Profile{
 						InstanceType: it,
 						Zone:         z,
 						CapacityType: machine.CapacityTypeBareMetal,
-						Resources:    a.Resources,
+						Resources:    machineResources,
+						Labels:       labels,
 					}
 					assignedPriority = a.MaxPriority()
 					interruptionPenalty = a.InterruptionPenalty

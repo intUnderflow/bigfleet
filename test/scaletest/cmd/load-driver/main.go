@@ -72,6 +72,34 @@ type profile struct {
 	// test/scaletest/profiles/archetypes/realistic.yaml for the
 	// production-realistic catalog.
 	Archetypes []archetype.Archetype `yaml:"archetypes"`
+
+	// Bursts (ADR-0015 §3): each driver independently rolls a
+	// Bernoulli trial against Selectivity at startup. Pods that win
+	// the trial schedule the burst at AtSeconds-from-start (relative
+	// to driver start, NOT runner soak start — the runner schedules
+	// its actions independently). At burst time the driver ramps
+	// Target by ExtraTarget for DurationSeconds, then drains back.
+	Bursts []burstSpec `yaml:"bursts"`
+
+	// ClusterSizeDistribution (ADR-0015 §5): override the per-pod
+	// effective Target via a heavy-tailed distribution. Each pod
+	// computes its multiplier deterministically from POD_NAME's
+	// ordinal so the same pod always gets the same multiplier.
+	// When empty, every pod uses Target unmodified.
+	ClusterSizeDistribution []sizeBucket `yaml:"clusterSizeDistribution"`
+}
+
+type burstSpec struct {
+	AtSeconds       int     `yaml:"atSeconds"`
+	Archetype       string  `yaml:"archetype"`
+	ExtraTarget     int     `yaml:"extraTarget"`
+	DurationSeconds int     `yaml:"durationSeconds"`
+	Selectivity     float64 `yaml:"selectivity"`
+}
+
+type sizeBucket struct {
+	Fraction         float64 `yaml:"fraction"`
+	TargetMultiplier float64 `yaml:"targetMultiplier"`
 }
 
 var (
@@ -119,6 +147,16 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("profile: %w", err)
 	}
+	// ADR-0015 §5: cluster-size skew. Scale the per-pod effective
+	// Target deterministically by POD_NAME ordinal so the test sees
+	// a heavy-tailed distribution of cluster sizes (a few big
+	// clusters dominate fleet load; long tail of small ones provides
+	// fingerprint diversity).
+	if mult := podSizeMultiplier(*clusterID, prof.ClusterSizeDistribution); mult != 1.0 {
+		newTarget := int(float64(prof.Target) * mult)
+		logger.Info("cluster-size skew applied", "base_target", prof.Target, "multiplier", mult, "effective_target", newTarget)
+		prof.Target = newTarget
+	}
 	logger.Info("profile loaded",
 		"target", prof.Target,
 		"churn_per_minute", prof.ChurnPerMinute,
@@ -149,13 +187,14 @@ func run(args []string) error {
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	d := &driver{
-		clusterID: *clusterID,
-		log:       logger,
-		k:         kc,
-		prof:      prof,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		known:     make(map[string]struct{}, prof.Target),
-		picker:    archetype.NewPicker(prof.Archetypes),
+		clusterID:  *clusterID,
+		log:        logger,
+		k:          kc,
+		prof:       prof,
+		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		known:      make(map[string]crMeta, prof.Target),
+		picker:     archetype.NewPicker(prof.Archetypes),
+		archByName: indexArchetypes(prof.Archetypes),
 	}
 	if d.picker != nil {
 		logger.Info("archetypes loaded", "count", len(prof.Archetypes))
@@ -164,16 +203,103 @@ func run(args []string) error {
 }
 
 type driver struct {
-	clusterID string
-	log       *slog.Logger
-	k         client.Client
-	prof      profile
-	rng       *rand.Rand
-	picker    *archetype.Picker
+	clusterID  string
+	log        *slog.Logger
+	k          client.Client
+	prof       profile
+	rng        *rand.Rand
+	picker     *archetype.Picker
+	archByName map[string]*archetype.Archetype
 
 	mu    sync.Mutex
-	known map[string]struct{}
+	known map[string]crMeta
 	seq   uint64
+}
+
+// crMeta records per-CR bookkeeping needed for ADR-0015 §2 lifetime
+// aging. The archetype name keys back into archByName when picking
+// which CRs to age out.
+type crMeta struct {
+	archetype string
+}
+
+// podSizeMultiplier returns the per-pod target scaling factor from the
+// distribution. Pods are bucketed by ordinal modulo a denominator of
+// 100 so each fraction-band lands deterministically on a contiguous
+// ordinal range — pod-0 always gets the same bucket, pod-1 always
+// gets the same bucket, regardless of which other pods exist.
+//
+// ADR-0015 §5. Returns 1.0 when distribution is empty.
+func podSizeMultiplier(podName string, dist []sizeBucket) float64 {
+	if len(dist) == 0 {
+		return 1.0
+	}
+	ord := ordinalFromPodName(podName)
+	bucket := ord % 100
+	cum := 0.0
+	for _, b := range dist {
+		cum += b.Fraction * 100
+		if float64(bucket) < cum {
+			return b.TargetMultiplier
+		}
+	}
+	// Fractions don't sum to 1.0 — apply the last bucket so we don't
+	// accidentally return 0 (which would make the pod create no CRs).
+	return dist[len(dist)-1].TargetMultiplier
+}
+
+// ordinalFromPodName extracts the trailing integer from a pod name.
+// "kwok-cluster-7" → 7. Returns 0 when no trailing integer is found.
+func ordinalFromPodName(podName string) int {
+	for i := len(podName) - 1; i >= 0; i-- {
+		if podName[i] == '-' {
+			suffix := podName[i+1:]
+			n := 0
+			for _, c := range suffix {
+				if c < '0' || c > '9' {
+					return 0
+				}
+				n = n*10 + int(c-'0')
+			}
+			return n
+		}
+	}
+	return 0
+}
+
+// shouldBurst decides whether this pod participates in a given burst
+// trigger. Deterministic from (podName, atSeconds) so the same pod
+// always reaches the same decision across restarts within a single
+// run. ADR-0015 §3.
+func shouldBurst(podName string, b burstSpec) bool {
+	if b.Selectivity >= 1.0 {
+		return true
+	}
+	if b.Selectivity <= 0.0 {
+		return false
+	}
+	// Cheap deterministic hash: FNV-32 of (podName||atSeconds).
+	const offset32 = 2166136261
+	const prime32 = 16777619
+	h := uint32(offset32)
+	for _, c := range podName {
+		h = (h ^ uint32(c)) * prime32
+	}
+	for v := uint32(b.AtSeconds); v > 0; v >>= 8 {
+		h = (h ^ (v & 0xff)) * prime32
+	}
+	return float64(h)/float64(^uint32(0)) < b.Selectivity
+}
+
+func indexArchetypes(arches []archetype.Archetype) map[string]*archetype.Archetype {
+	if len(arches) == 0 {
+		return nil
+	}
+	out := make(map[string]*archetype.Archetype, len(arches))
+	for i := range arches {
+		out[arches[i].Name] = &arches[i]
+	}
+	return out
 }
 
 func (d *driver) run(ctx context.Context) error {
@@ -207,19 +333,98 @@ func (d *driver) run(ctx context.Context) error {
 	}
 	d.log.Info("steady state", "churn_per_tick", perTick)
 
+	// ADR-0015 §3: schedule burst events that this pod participates in.
+	// shouldBurst is deterministic so a pod restart re-arms the same
+	// bursts it had originally been chosen for.
+	type pendingBurst struct {
+		fireAt  time.Time
+		drainAt time.Time
+		spec    burstSpec
+		extraOn bool
+	}
+	bursts := make([]*pendingBurst, 0, len(d.prof.Bursts))
+	startedAt := time.Now()
+	for _, b := range d.prof.Bursts {
+		if !shouldBurst(d.clusterID, b) {
+			continue
+		}
+		pb := &pendingBurst{
+			fireAt:  startedAt.Add(time.Duration(b.AtSeconds) * time.Second),
+			drainAt: startedAt.Add(time.Duration(b.AtSeconds+b.DurationSeconds) * time.Second),
+			spec:    b,
+		}
+		bursts = append(bursts, pb)
+		d.log.Info("burst scheduled", "archetype", b.Archetype, "at_s", b.AtSeconds, "extra", b.ExtraTarget, "duration_s", b.DurationSeconds)
+	}
+
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-tick.C:
+		case now := <-tick.C:
 			if perTick > 0 {
 				d.churn(ctx, perTick)
 			}
-			// Reconcile actual count back toward target on every tick to
-			// repair any drift from failed Create / Delete calls.
-			d.reconcile(ctx)
+			// ADR-0015 §2: per-archetype lifetime aging.
+			d.ageByLifetime(ctx)
+			// ADR-0015 §3: ramp / drain bursts. extraOn flips the
+			// pod's effective target up while the burst is active.
+			for _, pb := range bursts {
+				if !pb.extraOn && !now.Before(pb.fireAt) && now.Before(pb.drainAt) {
+					pb.extraOn = true
+					d.log.Info("burst firing", "archetype", pb.spec.Archetype, "extra", pb.spec.ExtraTarget)
+				}
+				if pb.extraOn && !now.Before(pb.drainAt) {
+					pb.extraOn = false
+					d.log.Info("burst drained", "archetype", pb.spec.Archetype)
+				}
+			}
+			extra := 0
+			for _, pb := range bursts {
+				if pb.extraOn {
+					extra += pb.spec.ExtraTarget
+				}
+			}
+			// Reconcile actual count back toward target+burst-extra.
+			d.reconcileTarget(ctx, d.prof.Target+extra)
+		}
+	}
+}
+
+// ageByLifetime replaces a fraction of CRs proportional to each
+// archetype's mean lifetime. Run once per tick (1s).
+func (d *driver) ageByLifetime(ctx context.Context) {
+	if d.archByName == nil {
+		return
+	}
+	counts := d.activeCountByArchetype()
+	for name, n := range counts {
+		a := d.archByName[name]
+		if a == nil || a.MeanLifetimeSeconds <= 0 {
+			continue
+		}
+		// Expected replacements per second = n / mean_lifetime. Sample
+		// a small Poisson around it via fractional accumulation: take
+		// the integer part deterministically and the fractional part
+		// via Bernoulli on the rng. Simple and unbiased at low rates.
+		rate := float64(n) / float64(a.MeanLifetimeSeconds)
+		nReplace := int(rate)
+		if d.rng.Float64() < rate-float64(nReplace) {
+			nReplace++
+		}
+		for i := 0; i < nReplace; i++ {
+			old, ok := d.popRandomFromArchetype(name)
+			if !ok {
+				break
+			}
+			if err := d.deleteOne(ctx, old); err != nil {
+				errs.WithLabelValues("delete").Inc()
+			}
+			if err := d.createOne(ctx); err != nil {
+				errs.WithLabelValues("create").Inc()
+			}
 		}
 	}
 }
@@ -253,15 +458,19 @@ func (d *driver) churn(ctx context.Context, n int) {
 	}
 }
 
-func (d *driver) reconcile(ctx context.Context) {
+// reconcileTarget drives the active count toward the given target,
+// up to a per-tick budget of 20 ops in either direction. Used both
+// by the legacy reconcile loop and by ADR-0015 §3's burst-aware tick
+// (which passes Target + extra burst capacity).
+func (d *driver) reconcileTarget(ctx context.Context, target int) {
 	got := d.activeCount()
 	switch {
-	case got < d.prof.Target:
-		for i := 0; i < d.prof.Target-got && i < 20; i++ {
+	case got < target:
+		for i := 0; i < target-got && i < 20; i++ {
 			_ = d.createOne(ctx)
 		}
-	case got > d.prof.Target+d.prof.BurstAtStart:
-		extra := got - d.prof.Target
+	case got > target:
+		extra := got - target
 		for i := 0; i < extra && i < 20; i++ {
 			if name, ok := d.popRandom(); ok {
 				_ = d.deleteOne(ctx, name)
@@ -276,16 +485,26 @@ func (d *driver) createOne(ctx context.Context) error {
 	name := fmt.Sprintf("%s-cr-%06d", d.clusterID, d.seq)
 	d.mu.Unlock()
 
-	cr := d.buildCR(name)
+	cr, archName := d.buildCRWithArchetype(name)
 	if err := d.k.Create(ctx, cr); err != nil {
 		return err
 	}
 	d.mu.Lock()
-	d.known[name] = struct{}{}
+	d.known[name] = crMeta{archetype: archName}
 	d.mu.Unlock()
 	created.Inc()
 	active.Set(float64(d.activeCount()))
 	return nil
+}
+
+// buildCRWithArchetype is buildCR plus the archetype name (or "" for
+// the legacy single-shape path) so per-CR aging knows which archetype
+// to attribute the CR to.
+func (d *driver) buildCRWithArchetype(name string) (*bfv1alpha1.CapacityRequest, string) {
+	if a := d.picker.Pick(d.rng); a != nil {
+		return d.buildArchetypeCR(name, a), a.Name
+	}
+	return d.buildCR(name), ""
 }
 
 // buildCR constructs the CapacityRequest spec for a single CR. When
@@ -336,9 +555,27 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 			Values:   append([]string(nil), a.Zones...),
 		})
 	}
+	// ADR-0015 §1: per-CR resources picked weighted-random from
+	// SizeBuckets when present; falls back to the flat Resources
+	// map otherwise.
 	resources := corev1.ResourceList{}
-	for k, v := range a.Resources {
+	for k, v := range a.PickSize(d.rng) {
 		resources[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	// ADR-0015 §4: tightly-coupled workloads emit a `Same` requirement
+	// on `topology.bigfleet/rack`. Per-CR Same is the per-machine
+	// match: the autoscaler's group-aware path enforces the actual
+	// co-location at admission time. We don't pin a rack value (that
+	// would defeat the purpose of `Same`); we just declare the
+	// requirement.
+	if a.SameRack {
+		reqs = append(reqs, corev1.NodeSelectorRequirement{
+			Key: "topology.bigfleet/rack",
+			// `Same` is protobuf-only — at the CRD level we use
+			// `Exists`, then the operator translates to `Same`
+			// during roll-up per ADR-0015 §4 / paper §6.2.
+			Operator: corev1.NodeSelectorOpExists,
+		})
 	}
 	pri := int32(1000)
 	if len(a.PriorityClasses) > 0 {
@@ -401,6 +638,37 @@ func (d *driver) popRandom() (string, bool) {
 		i++
 	}
 	return "", false
+}
+
+// popRandomFromArchetype picks a random known CR whose archetype
+// matches archName. Returns ("", false) if none exists. Used by the
+// lifetime-aging path so deletes are attributed to the correct
+// archetype's churn rate.
+func (d *driver) popRandomFromArchetype(archName string) (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	matches := make([]string, 0, len(d.known))
+	for name, meta := range d.known {
+		if meta.archetype == archName {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) == 0 {
+		return "", false
+	}
+	return matches[d.rng.Intn(len(matches))], true
+}
+
+// activeCountByArchetype returns a map of archetype-name to count of
+// active CRs. Used by the lifetime-aging tick.
+func (d *driver) activeCountByArchetype() map[string]int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := map[string]int{}
+	for _, meta := range d.known {
+		out[meta.archetype]++
+	}
+	return out
 }
 
 func (d *driver) activeCount() int {
