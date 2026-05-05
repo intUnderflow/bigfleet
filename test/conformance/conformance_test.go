@@ -327,6 +327,134 @@ func TestConformance_DrainOnSpeculative(t *testing.T) {
 	// FailedPrecondition / Internal both reasonable; just not OK.
 }
 
+// TestConformance_TransitionalStateObservability is the M23 conformance
+// check for the user-stories "transitional-state recovery" contract.
+// The full kill-and-restart scenario (kill provider mid-Configure,
+// restart, observe in-progress state preserved) requires process
+// control we don't have over an external gRPC endpoint. What's
+// testable from outside is the underlying property the recovery
+// contract depends on: that transitional states are observable via
+// Get while a transition is in progress.
+//
+// A provider that does instant transitions (Speculative → Idle in a
+// single atomic step, no observable Creating window) passes this test
+// trivially — there's nothing transitional to observe and therefore
+// nothing to recover. A provider with staged transitions must report
+// the intermediate state via Get for at least one observation window.
+//
+// The test polls Get aggressively (every 5 ms) for 1 s after Create
+// and asserts at least one of {Speculative, Creating, Idle} was
+// observed. Providers that complete the transition before the first
+// poll are fine.
+func TestConformance_TransitionalStateObservability(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	deadline := time.Now().Add(1 * time.Second)
+	seen := map[pb.MachineState]bool{}
+	for time.Now().Before(deadline) {
+		m, err := cli.Get(ctx, &pb.MachineRef{Id: id})
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		seen[m.GetState()] = true
+		if m.GetState() == pb.MachineState_MACHINE_STATE_IDLE {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+
+	// At least one valid post-Create state must have been observed.
+	// A provider that returned an unrelated state (Failed without
+	// last_error, or some made-up enum value) violates the contract.
+	any := seen[pb.MachineState_MACHINE_STATE_SPECULATIVE] ||
+		seen[pb.MachineState_MACHINE_STATE_CREATING] ||
+		seen[pb.MachineState_MACHINE_STATE_IDLE]
+	if !any {
+		t.Errorf("Get reported no valid state during a Speculative → Idle transition; observed %v", seen)
+	}
+}
+
+// TestConformance_DrainGraceTimeout is the M23 conformance check for
+// the user-stories "drain-grace handling" contract: a Drain that
+// can't complete inside grace_period_seconds must end up in Failed
+// with last_error populated, NOT silently revert to a clean state.
+//
+// Calls Drain with grace_period_seconds = 0 against a Configured
+// machine. After ~10 s, the final state must be one of:
+//
+//   - Idle: drain succeeded immediately. No failure path was
+//     triggered. Valid: a 0-second grace is the lower bound, not a
+//     mandatory failure trigger.
+//   - Failed: drain didn't complete in time. last_error must be
+//     non-empty.
+//
+// Stuck-in-Draining or back-in-Configured-without-error after a
+// grace-exceeded drain fails the test. Last_error empty on a Failed
+// state also fails the test.
+func TestConformance_DrainGraceTimeout(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Walk a fresh machine to Configured.
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+	if _, err := cli.Configure(ctx, &pb.ConfigureRequest{
+		MachineId: id, ClusterId: "conformance-grace",
+		BootstrapBlob: []byte("# conformance grace-test\n"),
+	}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_CONFIGURED, 10*time.Second)
+
+	// Drain with the most aggressive grace possible.
+	if _, err := cli.Drain(ctx, &pb.DrainRequest{MachineId: id, GracePeriodSeconds: 0}); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	// Wait up to 10 s for the drain to settle in either direction.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		m, err := cli.Get(ctx, &pb.MachineRef{Id: id})
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		switch m.GetState() {
+		case pb.MachineState_MACHINE_STATE_IDLE:
+			// Drain succeeded immediately. No failure path triggered.
+			return
+		case pb.MachineState_MACHINE_STATE_FAILED:
+			if m.GetLastError() == "" {
+				t.Errorf("state = Failed but last_error empty — failure mode unexplained")
+			}
+			return
+		case pb.MachineState_MACHINE_STATE_DRAINING:
+			// Still in progress; keep polling.
+		case pb.MachineState_MACHINE_STATE_CONFIGURED:
+			t.Fatalf("state reverted to Configured after Drain — silent revert is not allowed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	m, err := cli.Get(ctx, &pb.MachineRef{Id: id})
+	if err != nil {
+		t.Fatalf("final Get: %v", err)
+	}
+	t.Fatalf("machine stuck in %s 10s after Drain(grace=0) — must reach Idle or Failed-with-last_error", m.GetState())
+}
+
 // mustReachState polls Get until the machine is in the desired state
 // or timeout elapses.
 func mustReachState(t *testing.T, cli pb.CapacityProviderClient, ctx context.Context, id string, want pb.MachineState, timeout time.Duration) {

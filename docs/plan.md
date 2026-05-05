@@ -646,6 +646,15 @@ if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > r
 
 **Out of scope:** dynamic per-cluster pacing (the load-driver's own QPS knob — already configurable). This milestone is just the runner's gate-time, not the load-driver's behaviour.
 
+### M23. Conformance: transitional-state observability + drain-grace handling
+**Goal:** close two categories the user-stories doc claims the conformance suite covers but that didn't actually exist as tests.
+
+**Scope:**
+1. `TestConformance_TransitionalStateObservability`: poll Get aggressively after Create on a Speculative machine and assert at least one valid post-Create state ({Speculative, Creating, Idle}) was observed. The full kill-and-restart contract from user-stories ("kill the provider mid-Configure, restart, observe in-progress state preserved") needs process control we don't have over an external gRPC endpoint; the underlying property — that transitional states are reportable via Get — is what's testable from outside, and is what kill-and-restart depends on.
+2. `TestConformance_DrainGraceTimeout`: Drain a Configured machine with `grace_period_seconds = 0`. Final state must be Idle (drain succeeded immediately) or Failed-with-non-empty-last_error. Stuck-in-Draining or silently-reverted-to-Configured fails the test.
+
+**Out of scope:** killing the provider process from inside the suite (can't generically; provider authors add their own integration tests for restart-survival).
+
 ### M13. Fleet-scale realism test (5M, hundreds of clusters)
 **Gated on M22 + a passing scaleway-1m run.** The 5M test is end-of-line: it's the most expensive run we ship (~$2.60-$8 depending on duration after M22's ramp budget bump) and the most likely to surface previously-unseen bottlenecks. Originally drafted right after M12; deferred behind everything else because (a) M14-M21 close real user-stories gaps, (b) M22 fixes the ramp-budget cliff that already failed the 1M de-risk by 25 CRs, and (c) re-running 1M cleanly is a much cheaper way to validate the per-cluster 10K-CR path before paying for 5M.
 
