@@ -74,6 +74,20 @@ type profile struct {
 	// production-realistic catalog.
 	Archetypes []archetype.Archetype `yaml:"archetypes"`
 
+	// DemandArchetypes (M34 / Item 1): when non-empty, the load-
+	// driver picks from this list instead of Archetypes. Lets a
+	// profile express "what's already running" (Archetypes /
+	// seedArchetypes) separately from "what's being submitted right
+	// now" (demandArchetypes). Real fleets show drift between the
+	// two; the previous single-catalog harness made Phase 3 matching
+	// artificially easy.
+	DemandArchetypes []archetype.Archetype `yaml:"demandArchetypes"`
+
+	// SeedArchetypes is parsed but unused by the load-driver — the
+	// shard binary reads it from the same ConfigMap. Declared here
+	// so unmarshal doesn't reject the field.
+	SeedArchetypes []archetype.Archetype `yaml:"seedArchetypes"`
+
 	// Bursts (ADR-0015 §3): each driver independently rolls a
 	// Bernoulli trial against Selectivity at startup. Pods that win
 	// the trial schedule the burst at AtSeconds-from-start (relative
@@ -101,6 +115,16 @@ type burstSpec struct {
 type sizeBucket struct {
 	Fraction         float64 `yaml:"fraction"`
 	TargetMultiplier float64 `yaml:"targetMultiplier"`
+}
+
+// demandArchetypes returns the archetype list the load-driver should
+// pick from. DemandArchetypes wins if non-empty; otherwise falls back
+// to the shared Archetypes list. M34 / Item 1.
+func (p profile) demandArchetypes() []archetype.Archetype {
+	if len(p.DemandArchetypes) > 0 {
+		return p.DemandArchetypes
+	}
+	return p.Archetypes
 }
 
 var (
@@ -194,8 +218,8 @@ func run(args []string) error {
 		prof:       prof,
 		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		known:      make(map[string]crMeta, prof.Target),
-		picker:     archetype.NewPicker(prof.Archetypes),
-		archByName: indexArchetypes(prof.Archetypes),
+		picker:     archetype.NewPicker(prof.demandArchetypes()),
+		archByName: indexArchetypes(prof.demandArchetypes()),
 	}
 	if d.picker != nil {
 		logger.Info("archetypes loaded", "count", len(prof.Archetypes))

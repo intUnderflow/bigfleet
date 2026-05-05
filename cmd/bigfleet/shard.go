@@ -319,8 +319,11 @@ func runShard(args []string) error {
 			if err != nil {
 				return fmt.Errorf("--archetypes: %w", err)
 			}
-			arches = cat.Archetypes
-			logger.Info("archetype catalog loaded", "path", *archetypesPath, "count", len(arches))
+			// M34: prefer the seed-specific list when the catalog
+			// provides one; otherwise the legacy single Archetypes
+			// list is used for both seed and demand.
+			arches = cat.ForSeed()
+			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches))
 		}
 		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, arches, logger)
 	}

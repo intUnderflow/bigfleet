@@ -26,8 +26,42 @@ import (
 
 // Catalog is the top-level YAML shape mounted as a ConfigMap into
 // both the load-driver and shard pods.
+//
+// M34 (Item 1): SeedArchetypes and DemandArchetypes optionally split
+// the seed-side distribution (Configured machines pre-populated into
+// the fake provider) from the demand-side distribution (CRs the
+// load-driver creates). Real fleets show this drift: the seed reflects
+// what's been running for a while; demand reflects what's being
+// submitted right now. They share archetype shapes but the *frequency*
+// distribution differs — seed is biased toward long-lived archetypes,
+// demand may be biased toward short-lived burst-y ones.
+//
+// When both SeedArchetypes and DemandArchetypes are empty, both sides
+// fall back to Archetypes (legacy single-catalog behaviour, unchanged).
 type Catalog struct {
-	Archetypes []Archetype `yaml:"archetypes"`
+	Archetypes       []Archetype `yaml:"archetypes"`
+	SeedArchetypes   []Archetype `yaml:"seedArchetypes"`
+	DemandArchetypes []Archetype `yaml:"demandArchetypes"`
+}
+
+// ForSeed returns the archetype list the Configured-seed should
+// distribute over. SeedArchetypes wins if non-empty; otherwise falls
+// back to Archetypes.
+func (c Catalog) ForSeed() []Archetype {
+	if len(c.SeedArchetypes) > 0 {
+		return c.SeedArchetypes
+	}
+	return c.Archetypes
+}
+
+// ForDemand returns the archetype list the load-driver should pick
+// from. DemandArchetypes wins if non-empty; otherwise falls back to
+// Archetypes.
+func (c Catalog) ForDemand() []Archetype {
+	if len(c.DemandArchetypes) > 0 {
+		return c.DemandArchetypes
+	}
+	return c.Archetypes
 }
 
 // Archetype describes one workload pattern. Both producer (CR)
@@ -84,18 +118,31 @@ func LoadCatalog(path string) (Catalog, error) {
 	if err := yaml.Unmarshal(b, &c); err != nil {
 		return Catalog{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	for i, a := range c.Archetypes {
-		if a.Name == "" {
-			return Catalog{}, fmt.Errorf("archetype[%d]: name required", i)
-		}
-		if len(a.InstanceTypes) == 0 {
-			return Catalog{}, fmt.Errorf("archetype[%d] %q: at least one instanceType required", i, a.Name)
-		}
-		if a.Weight < 0 {
-			return Catalog{}, fmt.Errorf("archetype[%d] %q: weight must be ≥ 0", i, a.Name)
-		}
+	if err := validateArchetypes("archetypes", c.Archetypes); err != nil {
+		return Catalog{}, err
+	}
+	if err := validateArchetypes("seedArchetypes", c.SeedArchetypes); err != nil {
+		return Catalog{}, err
+	}
+	if err := validateArchetypes("demandArchetypes", c.DemandArchetypes); err != nil {
+		return Catalog{}, err
 	}
 	return c, nil
+}
+
+func validateArchetypes(field string, arches []Archetype) error {
+	for i, a := range arches {
+		if a.Name == "" {
+			return fmt.Errorf("%s[%d]: name required", field, i)
+		}
+		if len(a.InstanceTypes) == 0 {
+			return fmt.Errorf("%s[%d] %q: at least one instanceType required", field, i, a.Name)
+		}
+		if a.Weight < 0 {
+			return fmt.Errorf("%s[%d] %q: weight must be ≥ 0", field, i, a.Name)
+		}
+	}
+	return nil
 }
 
 // MaxPriority returns the highest priority in the archetype's
