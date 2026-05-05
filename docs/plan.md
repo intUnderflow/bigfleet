@@ -595,6 +595,49 @@ The cap surfaced by M11: a single shard runs out of cycle headroom around 500K m
 
 **Out of scope:** chaos engineering beyond pod kills (no kernel-level fault injection in v1).
 
+### M18. user-stories doc-vs-code follow-up (cheap)
+**Goal:** close the two cheap gaps from the post-M17 user-stories re-audit. Each is a doc rewrite or a Makefile-target add.
+
+**Scope:**
+1. **`docs/user-stories.md` Pre-release validation section.** Line 250 still says "automating it inside the runner is not yet shipped". M17 (commit `12f0407`) and M17.x (`79703d7`) shipped the asserted-outcome runner. Rewrite the section: drop the manual-kill walkthrough, point at `failover-leader-kill.yaml` / `failover-shard-kill.yaml` / `failover-partition.yaml` / `failover-soak.yaml`, and explain that the runner's `failures: []` in summary.json is the regression signal.
+2. **`make conformance-build` / `./bin/conformance`.** Story line 197-198 documents these but neither exists. Either add a Makefile target that compiles a binary (the conformance suite is a Go test today), or rewrite the runbook to match the existing `make conformance TARGET=…` flow. Going with the rewrite is cleaner — keeping the suite as a `go test` invocation is the right ergonomic for `go test ./...` integration anyway.
+
+### M19. CapacityRequest `.status.phase` write path
+**Goal:** make the CR lifecycle visible. Today the CRD declares `status.phase` (Pending / Acknowledged) but no code anywhere writes it; the user story claims a Pending → Acknowledged walk that doesn't actually render. Workload owners watching `kubectl get capacityrequest` see no phase progression, on-call's runbook query returns nothing useful, and the lifecycle pillar is bookkeeping-only.
+
+**Scope:**
+1. Operator-side: when `buildRollup` includes a CR for the first time (its fingerprint enters the rollup), patch `status.phase = Acknowledged`. Idempotent on re-rollup.
+2. Pod-controller / external creator: CR objects start with `status.phase = Pending` at create time (the controller already returns immediately after Create — add a status patch right after).
+3. Operator's existing post-rollup batch-status-write path already handles `bigfleet_operator_acknowledge_duration_seconds` measurement. Rename / extend so the new write is observable as `bigfleet_operator_acknowledged_total{phase="Acknowledged"}`.
+4. Update test/conformance and integration tests to assert the phase walk on a synthetic CR.
+
+**Out of scope:** Failed / Satisfied phases — the v1 lifecycle is intentionally a two-step (Pending / Acknowledged) per the user story. Adding more phases is post-v1.
+
+### M20. ReclaimInstruction end-to-end
+**Goal:** lift `pkg/operator/reclaim.go` out of its M4 "log + ack" stub and implement the full Reclaim path: cordon, graceful-shutdown grace period, PDB respect, UpcomingNode `Draining → Drained` walk completion. The user-stories Mode-2 / preempt path claims the operator does this work; today it doesn't.
+
+**Scope:**
+1. On ReclaimInstruction: cordon each named node (`Spec.Unschedulable = true`).
+2. Drain workloads with `eviction` API calls that respect PodDisruptionBudgets — the evictor takes the instruction's `grace_period_seconds` as the timeout per pod.
+3. UpcomingNode CR phase walks through `Draining` (during eviction) → `Drained` (when the node is empty) → CR garbage-collected after a retention window.
+4. ReclaimAck only fires once the cordon has taken effect — so the shard's reclamation-progress accounting is real, not an immediate ack.
+5. Drain-grace timeout: a Drain that hits `grace_period_seconds` without succeeding flips the machine to `Failed` per the protocol; the operator surfaces `last_error` on the UpcomingNode.
+
+**Out of scope:** node-drain ergonomics beyond the eviction API (custom drainers, in-pod hooks, etc.). The standard Kubernetes eviction path is enough for v1.
+
+**Validation:** the existing `failover-soak` and a new `reclaim-cycle.yaml` profile drive synthetic preempt actions and assert the UpcomingNode CR walks through both Draining and Drained before deletion.
+
+### M21. BootstrapTemplate as user-facing config
+**Goal:** let cluster owners configure their bootstrap blob via the operator's helm values, not by forking the Go code. Today `Operator.Config.BootstrapTemplate` is a Go callback — only embedders can set it, which contradicts the per-cluster operator-install story where a cluster owner runs `helm install bigfleet-operator …` and expects to be able to specify how userdata is rendered for their cluster.
+
+**Scope:**
+1. Helm values block: `bootstrapTemplate` accepts a Go-template-style string with `.ClusterID`, `.MachineID`, `.NodeSelector`, etc. context. Default is a small no-op template (matches the in-process fake provider's behaviour).
+2. Operator binary: `--bootstrap-template-file` flag pointing at a mounted ConfigMap-backed file; loaded at startup and parsed via `text/template`.
+3. Operator's existing `BootstrapTemplate` Go callback retained for embedders + tests; the new flag's behaviour is implemented as a default callback that reads the parsed template.
+4. Operator-guide entry walking through "I have nodes that need a custom kubelet config — here's how to render it via the bootstrap template".
+
+**Out of scope:** template helpers beyond what `text/template` ships with (no Sprig). Per-cluster bootstrap-template overrides via CRD (operator chart values are per-deployment; cross-cluster overrides are a different design).
+
 ---
 
 ## 10. Scalability concerns
