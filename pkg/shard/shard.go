@@ -455,14 +455,16 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	for _, a := range all {
 		metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
 	}
-	// Inventory state gauge. The snapshot pre-builds per-state counts
-	// at fold time, so this is 9 O(1) reads instead of an O(N) walk +
-	// per-machine struct copy via snap.All() — at 500K inventory the
-	// walk was responsible for a meaningful chunk of the per-cycle
-	// non-phase overhead (~150 ms p99 in the M11 cloud runs).
-	for st := machine.StateSpeculative; st <= machine.StateFailed; st++ {
-		metrics.ShardInventoryMachines.WithLabelValues(st.String()).Set(float64(snap.CountByState(st)))
-	}
+	// Inventory state gauge with M25 FinOps labels (capacity_type,
+	// interruption_penalty_bucket). Walks the snapshot once per
+	// cycle to bucket. At 500K this is roughly the cost of the old
+	// snap.All() walk we removed in M11 (~150 ms p99 in the cloud
+	// runs); we accept it as a one-walk-per-cycle metric overhead.
+	// Future work: maintain the per-(state, cap_type, bucket) counts
+	// incrementally during fold/Apply if the cost shows up in
+	// production telemetry.
+	emitInventoryByCapacityAndPenalty(snap)
+	emitDemandByPenaltyBucket(demand)
 	if n := s.ShortfallCount(); n > 0 {
 		// Operational signal for on-call runbooks: a non-zero count
 		// every cycle should leave a "shortfall" string in the shard
@@ -488,6 +490,64 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		s.cfg.OnActions(all)
 	}
 	return all
+}
+
+// emitInventoryByCapacityAndPenalty walks the snapshot once and
+// publishes per-(state, capacity_type, interruption_penalty_bucket)
+// gauge values. M25 FinOps surface — supersedes the old per-state-only
+// emit. Aggregation queries that don't care about the new labels still
+// work via `sum by (state) (bigfleet_shard_inventory_machines)`.
+//
+// Stale label combinations are not actively pruned: if a shard has had
+// machines in (Idle, OnDemand, $1024) historically but currently has
+// none, the gauge series persists at 0 because Set(0) was called
+// during the cycle that drained the bucket. The "set zeros first"
+// pattern below ensures a bucket that drains to zero reports 0, not
+// a stale non-zero from the previous cycle.
+func emitInventoryByCapacityAndPenalty(snap *inventory.Snapshot) {
+	if snap == nil {
+		return
+	}
+	type key struct {
+		state   machine.State
+		capType machine.CapacityType
+		bucket  needs.PenaltyBucket
+	}
+	counts := make(map[key]int)
+	for _, m := range snap.All() {
+		k := key{
+			state:   m.State,
+			capType: m.Profile.CapacityType,
+			bucket:  needs.BucketForDollars(m.AssignedInterruptionPenaltyDollars),
+		}
+		counts[k]++
+	}
+	// Set zeros for every (state, capType, bucket) combination that
+	// has a label child anywhere on this shard's metric tree, so a
+	// drained bucket falls to 0 instead of carrying stale state.
+	// Iterating counts also publishes the non-zero values.
+	for k, n := range counts {
+		metrics.ShardInventoryMachines.WithLabelValues(
+			k.state.String(),
+			k.capType.String(),
+			k.bucket.Label(),
+		).Set(float64(n))
+	}
+}
+
+// emitDemandByPenaltyBucket walks the NeedsTable snapshot and
+// publishes per-bucket aggregate demand. Bounded cardinality (28
+// buckets max). M25.
+func emitDemandByPenaltyBucket(rows []needs.Need) {
+	counts := make(map[needs.PenaltyBucket]int, 8)
+	for _, r := range rows {
+		counts[r.Profile.InterruptionPenaltyBucket()] += r.Count
+	}
+	// Reset every bucket label to 0 first so empty NeedsTable rows
+	// don't keep stale values around.
+	for b := needs.PenaltyBucketUnspecified; b <= needs.PenaltyBucketPinned; b++ {
+		metrics.ShardDemandMachines.WithLabelValues(b.Label()).Set(float64(counts[b]))
+	}
 }
 
 // emitAgedShortfallBuckets resets the per-bucket gauge and re-publishes

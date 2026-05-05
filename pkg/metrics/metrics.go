@@ -61,10 +61,30 @@ var (
 		Help: "Count of decision-engine actions emitted, by kind (Bootstrap / Provision / Reclaim / Preempt).",
 	}, []string{"kind"})
 
+	// ShardInventoryMachines now carries capacity_type and
+	// interruption_penalty_bucket labels alongside state (M25). Lets
+	// FinOps roll up:
+	//   - spot/on-demand ratio per shard
+	//   - penalty-bucket distribution of held capacity
+	//   - which penalty buckets are over- or under-supplied
+	// Cardinality bound: 9 states × 4 capacity types × 28 penalty
+	// buckets = 1008 series per shard. Acceptable for prom; alerts
+	// that don't care about the new labels keep working via
+	// `sum by (state) (bigfleet_shard_inventory_machines)`.
 	ShardInventoryMachines = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "bigfleet_shard_inventory_machines",
-		Help: "Machines currently in inventory, by state.",
-	}, []string{"state"})
+		Help: "Machines currently in inventory, by state, capacity type, and interruption-penalty bucket.",
+	}, []string{"state", "capacity_type", "interruption_penalty_bucket"})
+
+	// ShardDemandMachines is the M25 NeedsTable-side counterpart to
+	// ShardInventoryMachines. Per (interruption_penalty_bucket)
+	// aggregate count of demanded machines — surfaces the
+	// "penalty-bucket distribution of demand" view from the FinOps
+	// runbook in user-stories.md.
+	ShardDemandMachines = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_demand_machines",
+		Help: "Machines currently demanded by the NeedsTable, bucketed by interruption-penalty bucket.",
+	}, []string{"interruption_penalty_bucket"})
 
 	ShardShortfalls = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "bigfleet_shard_shortfalls",

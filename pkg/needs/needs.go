@@ -58,6 +58,70 @@ const (
 	PenaltyBucketPinned      PenaltyBucket = 27
 )
 
+// Label returns a stable Prometheus-label-friendly string for the
+// bucket. Used by the FinOps metrics in pkg/metrics so penalty-bucket
+// breakdowns stay readable in Grafana without leaking the internal
+// uint8 enum value. M25.
+func (b PenaltyBucket) Label() string {
+	switch b {
+	case PenaltyBucketZero:
+		return "0"
+	case PenaltyBucketHalfDollar:
+		return "0.5"
+	case PenaltyBucket1:
+		return "1"
+	case PenaltyBucket2:
+		return "2"
+	case PenaltyBucket4:
+		return "4"
+	case PenaltyBucket8:
+		return "8"
+	case PenaltyBucket16:
+		return "16"
+	case PenaltyBucket32:
+		return "32"
+	case PenaltyBucket64:
+		return "64"
+	case PenaltyBucket128:
+		return "128"
+	case PenaltyBucket256:
+		return "256"
+	case PenaltyBucket512:
+		return "512"
+	case PenaltyBucket1024:
+		return "1024"
+	case PenaltyBucket2048:
+		return "2048"
+	case PenaltyBucket4096:
+		return "4096"
+	case PenaltyBucket8192:
+		return "8192"
+	case PenaltyBucket16384:
+		return "16384"
+	case PenaltyBucket32768:
+		return "32768"
+	case PenaltyBucket65536:
+		return "65536"
+	case PenaltyBucket131072:
+		return "131072"
+	case PenaltyBucket262144:
+		return "262144"
+	case PenaltyBucket524288:
+		return "524288"
+	case PenaltyBucket1048576:
+		return "1048576"
+	case PenaltyBucket2097152:
+		return "2097152"
+	case PenaltyBucket4194304:
+		return "4194304"
+	case PenaltyBucket8388608:
+		return "8388608"
+	case PenaltyBucketPinned:
+		return "pinned"
+	}
+	return "unspecified"
+}
+
 // BucketForDollars returns the smallest bucket whose upper bound is at
 // least the given raw dollar value. Bucket boundaries are powers of 2
 // from $1 (PenaltyBucket1) up to $8,388,608 (PenaltyBucket8388608), plus
