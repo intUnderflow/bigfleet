@@ -1,0 +1,104 @@
+# Production-realistic workload archetypes for the scaletest harness.
+# Each archetype represents a recurring workload pattern observed in
+# real fleets (Borg, Twine, Kubernetes-on-everything-else): GPU training,
+# GPU inference, CPU batch, CPU service, memory-bound DBs, critical
+# realtime. Weights are rough fleet-frequency estimates — not a
+# scientific distribution, but more honest than "one a3 GPU job for
+# everything."
+#
+# Both the load-driver (which creates CRs) and the shard's Configured
+# seed read this same file so the seeded inventory matches the demand
+# the load-driver creates. If the catalog and the seed drift, Phase 3
+# will reclaim the seed every cycle and the test measures a
+# reprovisioning regime, not a steady-state.
+#
+# Schema (per-archetype):
+#   name             : human-readable label, used for telemetry
+#   weight           : relative frequency vs other archetypes (any int > 0)
+#   instanceTypes    : list — translated to `node.kubernetes.io/instance-type In [...]`
+#   zones            : optional list — translated to `topology.kubernetes.io/zone In [...]`
+#   resources        : map — passed verbatim into CapacityRequest.spec.resources
+#   priorityClasses  : list of int32 — driver picks one uniformly per CR (per-archetype)
+#   interruptionPenalty : float64 dollars — passed into CR.spec.interruptionPenalty
+#   reclamationPenalty  : float64 dollars — passed into CR.spec.reclamationPenalty
+#   extraRequirements: list — additional NodeSelectorRequirement entries (rare)
+
+archetypes:
+  - name: gpu-training
+    # Long-running multi-GPU training jobs. Rare but very high penalty
+    # to interrupt — production fleets keep priority above the bulk of
+    # work so spot reclaims don't take them down.
+    weight: 5
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    resources:
+      nvidia.com/gpu: "8"
+    priorityClasses: [1000]
+    interruptionPenalty: 65536
+    reclamationPenalty: 65536
+
+  - name: gpu-inference
+    # Latency-sensitive single-GPU inference. Not preempted by training
+    # but lives below the critical-realtime tier.
+    weight: 15
+    instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
+    zones: [zone-a, zone-b, zone-c]
+    resources:
+      nvidia.com/gpu: "1"
+    priorityClasses: [100, 1000]
+    interruptionPenalty: 4096
+    reclamationPenalty: 8192
+
+  - name: cpu-batch
+    # Resumable batch jobs. The biggest population by count; lowest
+    # priority; cheap to interrupt (resubmit is fine).
+    weight: 35
+    instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
+    zones: [zone-a, zone-b, zone-c]
+    resources:
+      cpu: "16"
+      memory: "32Gi"
+    priorityClasses: [100]
+    interruptionPenalty: 64
+    reclamationPenalty: 256
+
+  - name: cpu-service
+    # User-facing services with HPAs / fixed-replica deployments.
+    # Mid priority, mid penalty; the steady-state production majority.
+    weight: 30
+    instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    resources:
+      cpu: "4"
+      memory: "16Gi"
+    priorityClasses: [1000]
+    interruptionPenalty: 1024
+    reclamationPenalty: 8192
+
+  - name: memory-db
+    # In-memory caches / DBs with persistent disk attached. High
+    # reclamation penalty (data is hot, draining is expensive) but
+    # tolerant of interruption (replication catches up).
+    weight: 10
+    instanceTypes: [r6i.xlarge, r6i.2xlarge]
+    zones: [zone-a, zone-b]
+    resources:
+      cpu: "4"
+      memory: "64Gi"
+    priorityClasses: [1000]
+    interruptionPenalty: 4096
+    reclamationPenalty: 32768
+
+  - name: critical-realtime
+    # Top-priority workloads (control plane, telemetry hot path,
+    # safety-critical services). Small population; can preempt
+    # everything else. The "1000000" priority class.
+    weight: 5
+    instanceTypes: [c6i.4xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    resources:
+      cpu: "8"
+      memory: "16Gi"
+    priorityClasses: [1000000]
+    interruptionPenalty: 65536
+    reclamationPenalty: 65536

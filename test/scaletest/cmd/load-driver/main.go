@@ -52,6 +52,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 )
 
 type profile struct {
@@ -60,6 +61,17 @@ type profile struct {
 	BurstAtStart    int     `yaml:"burstAtStart"`
 	PriorityClasses []int32 `yaml:"priorityClasses"`
 	DurationSeconds int     `yaml:"durationSeconds"`
+
+	// Archetypes: a list of workload templates, weighted-picked on every
+	// createOne. When non-empty, the GPU-only single-shape fallback
+	// below is bypassed and CRs are emitted from the chosen archetype.
+	// Both the load-driver and the shard's Configured seed read this
+	// list (M31). When empty, behaviour is identical to pre-M31:
+	// instance-type=a3-highgpu-8g, nvidia.com/gpu=8, priority from
+	// PriorityClasses (or 1000), penalties 8192/65536. See
+	// test/scaletest/profiles/archetypes/realistic.yaml for the
+	// production-realistic catalog.
+	Archetypes []archetype.Archetype `yaml:"archetypes"`
 }
 
 var (
@@ -143,6 +155,10 @@ func run(args []string) error {
 		prof:      prof,
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		known:     make(map[string]struct{}, prof.Target),
+		picker:    archetype.NewPicker(prof.Archetypes),
+	}
+	if d.picker != nil {
+		logger.Info("archetypes loaded", "count", len(prof.Archetypes))
 	}
 	return d.run(ctx)
 }
@@ -153,6 +169,7 @@ type driver struct {
 	k         client.Client
 	prof      profile
 	rng       *rand.Rand
+	picker    *archetype.Picker
 
 	mu    sync.Mutex
 	known map[string]struct{}
@@ -259,13 +276,33 @@ func (d *driver) createOne(ctx context.Context) error {
 	name := fmt.Sprintf("%s-cr-%06d", d.clusterID, d.seq)
 	d.mu.Unlock()
 
+	cr := d.buildCR(name)
+	if err := d.k.Create(ctx, cr); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.known[name] = struct{}{}
+	d.mu.Unlock()
+	created.Inc()
+	active.Set(float64(d.activeCount()))
+	return nil
+}
+
+// buildCR constructs the CapacityRequest spec for a single CR. When
+// archetypes are configured the picker chooses one weighted-random;
+// otherwise the legacy single-shape (a3-highgpu-8g GPU) is emitted
+// for compatibility with pre-M31 profiles.
+func (d *driver) buildCR(name string) *bfv1alpha1.CapacityRequest {
+	if a := d.picker.Pick(d.rng); a != nil {
+		return d.buildArchetypeCR(name, a)
+	}
 	pri := int32(1000)
 	if len(d.prof.PriorityClasses) > 0 {
 		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
 	}
 	intr := resource.MustParse("8192")
 	recl := resource.MustParse("65536")
-	cr := &bfv1alpha1.CapacityRequest{
+	return &bfv1alpha1.CapacityRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: bfv1alpha1.CapacityRequestSpec{
 			Requirements: []corev1.NodeSelectorRequirement{{
@@ -281,15 +318,59 @@ func (d *driver) createOne(ctx context.Context) error {
 			ReclamationPenalty:  &recl,
 		},
 	}
-	if err := d.k.Create(ctx, cr); err != nil {
-		return err
+}
+
+func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alpha1.CapacityRequest {
+	reqs := []corev1.NodeSelectorRequirement{}
+	if len(a.InstanceTypes) > 0 {
+		reqs = append(reqs, corev1.NodeSelectorRequirement{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.InstanceTypes...),
+		})
 	}
-	d.mu.Lock()
-	d.known[name] = struct{}{}
-	d.mu.Unlock()
-	created.Inc()
-	active.Set(float64(d.activeCount()))
-	return nil
+	if len(a.Zones) > 0 {
+		reqs = append(reqs, corev1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.Zones...),
+		})
+	}
+	resources := corev1.ResourceList{}
+	for k, v := range a.Resources {
+		resources[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	pri := int32(1000)
+	if len(a.PriorityClasses) > 0 {
+		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
+	}
+	intr := resource.MustParse(formatDollars(a.InterruptionPenalty))
+	recl := resource.MustParse(formatDollars(a.ReclamationPenalty))
+	return &bfv1alpha1.CapacityRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
+		},
+		Spec: bfv1alpha1.CapacityRequestSpec{
+			Requirements:        reqs,
+			Resources:           resources,
+			Priority:            pri,
+			InterruptionPenalty: &intr,
+			ReclamationPenalty:  &recl,
+		},
+	}
+}
+
+// formatDollars renders a float-dollar penalty as a fixed-point
+// resource.Quantity-parseable string. resource.MustParse rejects "0"
+// in some contexts but accepts integer strings like "8192", so we
+// emit integers when the value is integral.
+func formatDollars(v float64) string {
+	if v == float64(int64(v)) {
+		return fmt.Sprintf("%d", int64(v))
+	}
+	return fmt.Sprintf("%f", v)
 }
 
 func (d *driver) deleteOne(ctx context.Context, name string) error {

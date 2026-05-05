@@ -1,0 +1,183 @@
+# scaleway-1m-realistic — 1M-machine fleet test on Scaleway with the
+# **M31 production-realistic workload mix**.
+#
+# Where this differs from scaleway-1m.yaml:
+#   - Demand is six distinct workload archetypes (GPU training, GPU
+#     inference, CPU batch, CPU service, memory-bound DBs, critical
+#     realtime), weighted by approximate fleet frequency.
+#   - Real resource requests on every CR (cpu / memory / GPU), not
+#     just instance-type pins.
+#   - Multi-instance-type pools per archetype (CPU service may use
+#     m6i.large or m6i.xlarge or m6i.2xlarge).
+#   - Zone constraints — most archetypes spread across [zone-a, zone-b,
+#     zone-c]; memory-DBs deliberately pin to zone-a, zone-b only.
+#   - Priority diversity: 100 / 1000 / 1000000 ladder, weighted by
+#     archetype.
+#   - Configured seed mirrors the same archetype distribution so
+#     Phase 3 sees a realistic per-cluster fingerprint mix (not a
+#     single fingerprint).
+#
+# Why this matters: M30.{1,2}'s optimisations are validated under a
+# uniform single-shape load. Real fleets have 5-50 distinct profile
+# fingerprints per cluster. The min-priority short-circuit fires only
+# when a bucket has no preemptable victim; the pin-only fast path
+# fires only when a profile has no resources. Under a realistic mix
+# both optimisations may fail to trigger on most needs, so cycle p99
+# may regress vs scaleway-1m. That regression is the *honest* number
+# — what the SLO needs to be measured against.
+#
+# Inventory shape (per shard, 50 owned clusters × 9000 Configured each):
+#   ~5%  GPU-training  (a3-highgpu-8g)
+#   ~15% GPU-inference (a3-highgpu-1g, a2-highgpu-1g)
+#   ~35% CPU-batch     (c6i.4xlarge, c6i.8xlarge, n2-standard-32)
+#   ~30% CPU-service   (m6i.large, m6i.xlarge, m6i.2xlarge)
+#   ~10% memory-DB     (r6i.xlarge, r6i.2xlarge)
+#   ~5%  critical-realtime (c6i.4xlarge, m6i.2xlarge, prio 1000000)
+#
+# Demand: target 10000 CRs per cluster (1M aggregate); same archetype
+# distribution. ~9K of 10K matched by Configured; ~1K is unsatisfied
+# burst at the 1:10 burst-regime ratio (ADR-0013).
+#
+# Sized for the same 2× PRO2-L Kapsule as scaleway-1m.yaml.
+# Provisioning recipe identical:
+#
+#   scw k8s cluster create name=bigfleet-1m \
+#     version=1.35.3 cni=cilium type=kapsule \
+#     pools.0.name=default pools.0.node-type=PRO2-L \
+#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
+#     region=fr-par project-id=<bigfleet-project-id>
+#
+# Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
+# A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74).
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: Always
+
+kwok:
+  clusterCount: 100
+  apiserverResources:
+    requests: { cpu: 150m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 3Gi }
+  workloadResources:
+    requests: { cpu: 150m, memory: 400Mi }
+    limits:   { cpu: 2,    memory: 1500Mi }
+
+shard:
+  replicas: 2
+  seedMachines: 50000
+  seedConfiguredPerCluster: 9000
+  maxActionsPerCycle: 1000
+  executeConcurrency: 128
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 2, memory: 3Gi }
+    limits:   { cpu: 6, memory: 12Gi }
+
+coordinator:
+  enabled: true
+  replicas: 1
+
+loadProfile:
+  target: 10000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+  # PriorityClasses is a fallback for the legacy single-shape path.
+  # When archetypes is non-empty (it is here), each archetype
+  # provides its own priorityClasses and this list is unused.
+  priorityClasses: [100, 1000, 1000000]
+  # M31 archetype catalog — kept inline so the ConfigMap that the
+  # chart builds from .Values.loadProfile picks them up directly.
+  # Mirrors test/scaletest/profiles/archetypes/realistic.yaml; if
+  # you change one file, change the other (a future cleanup is to
+  # have the runner --set-file the catalog so there's only one
+  # source of truth).
+  archetypes:
+    - name: gpu-training
+      weight: 5
+      instanceTypes: [a3-highgpu-8g]
+      zones: [zone-a, zone-b, zone-c]
+      resources:
+        nvidia.com/gpu: "8"
+      priorityClasses: [1000]
+      interruptionPenalty: 65536
+      reclamationPenalty: 65536
+
+    - name: gpu-inference
+      weight: 15
+      instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
+      zones: [zone-a, zone-b, zone-c]
+      resources:
+        nvidia.com/gpu: "1"
+      priorityClasses: [100, 1000]
+      interruptionPenalty: 4096
+      reclamationPenalty: 8192
+
+    - name: cpu-batch
+      weight: 35
+      instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
+      zones: [zone-a, zone-b, zone-c]
+      resources:
+        cpu: "16"
+        memory: "32Gi"
+      priorityClasses: [100]
+      interruptionPenalty: 64
+      reclamationPenalty: 256
+
+    - name: cpu-service
+      weight: 30
+      instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
+      zones: [zone-a, zone-b, zone-c]
+      resources:
+        cpu: "4"
+        memory: "16Gi"
+      priorityClasses: [1000]
+      interruptionPenalty: 1024
+      reclamationPenalty: 8192
+
+    - name: memory-db
+      weight: 10
+      instanceTypes: [r6i.xlarge, r6i.2xlarge]
+      zones: [zone-a, zone-b]
+      resources:
+        cpu: "4"
+        memory: "64Gi"
+      priorityClasses: [1000]
+      interruptionPenalty: 4096
+      reclamationPenalty: 32768
+
+    - name: critical-realtime
+      weight: 5
+      instanceTypes: [c6i.4xlarge, m6i.2xlarge]
+      zones: [zone-a, zone-b, zone-c]
+      resources:
+        cpu: "8"
+        memory: "16Gi"
+      priorityClasses: [1000000]
+      interruptionPenalty: 65536
+      reclamationPenalty: 65536
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 12Gi }
+
+costEstimate:
+  vCPU: 64
+  memoryGB: 256
+  awsSpotUsdPerHour: 0.84
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management each (450K Configured + 50K Idle) = 1M aggregate fleet. M31 production-realistic workload mix: 6 archetypes (GPU training/inference, CPU batch/service, memory-DB, critical-realtime) with real resources, multi-type pools, zone constraints, priority diversity. Configured seed mirrors the demand archetype distribution so Phase 3 sees a realistic fingerprint mix. ~$0.74 for a 50-min run end-to-end."

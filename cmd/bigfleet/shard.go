@@ -16,11 +16,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
+	"math/rand"
+
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
 	"github.com/intUnderflow/bigfleet/pkg/shard/coordclient"
 )
@@ -77,7 +80,7 @@ func parseStatefulSetOrdinal(podName string) (int, error) {
 // shardReplicas). Setting any of {nConfiguredPerCluster, clusterStride,
 // totalClusters, shardOrdinal} to its zero value disables the
 // Configured seed.
-func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal int, logger *slog.Logger) {
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal int, archetypes []archetype.Archetype, logger *slog.Logger) {
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
 	zones := []string{"zone-a", "zone-b", "zone-c"}
 	resources := map[string]map[string]string{
@@ -117,35 +120,55 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 	if nConfiguredPerCluster > 0 && totalClusters > 0 && clusterStride > 0 {
 		// Configured-seed: bound to "kwok-cluster-N" cluster IDs that
 		// the harness's `N % shardReplicas` mapping routes to THIS
-		// shard. Profile is a3-highgpu-8g (zone rotated) to MATCH the
-		// load-driver's CRs (test/scaletest/cmd/load-driver/main.go
-		// pins `node.kubernetes.io/instance-type In [a3-highgpu-8g]`
-		// and asks for nvidia.com/gpu=8). If the seed used other
-		// instance types, Phase 3 would see them as "no need wants
-		// this profile" and reclaim them every cycle. AssignedPriority
-		// = 1000 matches the load-driver's default CR priority so
-		// Phase 2 cannot preempt the seed (Phase 2 only preempts
-		// strictly lower priority victims). Setting it to the top
-		// of the default load-driver priorityClasses ladder
-		// ([100, 1000, 1000000]) keeps the seed untouchable across
-		// all CR priorities the harness ships with — modelling
-		// "established high-value running workloads" that the
-		// burst should never disturb.
-		const assignedPriority = int32(1000000)
-		const interruptionPenalty = float64(8192)
-		const reclamationPenalty = float64(65536)
-		const it = "a3-highgpu-8g"
-		profileResources := resources[it]
+		// shard. Each owned cluster gets nConfiguredPerCluster machines.
+		//
+		// M31: when an archetype catalog is provided, machines are
+		// distributed across archetypes proportional to weight. Profile
+		// (instance-type, zone, resources) and assigned penalties come
+		// from the archetype; AssignedPriority is the top of the
+		// archetype's PriorityClasses (the seed represents established
+		// workloads at the top of their priority tier — burst demand
+		// at lower priorities can't preempt them, only equal-tier
+		// demand competes for capacity). When the catalog is empty,
+		// fall back to pre-M31 behaviour: every machine is
+		// a3-highgpu-8g at priority 1000000. This keeps existing
+		// scaleway-1m / scaleway-5m profiles working without
+		// modification.
+		picker := archetype.NewPicker(archetypes)
+		rng := rand.New(rand.NewSource(int64(shardOrdinal) + 1))
 		idx := 0
 		for c := shardOrdinal; c < totalClusters; c += clusterStride {
 			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
 			for i := 0; i < nConfiguredPerCluster; i++ {
-				z := zones[idx%len(zones)]
-				profile := machine.Profile{
-					InstanceType: it,
-					Zone:         z,
-					CapacityType: machine.CapacityTypeBareMetal,
-					Resources:    profileResources,
+				var profile machine.Profile
+				var assignedPriority int32
+				var interruptionPenalty, reclamationPenalty float64
+				if a := picker.Pick(rng); a != nil {
+					it := a.InstanceTypes[idx%len(a.InstanceTypes)]
+					z := "zone-a"
+					if len(a.Zones) > 0 {
+						z = a.Zones[idx%len(a.Zones)]
+					}
+					profile = machine.Profile{
+						InstanceType: it,
+						Zone:         z,
+						CapacityType: machine.CapacityTypeBareMetal,
+						Resources:    a.Resources,
+					}
+					assignedPriority = a.MaxPriority()
+					interruptionPenalty = a.InterruptionPenalty
+					reclamationPenalty = a.ReclamationPenalty
+				} else {
+					const it = "a3-highgpu-8g"
+					profile = machine.Profile{
+						InstanceType: it,
+						Zone:         zones[idx%len(zones)],
+						CapacityType: machine.CapacityTypeBareMetal,
+						Resources:    resources[it],
+					}
+					assignedPriority = 1000000
+					interruptionPenalty = 8192
+					reclamationPenalty = 65536
 				}
 				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, i))
 				prov.AddConfigured(id, profile, machine.CapacityTypeBareMetal, 0, 0, cluster, assignedPriority, interruptionPenalty, reclamationPenalty)
@@ -163,7 +186,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 			}
 		}
 	}
-	logger.Info("seed complete", "idle", nIdle, "configured", configuredSeeded)
+	logger.Info("seed complete", "idle", nIdle, "configured", configuredSeeded, "archetypes", len(archetypes))
 }
 
 // runShard runs the shard controller. The in-process fake provider
@@ -181,6 +204,7 @@ func runShard(args []string) error {
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
+	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to a single a3-highgpu-8g GPU shape (the legacy M29 behaviour). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
@@ -245,7 +269,16 @@ func runShard(args []string) error {
 			}
 			shardOrdinal = ord
 		}
-		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, logger)
+		var arches []archetype.Archetype
+		if *archetypesPath != "" {
+			cat, err := archetype.LoadCatalog(*archetypesPath)
+			if err != nil {
+				return fmt.Errorf("--archetypes: %w", err)
+			}
+			arches = cat.Archetypes
+			logger.Info("archetype catalog loaded", "path", *archetypesPath, "count", len(arches))
+		}
+		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, arches, logger)
 	}
 
 	srv := grpc.NewServer()

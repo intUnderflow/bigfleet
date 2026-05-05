@@ -76,6 +76,9 @@ spec:
             - --seed-configured-per-cluster={{ .Values.shard.seedConfiguredPerCluster }}
             - --seed-cluster-total={{ .Values.kwok.clusterCount | default 0 }}
             - --seed-cluster-stride={{ .Values.shard.replicas | default 1 }}
+            {{- if .Values.loadProfile.archetypes }}
+            - --archetypes=/etc/loadgen/profile.yaml
+            {{- end }}
             {{- end }}
             - --max-actions-per-cycle={{ .Values.shard.maxActionsPerCycle | default 0 }}
             - --execute-concurrency={{ .Values.shard.executeConcurrency | default 1 }}
@@ -99,8 +102,20 @@ spec:
             - { name: metrics, containerPort: 8780 }
           volumeMounts:
             - { name: data, mountPath: /var/lib/bigfleet }
+            {{- if .Values.loadProfile.archetypes }}
+            - { name: loadgen, mountPath: /etc/loadgen, readOnly: true }
+            {{- end }}
           resources:
             {{- toYaml .Values.shard.resources | nindent 12 }}
       volumes:
         - name: data
           emptyDir: {}
+        {{- if .Values.loadProfile.archetypes }}
+        # M31: shard reads the archetype catalog from the same
+        # ConfigMap the load-driver uses, so demand and Configured
+        # seed describe the same fleet shape. Mounting the same
+        # CM ensures the catalog can never drift between the two.
+        - name: loadgen
+          configMap:
+            name: kwok-load-profile
+        {{- end }}
