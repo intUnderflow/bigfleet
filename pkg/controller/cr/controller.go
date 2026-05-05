@@ -14,6 +14,7 @@ package cr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -155,7 +157,44 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("create CR: %w", err)
 	}
 	logger.Info("created CapacityRequest", "cr", newCR.Name)
+	// M19: stamp the initial Pending phase. Status subresource — needs a
+	// separate write since Create cannot set status. The operator's
+	// markAcknowledged path treats both "" and "Pending" as "needs
+	// acknowledging", so a transient Pending → Acknowledged → Pending
+	// → Acknowledged flap (if the operator's first rollup races this
+	// patch) is harmless: the next rollup re-acks. Failure here is
+	// non-fatal — the lifecycle still works without it, just less
+	// observable from kubectl.
+	if err := r.patchInitialPending(ctx, newCR); err != nil {
+		logger.Info("patch initial Pending status failed (non-fatal)", "err", err)
+	}
 	return ctrl.Result{}, nil
+}
+
+// patchInitialPending stamps status.phase=Pending on the freshly-
+// created CR via a JSON merge-patch. Mirrors the operator's
+// markAcknowledged pattern (single apiserver call, no resource-version
+// precondition). Idempotent if Phase is already Pending; on
+// already-Acknowledged CRs the operator's next rollup will re-ack.
+func (r *Reconciler) patchInitialPending(ctx context.Context, cr *bfv1alpha1.CapacityRequest) error {
+	patch, err := json.Marshal(map[string]any{
+		"status": map[string]any{
+			"phase": string(bfv1alpha1.CapacityRequestPending),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	target := &bfv1alpha1.CapacityRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: cr.Name, Namespace: cr.Namespace},
+	}
+	if err := r.Status().Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // AddToManager is the convenience wiring used by cmd/bigfleet-unschedulable-pod-controller.

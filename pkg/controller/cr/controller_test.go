@@ -115,6 +115,30 @@ func TestReconciler_CreatesCRForUnschedulablePod(t *testing.T) {
 	}
 }
 
+// TestReconciler_StampsInitialPendingPhase locks in the M19 contract
+// that newly-created CRs land with status.phase=Pending so observers
+// running `kubectl get capacityrequest` see the lifecycle walk
+// instead of a blank phase column.
+func TestReconciler_StampsInitialPendingPhase(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("trainer-pending", true, 8)
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	if got, want := list.Items[0].Status.Phase, bfv1alpha1.CapacityRequestPending; got != want {
+		t.Errorf("status.phase = %q, want %q", got, want)
+	}
+}
+
 func TestReconciler_Idempotent(t *testing.T) {
 	t.Parallel()
 	pod := unschedulablePod("trainer-0", true, 8)
