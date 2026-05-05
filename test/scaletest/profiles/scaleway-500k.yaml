@@ -69,7 +69,12 @@ kwok:
     limits:   { cpu: 1500m, memory: 1Gi }
 
 shard:
-  replicas: 1
+  # M12.6 validation run: 2 shards, kwok-cluster pods deterministically
+  # split N % 2 across them. Per-shard load is ~25K demand each
+  # (vs 50K on a single shard); inventory stays at 500K per shard.
+  # Tests the multi-shard wiring contract end-to-end on real cloud
+  # infra; not yet a comparable scale number to single-shard 500K.
+  replicas: 2
   # 500K idle machines pre-seeded so Phase 1 has a real population to
   # match against. Without this the harness measures rollup latency
   # only, not the algorithmic ceiling we actually want to test.
