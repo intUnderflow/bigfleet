@@ -84,8 +84,31 @@ log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPE
 bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
 OPERATOR_PID=$!
 
-# ---- 3. start the load-driver ----
-log loadgen "starting (profile=$LOAD_PROFILE)"
+# ---- 3. (M43b) optionally start the pod-shim + unschedulable-pod-controller.
+# These are needed only when the load-driver runs in mode=pods. The
+# chart sets POD_MODE=pods in the entrypoint env when the profile
+# opts in; otherwise both processes stay off and the harness behaves
+# as pre-M43.
+PODSHIM_PID=""
+UPC_PID=""
+if [[ "${POD_MODE:-cr}" == "pods" ]]; then
+  log podshim "starting"
+  bigfleet-scaletest-pod-shim \
+    --kubeconfig="$KCFG" \
+    --metrics-addr="0.0.0.0:8772" \
+    >"$WORK/logs/podshim.log" 2>&1 &
+  PODSHIM_PID=$!
+
+  log upc "starting"
+  bigfleet-unschedulable-pod-controller \
+    --kubeconfig="$KCFG" \
+    --metrics-addr="0.0.0.0:8773" \
+    >"$WORK/logs/upc.log" 2>&1 &
+  UPC_PID=$!
+fi
+
+# ---- 4. start the load-driver ----
+log loadgen "starting (profile=$LOAD_PROFILE mode=${POD_MODE:-cr})"
 load-driver \
   --kubeconfig="$KCFG" \
   --cluster-id="$CLUSTER_ID" \
@@ -96,16 +119,28 @@ LOADGEN_PID=$!
 
 log entrypoint "workload-side up"
 
-trap 'kill $OPERATOR_PID $LOADGEN_PID 2>/dev/null || true' SIGTERM SIGINT
+trap 'kill $OPERATOR_PID $LOADGEN_PID ${PODSHIM_PID:-} ${UPC_PID:-} 2>/dev/null || true' SIGTERM SIGINT
 
 while true; do
-  for name in OPERATOR LOADGEN; do
+  for entry in "OPERATOR:operator" "LOADGEN:loadgen"; do
+    name="${entry%:*}"
+    log_basename="${entry#*:}"
     pidvar="${name}_PID"
     if ! kill -0 "${!pidvar}" 2>/dev/null; then
-      log entrypoint "$name (pid ${!pidvar}) exited; tailing logs and exiting"
-      tail -n 50 "$WORK/logs/$(echo "$name" | tr '[:upper:]' '[:lower:]').log" || true
+      log entrypoint "$name (pid ${!pidvar}) exited; tailing $WORK/logs/$log_basename.log and exiting"
+      tail -n 50 "$WORK/logs/$log_basename.log" || true
       exit 1
     fi
   done
+  if [[ -n "$PODSHIM_PID" ]] && ! kill -0 "$PODSHIM_PID" 2>/dev/null; then
+    log entrypoint "podshim (pid $PODSHIM_PID) exited; tailing podshim.log and exiting"
+    tail -n 50 "$WORK/logs/podshim.log" || true
+    exit 1
+  fi
+  if [[ -n "$UPC_PID" ]] && ! kill -0 "$UPC_PID" 2>/dev/null; then
+    log entrypoint "upc (pid $UPC_PID) exited; tailing upc.log and exiting"
+    tail -n 50 "$WORK/logs/upc.log" || true
+    exit 1
+  fi
   sleep 2
 done

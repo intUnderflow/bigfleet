@@ -126,6 +126,10 @@ spec:
             - name: OPERATOR_CO_LOCATION_KEY
               value: "{{ .Values.operator.coLocationKey }}"
             {{- end }}
+            {{- if .Values.loadProfile.mode }}
+            - name: POD_MODE
+              value: "{{ .Values.loadProfile.mode }}"
+            {{- end }}
           ports:
             - { name: operator-met, containerPort: 8770 }
             - { name: loadgen-met,  containerPort: 8771 }
