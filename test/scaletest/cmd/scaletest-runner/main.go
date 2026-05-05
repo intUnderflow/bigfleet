@@ -582,10 +582,16 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardCycleDurationP99Seconds":       `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))`,
 		"shardProvisioningLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
 		"shardProvisioningLatencyP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
-		"operatorRollupP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":              `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec":          `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":                    `sum(bigfleet_shard_shortfalls)`,
+		// ADR-0014 release gate: binding-latency p99 — what users feel.
+		// Backed by the same shard-side provisioning histogram for now;
+		// adding per-priority-tier gating is a follow-up that requires
+		// a tier label on the histogram. Aliased here so the SLO surface
+		// is named after the contract, not the implementation detail.
+		"bindingLatencyP99Seconds":  `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
+		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last
@@ -711,14 +717,23 @@ func kArgs(kubeconfig string, rest ...string) []string {
 	return rest
 }
 
-// pass enforces the runner's SLO budget. Each threshold is the best
-// observed value (across passing baseline runs) plus a small variance
-// margin — they're regression detectors, not aspirational targets.
+// pass enforces the runner's SLO budget per ADR-0014 (binding-latency
+// is the user-facing release gate; cycle wall-clock is a tracked
+// throughput envelope).
 //
-//   - shardCycleDurationP99 ≤ 100 ms.   Best observed: 1.8 ms (scaleway-50k).
-//     Headroom is large because the decision engine is intrinsically fast;
-//     a regression that pushed past 100 ms would be a real architectural
-//     problem, not a tuning issue.
+//   - bindingLatencyP99 ≤ 5 s.   Release gate. Measured via
+//     bigfleet_shard_provisioning_latency_seconds (shard-side wall-clock
+//     from first rollup observation to Configured). 5 s is the
+//     in-process fake-provider floor — real-provider deployments add
+//     their provisioning-latency p99 on top per ADR-0014's
+//     priority-tier table. This is what users feel; it is the SLO.
+//
+//   - shardCycleDurationP99 ≤ rollupInterval / 2 (default 10 s → 5 s).
+//     Throughput envelope — if the shard can't finish a snapshot
+//     before the next rollup arrives, backlog accumulates and binding
+//     latency drifts. ADR-0014 §2: not a release gate by itself, but
+//     a real fail signal — the next cycle compounds the lag, so
+//     enforce it as a floor.
 //
 //   - operatorRollupP99 ≤ 1 s.          Best observed: 122 ms (scaleway-50k).
 //     One rollup pipeline turn (list CRs, aggregate, enqueue) must finish
@@ -730,6 +745,10 @@ func kArgs(kubeconfig string, rest ...string) []string {
 //     of wall-clock just for the writes; 12 s allows ~20 % run-to-run
 //     variance. Tighten when the operator gains batched status writes
 //     or its QPS budget is raised on profile.
+//
+// Cycle wall-clock and per-phase histograms remain in summary.json as
+// informational metrics; they're alerted on by the operator's
+// monitoring stack but no longer block a release.
 func pass(m map[string]float64, totalCRs, shardReplicas int) (bool, string) {
 	// Sustained-load floor: the run is invalid if loadgenCRsActive
 	// drifted away from the target during the soak. We already gate
@@ -754,8 +773,17 @@ func pass(m map[string]float64, totalCRs, shardReplicas int) (bool, string) {
 			return false, fmt.Sprintf("shardsReportingCycle %d < shard.replicas %d — at least one shard isn't reporting metrics", int(v), shardReplicas)
 		}
 	}
-	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 0.1 {
-		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > 100ms SLO", v)
+	// ADR-0014 release gate: binding latency. -1 means the metric was
+	// unavailable (Prometheus query failed); skip rather than gate on
+	// a sentinel.
+	if v, ok := m["bindingLatencyP99Seconds"]; ok && v >= 0 && v > 5.0 {
+		return false, fmt.Sprintf("bindingLatencyP99Seconds %.3fs > 5s SLO (ADR-0014 in-process tier — real-provider deployments add provider provisioning latency on top)", v)
+	}
+	// ADR-0014 throughput envelope: cycle p99 ≤ rollupInterval / 2 so
+	// the shard always finishes one snapshot before the next rollup
+	// arrives. Default rollupInterval is 10s → envelope = 5s.
+	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 5.0 {
+		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > 5s throughput envelope (rollupInterval/2; backlog will accumulate)", v)
 	}
 	if v, ok := m["operatorRollupP99Seconds"]; ok && v > 1.0 {
 		return false, fmt.Sprintf("operatorRollupP99Seconds %.3fs > 1s SLO", v)
