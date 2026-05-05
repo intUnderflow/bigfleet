@@ -58,22 +58,6 @@ async function readRuns() {
   return runs;
 }
 
-// renderInventoryCol formats the per-shard × replicas → aggregate
-// fleet size cell. Multi-shard runs render `2 × 500,000 = 1,000,000`;
-// single-shard runs render `500,000` (no multiplication clutter when
-// it's the same as the per-shard number).
-function renderInventoryCol(r) {
-  if (r.aggregateInventory == null || r.aggregateInventory <= 0) return "—";
-  const seed = r.aggregateInventory / r.shardReplicas;
-  if (r.shardReplicas <= 1) return fmtInt(seed);
-  return `${r.shardReplicas} × ${fmtInt(seed)} = ${fmtInt(r.aggregateInventory)}`;
-}
-
-function fmtInt(n) {
-  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
-  return Math.round(n).toLocaleString("en-US");
-}
-
 // numericOrNull collapses the runner's -1 sentinel for "query failed"
 // and any non-finite junk into null so the page never claims a run
 // hit some impossible value.
@@ -245,10 +229,10 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
 
   let table = `## All runs
 
-"shards × inventory" is shard.replicas × seedMachines per shard — multi-shard runs make the aggregate fleet size explicit. "load" is observed sustained CRs over the target. The rundir link encodes the profile, so the profile column has been dropped to keep the row compact; "target met" rolls into the pass mark (a passing run has target met by definition).
+The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K, scaleway-1m = 2 × 500K, scaleway-5m = 10 × 500K — the paper's per-shard ceiling is 500K, so multi-shard runs are aggregate-named). "load" is observed sustained CRs over the target. A run only passes if it held target load *and* hit every SLO.
 
-| run | shards × inventory | cycle p99 | ack p99 | rollup p99 | load | pass |
-|---|---|---|---|---|---|---|
+| run | cycle p99 | ack p99 | rollup p99 | load | pass |
+|---|---|---|---|---|---|
 `;
   for (const r of runs) {
     const tag = shortLabel(r.dir);
@@ -259,8 +243,7 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
           ? `${r.active}`
           : "—";
     const pass = r.passed ? "✓" : "✗";
-    const inventoryCol = renderInventoryCol(r);
-    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${inventoryCol} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
+    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
   }
 
   return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
