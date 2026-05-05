@@ -1,17 +1,45 @@
-# failover-soak — 50 clusters at steady state. The runner kills the
-# coordinator leader at t=10min and confirms the data plane (shards +
-# operators) keeps serving. Validates static stability.
+# failover-soak — combined static-stability regression. Drives a
+# longer 60-min soak with two coordinator-leader-kills (t=600s and
+# t=1200s) and one shard-pod-kill (t=1800s). Each runnerAction has
+# an asserted outcome in scaletest-runner; the run fails if any
+# assertion misses. Use when you want one belt-and-braces failover
+# regression run before a release; for targeted regressions during
+# development, the dedicated profiles are faster and cheaper:
+#
+#   failover-leader-kill.yaml  — single coordinator kill, 30-min soak
+#   failover-shard-kill.yaml   — single shard pod kill, 30-min soak
+#
+# Validates the "static stability is non-negotiable" hard rule
+# end-to-end across multiple disturbance types.
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: Always
 
 kwok:
   clusterCount: 50
-
-coordinator:
-  replicas: 3
-  resources:
-    requests: { cpu: 500m, memory: 1Gi }
-    limits:   { cpu: 2,    memory: 4Gi }
+  apiserverResources:
+    requests: { cpu: 150m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 3Gi }
+  workloadResources:
+    requests: { cpu: 150m, memory: 300Mi }
+    limits:   { cpu: 1500m, memory: 1Gi }
 
 shard:
+  replicas: 2
+  seedMachines: 0
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+
+coordinator:
+  enabled: true
   replicas: 1
 
 loadProfile:
@@ -19,14 +47,27 @@ loadProfile:
   churnPerMinute: 0.05
   durationSeconds: 3600
 
-# Runner-only directive: scaletest-runner reads this, so it isn't
-# applied at chart render time.
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 12Gi }
+
+# Runner-only: scaletest-runner reads this, so it isn't applied at
+# chart render time. Each action has an asserted outcome (see
+# runner_actions.go); the run fails if any assertion misses.
 runnerActions:
   - { atSeconds: 600,  action: kill-coordinator-leader }
   - { atSeconds: 1200, action: kill-coordinator-leader }
+  - { atSeconds: 1800, action: kill-shard-bigfleet-shard-1 }
 
 costEstimate:
-  vCPU: 30
-  memoryGB: 35
-  awsSpotUsdPerHour: 5.00
-  notes: "M5 Max kind or homelab. 60 min run. Tests static stability."
+  vCPU: 32
+  memoryGB: 128
+  awsSpotUsdPerHour: 0.42
+  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 60-min soak with two coordinator-leader-kills + one shard-pod-kill. ~$0.45 end-to-end. M17 belt-and-braces failover regression."

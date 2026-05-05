@@ -63,7 +63,24 @@ type profileFile struct {
 		Target          int `yaml:"target"`
 		DurationSeconds int `yaml:"durationSeconds"`
 	} `yaml:"loadProfile"`
-	CostEstimate costEstimate `yaml:"costEstimate"`
+	// RunnerActions are fired by the runner during the soak window.
+	// AtSeconds is offset from steady-state-reached. Action is one of
+	//   kill-coordinator-leader: delete the coordinator's leader pod;
+	//                            asserts coordinator_raft_term advances
+	//                            by at least 1 within 60 s.
+	//   kill-shard-<podname>:    delete the named shard StatefulSet pod;
+	//                            asserts the pod is rescheduled and
+	//                            resumes publishing cycle metrics
+	//                            within 60 s.
+	// Unrecognised actions are recorded as failures with no fire-side
+	// effects.
+	RunnerActions []runnerAction `yaml:"runnerActions"`
+	CostEstimate  costEstimate   `yaml:"costEstimate"`
+}
+
+type runnerAction struct {
+	AtSeconds int    `yaml:"atSeconds"`
+	Action    string `yaml:"action"`
 }
 
 type runResult struct {
@@ -89,8 +106,27 @@ type runResult struct {
 		AggregateInventory   int `json:"aggregateInventory"`
 	} `json:"scale"`
 	Metrics map[string]float64 `json:"metrics"`
-	Passed  bool               `json:"passed"`
-	Failure string             `json:"failure,omitempty"`
+	// RunnerActions records what the runner fired during the soak,
+	// including whether each action's expected outcome was observed.
+	// Empty for runs without runnerActions: in the profile.
+	RunnerActions []runnerActionResult `json:"runnerActions,omitempty"`
+	Passed        bool                 `json:"passed"`
+	Failure       string               `json:"failure,omitempty"`
+	// Failures lists assertion violations from runnerActions. A run with
+	// non-empty Failures fails overall — Passed is false and Failure
+	// summarises the first violation. Used to regression-check the
+	// static-stability invariant on every release run.
+	Failures []string `json:"failures,omitempty"`
+}
+
+type runnerActionResult struct {
+	Action      string `json:"action"`
+	AtSeconds   int    `json:"atSeconds"`
+	FiredAt     string `json:"firedAt,omitempty"` // RFC3339, "" if not fired
+	FireError   string `json:"fireError,omitempty"`
+	Assertion   string `json:"assertion,omitempty"`
+	Asserted    bool   `json:"asserted"`
+	AssertError string `json:"assertError,omitempty"`
 }
 
 func main() {
@@ -202,8 +238,14 @@ func run(args []string) error {
 	}
 	fmt.Fprintln(os.Stderr, "steady state reached; soaking", duration)
 
+	soakStart := time.Now()
 	// Soak.
 	soakCtx, cancelSoak := context.WithTimeout(ctx, *duration)
+	// runnerActions: fire-and-record each action at its scheduled
+	// offset from soakStart. The fire side runs concurrently with the
+	// soak; the assertion side runs after teardown using prom queries
+	// from the snapshot.
+	actionResults := scheduleRunnerActions(soakCtx, *kubeconfig, namespace, soakStart, prof.RunnerActions)
 	<-soakCtx.Done()
 	cancelSoak()
 	if err := ctx.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
@@ -239,7 +281,27 @@ func run(args []string) error {
 	}
 	res.Scale.SeedMachinesPerShard = prof.Shard.SeedMachines
 	res.Scale.AggregateInventory = res.Scale.ShardReplicas * res.Scale.SeedMachinesPerShard
+	res.RunnerActions = actionResults
+	// Assert per-action expected outcomes against the prom snapshot.
+	// Passing assertions are silent; any violation appends to
+	// res.Failures and fails the overall run.
+	for i := range res.RunnerActions {
+		assertRunnerActionOutcome(context.Background(), *kubeconfig, namespace, &res.RunnerActions[i], soakStart)
+		if !res.RunnerActions[i].Asserted {
+			res.Failures = append(res.Failures, fmt.Sprintf("runnerAction %s @t=%ds: %s",
+				res.RunnerActions[i].Action,
+				res.RunnerActions[i].AtSeconds,
+				res.RunnerActions[i].AssertError,
+			))
+		}
+	}
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas)
+	if len(res.Failures) > 0 && res.Passed {
+		// SLO numbers passed but a runnerAction assertion didn't fire
+		// — the static-stability invariant requires both.
+		res.Passed = false
+		res.Failure = res.Failures[0]
+	}
 
 	summary := filepath.Join(*output, "summary.json")
 	b, err := json.MarshalIndent(res, "", "  ")

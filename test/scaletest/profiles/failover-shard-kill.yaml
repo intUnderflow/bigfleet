@@ -1,0 +1,66 @@
+# failover-shard-kill — M17 static-stability regression check for a
+# shard pod restart. Two shards each carry ~25 KWOK clusters via the
+# N % 2 mapping. At t=600s the runner deletes bigfleet-shard-1; the
+# runnerAction asserts the StatefulSet reschedules the pod and it
+# resumes publishing cycle metrics within the 1 min query window.
+#
+# Validates that operator-to-shard binding survives a shard pod
+# restart — the cluster operators bound to bigfleet-shard-1 should
+# reconnect to the same ordinal as it returns.
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: Always
+
+kwok:
+  clusterCount: 50
+  apiserverResources:
+    requests: { cpu: 150m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 3Gi }
+  workloadResources:
+    requests: { cpu: 150m, memory: 300Mi }
+    limits:   { cpu: 1500m, memory: 1Gi }
+
+shard:
+  replicas: 2
+  seedMachines: 0
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+
+coordinator:
+  enabled: true
+  replicas: 1
+
+loadProfile:
+  target: 1000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 12Gi }
+
+# M17 runnerAction: kill bigfleet-shard-1 mid-soak. Asserts the pod
+# is rescheduled and resumes publishing cycle metrics within 60 s.
+runnerActions:
+  - { atSeconds: 600, action: kill-shard-bigfleet-shard-1 }
+
+costEstimate:
+  vCPU: 32
+  memoryGB: 128
+  awsSpotUsdPerHour: 0.42
+  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 2-shard failover-soak with one mid-soak shard-pod-kill. ~$0.38 for a 50-min run. M17 regression check for shard StatefulSet recovery + operator-to-shard binding stability."
