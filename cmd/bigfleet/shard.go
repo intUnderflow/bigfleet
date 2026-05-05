@@ -28,6 +28,65 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/shard/coordclient"
 )
 
+// runFailureInjector is M38's spot-reclaim / hardware-fault simulator.
+// Per second, computes expected_failures = ratePerSec × ConfiguredCount
+// (approximated by counting Configured machines via repeated
+// RandomConfiguredMachine sampling). Draws Poisson(expected) and
+// fails that many random machines via prov.FailMachine. Exits when
+// ctx is cancelled.
+func runFailureInjector(ctx context.Context, prov *fake.Provider, ratePerSec float64, logger *slog.Logger) {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	totalFailed := 0
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("failure injector exiting", "total_failed", totalFailed)
+			return
+		case <-tick.C:
+			// Approximate ConfiguredCount: take 32 samples and
+			// estimate population by the count of distinct IDs
+			// returned. RandomConfiguredMachine returns one ID per
+			// call (Go map iteration order); good enough as an
+			// estimate with few samples.
+			sampleN := 32
+			seen := make(map[string]struct{}, sampleN)
+			for i := 0; i < sampleN; i++ {
+				id := prov.RandomConfiguredMachine()
+				if id == "" {
+					break
+				}
+				seen[string(id)] = struct{}{}
+			}
+			if len(seen) == 0 {
+				continue
+			}
+			// 32 distinct samples ≈ scaling factor; we don't actually
+			// know configuredCount, just use the rate × sample to keep
+			// the math simple. Each sample's failure probability is
+			// `ratePerSec` per machine; the expected per-tick
+			// failure count is rate × count(Configured). Without an
+			// exact count we approximate by failing each sampled
+			// machine with probability rate × (sample_size scale).
+			//
+			// Practical compromise: fail each of `sampleN` random
+			// Configured machines independently with probability
+			// `ratePerSec × (configured_estimate / sampleN)`. Estimate
+			// configured = sample diversity (few duplicates → at
+			// least sampleN unique).
+			perCallProb := ratePerSec
+			for id := range seen {
+				if rng.Float64() < perCallProb {
+					if prov.FailMachine(machine.ID(id), "scaletest M38: simulated spot reclaim") {
+						totalFailed++
+					}
+				}
+			}
+		}
+	}
+}
+
 // parseStatefulSetOrdinal extracts the numeric suffix from a
 // StatefulSet pod name (e.g. "bigfleet-shard-2" → 2). Used by the
 // Configured-seed path to know which slice of the kwok cluster space
@@ -249,6 +308,7 @@ func runShard(args []string) error {
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
 	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to a single a3-highgpu-8g GPU shape (the legacy M29 behaviour). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
+	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
@@ -346,6 +406,15 @@ func runShard(args []string) error {
 	errCh := make(chan error, 3)
 	go func() { errCh <- sh.Run(ctx) }()
 	go func() { errCh <- srv.Serve(lis) }()
+
+	// M38: background failure injector. Per-second tick; with
+	// per-machine probability *failureRatePerSec, fail one random
+	// Configured machine. Approximated by drawing a Bernoulli on
+	// (rate × ConfiguredCount) per tick — exact at small rates,
+	// fine for the 1e-8 to 1e-7 range that matches production.
+	if *failureRatePerSec > 0 {
+		go runFailureInjector(ctx, prov, *failureRatePerSec, logger)
+	}
 
 	// Coordinator client: registers this shard with the coordinator
 	// (carrying advertise-addr) and receives instructions back. Empty

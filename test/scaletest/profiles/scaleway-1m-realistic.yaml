@@ -78,6 +78,9 @@ shard:
   executeConcurrency: 128
   incrementalReconcile: true
   metricsWarmupCycles: 5
+  # M38 (Item 5): spot/hardware failure injector. 1.16e-7 per second
+  # per machine ≈ 1%/day, the upper bound of what real fleets see.
+  failureRatePerSec: 0.0000001
   resources:
     requests: { cpu: 2, memory: 3Gi }
     limits:   { cpu: 6, memory: 12Gi }

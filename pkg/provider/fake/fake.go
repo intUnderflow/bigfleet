@@ -202,6 +202,47 @@ func (p *Provider) FailNext(id machine.ID, target machine.State, err error) {
 	p.failNext[failKey{id, target}] = err
 }
 
+// FailMachine forcibly transitions the named machine to StateFailed,
+// regardless of its current state. Models an unsolicited provider
+// notification — spot reclaim, hardware fault, kernel panic — that
+// the autoscaler discovers via the next provider.List(). M38 / Item 5.
+//
+// Returns false if the machine doesn't exist; true otherwise. Already-
+// failed machines stay failed (idempotent).
+func (p *Provider) FailMachine(id machine.ID, reason string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, ok := p.machines[id]
+	if !ok {
+		return false
+	}
+	if m.State == machine.StateFailed {
+		return true
+	}
+	m.State = machine.StateFailed
+	m.LastError = reason
+	p.rev++
+	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
+	return true
+}
+
+// RandomConfiguredMachine returns the ID of a randomly-selected machine
+// in StateConfigured, or "" if none exist. Used by the M38 failure
+// injector to pick victims. Iteration order over the map is random by
+// Go's map semantics; we accept that and don't try to be fancy with
+// reservoir sampling.
+func (p *Provider) RandomConfiguredMachine() machine.ID {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, m := range p.machines {
+		if m.State == machine.StateConfigured {
+			return id
+		}
+	}
+	return ""
+}
+
 // Create implements provider.Provider.
 func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opCreate, func(m *machine.Machine) {

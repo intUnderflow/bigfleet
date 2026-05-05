@@ -88,6 +88,12 @@ shard:
   # value (e.g., 5) to exclude the cold-start full-List cycle from
   # the steady-state p99.
   metricsWarmupCycles: 0
+  # M38 (Item 5): per-second per-machine probability of an unsolicited
+  # provider failure (spot reclaim / hardware fault). 0 disables.
+  # Real fleets see ~0.1-1%/day → ~1.16e-8 to 1.16e-7 per second per
+  # machine. The realistic profile opts in; other profiles default off
+  # to keep behaviour deterministic.
+  failureRatePerSec: 0
 
 provider:
   resources:

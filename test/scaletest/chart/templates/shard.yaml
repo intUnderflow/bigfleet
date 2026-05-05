@@ -94,6 +94,9 @@ spec:
             {{- if .Values.shard.metricsWarmupCycles }}
             - --metrics-warmup-cycles={{ .Values.shard.metricsWarmupCycles }}
             {{- end }}
+            {{- if .Values.shard.failureRatePerSec }}
+            - --failure-rate-per-sec={{ .Values.shard.failureRatePerSec }}
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
