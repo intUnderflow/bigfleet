@@ -252,3 +252,42 @@ func TestFake_List_SinceRevisionReturnsDeltasOnly(t *testing.T) {
 		t.Errorf("post-delta cursor = %d, want 0", len(delta2.Machines))
 	}
 }
+
+// M29 Configured-seed path: machines should appear via List(Configured)
+// with the cluster + priority + penalty values populated, so the shard
+// snapshot has everything Phase 2/3 need to score them.
+func TestFake_AddConfigured_ExposesAssignedMetadata(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+	prof := machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "zone-a"}
+	p.AddConfigured("conf-x", prof, machine.CapacityTypeBareMetal, 0, 0, "kwok-cluster-7", 1000000, 8192, 65536)
+
+	listed, err := p.List(ctx, provider.ListFilter{States: []machine.State{machine.StateConfigured}})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed.Machines) != 1 {
+		t.Fatalf("Configured listing = %d, want 1", len(listed.Machines))
+	}
+	got := listed.Machines[0]
+	if got.ID != "conf-x" {
+		t.Errorf("ID = %q, want conf-x", got.ID)
+	}
+	if got.Cluster != "kwok-cluster-7" {
+		t.Errorf("Cluster = %q, want kwok-cluster-7", got.Cluster)
+	}
+	if got.AssignedPriority != 1000000 {
+		t.Errorf("AssignedPriority = %d, want 1000000", got.AssignedPriority)
+	}
+	if got.AssignedInterruptionPenaltyDollars != 8192 {
+		t.Errorf("AssignedInterruptionPenaltyDollars = %v, want 8192", got.AssignedInterruptionPenaltyDollars)
+	}
+	if got.AssignedReclamationPenaltyDollars != 65536 {
+		t.Errorf("AssignedReclamationPenaltyDollars = %v, want 65536", got.AssignedReclamationPenaltyDollars)
+	}
+	idle, _ := p.List(ctx, provider.ListFilter{States: []machine.State{machine.StateIdle}})
+	if len(idle.Machines) != 0 {
+		t.Errorf("Idle listing = %d, want 0 (Configured seed must not leak into Idle)", len(idle.Machines))
+	}
+}

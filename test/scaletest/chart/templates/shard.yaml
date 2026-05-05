@@ -72,6 +72,11 @@ spec:
             - --coordinator-addr=bigfleet-coordinator.{{ .Values.namespace }}.svc:7790
             {{- end }}
             - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
+            {{- if .Values.shard.seedConfiguredPerCluster }}
+            - --seed-configured-per-cluster={{ .Values.shard.seedConfiguredPerCluster }}
+            - --seed-cluster-total={{ .Values.kwok.clusterCount | default 0 }}
+            - --seed-cluster-stride={{ .Values.shard.replicas | default 1 }}
+            {{- end }}
             - --max-actions-per-cycle={{ .Values.shard.maxActionsPerCycle | default 0 }}
             - --execute-concurrency={{ .Values.shard.executeConcurrency | default 1 }}
             {{- if .Values.shard.localBootstrap }}

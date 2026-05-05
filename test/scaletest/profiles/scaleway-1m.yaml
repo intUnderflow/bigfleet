@@ -1,10 +1,27 @@
 # scaleway-1m — 1,000,000-machine fleet test on Scaleway, two shards.
 #
-# Aggregate-named: 2 shards × 500K seeded inventory each = 1M total
-# under management. Demand sized at the **burst regime** (ADR-0013):
-# 100 KWOK clusters × 1K demand each = 100K total demand, a 1:10
-# demand-to-inventory ratio. Per-shard: 50K demand × 500K inventory —
-# the same shape M11 validated at the 100 ms cycle p99 SLO.
+# **M29: production-realistic seed shape.** Earlier revisions of this
+# profile pre-seeded the entire 1M aggregate inventory as Idle. That
+# does not match a real fleet, where the vast majority of machines are
+# already bound to workloads (Configured) and Idle is a small
+# headroom pool for new bursts. With M29 the seed is split:
+#   - 9000 Configured per cluster × 100 clusters = 900K Configured
+#     (already-bound, AssignedPriority=1000000 so the burst can't
+#     preempt them, instance-type a3-highgpu-8g matching the
+#     load-driver's CR profile so Phase 3 keeps them as "wanted")
+#   - 100K Idle headroom (50K per shard) for the burst's new bindings
+#
+# Demand: 100 KWOK clusters × 10K CRs each = 1M total CRs. Of those
+# 1M, 900K are matched by the seed Configured (no Phase 1 work,
+# Phase 3 keeps) and 100K are *unsatisfied burst* that Phase 1 must
+# bind from Idle. That's a 1:10 burst regime (ADR-0013) at the
+# pending-demand-to-inventory level, the way real production fleets
+# actually look during deploy ramps.
+#
+# Per-shard: 500K Configured + 50K Idle = 550K under management,
+# with ~50K pending demand from the 50 owned clusters. Phase 2/3
+# work scales with Configured count (per M27); Phase 1 work scales
+# with the unsatisfied-demand count.
 #
 # Why 1:10 rather than 1:1: ADR-0013 codifies that BigFleet's
 # cycle-p99 SLO is promised at burst-density (≤10 % pending demand,
@@ -56,24 +73,32 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  # 100 clusters × 1K demand each = 100K total demand. 100 KWOK pods
-  # at the same per-cluster CR shape as the M11 single-shard 500K
-  # baseline — 2× the cluster count for the multi-shard test, same
-  # per-cluster demand profile.
+  # 100 clusters × 10K CRs each = 1M total CRs. With M29's seed
+  # 9K of those 10K CRs per cluster are pre-matched by Configured
+  # (no Phase 1 binding work, Phase 3 keeps); the other 1K is
+  # unsatisfied burst that Phase 1 must bind from Idle.
   clusterCount: 100
   apiserverResources:
     requests: { cpu: 150m, memory: 500Mi }
     limits:   { cpu: 2,    memory: 3Gi }
   workloadResources:
+    # 10K CRs/cluster (10× the old 1K shape) to support the
+    # production-realistic seed alignment. Same per-pod budget as
+    # scaleway-5m-reprovision, which already validates 10K CRs/cluster.
     requests: { cpu: 150m, memory: 400Mi }
     limits:   { cpu: 2,    memory: 1500Mi }
 
 shard:
   # 2 shards: kwok-cluster-N → bigfleet-shard-(N % 2). Each shard
-  # sees ~50K demand (100K / 2) against 500K inventory — the same
-  # 1:10 burst ratio M11 validated, now at 2-shard fleet scale.
+  # owns 50 clusters × 9000 = 450K Configured + 50K Idle ≈ 500K
+  # under management. The realistic split — most of which is
+  # workloads-already-bound, not Idle headroom.
   replicas: 2
-  seedMachines: 500000
+  # Idle headroom for the 100K unsatisfied burst (50K per shard).
+  seedMachines: 50000
+  # M29: 9000 Configured per kwok cluster owned by this shard.
+  # 50 clusters × 9000 = 450K Configured per shard.
+  seedConfiguredPerCluster: 9000
   maxActionsPerCycle: 1000
   executeConcurrency: 128
   incrementalReconcile: true
@@ -87,10 +112,23 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 1K CRs per cluster × 100 clusters = 100K total demand (1:10
-  # vs the 1M aggregate inventory). Burst regime.
-  target: 1000
+  # 10K CRs per cluster × 100 clusters = 1M total CRs. M29's
+  # Configured seed pre-matches 9K of those 10K per cluster, so
+  # at any moment ~100K CRs remain unsatisfied — the 1:10 burst
+  # ratio against the 1M aggregate inventory (ADR-0013). The
+  # other 900K live in steady-state Configured under Phase 3's
+  # "kept" path.
+  target: 10000
   churnPerMinute: 0.05
+  # Pin all CRs to priority 1000 (vs the default [100, 1000, 1000000]
+  # ladder). The seed lives at priority 1000000 so it can never be
+  # preempted, but we don't want load-driver CRs at 1000000 either —
+  # those would trigger Phase 2 against fellow CRs at lower priority,
+  # which is a different regime than what this profile validates.
+  # The 1000-only setting keeps the test focused on the steady-state +
+  # burst path and avoids Phase 2 inversion fan-out from priority
+  # diversity.
+  priorityClasses: [1000]
   durationSeconds: 1800
 
 operator:
@@ -108,4 +146,4 @@ costEstimate:
   vCPU: 64
   memoryGB: 256
   awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K seeded inventory + 100 KWOK clusters × 10K demand = 1M-machine fleet at 1:1 demand-to-inventory ratio. ~$0.74 for a 50-min run end-to-end. Same shape as scaleway-5m, just one-fifth the fleet."
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management each (450K Configured + 50K Idle) = 1M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013). ~$0.74 for a 50-min run end-to-end."

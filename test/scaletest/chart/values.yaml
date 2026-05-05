@@ -49,6 +49,13 @@ shard:
   # (e.g. scaleway-500k) to populate the inventory without a real
   # provider; 0 = no seeding.
   seedMachines: 0
+  # M29: pre-seed N Configured machines per kwok cluster owned by this
+  # shard. Models the production-realistic shape where most fleet
+  # inventory is workloads-already-bound, not Idle headroom. Profile
+  # is hardcoded to a3-highgpu-8g (zone rotated) to MATCH the
+  # load-driver's CR profile — otherwise Phase 3 reclaims the seed
+  # every cycle as "no need wants this profile". 0 disables.
+  seedConfiguredPerCluster: 0
   # Cap per-cycle execute work so a ramp burst doesn't blow past the
   # cycle SLO. 0 = unlimited (production default). Larger profiles
   # bump this to bound the cycle wall-clock at the expense of taking

@@ -1,9 +1,19 @@
 # scaleway-5m — fleet-scale realism test on Scaleway (M13).
 #
-# Target shape:
-#   10 shards × 500K seeded inventory each      = 5,000,000 machines under management
-#   500 simulated KWOK clusters × 1K demand     = 500,000 demand CRs (burst regime, 1:10)
-#   Per-shard load: ~50K demand, 500K inventory  = same ratio as M11 single-shard 500K test
+# **M29 production-realistic seed.** Each shard owns 50 kwok clusters
+# under the `c % 10` mapping; per-cluster pre-seed is 9000 Configured
+# (already-bound, AssignedPriority=1000000, instance-type
+# a3-highgpu-8g matching the load-driver's CR profile). Per-shard:
+#   - 9000 × 50 = 450K Configured (steady-state running workloads)
+#   - 50K Idle headroom for the burst's new bindings
+#   - Total 500K under management, 4.5M aggregate Configured fleet-wide
+#
+# Demand: 500 kwok clusters × 10K CRs each = 5M total CRs. Phase 3
+# pre-matches 9K of each cluster's 10K CRs against the seed Configured
+# (kept, no work); the remaining 1K per cluster is unsatisfied burst
+# Phase 1 binds from Idle. Total pending demand: 500K against 5M
+# inventory = 1:10 burst regime (ADR-0013) — what the 100 ms cycle
+# p99 SLO is measured under per ADR-0013.
 #
 # This is the architectural-scale test: each shard runs at its
 # M11-validated 500K burst-regime ceiling while the fleet aggregates
@@ -86,7 +96,12 @@ shard:
   # for this run — but the integration tests already cover the
   # ~500-domain assignment workload at a per-FSM-apply level.
   replicas: 10
-  seedMachines: 500000
+  # Idle headroom: 50K per shard × 10 = 500K total Idle, sized for
+  # the 500K unsatisfied-burst demand fleet-wide.
+  seedMachines: 50000
+  # M29: 9000 Configured per kwok cluster owned by this shard.
+  # 50 clusters × 9000 = 450K Configured per shard; 4.5M fleet-wide.
+  seedConfiguredPerCluster: 9000
   maxActionsPerCycle: 1000
   executeConcurrency: 128
   incrementalReconcile: true
@@ -100,10 +115,16 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 1K CRs per cluster × 500 clusters = 500K total demand (1:10
-  # vs the 5M aggregate inventory). Burst regime (ADR-0013).
-  target: 1000
+  # 10K CRs per cluster × 500 clusters = 5M total CRs. M29's seed
+  # pre-matches 9K of those 10K per cluster, so at any moment ~500K
+  # CRs remain unsatisfied — the 1:10 burst ratio against the 5M
+  # aggregate inventory (ADR-0013).
+  target: 10000
   churnPerMinute: 0.05
+  # See scaleway-1m.yaml — pin to priority 1000 only so the seed
+  # (priority 1000000) is never preempted and the test exercises the
+  # steady-state + burst path rather than priority-mix Phase 2 fan-out.
+  priorityClasses: [1000]
   durationSeconds: 1800
 
 operator:
@@ -124,4 +145,4 @@ costEstimate:
   vCPU: 224
   memoryGB: 896
   awsSpotUsdPerHour: 3.10
-  notes: "7× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K seeded inventory + 500 KWOK clusters × 10K demand = 5M-machine fleet. ~$2.60 for a 50-min run end-to-end. M13 architectural-scale test: validates the multi-shard contract from M12 against the 100ms per-shard cycle SLO at fleet scale. Sized down from the original 8× PRO2-XXL sketch (-22 %): the bigger node type was overprovisioned given measured per-kwok-pod CPU on the 500K M11 runs (115 m steady-state per container)."
+  notes: "7× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management each (450K Configured + 50K Idle) = 5M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013); cycle p99 ≤ 100 ms SLO. ~$2.60 for a 50-min run end-to-end."

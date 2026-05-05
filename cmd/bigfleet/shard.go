@@ -25,6 +25,27 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/shard/coordclient"
 )
 
+// parseStatefulSetOrdinal extracts the numeric suffix from a
+// StatefulSet pod name (e.g. "bigfleet-shard-2" → 2). Used by the
+// Configured-seed path to know which slice of the kwok cluster space
+// this shard owns under the harness's `c % shardReplicas` mapping.
+func parseStatefulSetOrdinal(podName string) (int, error) {
+	for i := len(podName) - 1; i >= 0; i-- {
+		if podName[i] == '-' {
+			suffix := podName[i+1:]
+			if suffix == "" {
+				return 0, fmt.Errorf("empty ordinal suffix")
+			}
+			n, err := strconv.Atoi(suffix)
+			if err != nil {
+				return 0, fmt.Errorf("ordinal suffix %q: %w", suffix, err)
+			}
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("no '-' separator in pod name")
+}
+
 // seedFakeInventory mints n synthetic idle machines into the in-process
 // fake provider AND seeds them into the shard's inventory so Phase 1
 // can pick from them on the first cycle. Used by the scale-test
@@ -34,7 +55,29 @@ import (
 // Spread: round-robin across 5 instance types × 3 zones × bare-metal
 // capacity type. Profile fingerprints are stable so the per-fingerprint
 // pool cache (M11.16) sees real diversity instead of one giant bucket.
-func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, n int, logger *slog.Logger) {
+//
+// nIdle is added as Speculative-then-Idle (the default Phase-1
+// candidate pool — fresh headroom).
+//
+// Configured seed (M28): if both clusterStride > 0 and
+// nConfiguredPerCluster > 0, the seed enumerates only the kwok
+// cluster IDs the harness's deterministic
+// `kwok-cluster-N → bigfleet-shard-(N % shardReplicas)` mapping
+// routes to THIS shard. shardOrdinal is the shard's index within its
+// StatefulSet (parsed from --id, e.g. "bigfleet-shard-2" → 2);
+// clusterStride is the total shardReplicas count. The seed iterates
+// cluster IDs c ∈ [0, totalClusters) where c % clusterStride ==
+// shardOrdinal — the same set the kwok pods would dial. Configured
+// machines created this way have demand-bearing cluster bindings
+// the harness's load-driver actually targets, so Phase 3 sees them
+// as "wanted" machines (no reclaim) and Phase 2 sees them as
+// potential preemption victims if a higher-priority demand arrives.
+//
+// totalClusters is the harness's kwok.clusterCount (NOT divided by
+// shardReplicas). Setting any of {nConfiguredPerCluster, clusterStride,
+// totalClusters, shardOrdinal} to its zero value disables the
+// Configured seed.
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal int, logger *slog.Logger) {
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
 	zones := []string{"zone-a", "zone-b", "zone-c"}
 	resources := map[string]map[string]string{
@@ -44,8 +87,15 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, n int, logger *slog
 		"n2-standard-32": {"cpu": "32", "memory": "128Gi"},
 		"r6i.xlarge":     {"cpu": "4", "memory": "32Gi"},
 	}
-	logger.Info("seeding fake inventory", "count", n)
-	for i := 0; i < n; i++ {
+
+	logger.Info("seeding fake inventory",
+		"idle", nIdle,
+		"configured_per_cluster", nConfiguredPerCluster,
+		"total_clusters", totalClusters,
+		"cluster_stride", clusterStride,
+		"shard_ordinal", shardOrdinal,
+	)
+	for i := 0; i < nIdle; i++ {
 		t := types[i%len(types)]
 		z := zones[i%len(zones)]
 		profile := machine.Profile{
@@ -54,7 +104,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, n int, logger *slog
 			CapacityType: machine.CapacityTypeBareMetal,
 			Resources:    resources[t],
 		}
-		id := machine.ID("seed-" + strconv.Itoa(i))
+		id := machine.ID("idle-" + strconv.Itoa(i))
 		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
 		_ = sh.SeedInventory(machine.Machine{
 			ID:      id,
@@ -62,7 +112,58 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, n int, logger *slog
 			Profile: profile,
 		})
 	}
-	logger.Info("seed complete", "count", n)
+
+	configuredSeeded := 0
+	if nConfiguredPerCluster > 0 && totalClusters > 0 && clusterStride > 0 {
+		// Configured-seed: bound to "kwok-cluster-N" cluster IDs that
+		// the harness's `N % shardReplicas` mapping routes to THIS
+		// shard. Profile is a3-highgpu-8g (zone rotated) to MATCH the
+		// load-driver's CRs (test/scaletest/cmd/load-driver/main.go
+		// pins `node.kubernetes.io/instance-type In [a3-highgpu-8g]`
+		// and asks for nvidia.com/gpu=8). If the seed used other
+		// instance types, Phase 3 would see them as "no need wants
+		// this profile" and reclaim them every cycle. AssignedPriority
+		// = 1000 matches the load-driver's default CR priority so
+		// Phase 2 cannot preempt the seed (Phase 2 only preempts
+		// strictly lower priority victims). Setting it to the top
+		// of the default load-driver priorityClasses ladder
+		// ([100, 1000, 1000000]) keeps the seed untouchable across
+		// all CR priorities the harness ships with — modelling
+		// "established high-value running workloads" that the
+		// burst should never disturb.
+		const assignedPriority = int32(1000000)
+		const interruptionPenalty = float64(8192)
+		const reclamationPenalty = float64(65536)
+		const it = "a3-highgpu-8g"
+		profileResources := resources[it]
+		idx := 0
+		for c := shardOrdinal; c < totalClusters; c += clusterStride {
+			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
+			for i := 0; i < nConfiguredPerCluster; i++ {
+				z := zones[idx%len(zones)]
+				profile := machine.Profile{
+					InstanceType: it,
+					Zone:         z,
+					CapacityType: machine.CapacityTypeBareMetal,
+					Resources:    profileResources,
+				}
+				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, i))
+				prov.AddConfigured(id, profile, machine.CapacityTypeBareMetal, 0, 0, cluster, assignedPriority, interruptionPenalty, reclamationPenalty)
+				_ = sh.SeedInventory(machine.Machine{
+					ID:                                 id,
+					State:                              machine.StateConfigured,
+					Cluster:                            cluster,
+					Profile:                            profile,
+					AssignedPriority:                   assignedPriority,
+					AssignedInterruptionPenaltyDollars: interruptionPenalty,
+					AssignedReclamationPenaltyDollars:  reclamationPenalty,
+				})
+				idx++
+				configuredSeeded++
+			}
+		}
+	}
+	logger.Info("seed complete", "idle", nIdle, "configured", configuredSeeded)
 }
 
 // runShard runs the shard controller. The in-process fake provider
@@ -77,6 +178,9 @@ func runShard(args []string) error {
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
+	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
+	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
+	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
@@ -131,8 +235,17 @@ func runShard(args []string) error {
 		return err
 	}
 
-	if *seedMachines > 0 {
-		seedFakeInventory(prov, sh, *seedMachines, logger)
+	configuredEnabled := *seedConfiguredPerCluster > 0 && *seedClusterTotal > 0 && *seedClusterStride > 0
+	if *seedMachines > 0 || configuredEnabled {
+		shardOrdinal := 0
+		if configuredEnabled {
+			ord, err := parseStatefulSetOrdinal(*shardID)
+			if err != nil {
+				return fmt.Errorf("--seed-configured-per-cluster requires --id ending in -N (got %q): %w", *shardID, err)
+			}
+			shardOrdinal = ord
+		}
+		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, logger)
 	}
 
 	srv := grpc.NewServer()

@@ -14,6 +14,8 @@ BigFleet's `shardCycleDurationP99 ≤ 100 ms` SLO is regime-aware. "Demand" is u
 
 **Worked example.** A real production fleet of 500 000 nodes running ~5 000 deployments has roughly 5 000 binding events per minute (Borg / Twine churn rate). With a ~30 s bind-to-running latency, ~2 500 of those bindings are pending at any moment — 0.5 % of inventory. **The fleet sits in the steady-state row 99 % of the time.** A platform-wide deployment ramp (every team pushing on a Friday afternoon) might briefly push pending demand to 5-8 % — still inside the burst regime. A 1:1 reprovisioning event is rare enough to be worth its own runbook.
 
+The scaletest profiles model this realistically (M29). For burst-regime profiles the per-shard inventory is ~90 % Configured (already-bound, AssignedPriority pinned to 1000000 so it's never preempted, instance-type matching the load-driver's CRs so Phase 3 keeps them) and ~10 % Idle headroom. The load-driver creates 10× as many CRs as the unsatisfied burst — 9 of every 10 CRs are pre-matched by Configured (no Phase 1 work, no Phase 3 reclaim), the remaining 1 of every 10 is the burst that drives Phase 1 work. Earlier revisions of these profiles pre-seeded the entire fleet as Idle, which is not what real fleets look like and meant Phase 2/3 were never exercised at-scale against a Configured-heavy snapshot.
+
 Per ADR-0013, the cycle-p99 SLO is *measured* under burst conditions (the worst case real fleets actually hit during normal operation). Reprovisioning is its own regime gated on throughput rather than per-cycle latency. The scaletest profiles follow the regime split:
 
 | profile | regime | demand:inventory | SLO |

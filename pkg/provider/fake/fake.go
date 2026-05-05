@@ -154,6 +154,45 @@ func (p *Provider) AddIdle(id machine.ID, profile machine.Profile, capType machi
 	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 }
 
+// AddConfigured inserts a machine in the Configured state, bound to
+// the given cluster + workload identity. Used by the scaletest harness
+// to model production-realistic seed shapes — most fleet inventory
+// is running workloads (Configured), not Idle headroom. The
+// AssignedPriority + AssignedInterruptionPenaltyDollars +
+// AssignedReclamationPenaltyDollars feed Phase 2 victim scoring; pass
+// representative values for the workload class this machine simulates.
+func (p *Provider) AddConfigured(
+	id machine.ID,
+	profile machine.Profile,
+	capType machine.CapacityType,
+	pricePerHour, interruptionProb float64,
+	cluster machine.ClusterID,
+	priority int32,
+	interruptionPenalty, reclamationPenalty float64,
+) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prof := profile
+	if prof.CapacityType == machine.CapacityTypeUnspecified {
+		prof.CapacityType = capType
+	}
+	p.machines[id] = &machine.Machine{
+		ID:                                 id,
+		State:                              machine.StateConfigured,
+		Host:                               machine.HostRef{Provider: "fake", Ref: string(id)},
+		Cluster:                            cluster,
+		Profile:                            prof,
+		PricePerHour:                       pricePerHour,
+		InterruptionProbability:            interruptionProb,
+		AssignedPriority:                   priority,
+		AssignedInterruptionPenaltyDollars: interruptionPenalty,
+		AssignedReclamationPenaltyDollars:  reclamationPenalty,
+	}
+	p.rev++
+	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
+}
+
 // FailNext queues a single error to be returned the next time the
 // matching (machine_id, target_state) RPC is called. Useful for testing
 // the shard's retry / Failed-state handling.
