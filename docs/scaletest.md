@@ -108,6 +108,17 @@ docker run --rm -p 9090:9090 -v /tmp/replay:/prometheus prom/prometheus:v2.55.0 
   --storage.tsdb.path=/prometheus --web.enable-admin-api
 ```
 
+## Live dashboard during the run
+
+The harness chart ships an in-cluster Grafana with the same panels the runner gates on (cycle p99 + per-phase, operator rollup/ack p99, provisioning latency, shortfalls, coordinator apply rate, multi-shard health). The runner prints the port-forward at startup:
+
+```sh
+kubectl -n bigfleet-scaletest port-forward svc/grafana 3000:3000
+# then open http://localhost:3000/d/bigfleet-scaletest (anonymous viewer)
+```
+
+Disable with `--set grafana.enabled=false` if you don't want the deployment (e.g., very tight CPU budget). The dashboard JSON lives at `test/scaletest/chart/dashboards/scaletest.json` and is provisioned via ConfigMap; edit it like code.
+
 ## Pass/fail SLOs
 
 The runner marks a run failed if any of these p99 thresholds are exceeded. Each one is the best observed value from a passing baseline run plus a small variance margin — they detect regressions, they're not aspirational targets.

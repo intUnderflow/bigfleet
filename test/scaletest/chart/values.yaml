@@ -139,6 +139,19 @@ prometheus:
     requests: { cpu: 500m, memory: 2Gi }
     limits:   { cpu: 2,    memory: 8Gi }
 
+# In-cluster Grafana for live monitoring during long soaks. The runner
+# prints a `kubectl port-forward` command at startup so the dashboard
+# is reachable at http://localhost:3000 without any extra setup.
+# Disable to skip the deployment (e.g., for CPU-constrained targets).
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana
+    tag: "10.4.7"
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
 # Cost-model annotations used by the runner. Not enforced at chart
 # render time; informational so `helm get values` surfaces them.
 costEstimate:

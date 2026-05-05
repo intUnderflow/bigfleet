@@ -239,6 +239,8 @@ func run(args []string) error {
 	totalCRs := prof.KWOK.ClusterCount * prof.LoadProfile.Target
 	rampBudget, rampSource := resolveRampBudget(prof, totalCRs)
 	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s)\n", rampBudget, rampSource)
+	pfArgs := strings.Join(kArgs(*kubeconfig, "-n", namespace, "port-forward", "svc/grafana", "3000:3000"), " ")
+	fmt.Fprintf(os.Stderr, "live dashboard: kubectl %s  →  http://localhost:3000/d/bigfleet-scaletest\n", pfArgs)
 	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
 		return fmt.Errorf("steady state: %w", err)
 	}
