@@ -178,8 +178,22 @@ func run(args []string) error {
 	// clusters dominate fleet load; long tail of small ones provides
 	// fingerprint diversity).
 	if mult := podSizeMultiplier(*clusterID, prof.ClusterSizeDistribution); mult != 1.0 {
-		newTarget := int(float64(prof.Target) * mult)
-		logger.Info("cluster-size skew applied", "base_target", prof.Target, "multiplier", mult, "effective_target", newTarget)
+		// M36 (Item 3): kwok pod resource budgets are uniform across
+		// the StatefulSet; multipliers above 2× start risking OOM /
+		// QPS exhaustion on the workload-side container. Clamp the
+		// effective multiplier and log the divergence so summary.json
+		// reflects what actually ran, not what was requested.
+		const safeMaxMultiplier = 2.0
+		clamped := mult
+		if clamped > safeMaxMultiplier {
+			logger.Warn("cluster-size multiplier clamped — per-pod resource budgets are uniform; raise kwok.workloadResources or split into per-size StatefulSets to lift the cap",
+				"requested_multiplier", mult,
+				"clamped_to", safeMaxMultiplier,
+			)
+			clamped = safeMaxMultiplier
+		}
+		newTarget := int(float64(prof.Target) * clamped)
+		logger.Info("cluster-size skew applied", "base_target", prof.Target, "multiplier", clamped, "effective_target", newTarget)
 		prof.Target = newTarget
 	}
 	logger.Info("profile loaded",

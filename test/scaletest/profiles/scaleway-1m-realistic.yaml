@@ -102,13 +102,15 @@ loadProfile:
       durationSeconds: 60
       selectivity: 0.1
 
-  # ADR-0015 §5: cluster-size skew. Heavy-tailed distribution: 5%
-  # huge clusters (5×), 20% medium (2×), 50% baseline, 25% small
-  # (0.3×). Per-cluster Phase 1/3 work distribution becomes
-  # production-shaped instead of uniform.
+  # ADR-0015 §5 (capped per M36): cluster-size skew within the
+  # uniform-pod-budget envelope. Real fleets are heavier-tailed but
+  # raising kwok.workloadResources across the entire StatefulSet to
+  # serve the few 5× pods would over-provision the rest. Until per-
+  # pod resource templating lands, multipliers >2× are clamped at
+  # runtime by the load-driver; values here stay inside that cap.
   clusterSizeDistribution:
-    - { fraction: 0.05, targetMultiplier: 5.0 }
-    - { fraction: 0.20, targetMultiplier: 2.0 }
+    - { fraction: 0.05, targetMultiplier: 2.0 }
+    - { fraction: 0.20, targetMultiplier: 1.5 }
     - { fraction: 0.50, targetMultiplier: 1.0 }
     - { fraction: 0.25, targetMultiplier: 0.3 }
 
