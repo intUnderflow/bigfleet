@@ -30,6 +30,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -42,6 +43,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gopkg.in/yaml.v3"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -102,6 +104,24 @@ type profile struct {
 	// ordinal so the same pod always gets the same multiplier.
 	// When empty, every pod uses Target unmodified.
 	ClusterSizeDistribution []sizeBucket `yaml:"clusterSizeDistribution"`
+
+	// JitteredChurn (M41 / Item 8): when true, the per-tick churn
+	// count is drawn from Poisson(perTick) instead of the
+	// deterministic perTick value. Real apiserver write patterns
+	// have second-by-second variance; without jitter every tick is
+	// identical and the p99.9 tail behaviour is invisible. Default
+	// false for backward compatibility with existing profiles.
+	JitteredChurn bool `yaml:"jitteredChurn"`
+
+	// MicroBurstRatePerMinute (M41 / Item 8): expected number of
+	// minute-scale micro-bursts per minute per pod. On each ticking
+	// second a Bernoulli(rate/60) trial fires; on success the tick's
+	// churn is multiplied by MicroBurstFactor for that one tick.
+	// Models the "p99.9 tail" — large but rare write spikes that
+	// real apiservers see during deploy windows or queue drains.
+	// 0 disables.
+	MicroBurstRatePerMinute float64 `yaml:"microBurstRatePerMinute"`
+	MicroBurstFactor        float64 `yaml:"microBurstFactor"`
 }
 
 type burstSpec struct {
@@ -270,6 +290,23 @@ type crMeta struct {
 	archetype string
 }
 
+// poissonInt samples an integer from Poisson(mean) via the Knuth
+// algorithm. O(mean), fine for the small means used in M41's churn
+// jitter (typically <50). Returns 0 for non-positive means.
+func poissonInt(rng *rand.Rand, mean float64) int {
+	if mean <= 0 {
+		return 0
+	}
+	L := math.Exp(-mean)
+	k := 0
+	p := 1.0
+	for p > L {
+		k++
+		p *= rng.Float64()
+	}
+	return k - 1
+}
+
 // podSizeMultiplier returns the per-pod target scaling factor from the
 // distribution. Pods are bucketed by ordinal modulo a denominator of
 // 100 so each fraction-band lands deterministically on a contiguous
@@ -411,8 +448,21 @@ func (d *driver) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case now := <-tick.C:
-			if perTick > 0 {
-				d.churn(ctx, perTick)
+			thisTick := perTick
+			// M41: Poisson jitter on per-tick churn count, plus
+			// optional minute-scale micro-bursts. Without jitter,
+			// every tick produces identical write rate and the p99.9
+			// tail is invisible.
+			if d.prof.JitteredChurn && perTick > 0 {
+				thisTick = poissonInt(d.rng, float64(perTick))
+			}
+			if d.prof.MicroBurstRatePerMinute > 0 && d.prof.MicroBurstFactor > 1 {
+				if d.rng.Float64() < d.prof.MicroBurstRatePerMinute/60.0 {
+					thisTick = int(float64(thisTick) * d.prof.MicroBurstFactor)
+				}
+			}
+			if thisTick > 0 {
+				d.churn(ctx, thisTick)
 			}
 			// ADR-0015 §2: per-archetype lifetime aging.
 			d.ageByLifetime(ctx)

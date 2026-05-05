@@ -92,6 +92,14 @@ loadProfile:
   durationSeconds: 1800
   priorityClasses: [100, 1000, 1000000]   # legacy fallback; unused when archetypes non-empty
 
+  # M41 (Item 8): Poisson jitter on per-tick churn + minute-scale
+  # micro-bursts. Models the second-by-second + minute-scale variance
+  # real apiserver write patterns have. Without these the p99.9 tail
+  # in summary.json is artificially flat.
+  jitteredChurn: true
+  microBurstRatePerMinute: 1.0   # one micro-burst per minute on average per pod
+  microBurstFactor: 5.0          # 5× the normal per-tick churn for that tick
+
   # ADR-0015 §3: concentrated bursts. 5 minutes into the soak, ~10 %
   # of pods (selectivity 0.1) ramp up an extra 2000 cpu-service CRs
   # for 60 s — Friday-deploy-window simulation.
