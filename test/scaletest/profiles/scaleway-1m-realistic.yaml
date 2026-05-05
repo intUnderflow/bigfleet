@@ -195,9 +195,16 @@ loadProfile:
       reclamationPenalty: 65536
 
 operator:
-  qps: 200
-  burst: 400
-  ackConcurrency: 64
+  # M39 (Item 6): production-defensible client-go defaults. Earlier
+  # scaletest profiles raised QPS=200/Burst=400/AckConcurrency=64 to
+  # mask apiserver pressure as a "shard-only" measurement. Real
+  # operators run at the conservative client-go defaults and rely on
+  # apiserver flow-control. Running the test at the production rate
+  # surfaces the apiserver-pressure ceiling, not just the shard
+  # ceiling — the realistic profile measures both end-to-end.
+  qps: 50
+  burst: 100
+  ackConcurrency: 16
   rollupInterval: 0s
   # M37: route owner-grouped CRs through Same(rack). Seeded Configured
   # machines carry this label per ADR-0015 §4 / shard.go seedFakeInventory.
