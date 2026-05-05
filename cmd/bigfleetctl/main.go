@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -124,7 +125,7 @@ func cmdListQuotas(ctx context.Context, cli pb.CoordinatorClient) error {
 		for sh := range a.GetPerShard() {
 			shards = append(shards, sh)
 		}
-		sortStrings(shards)
+		sort.Strings(shards)
 		for _, sh := range shards {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", a.GetProvider(), a.GetRegion(), sh, a.GetPerShard()[sh])
 		}
@@ -188,17 +189,6 @@ func cmdRemoveShard(ctx context.Context, cli pb.CoordinatorClient, args []string
 	}
 	fmt.Printf("removed shard %s\n", *shard)
 	return nil
-}
-
-func sortStrings(s []string) {
-	// stdlib sort.Strings would do, but pulling in sort just for this
-	// pulls in a chunk of stdlib for the binary. Inline insertion sort
-	// is fine — list is bounded by shard count.
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
 }
 
 func fmtUnix(ns int64) string {

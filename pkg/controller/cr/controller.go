@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -256,7 +257,7 @@ func (r *Reconciler) buildCRForPod(pod *corev1.Pod) *bfv1alpha1.CapacityRequest 
 				Kind:       "Pod",
 				Name:       pod.Name,
 				UID:        pod.UID,
-				Controller: ptrBool(true),
+				Controller: ptr.To(true),
 			}},
 		},
 		Spec: bfv1alpha1.CapacityRequestSpec{
@@ -368,5 +369,3 @@ func penaltyFromAnnotation(value string) *resource.Quantity {
 	}
 	return &q
 }
-
-func ptrBool(b bool) *bool { return &b }
