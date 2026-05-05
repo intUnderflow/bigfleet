@@ -1,0 +1,82 @@
+profile scaleway-1m on context admin@bigfleet-1m-gate (kind=unknown)
+  scale: 100 clusters × 10000 CRs = 1000000 total
+  duration: 30m0s
+  estimated cost (cloud baseline): $0.42
+Release "scaletest" does not exist. Installing it now.
+NAME: scaletest
+LAST DEPLOYED: Tue May  5 20:36:39 2026
+NAMESPACE: bigfleet-scaletest
+STATUS: deployed
+REVISION: 1
+DESCRIPTION: Install complete
+TEST SUITE: None
+ramp budget: 22m14.333333333s (totalCRs 1000000 / 750 CR/sec)
+  waiting: pods 100/100 ready, active 94524/999000
+  waiting: pods 100/100 ready, active 128760/999000
+  waiting: pods 100/100 ready, active 160932/999000
+  waiting: pods 100/100 ready, active 195839/999000
+  waiting: pods 100/100 ready, active 222765/999000
+  waiting: pods 100/100 ready, active 256591/999000
+  waiting: pods 100/100 ready, active 279787/999000
+  waiting: pods 100/100 ready, active 308911/999000
+  waiting: pods 100/100 ready, active 327503/999000
+  waiting: pods 100/100 ready, active 349514/999000
+  waiting: pods 100/100 ready, active 370279/999000
+  waiting: pods 100/100 ready, active 391721/999000
+  waiting: pods 100/100 ready, active 409888/999000
+  waiting: pods 100/100 ready, active 428964/999000
+  waiting: pods 100/100 ready, active 447054/999000
+  waiting: pods 100/100 ready, active 466606/999000
+  waiting: pods 100/100 ready, active 487020/999000
+  waiting: pods 100/100 ready, active 506962/999000
+  waiting: pods 100/100 ready, active 524960/999000
+  waiting: pods 100/100 ready, active 538435/999000
+  waiting: pods 100/100 ready, active 555307/999000
+  waiting: pods 100/100 ready, active 571244/999000
+  waiting: pods 100/100 ready, active 589939/999000
+  waiting: pods 100/100 ready, active 607157/999000
+  waiting: pods 100/100 ready, active 623064/999000
+  waiting: pods 100/100 ready, active 638957/999000
+  waiting: pods 100/100 ready, active 654293/999000
+  waiting: pods 100/100 ready, active 670899/999000
+  waiting: pods 100/100 ready, active 686949/999000
+  waiting: pods 100/100 ready, active 702709/999000
+  waiting: pods 100/100 ready, active 718349/999000
+  waiting: pods 100/100 ready, active 730122/999000
+  waiting: pods 100/100 ready, active 744473/999000
+  waiting: pods 100/100 ready, active 758706/999000
+  waiting: pods 100/100 ready, active 771945/999000
+  waiting: pods 100/100 ready, active 788266/999000
+  waiting: pods 100/100 ready, active 804111/999000
+  waiting: pods 100/100 ready, active 820046/999000
+  waiting: pods 100/100 ready, active 835285/999000
+  waiting: pods 100/100 ready, active 850156/999000
+  waiting: pods 100/100 ready, active 864327/999000
+  waiting: pods 100/100 ready, active 878832/999000
+  waiting: pods 100/100 ready, active 894475/999000
+  waiting: pods 100/100 ready, active 909900/999000
+  waiting: pods 100/100 ready, active 925084/999000
+  waiting: pods 100/100 ready, active 939221/999000
+  waiting: pods 100/100 ready, active 954493/999000
+  waiting: pods 100/100 ready, active 967148/999000
+  waiting: pods 100/100 ready, active 977799/999000
+  waiting: pods 100/100 ready, active 985846/999000
+  waiting: pods 100/100 ready, active 990423/999000
+  waiting: pods 100/100 ready, active 992457/999000
+  waiting: pods 100/100 ready, active 993605/999000
+  waiting: pods 100/100 ready, active 993928/999000
+  waiting: pods 100/100 ready, active 993929/999000
+  waiting: pods 100/100 ready, active 993925/999000
+  waiting: pods 100/100 ready, active 993934/999000
+  waiting: pods 100/100 ready, active 993937/999000
+  waiting: pods 100/100 ready, active 994453/999000
+  waiting: pods 100/100 ready, active 995433/999000
+  waiting: pods 100/100 ready, active 996747/999000
+  waiting: pods 100/100 ready, active 997355/999000
+  waiting: pods 100/100 ready, active 998297/999000
+steady state reached; soaking 30m0s
+wrote test/scaletest/results/20260505-203638-scaleway-1m/summary.json
+tearing down
+release "scaletest" uninstalled
+scaletest-runner: shardCycleDurationP99Seconds 0.967s > 100ms SLO
+exit status 1

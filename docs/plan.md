@@ -655,10 +655,32 @@ if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > r
 
 **Out of scope:** killing the provider process from inside the suite (can't generically; provider authors add their own integration tests for restart-survival).
 
-### M13. Fleet-scale realism test (5M, hundreds of clusters)
-**Gated on M22 + a passing scaleway-1m run.** The 5M test is end-of-line: it's the most expensive run we ship (~$2.60-$8 depending on duration after M22's ramp budget bump) and the most likely to surface previously-unseen bottlenecks. Originally drafted right after M12; deferred behind everything else because (a) M14-M21 close real user-stories gaps, (b) M22 fixes the ramp-budget cliff that already failed the 1M de-risk by 25 CRs, and (c) re-running 1M cleanly is a much cheaper way to validate the per-cluster 10K-CR path before paying for 5M.
+### M27. Phase 2 + Phase 3 optimisation at high demand-to-inventory ratio
+**Surfaced by:** the M13.gate scaleway-1m cloud run (1M demand × 1M aggregate inventory, 2 shards × 500K each). Cycle p99 = 967 ms vs the 100 ms SLO. Per-phase breakdown:
 
-**Pre-gate:** a passing `scaleway-1m` run on the M22 ramp budget. If 1M times out or otherwise misses the SLO bar, fix it before paying for 5M — same shape, one-fifth the cost (~$0.74/run).
+  reconcile        1 ms
+  phase1          58 ms   (allocator — proportional to M11 results, fine)
+  phase2         471 ms   ← biggest
+  phase3         416 ms   ← second biggest
+  execute         —      (no execute work in this profile)
+
+The wall is **algorithmic at high demand-to-inventory ratio**. M11's 500K-inventory validation drove 50K demand against 500K inventory (10:1); M13.gate drives 500K demand against 500K inventory (1:1) and pushes Phase 2's victim-scoring + Phase 3's reclaim into territory neither was ever optimised for. M13 (5M) has the same per-shard ratio (500K × 500K), so it would land in the same place at 5× the cost.
+
+**Goal:** drop per-shard cycle p99 below the 100 ms SLO at 500K × 500K demand-inventory load. Re-validate via scaleway-1m; once that passes, M13 (5M) follows.
+
+**Scope (provisional, sized after a profiler run on the M13.gate snapshot):**
+1. **Phase 2 victim scoring** is currently O(N×M) — for every Need in the unsatisfied set, walk every Configured machine to score it. At 500K × 500K that's ~250B comparisons. Realistic optimisations: per-fingerprint candidate-pool index (analogous to M11.16 for Phase 1); short-circuit when the preemptor's priority gap collapses to zero against high-priority workloads; skip pinned-penalty victims early.
+2. **Phase 3 reclaim** at high demand walks idle inventory looking for fingerprint-match opportunities. Same per-fingerprint index pattern. The reclaim heuristic is also priority-coupled, so the same pinned-penalty short-circuit applies.
+3. Microbench in `pkg/decision/` covering the (500K demand, 500K inventory) shape so regressions catch in `make bench` rather than on a paid cloud run.
+
+**Validation:** re-run scaleway-1m on the optimised binary; cycle p99 ≤ 100 ms with the same 0.5×churn / 30-min soak shape. If 1M passes, M13 (5M) is unblocked. If 1M still fails, the next milestone re-profiles and iterates.
+
+**Out of scope:** changes to the algorithmic semantics (cost formula, victim-score reciprocal weights — both are author-locked) or to the proto contracts. M27 is pure data-structures-and-loops work inside `pkg/decision/`.
+
+### M13. Fleet-scale realism test (5M, hundreds of clusters)
+**Gated on M27 + a passing scaleway-1m run.** The 5M test is end-of-line: it's the most expensive run we ship (~$2.60-$8 depending on duration after M22's ramp budget bump) and the most likely to surface previously-unseen bottlenecks. Originally drafted right after M12; deferred behind a chain of cheaper milestones because (a) M14-M21 close real user-stories gaps, (b) M22 fixes the ramp-budget cliff that failed the original 1M de-risk by 25 CRs, (c) re-running 1M cleanly is a much cheaper way to validate the per-cluster 10K-CR path before paying for 5M, and (d) M13.gate (commit / rundir 20260505-203638-scaleway-1m) found that Phase 2 + Phase 3 break the 100 ms cycle SLO at the 500K × 500K demand-to-inventory ratio per shard — the same ratio M13 has, so paying for 5M before fixing the algorithm just buys an expensive confirmation of the same wall.
+
+**Pre-gate:** a passing `scaleway-1m` run on the M27 algorithmic optimisations. If 1M misses the SLO bar, fix it before paying for 5M — same per-shard work, one-fifth the cost (~$0.42/run).
 
 **Target shape:**
 - 10 shards × 500K inventory each = **5M total machines under management**.

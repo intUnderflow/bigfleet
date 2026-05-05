@@ -58,5 +58,6 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
 | [`scaleway-1m`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-020833-scaleway-1m) | 31 ms | 158 ms | 26 ms | 50000 / 50000 | ✓ |
 | [`failover-leader-kill`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-191344-failover-leader-kill) | 16 ms | 75 ms | 14 ms | 50000 / 50000 | ✓ |
 | [`failover-leader-kill`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-194845-failover-leader-kill) | 16 ms | 79 ms | 14 ms | 50000 / 50000 | ✓ |
+| [`scaleway-1m`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-203638-scaleway-1m) | 967 ms | 2.55 s | 495 ms | 999967 / 1000000 | ✗ |
 
 *Generated from `test/scaletest/results/*/summary.json` by `site/scripts/sync-scaletest.mjs`. Outcomes recomputed under the current SLO bar.*
