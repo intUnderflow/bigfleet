@@ -98,14 +98,40 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 		"cluster_stride", clusterStride,
 		"shard_ordinal", shardOrdinal,
 	)
+	// M42 (Item 9): Idle seed mirrors the archetype's PickSize
+	// distribution so MatchProfile-with-exact-resource-equality has
+	// machines that match what the load-driver requests. Without
+	// this the idle pool declares only "instance-type maxed out"
+	// resources (e.g. c6i.4xlarge → {cpu: 16}) and a CR asking
+	// {cpu: 4} fails MatchProfile against every idle, leaving Phase 1
+	// silently unable to bind. The picker is shared with the
+	// Configured seed below so Idle and Configured see the same
+	// archetype mix at fold time.
+	idlePicker := archetype.NewPicker(archetypes)
+	idleRng := rand.New(rand.NewSource(int64(shardOrdinal) + 17))
 	for i := 0; i < nIdle; i++ {
-		t := types[i%len(types)]
-		z := zones[i%len(zones)]
-		profile := machine.Profile{
-			InstanceType: t,
-			Zone:         z,
-			CapacityType: machine.CapacityTypeBareMetal,
-			Resources:    resources[t],
+		var profile machine.Profile
+		if a := idlePicker.Pick(idleRng); a != nil {
+			it := a.InstanceTypes[i%len(a.InstanceTypes)]
+			z := "zone-a"
+			if len(a.Zones) > 0 {
+				z = a.Zones[i%len(a.Zones)]
+			}
+			profile = machine.Profile{
+				InstanceType: it,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeBareMetal,
+				Resources:    a.PickSize(idleRng),
+			}
+		} else {
+			t := types[i%len(types)]
+			z := zones[i%len(zones)]
+			profile = machine.Profile{
+				InstanceType: t,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeBareMetal,
+				Resources:    resources[t],
+			}
 		}
 		id := machine.ID("idle-" + strconv.Itoa(i))
 		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
