@@ -79,11 +79,14 @@ If you see Preempt actions firing, the affected nodes are written into per-clust
 You own one or more clusters. The platform team owns the BigFleet shard. Your job is the operator chart:
 
 ```sh
-helm install bigfleet-operator deploy/helm/bigfleet-operator \
+helm install bigfleet-operator oci://ghcr.io/intunderflow/charts/bigfleet-operator \
+  --version 0.1.0 \
   --namespace bigfleet-system --create-namespace \
   --set clusterID=cluster-prod-eu-1 \
   --set shardAddress=bigfleet-shard.bigfleet-system.svc:7780
 ```
+
+(Helm ≥3.8 for OCI; charts are pushed to GHCR on every commit to main. The `--version` flag pins to a specific `Chart.yaml` version — bump it when upgrading. For development against a git checkout, replace the OCI reference with `./deploy/helm/bigfleet-operator` and drop `--version`.)
 
 The operator dials the shard from inside the cluster (outbound only — no inbound listener). After install, check:
 
