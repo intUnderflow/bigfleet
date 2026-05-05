@@ -1,28 +1,46 @@
 # scaleway-1m — 1,000,000-machine fleet test on Scaleway, two shards.
 #
 # Aggregate-named: 2 shards × 500K seeded inventory each = 1M total
-# under management. The paper pegs the per-shard ceiling at 500K
-# (Phase 3 walks the inventory each cycle); scaling beyond that is
-# what shards are for. This profile is the smallest legitimate
-# multi-shard validation — single-shard at the per-shard ceiling
-# would be scaleway-500k.yaml.
+# under management; demand sized to match the fleet (100 KWOK clusters
+# × 10K demand each = 1M total demand). This is a real fleet-scale
+# test — same demand-to-inventory ratio as scaleway-5m, just smaller
+# fleet.
 #
-# Sized for the same 2-node PRO2-M Kapsule pool as scaleway-500k.
-# Per-shard CPU and memory work is roughly halved vs single-shard
-# 500K (each shard sees ~25K demand against 500K inventory) so this
-# isn't a per-shard scale stress; it's the wiring + per-shard SLO
-# contract validation that gates anything bigger.
+# Per-shard load: ~500K demand against 500K inventory. The M11
+# single-shard 500K validation drove 50K demand against 500K
+# inventory — this profile pushes 10× the demand per shard, which
+# is what the cycle p99 budget actually has to absorb at fleet scale.
+#
+# Prior history: the rundir
+# `test/scaletest/results/20260505-020833-scaleway-1m` was generated
+# from an earlier shape (50 clusters × 1K demand = 50K demand only)
+# and is left in place as the M12 multi-shard wiring validation. New
+# runs at this profile produce honest scaleway-1m entries with
+# load = 1,000,000 / 1,000,000.
+#
+# Sized for 2× PRO2-L Kapsule (32 vCPU / 128 GiB each):
+#   shards:       2 × 2 vCPU / 3 GiB                =  4 vCPU / 6 GiB
+#   coordinator:  1 × default                        =  ~0.5 vCPU / 0.5 GiB
+#   prometheus:   1 × 1 vCPU / 4 GiB                 =  1 vCPU / 4 GiB
+#   kwok pods:    100 × 0.3 vCPU / 0.8 GiB           = 30 vCPU / 80 GiB
+#                                                       (apiserver + workload split)
+#   total:        ~36 vCPU req / ~91 GiB             → fits 2× PRO2-L
+#                                                       (64 vCPU / 256 GiB)
+#                                                       ~56 % CPU, ~36 % memory reservation
+#
+# PRO2-L is a separate per-zone instance-type quota counter from
+# PRO2-M. Default 10/zone, so 2 fits comfortably.
 #
 # Provisioning:
 #
 #   scw k8s cluster create name=bigfleet-1m \
 #     version=1.35.3 cni=cilium type=kapsule \
-#     pools.0.name=default pools.0.node-type=PRO2-M \
+#     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
 #     region=fr-par project-id=<bigfleet-project-id>
 #
-# Expected cost: 2× PRO2-M × €0.21/hr ≈ €0.42/hr.
-# A 30-min run + setup + teardown ≈ 50 min ≈ €0.35 (~$0.38).
+# Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
+# A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74).
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -36,18 +54,29 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  clusterCount: 50
+  # 100 clusters × 10K demand each = 1M total demand. 100 KWOK pods
+  # is 2× the M11 50-cluster pattern, but each pod's apiserver-side
+  # working set is ~10× larger because each cluster carries 10K CRs
+  # instead of 1K. Apiserver request limit raised to 2 vCPU to absorb
+  # the bigger list-CRs and ack-write paths the operator drives at
+  # this size; observed steady-state on 1K CRs/cluster was ~115m
+  # workload-side, so 300m req remains conservative even with 10×
+  # more CRs.
+  clusterCount: 100
   apiserverResources:
     requests: { cpu: 150m, memory: 500Mi }
     limits:   { cpu: 2,    memory: 3Gi }
   workloadResources:
-    requests: { cpu: 150m, memory: 300Mi }
-    limits:   { cpu: 1500m, memory: 1Gi }
+    requests: { cpu: 150m, memory: 400Mi }
+    limits:   { cpu: 2,    memory: 1500Mi }
 
 shard:
-  # 2 shards, kwok-cluster pods deterministically split N % 2 across
-  # them. Each shard sees ~25K demand (50K total / 2 shards) against
-  # 500K seeded inventory.
+  # 2 shards: kwok-cluster-N → bigfleet-shard-(N % 2). Each shard
+  # sees ~500K demand (1M / 2) against 500K inventory. This is 10×
+  # the per-shard demand we've validated single-shard at 500K
+  # inventory — Phase 1's per-Profile candidate-pool work scales
+  # linearly with N (M11.16); Phase 3's tail work likewise. The
+  # 100ms cycle SLO budget is what's actually being tested here.
   replicas: 2
   seedMachines: 500000
   maxActionsPerCycle: 1000
@@ -63,7 +92,8 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  target: 1000
+  # 10K CRs per cluster × 100 clusters = 1M total demand.
+  target: 10000
   churnPerMinute: 0.05
   durationSeconds: 1800
 
@@ -79,7 +109,7 @@ prometheus:
     limits:   { cpu: 4, memory: 12Gi }
 
 costEstimate:
-  vCPU: 32
-  memoryGB: 128
-  awsSpotUsdPerHour: 0.42
-  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 2 shards × 500K seeded inventory + 50 KWOK clusters × 1K demand = 1M-machine fleet. ~$0.38 for a 50-min run end-to-end. Smallest legitimate multi-shard validation; the wiring this exercises is the prerequisite for anything bigger (e.g. scaleway-5m)."
+  vCPU: 64
+  memoryGB: 256
+  awsSpotUsdPerHour: 0.84
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K seeded inventory + 100 KWOK clusters × 10K demand = 1M-machine fleet at 1:1 demand-to-inventory ratio. ~$0.74 for a 50-min run end-to-end. Same shape as scaleway-5m, just one-fifth the fleet."
