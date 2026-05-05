@@ -245,23 +245,22 @@ The dashed blue line is the 100 ms cycle SLO. Bars are coloured green only when 
 
   let table = `## All runs
 
-The "shards × inventory" column reflects what the run actually exercised: shard.replicas × seedMachines per shard. Single-shard 500K runs show the same number twice; multi-shard runs make the aggregate fleet size explicit.
+"shards × inventory" is shard.replicas × seedMachines per shard — multi-shard runs make the aggregate fleet size explicit. "load" is observed sustained CRs over the target. The rundir link encodes the profile, so the profile column has been dropped to keep the row compact; "target met" rolls into the pass mark (a passing run has target met by definition).
 
-| run | profile | shards × inventory | cycle p99 | ack p99 | rollup p99 | active CRs / target | target met | passed (current SLO) |
-|---|---|---|---|---|---|---|---|---|
+| run | shards × inventory | cycle p99 | ack p99 | rollup p99 | load | pass |
+|---|---|---|---|---|---|---|
 `;
   for (const r of runs) {
     const tag = shortLabel(r.dir);
-    const activeCol =
+    const loadCol =
       r.active != null && r.totalCRs != null
         ? `${r.active} / ${r.totalCRs}`
         : r.active != null
           ? `${r.active}`
           : "—";
-    const targetMet = r.targetMet == null ? "—" : r.targetMet ? "✓" : "✗";
     const pass = r.passed ? "✓" : "✗";
     const inventoryCol = renderInventoryCol(r);
-    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${r.profile ?? "—"} | ${inventoryCol} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${activeCol} | ${targetMet} | ${pass} |\n`;
+    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${inventoryCol} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
   }
 
   return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
