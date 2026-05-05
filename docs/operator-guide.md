@@ -2,6 +2,24 @@
 
 For the human running BigFleet — installing it, monitoring it, responding when something is wrong.
 
+## Kubernetes version support
+
+**Minimum: Kubernetes 1.31.** The helm charts (`bigfleet`, `bigfleet-operator`, `bigfleet-unschedulable-pod-controller`) declare `kubeVersion: ">= 1.31.0-0"` and helm will refuse to install on older clusters.
+
+The binding constraint is the `CapacityRequest` CRD's `spec.versions[].selectableFields` block (used by the on-call runbook's `kubectl --field-selector=status.phase=Pending` query). SelectableFields went GA in Kubernetes 1.31; in 1.30 they're behind the `CustomResourceFieldSelectors` feature gate and require explicit opt-in. Older clusters reject the CRD at install time.
+
+Other features BigFleet uses, all from earlier releases (listed for completeness, not as additional requirements):
+
+| Feature | Used by | Stable since |
+|---|---|---|
+| CRD `subresource:status` | All `bigfleet.lucy.sh/v1alpha1` resources | 1.16 |
+| `policy/v1` Eviction | M20 ReclaimInstruction handler (PDB-respecting drain) | 1.22 |
+| `coordination.k8s.io/v1` Leases | controller-runtime managers | 1.14 |
+| `NetworkPolicy` egress | M17.x `partition-coordinator-from-shard-N` failover-test action | 1.8 |
+| `statefulset.kubernetes.io/pod-name` label | M17.x partition NetworkPolicy podSelector | 1.13 |
+
+If you need to run BigFleet on a 1.30 cluster, the workaround is to drop the `selectableFields` block from the CRD before applying it and use the user-stories runbook's pre-M21 `jq` command for status-phase filtering. Not officially supported; we don't run CI against it.
+
 ## Architecture in one paragraph
 
 BigFleet is two tiers. The **coordinator** (Tier 1) owns Raft-replicated fleet state — shard membership, cluster→shard map, topology-domain→shard assignments, quota allocations, provider registry. The **shards** (Tier 2) own machines and make provisioning decisions on their hot path. Per-cluster **operators** dial a shard over a long-lived bidirectional gRPC stream. The coordinator does *not* make provisioning decisions; shards do. Static stability is the load-bearing safety property: clusters keep running with BigFleet entirely down. (See the [BigFleet paper](https://lucy.sh/bigfleet) for the full architecture, also vendored at `docs/papers/bigfleet.md`.)

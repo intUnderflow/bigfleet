@@ -4,6 +4,9 @@ description: BigFleet's optional per-pod CapacityRequest controller. Watches Pod
 type: application
 version: 0.1.0
 appVersion: "v0.1.0"
+# Minimum Kubernetes version aligns with the operator chart (1.31)
+# since the CRDs and patch paths are shared.
+kubeVersion: ">= 1.31.0-0"
 home: https://github.com/intUnderflow/bigfleet
 sources:
   - https://github.com/intUnderflow/bigfleet

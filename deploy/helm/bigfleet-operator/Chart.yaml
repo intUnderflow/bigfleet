@@ -4,6 +4,13 @@ description: BigFleet per-cluster operator. Installs the agent that dials the Bi
 type: application
 version: 0.1.0
 appVersion: "v0.1.0"
+# Minimum Kubernetes version 1.31. The CapacityRequest CRD declares
+# status.phase as a SelectableField (GA in 1.31); the M20 Reclaim
+# handler uses the policy/v1 Eviction subresource (GA in 1.22) so
+# PodDisruptionBudgets are respected. Older clusters install the chart
+# but `kubectl --field-selector=status.phase=Pending` won't work and
+# the apiserver may reject the CRD's selectableFields block.
+kubeVersion: ">= 1.31.0-0"
 home: https://github.com/intUnderflow/bigfleet
 sources:
   - https://github.com/intUnderflow/bigfleet

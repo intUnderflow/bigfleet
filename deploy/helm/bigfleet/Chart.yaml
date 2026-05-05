@@ -4,6 +4,13 @@ description: BigFleet control plane (coordinator + shards). Tier 1 + Tier 2 of t
 type: application
 version: 0.1.0
 appVersion: "v0.1.0"
+# Minimum Kubernetes version is 1.31 because the CapacityRequest CRD
+# declares status.phase as a SelectableField, which went GA in 1.31
+# (was beta in 1.30 behind the CustomResourceFieldSelectors feature
+# gate). Other feature uses (policy/v1 eviction, CRD status
+# subresource, PodDisruptionBudget v1) all stabilised in earlier
+# releases. See docs/operator-guide.md → Kubernetes version support.
+kubeVersion: ">= 1.31.0-0"
 home: https://github.com/intUnderflow/bigfleet
 sources:
   - https://github.com/intUnderflow/bigfleet
