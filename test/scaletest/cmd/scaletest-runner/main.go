@@ -438,9 +438,16 @@ func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error 
 // the gap visible without aborting the whole run.
 func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float64 {
 	queries := map[string]string{
-		"shardCycleDurationP99Seconds":       `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))`,
-		"shardProvisioningLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m])))`,
-		"shardProvisioningLatencyP50Seconds": `histogram_quantile(0.50, sum by (le) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m])))`,
+		// Cycle p99 is reported as the worst-shard number — the SLO
+		// applies per shard, not aggregated. With shard.replicas: 1
+		// max(by pod) reduces to the single shard. With shard.replicas:
+		// N a single overshooting shard will show through here instead
+		// of being diluted by its faster siblings. Histograms are
+		// already bucketed per pod by the scrape, so quantile→max is
+		// statistically meaningful for SLO gating.
+		"shardCycleDurationP99Seconds":       `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))`,
+		"shardProvisioningLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
+		"shardProvisioningLatencyP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
 		"operatorRollupP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
 		"operatorAckP99Seconds":              `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":          `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
@@ -458,11 +465,11 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// Per-phase p99s. Required to distinguish "the whole cycle is
 		// slow" from "one phase has a long tail" (M11.21 added the
 		// histogram; the runner's summary now surfaces it).
-		"shardPhaseReconcileP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="reconcile"}[5m])))`,
-		"shardPhase1P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase1"}[5m])))`,
-		"shardPhase2P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase2"}[5m])))`,
-		"shardPhase3P99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase3"}[5m])))`,
-		"shardPhaseExecuteP99Seconds":   `histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="execute"}[5m])))`,
+		"shardPhaseReconcileP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="reconcile"}[5m]))))`,
+		"shardPhase1P99Seconds":         `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase1"}[5m]))))`,
+		"shardPhase2P99Seconds":         `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase2"}[5m]))))`,
+		"shardPhase3P99Seconds":         `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase3"}[5m]))))`,
+		"shardPhaseExecuteP99Seconds":   `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="execute"}[5m]))))`,
 	}
 	out := make(map[string]float64, len(queries))
 	for k, q := range queries {

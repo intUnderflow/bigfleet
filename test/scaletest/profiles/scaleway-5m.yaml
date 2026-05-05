@@ -1,0 +1,106 @@
+# scaleway-5m — fleet-scale realism test on Scaleway (M13).
+#
+# Target shape:
+#   10 shards × 500K seeded inventory each            = 5,000,000 machines under management
+#   500 simulated KWOK clusters × 10K demand each     = 5,000,000 demand CRs
+#   Per-shard load: ~500K demand, 500K inventory       = same ratio as M11 single-shard 500K test
+#                                                        (each kwok-cluster pod dials a deterministic
+#                                                         shard via N % 10; load splits evenly)
+#
+# This is the architectural-scale test: each shard runs at its
+# M11-validated 500K cycle ceiling while the fleet aggregates 5M.
+# Per-shard p99 ≤100ms is the SLO; single overshooting shard fails
+# the gate (runner queries are max(by pod)).
+#
+# Sized for 8× PRO2-XXL (32 vCPU / 128 GB) Scaleway Kapsule:
+#   shards:        10 × 2 vCPU / 3 GiB                   =  20 vCPU / 30 GiB
+#   coordinator:   1 × default                            =  ~0.5 vCPU / 0.5 GiB
+#   prometheus:    1 × 2 vCPU / 8 GiB (5M demand → bigger histogram fan-out)
+#   kwok pods:     500 × 0.3 vCPU / 0.8 GiB (apiserver + workload split)
+#                                                        = 150 vCPU / 400 GiB
+#   total:         ~175 vCPU req / ~440 GiB              → fits 8× PRO2-XXL
+#                                                          (256 vCPU / 1024 GiB)
+#                                                          ~70 % CPU, ~45 % memory utilisation
+#
+# Pre-flight: per-zone PRO2-XXL quota is typically 10; 8 fits within
+# a single zone. Confirm before launch.
+#
+# Provisioning (single zone, fr-par-1 — adjust to whichever has quota):
+#
+#   scw k8s cluster create name=bigfleet-5m \
+#     version=1.35.3 cni=cilium type=kapsule \
+#     pools.0.name=default pools.0.node-type=PRO2-XXL \
+#     pools.0.size=8 pools.0.min-size=8 pools.0.max-size=8 \
+#     pools.0.zone=fr-par-1 \
+#     region=fr-par project-id=<bigfleet-project-id>
+#
+# Expected cost: 8× PRO2-XXL × ~€0.42/hr ≈ €3.40/hr.
+# A 30-min run + setup + teardown ≈ 50 min ≈ €2.83 (~$3.00).
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: dev
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: dev
+    pullPolicy: Always
+
+kwok:
+  clusterCount: 500
+  apiserverResources:
+    requests: { cpu: 150m, memory: 500Mi }
+    limits:   { cpu: 2,    memory: 3Gi }
+  workloadResources:
+    # 10× the CRs per cluster (10K vs 1K). The operator's rollup work
+    # scales with CRs; bump the limit so workload-side fan-out has room.
+    requests: { cpu: 150m, memory: 400Mi }
+    limits:   { cpu: 2,    memory: 1500Mi }
+
+shard:
+  # 10 shards at the M11-validated ceiling. Coordinator-scrape gap
+  # (-1 for coordinatorApplyOpsPerSec, see task #146) means we won't
+  # have explicit coordinator capacity confirmation in summary.json
+  # for this run — but the integration tests already cover the
+  # ~500-domain assignment workload at a per-FSM-apply level.
+  replicas: 10
+  seedMachines: 500000
+  maxActionsPerCycle: 1000
+  executeConcurrency: 128
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 2, memory: 3Gi }
+    limits:   { cpu: 6, memory: 12Gi }
+
+coordinator:
+  enabled: true
+  replicas: 1
+
+loadProfile:
+  # 10K CRs per cluster × 500 clusters = 5M total demand.
+  target: 10000
+  churnPerMinute: 0.05
+  durationSeconds: 1800
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 0s
+
+prometheus:
+  # 5M-CR fan-out: histogram bucket cardinality scales with kwok pod
+  # count × bucket count. 4 GiB → 8 GiB to handle 500-pod histograms
+  # without the scraper's TSDB head-block growing past memory.
+  resources:
+    requests: { cpu: 2, memory: 8Gi }
+    limits:   { cpu: 4, memory: 16Gi }
+
+costEstimate:
+  vCPU: 256
+  memoryGB: 1024
+  awsSpotUsdPerHour: 3.40
+  notes: "8× Scaleway PRO2-XXL (32 vCPU / 128 GB each). 10 shards × 500K seeded inventory + 500 KWOK clusters × 10K demand = 5M-machine fleet. ~$3.00 for a 50-min run end-to-end. M13 architectural-scale test: validates the multi-shard contract from M12 against the 100ms per-shard cycle SLO at fleet scale."
