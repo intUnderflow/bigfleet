@@ -69,12 +69,12 @@ kwok:
     limits:   { cpu: 1500m, memory: 1Gi }
 
 shard:
-  # M12.6 validation run: 2 shards, kwok-cluster pods deterministically
-  # split N % 2 across them. Per-shard load is ~25K demand each
-  # (vs 50K on a single shard); inventory stays at 500K per shard.
-  # Tests the multi-shard wiring contract end-to-end on real cloud
-  # infra; not yet a comparable scale number to single-shard 500K.
-  replicas: 2
+  # Single-shard 500K. Multi-shard configurations are aggregate-named
+  # — see scaleway-1m.yaml for 2 shards × 500K, scaleway-5m.yaml for
+  # 10 shards × 500K. The paper sets 500K as the per-shard ceiling
+  # (project_lessons_learned: M11.x), so the file's name reflects
+  # the scale tested, not how many shards were used to test it.
+  replicas: 1
   # 500K idle machines pre-seeded so Phase 1 has a real population to
   # match against. Without this the harness measures rollup latency
   # only, not the algorithmic ceiling we actually want to test.
