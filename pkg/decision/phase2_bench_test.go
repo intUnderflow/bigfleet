@@ -22,7 +22,7 @@ import (
 //	go test -bench=Phase2_ScaleInversions -benchmem ./pkg/decision/...
 func BenchmarkPhase2_ScaleInversions(b *testing.B) {
 	const (
-		configuredCount = 100_000 // configured low-priority workload
+		configuredCount = 500_000 // M27 baseline: M13.gate's per-shard configured
 		unresolvedCount = 100     // distinct higher-priority needs
 		instanceTypeCt  = 5
 	)

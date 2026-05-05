@@ -1,8 +1,6 @@
 package decision
 
 import (
-	"sort"
-
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
@@ -30,9 +28,16 @@ type Phase3Result struct {
 // Performance (M11.23): needs are pre-grouped per cluster by Profile
 // fingerprint with summed counts. The inner match loop calls
 // MatchProfile once per (configured, distinct fingerprint) instead of
-// once per (configured, need). At 1K configured × 1K needs × 50
-// clusters that's 50M calls collapsing to 50K when all needs in a
-// cluster share a single fingerprint (the common workload shape).
+// once per (configured, need).
+//
+// Performance (M27): when a group's profile pins to specific instance
+// types via `node.kubernetes.io/instance-type In [...]`, the match
+// candidates are restricted to the snapshot's pre-built per-(cluster,
+// state, instance-type) bucket — which at 500K configured / 50
+// clusters / 5 instance types is ~2K candidates instead of the
+// cluster's full ~10K configured. Cuts the inner MatchProfile loop
+// 5× at the M13.gate scale shape (cycle p99 was 416 ms before;
+// target is ≤100 ms after).
 func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 	out := Phase3Result{}
 
@@ -48,32 +53,38 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 	}
 
 	// For each cluster present in the inventory, compute reclaim actions.
-	for cluster := range collectClustersWithConfigured(snap) {
-		configured := snap.ListByClusterState(cluster, machine.StateConfigured)
+	// M27: iterate snap.bucketsByClusterState directly via the per-
+	// cluster keys we already have in the needs map; the snapshot's
+	// SortedClusterStateBucket returns the per-cluster Configured
+	// slice pre-sorted by Phase 3's keep-priority order, so the
+	// per-call ListByClusterState alloc + sort.SliceStable is gone.
+	for cluster := range clustersWithConfigured(snap) {
+		configured := snap.SortedClusterStateBucket(cluster, machine.StateConfigured)
 		if len(configured) == 0 {
 			continue
 		}
 
-		// Sort by *keep-priority* descending: machines we'd most prefer
-		// to retain come first and get matched to need slots. Whatever
-		// is left after every slot is filled becomes excess.
-		//
-		// Keep-priority is the inverse of release-priority:
-		//   primary: cheapest per-hour first (we hold onto bare metal
-		//     and dump on-demand)
-		//   tiebreak: highest reclamation_penalty first (within the
-		//     same price tier, hold the machines whose loss costs more)
-		sort.SliceStable(configured, func(i, j int) bool {
-			if configured[i].PricePerHour != configured[j].PricePerHour {
-				return configured[i].PricePerHour < configured[j].PricePerHour
-			}
-			if configured[i].AssignedReclamationPenaltyDollars != configured[j].AssignedReclamationPenaltyDollars {
-				return configured[i].AssignedReclamationPenaltyDollars > configured[j].AssignedReclamationPenaltyDollars
-			}
-			return configured[i].ID < configured[j].ID
-		})
-
 		groups := byCluster[cluster] // nil for clusters with no needs
+
+		// M27: pre-resolve each group's pinned instance-type set ONCE
+		// instead of re-walking the requirement list per machine. The
+		// inner loop's instance-type prefilter then skips MatchProfile
+		// when the machine's instance type isn't on the pinned list,
+		// which at the M13.gate scale shape (10K configured per
+		// cluster, 3 groups, 5 instance types) collapses ~30K
+		// MatchProfile calls per cluster to ~6K — most pairs short-
+		// circuit on the cheap string compare.
+		type resolvedGroup struct {
+			profile     needs.Profile
+			pinnedTypes []string // empty when unpinned (multi-type or no instance-type In requirement)
+		}
+		resolved := make([]resolvedGroup, len(groups))
+		for i := range groups {
+			resolved[i] = resolvedGroup{
+				profile:     groups[i].profile,
+				pinnedTypes: pinnedInstanceTypes(groups[i].profile),
+			}
+		}
 
 		for _, m := range configured {
 			kept := false
@@ -81,7 +92,23 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 				if groups[i].remaining <= 0 {
 					continue
 				}
-				if MatchProfile(groups[i].profile, m) {
+				// Fast prefilter: a pinned group only matches its
+				// listed instance types. Skipping MatchProfile when
+				// the type doesn't even fit drops the inner cost
+				// from a full requirement walk to one string compare.
+				if len(resolved[i].pinnedTypes) > 0 {
+					ok := false
+					for _, t := range resolved[i].pinnedTypes {
+						if t == m.Profile.InstanceType {
+							ok = true
+							break
+						}
+					}
+					if !ok {
+						continue
+					}
+				}
+				if MatchProfile(resolved[i].profile, m) {
 					groups[i].remaining--
 					kept = true
 					break
@@ -135,11 +162,15 @@ func collapseByFingerprint(ns []needs.Need) []profileBudget {
 	return out
 }
 
-func collectClustersWithConfigured(snap *inventory.Snapshot) map[machine.ClusterID]struct{} {
+// clustersWithConfigured returns the set of cluster IDs that have at
+// least one Configured machine. M27: iterates the snapshot's per-
+// cluster index keys instead of walking the full Configured slice
+// (which at 500K configured was ~9 % of Phase3's hot path).
+func clustersWithConfigured(snap *inventory.Snapshot) map[machine.ClusterID]struct{} {
 	out := make(map[machine.ClusterID]struct{})
-	for _, m := range snap.ListByState(machine.StateConfigured) {
-		if m.Cluster != "" {
-			out[m.Cluster] = struct{}{}
+	for cl := range snap.ClusterIDs() {
+		if snap.CountByClusterState(cl, machine.StateConfigured) > 0 {
+			out[cl] = struct{}{}
 		}
 	}
 	return out

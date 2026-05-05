@@ -354,13 +354,76 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		buckets[state] = typed
 	}
 
+	// Per-(cluster, state, instance-type) buckets for Phase 3's M27
+	// fast path. Same (price asc, ID asc) sort as the global per-
+	// (state, instance-type) buckets so callers can stream them
+	// straight into Phase 3's keep-priority loop. At 500K configured
+	// across 50 clusters and 5 instance types the cluster-scoped
+	// buckets are ~2K each instead of ~100K — Phase 3's per-cluster
+	// inner walk drops 5× when groups pin to single instance types
+	// (the typical production shape).
+	// Per-(cluster, state) buckets pre-sorted by Phase 3's keep-priority
+	// order. Avoids the per-call ListByClusterState alloc + sort that
+	// dominated Phase 3's hot path at 500K configured / 50 clusters
+	// before M27.
+	clusterStateBuckets := make(map[machine.ClusterID]map[machine.State][]machine.Machine, len(byClusterState))
+	for cl, stateMap := range byClusterState {
+		out := make(map[machine.State][]machine.Machine, len(stateMap))
+		for st, idList := range stateMap {
+			ms := make([]machine.Machine, len(idList))
+			for k, id := range idList {
+				ms[k] = machines[byID[id]]
+			}
+			sort.Slice(ms, func(a, b int) bool {
+				if ms[a].PricePerHour != ms[b].PricePerHour {
+					return ms[a].PricePerHour < ms[b].PricePerHour
+				}
+				if ms[a].AssignedReclamationPenaltyDollars != ms[b].AssignedReclamationPenaltyDollars {
+					return ms[a].AssignedReclamationPenaltyDollars > ms[b].AssignedReclamationPenaltyDollars
+				}
+				return ms[a].ID < ms[b].ID
+			})
+			out[st] = ms
+		}
+		clusterStateBuckets[cl] = out
+	}
+
+	clusterBuckets := make(map[machine.ClusterID]map[machine.State]map[string][]machine.Machine)
+	for cl, stateMap := range byClusterState {
+		stOut := make(map[machine.State]map[string][]machine.Machine, len(stateMap))
+		for st, idList := range stateMap {
+			byType := make(map[string][]machine.Machine)
+			for _, id := range idList {
+				m := machines[byID[id]]
+				if m.Profile.InstanceType == "" {
+					continue
+				}
+				byType[m.Profile.InstanceType] = append(byType[m.Profile.InstanceType], m)
+			}
+			for instType := range byType {
+				ms := byType[instType]
+				sort.Slice(ms, func(a, b int) bool {
+					if ms[a].PricePerHour != ms[b].PricePerHour {
+						return ms[a].PricePerHour < ms[b].PricePerHour
+					}
+					return ms[a].ID < ms[b].ID
+				})
+				byType[instType] = ms
+			}
+			stOut[st] = byType
+		}
+		clusterBuckets[cl] = stOut
+	}
+
 	return &Snapshot{
-		machines:                 machines,
-		byID:                     byID,
-		byState:                  byState,
-		byClusterState:           byClusterState,
-		byStateInstanceTp:        byStateInstanceTp,
-		bucketsByStateInstanceTp: buckets,
+		machines:                        machines,
+		byID:                            byID,
+		byState:                         byState,
+		byClusterState:                  byClusterState,
+		byStateInstanceTp:               byStateInstanceTp,
+		bucketsByStateInstanceTp:        buckets,
+		bucketsByClusterStateInstanceTp: clusterBuckets,
+		bucketsByClusterState:           clusterStateBuckets,
 	}
 }
 
@@ -453,6 +516,27 @@ type Snapshot struct {
 	// tiebreak. Multi-type pools still merge across types at allocator
 	// build time.
 	bucketsByStateInstanceTp map[machine.State]map[string][]machine.Machine
+
+	// bucketsByClusterStateInstanceTp is the per-(cluster, state,
+	// instance-type) bucket Phase 3 reads to find reclaim candidates
+	// without walking the full cluster's configured slice when groups
+	// pin to instance types. M27. At cluster=50, types=5, configured=
+	// 500K the cluster's per-type bucket is ~2K instead of ~10K — a 5×
+	// reduction in MatchProfile calls in the inner reclaim loop.
+	//
+	// Pre-sorted by the same (price asc, ID asc) order as
+	// bucketsByStateInstanceTp so Phase 3's keep-priority sort can
+	// skip the resort when pinned. Mutators MUST NOT modify the
+	// returned slice.
+	bucketsByClusterStateInstanceTp map[machine.ClusterID]map[machine.State]map[string][]machine.Machine
+
+	// bucketsByClusterState is the per-(cluster, state) bucket
+	// pre-sorted by Phase 3's keep-priority order
+	// (PricePerHour asc, AssignedReclamationPenaltyDollars desc, ID asc).
+	// M27 hot path: replaces a per-call ListByClusterState alloc + sort
+	// with a shared-slice read. Mutators MUST NOT modify the returned
+	// slice.
+	bucketsByClusterState map[machine.ClusterID]map[machine.State][]machine.Machine
 }
 
 // ListByStateInstanceType returns machines in the given state matching
@@ -469,6 +553,25 @@ type Snapshot struct {
 // Returns nil if no machines match.
 func (s *Snapshot) ListByStateInstanceType(state machine.State, instanceType string) []machine.Machine {
 	byType := s.bucketsByStateInstanceTp[state]
+	if byType == nil {
+		return nil
+	}
+	return byType[instanceType]
+}
+
+// ListByClusterStateInstanceType returns machines in the given
+// (cluster, state, instance-type) bucket. M27 fast path for Phase 3
+// when groups pin to a single instance type — caller avoids a per-
+// cluster O(N) walk + N MatchProfile checks against off-type machines.
+//
+// Returned slice is the shared, pre-sorted bucket; caller MUST NOT
+// mutate. Returns nil if no machines match.
+func (s *Snapshot) ListByClusterStateInstanceType(cluster machine.ClusterID, state machine.State, instanceType string) []machine.Machine {
+	byState := s.bucketsByClusterStateInstanceTp[cluster]
+	if byState == nil {
+		return nil
+	}
+	byType := byState[state]
 	if byType == nil {
 		return nil
 	}
@@ -534,6 +637,31 @@ func (s *Snapshot) ListByClusterState(cluster machine.ClusterID, state machine.S
 		out = append(out, s.machines[s.byID[id]])
 	}
 	return out
+}
+
+// ClusterIDs returns the set of cluster IDs that own at least one
+// machine in any state (Configured / Idle / etc.). M27 fast path —
+// avoids the per-cycle walk of every configured machine just to learn
+// the set of clusters present.
+func (s *Snapshot) ClusterIDs() map[machine.ClusterID]struct{} {
+	out := make(map[machine.ClusterID]struct{}, len(s.byClusterState))
+	for cl := range s.byClusterState {
+		out[cl] = struct{}{}
+	}
+	return out
+}
+
+// SortedClusterStateBucket returns the cluster's machines in the given
+// state, pre-sorted by Phase 3's keep-priority order (price asc,
+// reclamation_penalty desc, ID asc). Returned slice is the shared
+// pre-built bucket; caller MUST NOT mutate. Returns nil if no
+// machines match.
+func (s *Snapshot) SortedClusterStateBucket(cluster machine.ClusterID, state machine.State) []machine.Machine {
+	byState := s.bucketsByClusterState[cluster]
+	if byState == nil {
+		return nil
+	}
+	return byState[state]
 }
 
 // CountByClusterState returns the count of machines for the cluster in
