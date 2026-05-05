@@ -1,0 +1,52 @@
+{
+  "runId": "20260505-174845-failover-leader-kill",
+  "profile": "failover-leader-kill",
+  "target": {
+    "context": "admin@bigfleet-leaderkill2",
+    "kind": "unknown"
+  },
+  "cost": {
+    "estimatedUsd": 0.21,
+    "hours": 0.5
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000,
+    "shardReplicas": 1,
+    "seedMachinesPerShard": 0,
+    "aggregateInventory": 0
+  },
+  "metrics": {
+    "coordinatorApplyErrorRate": -1,
+    "coordinatorApplyOpsPerSec": 0,
+    "coordinatorPendingMax": 0,
+    "coordinatorTermChanges15m": 0,
+    "loadgenCRsActive": 50000,
+    "loadgenCRsCreatedPerSec": 50,
+    "operatorAckP99Seconds": 0.07885656565656564,
+    "operatorOutboxDropsPerSec": 0,
+    "operatorRollupP99Seconds": 0.013630400000000011,
+    "shardCycleDurationP99Seconds": 0.015843235704323572,
+    "shardInventoryMinMaxRatio": -1,
+    "shardPhase1P99Seconds": 0.015556047430830035,
+    "shardPhase2P99Seconds": 0.0009913182423435419,
+    "shardPhase3P99Seconds": 0.0009906586826347304,
+    "shardPhaseExecuteP99Seconds": -1,
+    "shardPhaseReconcileP99Seconds": 0.0009900000000000002,
+    "shardProvisioningLatencyP50Seconds": -1,
+    "shardProvisioningLatencyP99Seconds": -1,
+    "shardShortfalls": 3,
+    "shardsReportingCycle": 1
+  },
+  "runnerActions": [
+    {
+      "action": "kill-coordinator-leader",
+      "atSeconds": 600,
+      "firedAt": "2026-05-05T17:59:28Z",
+      "assertion": "coordinator_raft_term advances by ≥1 within 60s",
+      "asserted": true
+    }
+  ],
+  "passed": true
+}
