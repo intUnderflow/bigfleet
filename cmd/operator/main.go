@@ -51,6 +51,7 @@ func run(args []string) error {
 	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
 	ackConcurrency := fs.Int("ack-concurrency", 16, "max parallel CR Pending→Acknowledged status writes per rollup")
 	rollupInterval := fs.Duration("rollup-interval", 0, "interval between rollups; 0 means use the operator default (10s)")
+	bootstrapTemplateFile := fs.String("bootstrap-template-file", "", "path to a Go text/template file for kubelet userdata. Context: .ClusterID, .Requirements ([]{Key, Operator, Values}). Empty → use the built-in stub renderer (M21).")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -78,12 +79,18 @@ func run(args []string) error {
 		return fmt.Errorf("kube client: %w", err)
 	}
 
+	bootstrapRenderer, err := operator.NewFileTemplateRenderer(*bootstrapTemplateFile)
+	if err != nil {
+		return err
+	}
+
 	op, err := operator.New(operator.Config{
 		ClusterID:              machine.ClusterID(*clusterID),
 		ShardAddress:           *shardAddr,
 		KubeClient:             kc,
 		AcknowledgeConcurrency: *ackConcurrency,
 		RollupInterval:         *rollupInterval,
+		BootstrapTemplate:      bootstrapRenderer,
 		Logger:                 logger,
 	})
 	if err != nil {

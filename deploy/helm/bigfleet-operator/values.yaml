@@ -37,3 +37,27 @@ rbac:
 serviceAccount:
   create: true
   name: ""
+
+# M21 bootstrap-template configuration. When non-empty, the chart
+# renders the value as a ConfigMap and mounts it into the operator
+# pod; the operator parses it as a Go text/template and runs it on
+# every BootstrapRequest. Template context (mirrors the renderer's
+# input):
+#
+#   {{ .ClusterID }}
+#   {{ range .Requirements }}{{ .Key }} {{ .Operator }} {{ .Values }}{{ end }}
+#
+# Example:
+#
+#   bootstrapTemplate: |
+#     #cloud-config
+#     write_files:
+#       - path: /etc/bigfleet/cluster-id
+#         content: {{ .ClusterID }}
+#     runcmd:
+#       - kubeadm join --token=… --discovery-token-ca-cert-hash=…
+#
+# Empty / unset → the operator falls back to the built-in stub
+# renderer (no userdata). Embedders that supply a Go callback via
+# Operator.Config.BootstrapTemplate keep working unchanged.
+bootstrapTemplate: ""

@@ -70,6 +70,19 @@ subjects:
     name: {{ include "bigfleet-operator.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
 {{- end }}
+{{- if .Values.bootstrapTemplate }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bigfleet-operator-bootstrap-template
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet-operator.labels" . | nindent 4 }}
+data:
+  bootstrap.tmpl: |
+    {{- .Values.bootstrapTemplate | nindent 4 }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -97,8 +110,26 @@ spec:
             - --cluster-id={{ .Values.clusterID }}
             - --shard-addr={{ .Values.shardAddress }}
             - --metrics-addr=:{{ .Values.metricsPort }}
+            {{- if .Values.bootstrapTemplate }}
+            - --bootstrap-template-file=/etc/bigfleet/bootstrap.tmpl
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}
+          {{- if .Values.bootstrapTemplate }}
+          volumeMounts:
+            - name: bootstrap-template
+              mountPath: /etc/bigfleet
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.bootstrapTemplate }}
+      volumes:
+        - name: bootstrap-template
+          configMap:
+            name: bigfleet-operator-bootstrap-template
+            items:
+              - key: bootstrap.tmpl
+                path: bootstrap.tmpl
+      {{- end }}
