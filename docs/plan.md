@@ -638,6 +638,39 @@ The cap surfaced by M11: a single shard runs out of cycle headroom around 500K m
 
 **Out of scope:** template helpers beyond what `text/template` ships with (no Sprig). Per-cluster bootstrap-template overrides via CRD (operator chart values are per-deployment; cross-cluster overrides are a different design).
 
+### M22. Runner ramp budget that scales with profile size
+**Goal:** stop the 15-min hard-coded ramp budget from being the gate that fails fleet-scale runs. The 1M de-risk landed at 998,975 / 999,000 active CRs (99.898 % vs the 99.9 % bar) when the 15-min budget hit and the runner aborted; active count was still climbing. Empirically the 1M ramp needed ~17 min, the 5M ramp will need ~110 min at the same per-cluster pace.
+
+**Today's formula** (`test/scaletest/cmd/scaletest-runner/main.go`):
+
+```go
+rampBudget := 15 * time.Minute
+if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > rampBudget {
+    rampBudget = t
+}
+```
+
+`max(15 min, durationSeconds×0.5) = 15 min` for every profile with the standard 30-min soak — the formula is a no-op as soon as you're over 30-min soak.
+
+**Scope:**
+1. New `rampBudget` field on the profile YAML (Duration string). Profile authors override directly.
+2. Default formula when profile doesn't set `rampBudget`:
+   ```
+   rampBudget = max(15 min, totalCRs / 750 CR/sec, durationSeconds × 0.5)
+   ```
+   Empirical: the 1M de-risk's 998975 CRs in 900s = ~1110 CR/sec aggregate; sizing budget at 750 CR/sec gives ~1.5× headroom over observed throughput.
+   - dev-5k:    15 min  (already comfortable)
+   - local-50k: 15 min
+   - scaleway-500k: 15 min (was 11 min at 750 CR/sec — bumped to floor)
+   - scaleway-1m:   23 min  (1M / 750 = 22.2 min, rounded)
+   - scaleway-5m:   112 min (5M / 750 = 111 min)
+3. Runner logs the resolved budget at startup so the failure mode "ramp aborted at exactly the budget" is obvious from `runner.log`.
+4. `docs/scaling-guide.md` entry documenting the formula and the empirical CR/sec floor it's based on.
+
+**Validation:** re-run the 1M de-risk on the new defaults; confirm ramp completes inside the resolved budget with margin. Then proceed to M13 (5M) with confidence.
+
+**Out of scope:** dynamic per-cluster pacing (the load-driver's own QPS knob — already configurable). This milestone is just the runner's gate-time, not the load-driver's behaviour.
+
 ---
 
 ## 10. Scalability concerns
