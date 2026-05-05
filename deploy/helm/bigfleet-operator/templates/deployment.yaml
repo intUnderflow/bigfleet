@@ -40,14 +40,20 @@ rules:
   - apiGroups: ["bigfleet.lucy.sh"]
     resources: ["availablecapacities"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Read nodes / pods for the reclaim handler's cordon / kubelet
-  # graceful-shutdown signalling.
+  # Read nodes / pods + write the cordon (Spec.Unschedulable = true)
+  # in the M20 reclaim handler.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # M20: evict non-DaemonSet pods via the policy/v1 eviction
+  # subresource. Eviction is the API path that respects
+  # PodDisruptionBudgets — direct pod-delete bypasses PDBs.
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
