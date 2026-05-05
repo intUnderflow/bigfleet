@@ -14,6 +14,7 @@ import (
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -21,6 +22,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+
+	"sigs.k8s.io/yaml"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/controller/cr"
@@ -38,8 +41,14 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster or $KUBECONFIG)")
 	metricsAddr := fs.String("metrics-addr", ":8080", "Prometheus metrics listen address (\"0\" disables)")
+	defaultsPath := fs.String("priority-class-defaults", "", "path to a YAML file mapping PriorityClass name → {interruptionPenalty, reclamationPenalty}. Used as fallback when a pod has no bigfleet.lucy.sh/{interruption,reclamation}-penalty annotation. Empty path → no defaults applied.")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	defaults, err := loadPriorityClassDefaults(*defaultsPath)
+	if err != nil {
+		return fmt.Errorf("priority-class-defaults: %w", err)
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
@@ -70,7 +79,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("manager: %w", err)
 	}
-	if err := cr.AddToManager(mgr); err != nil {
+	if err := cr.AddToManager(mgr, cr.WithPriorityClassDefaults(defaults)); err != nil {
 		return fmt.Errorf("add controller: %w", err)
 	}
 
@@ -78,4 +87,55 @@ func run(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// loadPriorityClassDefaults reads the M16 PriorityClass → penalty
+// fallback file. Format (YAML):
+//
+//	ml-research:
+//	  interruptionPenalty: "8192"
+//	  reclamationPenalty:  "65536"
+//	batch-best-effort:
+//	  interruptionPenalty: "16"
+//	  reclamationPenalty:  "0"
+//
+// Penalties are parsed as Kubernetes resource.Quantity (decimal string).
+// An empty path returns nil (no defaults applied — controller behaves
+// as before M16, annotation-only).
+func loadPriorityClassDefaults(path string) (map[string]cr.PriorityClassDefaults, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // path is operator-supplied at startup
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	type rawEntry struct {
+		InterruptionPenalty string `json:"interruptionPenalty,omitempty"`
+		ReclamationPenalty  string `json:"reclamationPenalty,omitempty"`
+	}
+	raw := map[string]rawEntry{}
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("parse: %w", err)
+	}
+	out := make(map[string]cr.PriorityClassDefaults, len(raw))
+	for name, e := range raw {
+		var d cr.PriorityClassDefaults
+		if e.InterruptionPenalty != "" {
+			q, err := resource.ParseQuantity(e.InterruptionPenalty)
+			if err != nil {
+				return nil, fmt.Errorf("PriorityClass %q interruptionPenalty: %w", name, err)
+			}
+			d.InterruptionPenalty = &q
+		}
+		if e.ReclamationPenalty != "" {
+			q, err := resource.ParseQuantity(e.ReclamationPenalty)
+			if err != nil {
+				return nil, fmt.Errorf("PriorityClass %q reclamationPenalty: %w", name, err)
+			}
+			d.ReclamationPenalty = &q
+		}
+		out[name] = d
+	}
+	return out, nil
 }

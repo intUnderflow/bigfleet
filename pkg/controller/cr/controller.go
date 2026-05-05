@@ -46,11 +46,29 @@ const (
 	crNamePrefix = "cr-pod-"
 )
 
+// PriorityClassDefaults is the per-PriorityClass penalty fallback used
+// when a pod doesn't carry an explicit annotation. Resolution order
+// in buildCRForPod is:
+//  1. pod annotation (bigfleet.lucy.sh/{interruption,reclamation}-penalty)
+//  2. matching PriorityClass default (this map, keyed by Pod.Spec.PriorityClassName)
+//  3. nil (the autoscaler treats absent penalty as 0)
+//
+// M16: the platform team configures these defaults centrally via the
+// helm chart so workload owners don't need to set every annotation.
+type PriorityClassDefaults struct {
+	InterruptionPenalty *resource.Quantity
+	ReclamationPenalty  *resource.Quantity
+}
+
 // Reconciler watches Pods and creates CapacityRequests for unschedulable
 // ones. Add it to a manager via SetupWithManager.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// PriorityClassDefaults maps PriorityClass name → penalty fallback.
+	// Nil / absent → no defaults applied; controller behaves as before
+	// M16 (annotation-only).
+	PriorityClassDefaults map[string]PriorityClassDefaults
 }
 
 // SetupWithManager wires the Reconciler into a controller-runtime
@@ -82,6 +100,27 @@ func WithControllerName(name string) SetupOption {
 	return func(c *setupConfig) { c.name = name }
 }
 
+// WithPriorityClassDefaults supplies the M16 PriorityClass → penalty
+// defaults map. The cmd binary loads it from a YAML config file at
+// startup; tests pass it directly. Empty / nil → no defaults applied.
+func WithPriorityClassDefaults(m map[string]PriorityClassDefaults) AddOption {
+	return func(c *addOptions) { c.defaults = m }
+}
+
+// AddOption customises AddToManager. Distinct from SetupOption so the
+// Reconciler can be configured before SetupWithManager runs.
+type AddOption func(*addOptions)
+
+type addOptions struct {
+	setup    []SetupOption
+	defaults map[string]PriorityClassDefaults
+}
+
+// WithSetupOption forwards a SetupOption through AddToManager.
+func WithSetupOption(o SetupOption) AddOption {
+	return func(c *addOptions) { c.setup = append(c.setup, o) }
+}
+
 // Reconcile is called by controller-runtime for each pod event. We
 // only care about pods where PodScheduled=False, reason=Unschedulable.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -108,7 +147,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	newCR := buildCRForPod(&pod)
+	newCR := r.buildCRForPod(&pod)
 	if err := r.Create(ctx, newCR); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, nil
@@ -120,9 +159,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // AddToManager is the convenience wiring used by cmd/bigfleet-unschedulable-pod-controller.
-func AddToManager(mgr manager.Manager, opts ...SetupOption) error {
-	r := &Reconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}
-	return r.SetupWithManager(mgr, opts...)
+func AddToManager(mgr manager.Manager, opts ...AddOption) error {
+	cfg := addOptions{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	r := &Reconciler{
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		PriorityClassDefaults: cfg.defaults,
+	}
+	return r.SetupWithManager(mgr, cfg.setup...)
 }
 
 // isUnschedulable reports whether the pod has PodScheduled=False with
@@ -154,7 +201,7 @@ func (r *Reconciler) crExistsForPod(ctx context.Context, pod *corev1.Pod) (bool,
 // Currently always succeeds; the error return is reserved for future
 // validation (e.g., rejecting pods with topology terms we cannot yet
 // translate).
-func buildCRForPod(pod *corev1.Pod) *bfv1alpha1.CapacityRequest {
+func (r *Reconciler) buildCRForPod(pod *corev1.Pod) *bfv1alpha1.CapacityRequest {
 	requirements := requirementsFromPod(pod)
 	resources := resourcesFromPod(pod)
 
@@ -178,11 +225,35 @@ func buildCRForPod(pod *corev1.Pod) *bfv1alpha1.CapacityRequest {
 			Resources:           resources,
 			Priority:            podPriority(pod),
 			TopologySpread:      topologySpreadFromPod(pod),
-			InterruptionPenalty: penaltyFromAnnotation(pod.Annotations[AnnotationInterruptionPenalty]),
-			ReclamationPenalty:  penaltyFromAnnotation(pod.Annotations[AnnotationReclamationPenalty]),
+			InterruptionPenalty: r.resolveInterruptionPenalty(pod),
+			ReclamationPenalty:  r.resolveReclamationPenalty(pod),
 		},
 	}
 	return cr
+}
+
+// resolveInterruptionPenalty applies the M16 fallback chain:
+//  1. pod annotation
+//  2. PriorityClass default for pod.Spec.PriorityClassName
+//  3. nil (autoscaler treats as 0)
+func (r *Reconciler) resolveInterruptionPenalty(pod *corev1.Pod) *resource.Quantity {
+	if v := penaltyFromAnnotation(pod.Annotations[AnnotationInterruptionPenalty]); v != nil {
+		return v
+	}
+	if def, ok := r.PriorityClassDefaults[pod.Spec.PriorityClassName]; ok {
+		return def.InterruptionPenalty
+	}
+	return nil
+}
+
+func (r *Reconciler) resolveReclamationPenalty(pod *corev1.Pod) *resource.Quantity {
+	if v := penaltyFromAnnotation(pod.Annotations[AnnotationReclamationPenalty]); v != nil {
+		return v
+	}
+	if def, ok := r.PriorityClassDefaults[pod.Spec.PriorityClassName]; ok {
+		return def.ReclamationPenalty
+	}
+	return nil
 }
 
 func requirementsFromPod(pod *corev1.Pod) []corev1.NodeSelectorRequirement {

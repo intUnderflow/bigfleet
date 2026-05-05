@@ -202,3 +202,96 @@ func TestReconciler_PenaltyAnnotations(t *testing.T) {
 		t.Errorf("reclamation penalty not propagated")
 	}
 }
+
+// TestReconciler_PriorityClassDefaults_Fallback: M16 contract — when
+// a pod has no penalty annotation, the controller falls back to the
+// PriorityClass-defaults map. Pod annotation still wins when set.
+func TestReconciler_PriorityClassDefaults_Fallback(t *testing.T) {
+	t.Parallel()
+	defaults := map[string]cr.PriorityClassDefaults{
+		"ml-research": {
+			InterruptionPenalty: ptrQuantity("8192"),
+			ReclamationPenalty:  ptrQuantity("65536"),
+		},
+		"batch-best-effort": {
+			InterruptionPenalty: ptrQuantity("16"),
+		},
+	}
+
+	cases := []struct {
+		name              string
+		priorityClassName string
+		annotations       map[string]string
+		wantInterruption  string // "" = nil
+		wantReclamation   string
+	}{
+		{
+			name:              "PriorityClass default applies when no annotation",
+			priorityClassName: "ml-research",
+			wantInterruption:  "8192",
+			wantReclamation:   "65536",
+		},
+		{
+			name:              "annotation overrides PriorityClass default",
+			priorityClassName: "ml-research",
+			annotations: map[string]string{
+				cr.AnnotationInterruptionPenalty: "1",
+			},
+			wantInterruption: "1",
+			wantReclamation:  "65536",
+		},
+		{
+			name:              "PriorityClass default with only one penalty leaves the other nil",
+			priorityClassName: "batch-best-effort",
+			wantInterruption:  "16",
+			wantReclamation:   "", // not in defaults map for this PC
+		},
+		{
+			name:              "unknown PriorityClass falls all the way through to nil",
+			priorityClassName: "no-such-class",
+			wantInterruption:  "",
+			wantReclamation:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := unschedulablePod("trainer-"+tc.name, true, 8)
+			pod.Spec.PriorityClassName = tc.priorityClassName
+			if tc.annotations != nil {
+				pod.Annotations = tc.annotations
+			}
+			c, scheme := newFakeClient(t, pod)
+			r := &cr.Reconciler{Client: c, Scheme: scheme, PriorityClassDefaults: defaults}
+
+			reconcile(t, r, pod)
+
+			var list bfv1alpha1.CapacityRequestList
+			if err := c.List(context.Background(), &list); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(list.Items) != 1 {
+				t.Fatalf("CRs created = %d, want 1", len(list.Items))
+			}
+			got := list.Items[0]
+			if tc.wantInterruption == "" {
+				if got.Spec.InterruptionPenalty != nil {
+					t.Errorf("InterruptionPenalty = %v, want nil", got.Spec.InterruptionPenalty)
+				}
+			} else if got.Spec.InterruptionPenalty == nil || got.Spec.InterruptionPenalty.String() != tc.wantInterruption {
+				t.Errorf("InterruptionPenalty = %v, want %q", got.Spec.InterruptionPenalty, tc.wantInterruption)
+			}
+			if tc.wantReclamation == "" {
+				if got.Spec.ReclamationPenalty != nil {
+					t.Errorf("ReclamationPenalty = %v, want nil", got.Spec.ReclamationPenalty)
+				}
+			} else if got.Spec.ReclamationPenalty == nil || got.Spec.ReclamationPenalty.String() != tc.wantReclamation {
+				t.Errorf("ReclamationPenalty = %v, want %q", got.Spec.ReclamationPenalty, tc.wantReclamation)
+			}
+		})
+	}
+}
+
+func ptrQuantity(s string) *resource.Quantity {
+	q := resource.MustParse(s)
+	return &q
+}

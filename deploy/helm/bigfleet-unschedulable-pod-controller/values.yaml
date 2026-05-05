@@ -21,3 +21,24 @@ rbac:
 serviceAccount:
   create: true
   name: ""
+
+# M16 PriorityClass → penalty defaults. Applied as fallback when a pod
+# lacks bigfleet.lucy.sh/{interruption,reclamation}-penalty annotation.
+# Pod annotation always wins; pods with no matching PriorityClass and
+# no annotation get nil penalties (autoscaler treats as 0).
+#
+# Penalties are decimal strings parsed as Kubernetes resource.Quantity.
+# Powers of 2 from $0.50 to $10M are the documented cost-policy lever.
+#
+# Example:
+#
+#   priorityClassDefaults:
+#     ml-research:
+#       interruptionPenalty: "8192"
+#       reclamationPenalty:  "65536"
+#     batch-best-effort:
+#       interruptionPenalty: "16"
+#       reclamationPenalty:  "0"
+#
+# Empty / unset → no defaults applied (pre-M16 behaviour).
+priorityClassDefaults: {}

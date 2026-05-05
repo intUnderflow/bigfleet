@@ -38,6 +38,19 @@ subjects:
     name: {{ include "bigfleet-cr-controller.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
 {{- end }}
+{{- if .Values.priorityClassDefaults }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bigfleet-priority-class-defaults
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet-cr-controller.labels" . | nindent 4 }}
+data:
+  defaults.yaml: |
+    {{- toYaml .Values.priorityClassDefaults | nindent 4 }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -63,8 +76,26 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --metrics-addr=:{{ .Values.metricsPort }}
+            {{- if .Values.priorityClassDefaults }}
+            - --priority-class-defaults=/etc/bigfleet/priority-class-defaults.yaml
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}
+          {{- if .Values.priorityClassDefaults }}
+          volumeMounts:
+            - name: priority-class-defaults
+              mountPath: /etc/bigfleet
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.priorityClassDefaults }}
+      volumes:
+        - name: priority-class-defaults
+          configMap:
+            name: bigfleet-priority-class-defaults
+            items:
+              - key: defaults.yaml
+                path: priority-class-defaults.yaml
+      {{- end }}
