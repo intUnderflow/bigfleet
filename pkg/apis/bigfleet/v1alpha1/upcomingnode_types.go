@@ -15,7 +15,19 @@ const (
 	UpcomingNodeLaunched     UpcomingNodePhase = "Launched"
 	UpcomingNodeRegistered   UpcomingNodePhase = "Registered"
 	UpcomingNodeReady        UpcomingNodePhase = "Ready"
-	UpcomingNodeFailed       UpcomingNodePhase = "Failed"
+	// UpcomingNodeDraining is set while the shard is draining workloads
+	// off the node (machine state == DRAINING). M14: workloads that
+	// `kubectl get upcomingnodes` during a Reclaim see this phase
+	// during the drain window.
+	UpcomingNodeDraining UpcomingNodePhase = "Draining"
+	// UpcomingNodeDrained is the terminal phase set when drain
+	// completes — observed as a NodeStateUpdate transition from
+	// DRAINING back to IDLE. Distinguishes a freshly-released machine
+	// from a fresh Provisioning Idle. The operator may delete the CR
+	// shortly after, but the Drained window gives observers a final
+	// "the machine has been released from this workload" signal.
+	UpcomingNodeDrained UpcomingNodePhase = "Drained"
+	UpcomingNodeFailed  UpcomingNodePhase = "Failed"
 )
 
 // UpcomingNodeSpec describes the node that's coming online. Set when the

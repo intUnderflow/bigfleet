@@ -1,6 +1,6 @@
 {
-  "runId": "20260505-000833-scaleway-500k",
-  "profile": "scaleway-500k",
+  "runId": "20260505-000833-scaleway-1m",
+  "profile": "scaleway-1m",
   "target": {
     "context": "admin@bigfleet-2shard",
     "kind": "unknown"

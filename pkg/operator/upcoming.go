@@ -54,6 +54,12 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		return fmt.Errorf("get UpcomingNode: %w", getErr)
 	}
 
+	// Drained is the terminal post-drain phase — observed as a state
+	// transition from DRAINING back to IDLE. Without the previous-phase
+	// check we'd mis-map this as Launched (the default IDLE mapping).
+	if phase == bfv1alpha1.UpcomingNodeLaunched && existing.Status.Phase == bfv1alpha1.UpcomingNodeDraining {
+		phase = bfv1alpha1.UpcomingNodeDrained
+	}
 	existing.Status.Phase = phase
 	if u.GetNodeName() != "" {
 		existing.Status.NodeRef = &corev1.ObjectReference{Kind: "Node", Name: u.GetNodeName()}
@@ -189,6 +195,8 @@ func upcomingNodePhase(state pb.MachineState) bfv1alpha1.UpcomingNodePhase {
 		return bfv1alpha1.UpcomingNodeRegistered
 	case pb.MachineState_MACHINE_STATE_CONFIGURED:
 		return bfv1alpha1.UpcomingNodeReady
+	case pb.MachineState_MACHINE_STATE_DRAINING:
+		return bfv1alpha1.UpcomingNodeDraining
 	case pb.MachineState_MACHINE_STATE_FAILED:
 		return bfv1alpha1.UpcomingNodeFailed
 	}

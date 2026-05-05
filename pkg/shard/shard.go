@@ -463,7 +463,25 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	for st := machine.StateSpeculative; st <= machine.StateFailed; st++ {
 		metrics.ShardInventoryMachines.WithLabelValues(st.String()).Set(float64(snap.CountByState(st)))
 	}
-	metrics.ShardShortfalls.Set(float64(s.ShortfallCount()))
+	if n := s.ShortfallCount(); n > 0 {
+		// Operational signal for on-call runbooks: a non-zero count
+		// every cycle should leave a "shortfall" string in the shard
+		// log so `kubectl logs ... | grep -i shortfall` returns the
+		// recent unresolved-demand history. Top-3 oldest shortfall
+		// fingerprints are the most actionable for triage. M14.
+		top := s.Shortfalls()
+		if len(top) > 3 {
+			top = top[:3]
+		}
+		fps := make([]string, 0, len(top))
+		for _, sf := range top {
+			fps = append(fps, sf.Profile.Fingerprint())
+		}
+		s.log.Warn("shortfalls detected", "count", n, "top_fingerprints", fps)
+		metrics.ShardShortfalls.Set(float64(n))
+	} else {
+		metrics.ShardShortfalls.Set(0)
+	}
 	if s.cfg.OnActions != nil {
 		s.cfg.OnActions(all)
 	}
