@@ -122,6 +122,16 @@ type profile struct {
 	// 0 disables.
 	MicroBurstRatePerMinute float64 `yaml:"microBurstRatePerMinute"`
 	MicroBurstFactor        float64 `yaml:"microBurstFactor"`
+
+	// Mode (M43a / Item 10): "" or "cr" emit CapacityRequests
+	// directly (the legacy harness shape — bypasses the user-facing
+	// Pod → CR loop). "pods" emits Pods with archetype-shaped
+	// nodeAffinity + resources, leaving the rest of the production
+	// loop (mark-Unschedulable, unschedulable-pod-controller, Node
+	// creation, Pod binding) to the bigfleet-scaletest-pod-shim
+	// (M43b). With no shim wired, Pod-mode just leaves Pods Pending
+	// forever — that's expected during M43a's standalone landing.
+	Mode string `yaml:"mode"`
 }
 
 type burstSpec struct {
@@ -579,9 +589,13 @@ func (d *driver) reconcileTarget(ctx context.Context, target int) {
 func (d *driver) createOne(ctx context.Context) error {
 	d.mu.Lock()
 	d.seq++
-	name := fmt.Sprintf("%s-cr-%06d", d.clusterID, d.seq)
 	d.mu.Unlock()
 
+	if d.prof.Mode == "pods" {
+		return d.createOnePod(ctx)
+	}
+
+	name := fmt.Sprintf("%s-cr-%06d", d.clusterID, d.seq)
 	cr, archName := d.buildCRWithArchetype(name)
 	if err := d.k.Create(ctx, cr); err != nil {
 		return err
@@ -592,6 +606,160 @@ func (d *driver) createOne(ctx context.Context) error {
 	created.Inc()
 	active.Set(float64(d.activeCount()))
 	return nil
+}
+
+// createOnePod is the M43a path: emit a Pod (not a CR) with archetype-
+// shaped affinity + resources + annotations. Pods stay Pending until
+// M43b wires the bigfleet-scaletest-pod-shim that marks them
+// Unschedulable and lets bigfleet-unschedulable-pod-controller emit
+// CRs from there.
+func (d *driver) createOnePod(ctx context.Context) error {
+	name := fmt.Sprintf("%s-pod-%06d", d.clusterID, d.seq)
+	pod, archName := d.buildPodWithArchetype(name)
+	if err := d.k.Create(ctx, pod); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.known[name] = crMeta{archetype: archName}
+	d.mu.Unlock()
+	created.Inc()
+	active.Set(float64(d.activeCount()))
+	return nil
+}
+
+// buildPodWithArchetype mirrors buildCRWithArchetype but emits a Pod.
+// Returns the Pod plus the archetype name (or "" for the legacy
+// single-shape fallback).
+func (d *driver) buildPodWithArchetype(name string) (*corev1.Pod, string) {
+	if a := d.picker.Pick(d.rng); a != nil {
+		return d.buildArchetypePod(name, a), a.Name
+	}
+	return d.buildLegacyPod(name), ""
+}
+
+// buildArchetypePod constructs a Pod with the archetype's affinity
+// terms, resources, priority, penalty annotations, and (for sameRack
+// archetypes) an OwnerReference to drive the operator's owner→Same
+// translation downstream.
+func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.Pod {
+	terms := []corev1.NodeSelectorRequirement{}
+	if len(a.InstanceTypes) > 0 {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.InstanceTypes...),
+		})
+	}
+	if len(a.Zones) > 0 {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.Zones...),
+		})
+	}
+	for k, v := range a.PickLabels(d.rng) {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      k,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{v},
+		})
+	}
+	resources := corev1.ResourceList{}
+	for k, v := range a.PickSize(d.rng) {
+		resources[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	pri := int32(1000)
+	if len(a.PriorityClasses) > 0 {
+		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
+	}
+	meta := metav1.ObjectMeta{
+		Name:      name,
+		Namespace: "default",
+		Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
+		// Penalty annotations the unschedulable-pod-controller reads
+		// per pkg/controller/cr (M16 — bigfleet.lucy.sh/{interruption,
+		// reclamation}-penalty). Using the archetype values directly
+		// keeps the harness's CR shape identical between Mode=cr and
+		// Mode=pods.
+		Annotations: map[string]string{
+			"bigfleet.lucy.sh/interruption-penalty": formatDollars(a.InterruptionPenalty),
+			"bigfleet.lucy.sh/reclamation-penalty":  formatDollars(a.ReclamationPenalty),
+		},
+	}
+	if a.SameRack {
+		gid := d.allocateOrGetGroupUID(a)
+		meta.OwnerReferences = []metav1.OwnerReference{{
+			APIVersion: "scaletest.bigfleet/v1alpha1",
+			Kind:       "ScaletestWorkload",
+			Name:       fmt.Sprintf("%s-group-%s", a.Name, gid),
+			UID:        types.UID(gid),
+		}}
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: meta,
+		Spec: corev1.PodSpec{
+			Priority: &pri,
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "registry.k8s.io/pause:3.10",
+				Resources: corev1.ResourceRequirements{
+					Requests: resources,
+				},
+			}},
+			Affinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+							MatchExpressions: terms,
+						}},
+					},
+				},
+			},
+		},
+	}
+	return pod
+}
+
+func (d *driver) buildLegacyPod(name string) *corev1.Pod {
+	pri := int32(1000)
+	if len(d.prof.PriorityClasses) > 0 {
+		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Annotations: map[string]string{
+				"bigfleet.lucy.sh/interruption-penalty": "8192",
+				"bigfleet.lucy.sh/reclamation-penalty":  "65536",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Priority: &pri,
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "registry.k8s.io/pause:3.10",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						"nvidia.com/gpu": resource.MustParse("8"),
+					},
+				},
+			}},
+			Affinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+							MatchExpressions: []corev1.NodeSelectorRequirement{{
+								Key:      "node.kubernetes.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"a3-highgpu-8g"},
+							}},
+						}},
+					},
+				},
+			},
+		},
+	}
 }
 
 // buildCRWithArchetype is buildCR plus the archetype name (or "" for
@@ -754,8 +922,13 @@ func formatDollars(v float64) string {
 }
 
 func (d *driver) deleteOne(ctx context.Context, name string) error {
-	cr := &bfv1alpha1.CapacityRequest{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
-	if err := d.k.Delete(ctx, cr); err != nil && !errIsNotFound(err) {
+	var obj client.Object
+	if d.prof.Mode == "pods" {
+		obj = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	} else {
+		obj = &bfv1alpha1.CapacityRequest{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	}
+	if err := d.k.Delete(ctx, obj); err != nil && !errIsNotFound(err) {
 		return err
 	}
 	d.mu.Lock()
