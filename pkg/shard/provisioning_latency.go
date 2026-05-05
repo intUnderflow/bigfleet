@@ -44,12 +44,24 @@ func (s *Shard) observeRolledUpDemand(cluster machine.ClusterID, ns []needs.Need
 // in a rollup. Returns silently if no first-observed time exists (the
 // fingerprint may have been pruned, or this transition isn't tied to
 // rolled-up demand).
+//
+// Observe-once-and-delete semantics: after recording a sample, the
+// per-(cluster, fingerprint) tracking entry is removed so subsequent
+// Configures don't keep resampling against the same long-stale
+// timestamp. observeRolledUpDemand re-inserts the entry on the next
+// rollup that still sees demand for this fingerprint, so the next
+// sample measures the (rollup → Configure) latency for the freshly
+// re-observed demand. Without this delete, every Configure during
+// a 30-minute soak observed ~the soak duration as latency, saturating
+// the histogram's +Inf bucket and reducing the metric to a constant
+// 327.68s in summary.json.
 func (s *Shard) observeProvisioningLatency(cluster machine.ClusterID, fingerprint string) {
 	s.demandMu.Lock()
+	defer s.demandMu.Unlock()
 	t, ok := s.demandObservedAt[cluster][fingerprint]
-	s.demandMu.Unlock()
 	if !ok {
 		return
 	}
 	metrics.ShardProvisioningLatency.Observe(time.Since(t).Seconds())
+	delete(s.demandObservedAt[cluster], fingerprint)
 }

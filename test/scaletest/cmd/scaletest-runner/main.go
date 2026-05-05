@@ -239,7 +239,7 @@ func run(args []string) error {
 	}
 	res.Scale.SeedMachinesPerShard = prof.Shard.SeedMachines
 	res.Scale.AggregateInventory = res.Scale.ShardReplicas * res.Scale.SeedMachinesPerShard
-	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs)
+	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas)
 
 	summary := filepath.Join(*output, "summary.json")
 	b, err := json.MarshalIndent(res, "", "  ")
@@ -488,6 +488,37 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardPhase2P99Seconds":         `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase2"}[5m]))))`,
 		"shardPhase3P99Seconds":         `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="phase3"}[5m]))))`,
 		"shardPhaseExecuteP99Seconds":   `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket{phase="execute"}[5m]))))`,
+		// Multi-shard health: how many distinct shard pods reported a
+		// cycle in the last 5 min. The runner gates this against
+		// shard.replicas so a crash-looping shard can't hide behind
+		// max-by-pod aggregation (max would just exclude it).
+		"shardsReportingCycle": `count(count by (pod) (bigfleet_shard_cycle_duration_seconds_count{component="shard"}))`,
+		// Coordinator health (gated). apply_total error rate must be ~0;
+		// a non-zero rate means Raft Apply is failing or the FSM is
+		// rejecting commands. Observed during M12 self-registration as
+		// "fsm_error" when AddShard hits ErrShardExists, but the
+		// grpc_server.go handler swallows those — non-zero error here
+		// is a real bug.
+		"coordinatorApplyErrorRate": `sum(rate(bigfleet_coordinator_apply_total{outcome=~"error|fsm_error"}[5m])) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1)`,
+		// Operator outbox drops (gated). The session-outbox bounded queue
+		// drops messages on overflow; under heavy bootstrap load this
+		// can lose BootstrapBlobResponse / ReclaimAck. Should be 0/sec
+		// throughout the soak.
+		"operatorOutboxDropsPerSec": `sum(rate(bigfleet_operator_outbox_dropped_total[5m]))`,
+		// Coordinator pending-instructions ceiling (informational): a
+		// rising max means the coordinator is dispatching faster than
+		// the shards can ack. Instruction queues are bounded by the
+		// pending map; stable means the loop is closing.
+		"coordinatorPendingMax": `max(bigfleet_coordinator_pending_instructions)`,
+		// Coordinator term-change count over the last 15 min
+		// (informational). 0 means the leader was stable; > 0 means
+		// re-election under load.
+		"coordinatorTermChanges15m": `max(changes(bigfleet_coordinator_raft_term[15m]))`,
+		// Per-shard inventory balance (informational): min/max ratio
+		// across shard pods. Each shard should hold roughly the same
+		// number of seeded machines; significant skew suggests a shard
+		// failed seed-time partially.
+		"shardInventoryMinMaxRatio": `min(sum by (pod) (bigfleet_shard_inventory_machines)) / clamp_min(max(sum by (pod) (bigfleet_shard_inventory_machines)), 1)`,
 	}
 	out := make(map[string]float64, len(queries))
 	for k, q := range queries {
@@ -583,7 +614,7 @@ func kArgs(kubeconfig string, rest ...string) []string {
 //     of wall-clock just for the writes; 12 s allows ~20 % run-to-run
 //     variance. Tighten when the operator gains batched status writes
 //     or its QPS budget is raised on profile.
-func pass(m map[string]float64, totalCRs int) (bool, string) {
+func pass(m map[string]float64, totalCRs, shardReplicas int) (bool, string) {
 	// Sustained-load floor: the run is invalid if loadgenCRsActive
 	// drifted away from the target during the soak. We already gate
 	// at the steady-state ramp, but a ramp that just-barely-passed
@@ -598,6 +629,15 @@ func pass(m map[string]float64, totalCRs int) (bool, string) {
 			}
 		}
 	}
+	// Every configured shard must have published cycle metrics. Without
+	// this gate, a crash-looping shard is invisible to the per-pod
+	// max(by pod) aggregation used for cycle p99 (max just excludes
+	// the missing pod).
+	if shardReplicas > 0 {
+		if v, ok := m["shardsReportingCycle"]; ok && v >= 0 && int(v) < shardReplicas {
+			return false, fmt.Sprintf("shardsReportingCycle %d < shard.replicas %d — at least one shard isn't reporting metrics", int(v), shardReplicas)
+		}
+	}
 	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > 0.1 {
 		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > 100ms SLO", v)
 	}
@@ -606,6 +646,16 @@ func pass(m map[string]float64, totalCRs int) (bool, string) {
 	}
 	if v, ok := m["operatorAckP99Seconds"]; ok && v > 12.0 {
 		return false, fmt.Sprintf("operatorAckP99Seconds %.3fs > 12s SLO", v)
+	}
+	// Coordinator-side gates (M12 onwards: shards self-register, so
+	// coordinator metrics are real signal). FSM Apply errors mean
+	// Raft is rejecting commands or returning errors. Outbox drops
+	// mean the operator session lost frames silently.
+	if v, ok := m["coordinatorApplyErrorRate"]; ok && v > 0.001 {
+		return false, fmt.Sprintf("coordinatorApplyErrorRate %.4f > 0.001 — coordinator FSM is rejecting commands", v)
+	}
+	if v, ok := m["operatorOutboxDropsPerSec"]; ok && v > 0 {
+		return false, fmt.Sprintf("operatorOutboxDropsPerSec %.3f > 0 — operator session-outbox dropped messages", v)
 	}
 	return true, ""
 }
