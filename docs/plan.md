@@ -553,6 +553,48 @@ The cap surfaced by M11: a single shard runs out of cycle headroom around 500K m
 - Kapsule per-zone quota raise.
 - Scale-test profile `scaleway-5m.yaml` defining the target shape above.
 
+### M14. User-stories reconciliation (cheap)
+**Goal:** close the doc-vs-code gaps surfaced by the audit of `docs/user-stories.md`. Each is small enough that grouping makes sense.
+
+**Scope:**
+1. **UpcomingNode drain phases.** `UpcomingNodePhase` enum is currently `Provisioning / Launched / Registered / Ready / Failed`. The user story (and the `bigfleet-shard` lifecycle docs) reference `Draining / Drained`. Add both to the enum and to the operator's `upcomingNodePhase` mapper so reclaim progress is observable via `kubectl get upcomingnodes`.
+2. **Shard shortfall log line.** On-call runbook tells humans to `kubectl logs ... | grep -i shortfall` but no log line in `pkg/shard/` contains that word. Add a structured log on each cycle that emits a non-zero shortfall count (`logger.Warn("shortfalls detected", "count", n, "top", topProfileFingerprints)`).
+3. **CR phase field-selector.** `kubectl --field-selector=status.phase=Pending` for `CapacityRequest` doesn't work — CRDs don't support arbitrary field-selectors without the `selectableFields` declaration. Either add the declaration (Kubernetes ≥1.30 only — bumps minimum supported version) or update the runbook to use jq. Default to the runbook update unless we want to commit to k8s 1.30 as floor.
+
+**Validation:** existing CRD round-trip tests cover (1); a new on-call runbook excerpt in `docs/operator-guide.md` covers (3) once the command is rewritten; (2) is one new log line.
+
+### M15. Coordinator admin RPC surface
+**Goal:** make Mode 2 of `docs/user-stories.md` actually doable. Today's `service Coordinator { rpc ReportShard ... }` has no admin surface; the FSM commands `AssignDomain`, `UnassignDomain`, `RemoveShard`, and the provider-registry operations exist but are only reachable from in-process tests. A platform engineer running BigFleet cannot push a topology-domain assignment through Raft without restarting the coordinator with new bootstrap state.
+
+**Scope:**
+1. New RPCs in `coordinator.proto`: `AssignDomain`, `UnassignDomain`, `RemoveShard`, `ListShards`, `ListDomainAssignments`. Each gated to leader-only with the same `FailedPrecondition` pattern as `ReportShard`.
+2. Authorisation: v1 ships unauthenticated since the coordinator is an internal-only service. Note in the manifest that exposing the coordinator outside the cluster requires a sidecar (mTLS/OIDC). Don't ship in-tree auth.
+3. CLI helper: `cmd/bigfleetctl` (small new binary) wraps the new RPCs so the runbook commands look like `bigfleetctl assign-domain --topology-key=rack --topology-value=r-1 --shard=shard-2`.
+4. Integration test: 3-shard process group; CLI assigns domain → next ReportShard delivers the assignment via existing `CoordinatorInstruction.AssignDomain`.
+
+**Out of scope:** authn / authz beyond "trust the cluster boundary"; cross-region admin commands; CRD-style declarative shard topology (an admin command is fine for v1, declarative is post-v1).
+
+### M16. PriorityClass → penalty defaults
+**Goal:** `interruptionPenalty` and `reclamationPenalty` should have sensible cluster-wide defaults so workloads don't all need annotations. Today the controller (`pkg/controller/cr/controller.go`) reads only `bigfleet.lucy.sh/interruption-penalty` / `bigfleet.lucy.sh/reclamation-penalty` pod annotations; absent annotations → 0 penalties → workloads are arbitrarily preemptable.
+
+**Scope:**
+1. New CRD or Helm values block: `PriorityClassDefaults` mapping PriorityClass name → `{interruptionPenalty, reclamationPenalty}`.
+2. Controller resolves penalty for a Pod as: pod annotation > matching PriorityClass default > 0.
+3. Operator-guide entry showing how a platform team configures the defaults.
+
+**Out of scope:** more complex policy (per-namespace penalty caps, per-team budgets). Those land in M-anything-after.
+
+### M17. Runner failover automation
+**Goal:** make `failover-soak.yaml`'s `runnerActions` block actually do something. Today the runner ignores it; the on-call ritual in `docs/user-stories.md` walks through manually issuing `kubectl delete pod` on the leader during a soak. That's fine pre-release but doesn't catch regressions automatically.
+
+**Scope:**
+1. Runner reads `runnerActions: [{ atSeconds: N, action: K }]` from the profile.
+2. Implement actions: `kill-coordinator-leader` (delete the leader pod), `kill-shard-N` (delete a specific shard pod), `partition-coordinator-from-shard-N` (NetworkPolicy injection / removal). Each with a corresponding "expected outcome" the runner asserts (e.g. session_reconnects ≤ 1 per cluster after kill-leader).
+3. Single dedicated profile per scenario rather than overloading `failover-soak.yaml` (`failover-leader-kill.yaml`, `failover-shard-kill.yaml`, `failover-partition.yaml`).
+4. Runner emits `failures: [...]` in summary.json when an asserted outcome is violated, so the static-stability invariant is regression-checked automatically on every release run.
+
+**Out of scope:** chaos engineering beyond pod kills (no kernel-level fault injection in v1).
+
 ---
 
 ## 10. Scalability concerns
