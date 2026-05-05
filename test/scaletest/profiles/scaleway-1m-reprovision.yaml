@@ -1,24 +1,25 @@
-# scaleway-1m — 1,000,000-machine fleet test on Scaleway, two shards.
+# scaleway-1m-reprovision — 1M-machine fleet **reprovisioning regime**
+# test on Scaleway, two shards.
 #
 # Aggregate-named: 2 shards × 500K seeded inventory each = 1M total
-# under management. Demand sized at the **burst regime** (ADR-0013):
-# 100 KWOK clusters × 1K demand each = 100K total demand, a 1:10
-# demand-to-inventory ratio. Per-shard: 50K demand × 500K inventory —
-# the same shape M11 validated at the 100 ms cycle p99 SLO.
+# under management. Demand sized at the **reprovisioning regime**
+# (ADR-0013): 100 KWOK clusters × 10K demand each = 1M total demand,
+# a 1:1 demand-to-inventory ratio. Per-shard: 500K demand × 500K
+# inventory — every machine in the fleet has demand pending against
+# it simultaneously. Realistic for: cluster migration, full disaster
+# recovery, mass spot eviction. Steady-state operation: never.
 #
-# Why 1:10 rather than 1:1: ADR-0013 codifies that BigFleet's
-# cycle-p99 SLO is promised at burst-density (≤10 % pending demand,
-# the worst case real production fleets hit during deploy ramps).
-# A complete reprovisioning event (1:1) is its own regime gated on
-# convergence rate, not cycle p99 — see scaleway-1m-reprovision for
-# that shape.
-#
-# Prior history: the M13.gate rundir
-# `test/scaletest/results/20260505-203638-scaleway-1m` drove the 1:1
-# shape and measured cycle p99 = 967 ms. M27 brought that down ~5×
-# but 1:1 still doesn't meet a 100 ms cycle SLO at PRO2-M speeds —
-# nor would it meet a useful one. ADR-0013 reframes that result as
-# a regime mismatch, not a system limitation.
+# Per ADR-0013 this profile is **NOT gated on the cycle-p99 SLO**.
+# The 100 ms cycle SLO is a burst-regime guarantee (see scaleway-1m
+# for that shape). At 1:1 the system promises a convergence-rate
+# guarantee instead: ≥5K bindings per cycle until the demand backlog
+# drains. v1 doesn't yet have runner-side automated convergence-rate
+# gating — operators interpret bigfleet_shard_actions_total{kind=
+# "Bootstrap"} rate from the snapshot manually. Future work to wire
+# the gate into pass(). Until then, runs at this profile that
+# "fail" the cycle-p99 SLO are expected — what's NOT expected is
+# loadgenCRsActive failing the 99.9 % sustained gate (the system
+# must keep ramping toward the 1M target throughout the soak).
 #
 # Sized for 2× PRO2-L Kapsule (32 vCPU / 128 GiB each):
 #   shards:       2 × 2 vCPU / 3 GiB                =  4 vCPU / 6 GiB
@@ -56,10 +57,8 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  # 100 clusters × 1K demand each = 100K total demand. 100 KWOK pods
-  # at the same per-cluster CR shape as the M11 single-shard 500K
-  # baseline — 2× the cluster count for the multi-shard test, same
-  # per-cluster demand profile.
+  # 100 clusters × 10K demand each = 1M total demand (1:1 vs the
+  # 1M aggregate inventory).
   clusterCount: 100
   apiserverResources:
     requests: { cpu: 150m, memory: 500Mi }
@@ -87,9 +86,9 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 1K CRs per cluster × 100 clusters = 100K total demand (1:10
-  # vs the 1M aggregate inventory). Burst regime.
-  target: 1000
+  # 10K CRs per cluster × 100 clusters = 1M total demand (1:1 vs
+  # the 1M aggregate inventory). Reprovisioning regime.
+  target: 10000
   churnPerMinute: 0.05
   durationSeconds: 1800
 

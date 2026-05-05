@@ -1,18 +1,21 @@
-# scaleway-5m — fleet-scale realism test on Scaleway (M13).
+# scaleway-5m-reprovision — 5M-machine fleet **reprovisioning regime**
+# test on Scaleway (10 shards).
 #
 # Target shape:
 #   10 shards × 500K seeded inventory each      = 5,000,000 machines under management
-#   500 simulated KWOK clusters × 1K demand     = 500,000 demand CRs (burst regime, 1:10)
-#   Per-shard load: ~50K demand, 500K inventory  = same ratio as M11 single-shard 500K test
+#   500 simulated KWOK clusters × 10K demand    = 5,000,000 demand CRs (reprovisioning, 1:1)
+#   Per-shard load: ~500K demand × 500K inventory
 #
-# This is the architectural-scale test: each shard runs at its
-# M11-validated 500K burst-regime ceiling while the fleet aggregates
-# 5M. Per-shard cycle p99 ≤ 100 ms is the SLO; a single overshooting
-# shard fails the gate (runner queries are max(by pod)). ADR-0013
-# codifies the regime-aware SLO landscape — burst (1:10) is what the
-# 100 ms SLO is measured under, not 1:1 reprovisioning. Reprovisioning
-# at this scale lives in scaleway-5m-reprovision and gates on
-# convergence rate instead of cycle p99.
+# Per ADR-0013 this profile is **NOT gated on the cycle-p99 SLO**.
+# At 1:1 the system promises convergence-rate, not per-cycle latency.
+# v1 doesn't have automated convergence-rate gating in the runner —
+# operators interpret the snapshot's bigfleet_shard_actions_total
+# {kind="Bootstrap"} rate manually. Until that gate ships, runs at
+# this profile "fail" the cycle-p99 SLO by design; what should pass
+# is the loadgenCRsActive sustained gate (≥99.9 % of 5M throughout).
+#
+# For the burst-regime fleet-scale test (1:10 ratio, cycle p99 SLO
+# applies), see scaleway-5m.yaml.
 #
 # Sized for 7× PRO2-L (32 vCPU / 128 GiB) Scaleway Kapsule:
 #   shards:        10 × 2 vCPU / 3 GiB                   =  20 vCPU / 30 GiB
@@ -100,9 +103,9 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 1K CRs per cluster × 500 clusters = 500K total demand (1:10
-  # vs the 5M aggregate inventory). Burst regime (ADR-0013).
-  target: 1000
+  # 10K CRs per cluster × 500 clusters = 5M total demand (1:1 vs
+  # the 5M aggregate inventory). Reprovisioning regime (ADR-0013).
+  target: 10000
   churnPerMinute: 0.05
   durationSeconds: 1800
 

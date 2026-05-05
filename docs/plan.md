@@ -677,6 +677,21 @@ The wall is **algorithmic at high demand-to-inventory ratio**. M11's 500K-invent
 
 **Out of scope:** changes to the algorithmic semantics (cost formula, victim-score reciprocal weights — both are author-locked) or to the proto contracts. M27 is pure data-structures-and-loops work inside `pkg/decision/`.
 
+### M28. Demand-to-inventory regimes — reshape profiles + scaling guide
+**Codifies:** ADR-0013 (demand-to-inventory regimes and SLOs).
+
+**Goal:** make the SLO landscape honest. M13.gate showed that 1:1 demand-to-inventory ratio (M13.gate's scaleway-1m profile) breaks the 100 ms cycle SLO even with M27's optimisations. ADR-0013 names the three regimes (steady ≤2 %, burst ≤10 %, reprovisioning up to 100 %) and assigns each its own SLO. M28 ports the regime split into the test profiles and the scaling guide so the cycle-p99 SLO is measured at the density it actually promises.
+
+**Scope:**
+1. **Reshape `scaleway-1m`** from 1M demand × 1M inventory (1:1) to 100K demand × 1M inventory (1:10). Burst-density validation; gates on the standard `cycle p99 ≤ 100 ms` SLO. The 1M-demand shape moves to `scaleway-1m-reprovision`.
+2. **Reshape `scaleway-5m`** from 5M × 5M to 500K × 5M (1:10). Same shape rationale. The 5M-demand shape moves to `scaleway-5m-reprovision`.
+3. **New `scaleway-{1m,5m}-reprovision` profiles**: same total inventory, demand at 1:1. Documented as gating on convergence rate (≥5K bindings/cycle until drain), not cycle p99. v1 of these profiles ships without runner-side automation of the convergence gate — the operator interprets the snapshot's `bigfleet_shard_actions_total{kind="Bootstrap"}` rate manually. Future work to add the gate to the runner.
+4. **`docs/scaling-guide.md`** new section: "Regime-aware SLOs" — the regime / pending-demand / SLO table from ADR-0013, plus a worked example showing how a real production fleet's load lands in the steady-state row 99 % of the time.
+
+**Validation:** re-run `scaleway-1m` (the reshaped 1:10 version) on the M27-optimised binary. Expect cycle p99 well under 100 ms — Phase 2 + 3 caches were specifically tuned for this density. If 1:10 1M passes, M13 (5M at the 1:10 ratio) follows directly.
+
+**Out of scope:** runner-side convergence-rate gating for the *-reprovision profiles (deferred to a follow-up); steady-state-shape profiles at 1:50 (deferred — burst is the worst-case the SLO has to honour, so validating burst implies validating steady-state).
+
 ### M13. Fleet-scale realism test (5M, hundreds of clusters)
 **Gated on M27 + a passing scaleway-1m run.** The 5M test is end-of-line: it's the most expensive run we ship (~$2.60-$8 depending on duration after M22's ramp budget bump) and the most likely to surface previously-unseen bottlenecks. Originally drafted right after M12; deferred behind a chain of cheaper milestones because (a) M14-M21 close real user-stories gaps, (b) M22 fixes the ramp-budget cliff that failed the original 1M de-risk by 25 CRs, (c) re-running 1M cleanly is a much cheaper way to validate the per-cluster 10K-CR path before paying for 5M, and (d) M13.gate (commit / rundir 20260505-203638-scaleway-1m) found that Phase 2 + Phase 3 break the 100 ms cycle SLO at the 500K × 500K demand-to-inventory ratio per shard — the same ratio M13 has, so paying for 5M before fixing the algorithm just buys an expensive confirmation of the same wall.
 

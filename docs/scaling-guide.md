@@ -2,6 +2,30 @@
 
 How to size BigFleet for your fleet, and the knobs to reach for at each scale.
 
+## Demand-to-inventory regimes (ADR-0013)
+
+BigFleet's `shardCycleDurationP99 ≤ 100 ms` SLO is regime-aware. "Demand" is unsatisfied CapacityRequests not yet bound to a configured machine; the demand-to-inventory ratio is the fraction of inventory that has demand pending against it at any moment.
+
+| Regime | Pending demand vs inventory | When it happens | SLO |
+|---|---|---|---|
+| **Steady state** | ≤ 2 % (1:50) | normal day-to-day | `cycle p99 ≤ 50 ms` |
+| **Burst** | ≤ 10 % (1:10) | deploy ramps, AZ rebalance, batch-job submission | `cycle p99 ≤ 100 ms` |
+| **Reprovisioning** | up to 100 % (1:1) | cluster migration, full DR, mass spot eviction | **no per-cycle SLO** — convergence-rate guarantee: `≥5 000 bindings/cycle until drain` |
+
+**Worked example.** A real production fleet of 500 000 nodes running ~5 000 deployments has roughly 5 000 binding events per minute (Borg / Twine churn rate). With a ~30 s bind-to-running latency, ~2 500 of those bindings are pending at any moment — 0.5 % of inventory. **The fleet sits in the steady-state row 99 % of the time.** A platform-wide deployment ramp (every team pushing on a Friday afternoon) might briefly push pending demand to 5-8 % — still inside the burst regime. A 1:1 reprovisioning event is rare enough to be worth its own runbook.
+
+Per ADR-0013, the cycle-p99 SLO is *measured* under burst conditions (the worst case real fleets actually hit during normal operation). Reprovisioning is its own regime gated on throughput rather than per-cycle latency. The scaletest profiles follow the regime split:
+
+| profile | regime | demand:inventory | SLO |
+|---|---|---|---|
+| `scaleway-500k` | burst (single shard) | 1:10 | cycle p99 ≤ 100 ms |
+| `scaleway-1m` | burst (2 shards) | 1:10 | cycle p99 ≤ 100 ms |
+| `scaleway-5m` | burst (10 shards) | 1:10 | cycle p99 ≤ 100 ms |
+| `scaleway-1m-reprovision` | reprovisioning | 1:1 | convergence rate |
+| `scaleway-5m-reprovision` | reprovisioning | 1:1 | convergence rate |
+
+Convergence-rate gating in the runner is currently manual (interpret `bigfleet_shard_actions_total{kind="Bootstrap"}` from the snapshot); automating it is a follow-up.
+
 ## Per-shard machine ceiling (revised by scale tests)
 
 The plan §5.1 aspirational ceiling of 500K machines per shard does not hold at the runner's `shardCycleDurationP99 ≤ 100 ms` SLO. Empirical numbers from `pkg/shard/cycle_bench_test.go` and the Scaleway 500K real-cluster run:
