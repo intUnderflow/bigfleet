@@ -139,20 +139,42 @@ The shape of the day depends on whether anything is alarming. Most days: nothing
 
 The penalty bucket field on `Profile` is the cost-policy lever. Penalties are quantised to powers of 2 from $0.50 to $10M, so cardinality is bounded and aggregations are stable.
 
-What's in the operator's metrics today:
+The metrics carry the cost dimensions:
 
 ```promql
 # Inventory by lifecycle state across the fleet.
 sum by (state) (bigfleet_shard_inventory_machines)
+
+# Spot vs on-demand vs reserved vs bare-metal mix per shard.
+sum by (capacity_type) (bigfleet_shard_inventory_machines{state=~"Configured|Idle"})
+
+# Penalty-bucket distribution of held capacity — which workloads
+# are anchoring expensive interruption penalties to which capacity
+# class. High-penalty workloads on Spot are the FinOps red flag
+# (Phase 1 should have routed them to OnDemand or Reserved unless
+# the cluster's interruption_probability data is wrong).
+sum by (capacity_type, interruption_penalty_bucket) (
+  bigfleet_shard_inventory_machines{state="Configured"}
+)
+
+# Same dimensional breakdown on the demand side — what the
+# NeedsTable is currently asking for, before any allocation.
+sum by (interruption_penalty_bucket) (bigfleet_shard_demand_machines)
 
 # Per-action throughput from the decision engine — useful for spotting
 # Reclaim or Preempt rates that look out of character.
 sum by (kind) (rate(bigfleet_shard_actions_total[5m]))
 ```
 
-What's *not* yet in the metrics: per-(`interruption_penalty_bucket`, `capacity_type`) breakdowns of inventory or demand. The shard knows these dimensions internally — they're in the `bigfleet_shard_actions_total` action-emit path — but `bigfleet_shard_inventory_machines` only carries the `state` label today, and the NeedsTable doesn't export a per-fingerprint gauge. The full FinOps view (penalty-bucket distributions, spot/on-demand ratio per shard, per-cluster penalty histograms) needs additional instrumentation that's not yet shipped. The shape of those queries lives in [`docs/scaling-guide.md`](scaling-guide.md) for when the labels arrive.
+`capacity_type` is one of `BareMetal`, `Reserved`, `OnDemand`, `Spot`. `interruption_penalty_bucket` is the dollar value as a string: `0`, `0.5`, `1`, `2`, ..., `8388608`, `pinned`.
 
-For now, the production-observable signal of "are we paying for the right thing" is indirect: low `bigfleet_shard_shortfalls`, expected `bigfleet_shard_actions_total{kind="Provision"}` rates, and per-provider cloud-bill reconciliation outside of BigFleet.
+What's *still* not exposed (deferred for cardinality reasons):
+
+- per-`instance_type` breakdown of inventory or demand — would explode label cardinality at fleets with hundreds of instance types
+- per-`cluster` penalty histograms — same concern at 1K-cluster fleets
+- a derived "estimated wasted spend" metric — better computed in Grafana / a downstream cost dashboard from the labels above plus the per-provider price feed
+
+For an end-to-end "are we paying for the right thing" signal, layer `bigfleet_shard_demand_machines{interruption_penalty_bucket="pinned"}` against `bigfleet_shard_inventory_machines{capacity_type="Spot",state="Configured",interruption_penalty_bucket="pinned"}` — non-zero means Pinned-penalty workloads are sitting on Spot capacity, which Phase 1 shouldn't have allowed. Reconcile against the cloud bill outside BigFleet.
 
 ## Triaging a capacity-stockout page (on-call)
 
