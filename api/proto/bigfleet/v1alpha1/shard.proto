@@ -163,6 +163,26 @@ message NodeStateUpdate {
 
   // Populated when state == FAILED.
   string last_error = 8;
+
+  // Node identity the shard is bringing online. Operators copy these into
+  // UpcomingNode.Spec so observers (kubectl, the bigfleet-scaletest-pod-shim,
+  // any controller that wants to pre-allocate against an upcoming node)
+  // know the shape of the node before it joins. All three are
+  // present-but-empty when the shard hasn't yet decided (e.g. for
+  // SPECULATIVE machines mid-flight) and stable once a host has been
+  // bound.
+  map<string, string> labels = 9;
+  Resources resources        = 10;
+  repeated Taint taints      = 11;
+}
+
+// Taint mirrors the Kubernetes Taint shape so an operator can copy it
+// straight into UpcomingNode.Spec.Taints (and hence into the eventual
+// Node).
+message Taint {
+  string key    = 1;
+  string value  = 2;
+  string effect = 3;  // "NoSchedule" | "PreferNoSchedule" | "NoExecute"
 }
 
 // AvailableCapacityUpdate is a hint about what capacity the shard could

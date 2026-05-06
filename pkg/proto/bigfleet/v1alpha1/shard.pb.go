@@ -88,7 +88,7 @@ func (x AvailableCapacityUpdate_Confidence) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AvailableCapacityUpdate_Confidence.Descriptor instead.
 func (AvailableCapacityUpdate_Confidence) EnumDescriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_shard_proto_rawDescGZIP(), []int{9, 0}
+	return file_bigfleet_v1alpha1_shard_proto_rawDescGZIP(), []int{10, 0}
 }
 
 // OperatorMessage is anything the operator sends up the stream.
@@ -768,7 +768,17 @@ type NodeStateUpdate struct {
 	// upcoming nodes. Zero if unknown.
 	EstimatedReadyUnixNanos int64 `protobuf:"varint,7,opt,name=estimated_ready_unix_nanos,json=estimatedReadyUnixNanos,proto3" json:"estimated_ready_unix_nanos,omitempty"`
 	// Populated when state == FAILED.
-	LastError     string `protobuf:"bytes,8,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	LastError string `protobuf:"bytes,8,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	// Node identity the shard is bringing online. Operators copy these into
+	// UpcomingNode.Spec so observers (kubectl, the bigfleet-scaletest-pod-shim,
+	// any controller that wants to pre-allocate against an upcoming node)
+	// know the shape of the node before it joins. All three are
+	// present-but-empty when the shard hasn't yet decided (e.g. for
+	// SPECULATIVE machines mid-flight) and stable once a host has been
+	// bound.
+	Labels        map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Resources     *Resources        `protobuf:"bytes,10,opt,name=resources,proto3" json:"resources,omitempty"`
+	Taints        []*Taint          `protobuf:"bytes,11,rep,name=taints,proto3" json:"taints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -859,6 +869,90 @@ func (x *NodeStateUpdate) GetLastError() string {
 	return ""
 }
 
+func (x *NodeStateUpdate) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+func (x *NodeStateUpdate) GetResources() *Resources {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *NodeStateUpdate) GetTaints() []*Taint {
+	if x != nil {
+		return x.Taints
+	}
+	return nil
+}
+
+// Taint mirrors the Kubernetes Taint shape so an operator can copy it
+// straight into UpcomingNode.Spec.Taints (and hence into the eventual
+// Node).
+type Taint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Effect        string                 `protobuf:"bytes,3,opt,name=effect,proto3" json:"effect,omitempty"` // "NoSchedule" | "PreferNoSchedule" | "NoExecute"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Taint) Reset() {
+	*x = Taint{}
+	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Taint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Taint) ProtoMessage() {}
+
+func (x *Taint) ProtoReflect() protoreflect.Message {
+	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Taint.ProtoReflect.Descriptor instead.
+func (*Taint) Descriptor() ([]byte, []int) {
+	return file_bigfleet_v1alpha1_shard_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *Taint) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *Taint) GetValue() string {
+	if x != nil {
+		return x.Value
+	}
+	return ""
+}
+
+func (x *Taint) GetEffect() string {
+	if x != nil {
+		return x.Effect
+	}
+	return ""
+}
+
 // AvailableCapacityUpdate is a hint about what capacity the shard could
 // procure. Eventually consistent, advisory only. Operators write this
 // through to AvailableCapacity CRDs.
@@ -887,7 +981,7 @@ type AvailableCapacityUpdate struct {
 
 func (x *AvailableCapacityUpdate) Reset() {
 	*x = AvailableCapacityUpdate{}
-	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -899,7 +993,7 @@ func (x *AvailableCapacityUpdate) String() string {
 func (*AvailableCapacityUpdate) ProtoMessage() {}
 
 func (x *AvailableCapacityUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_shard_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -912,7 +1006,7 @@ func (x *AvailableCapacityUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AvailableCapacityUpdate.ProtoReflect.Descriptor instead.
 func (*AvailableCapacityUpdate) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_shard_proto_rawDescGZIP(), []int{9}
+	return file_bigfleet_v1alpha1_shard_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AvailableCapacityUpdate) GetSupersedesKey() string {
@@ -1028,7 +1122,7 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\n" +
 	"ReclaimAck\x12%\n" +
 	"\x0einstruction_id\x18\x01 \x01(\tR\rinstructionId\x12#\n" +
-	"\rnodes_started\x18\x02 \x01(\x05R\fnodesStarted\"\xc7\x02\n" +
+	"\rnodes_started\x18\x02 \x01(\x05R\fnodesStarted\"\xb8\x04\n" +
 	"\x0fNodeStateUpdate\x12%\n" +
 	"\x0esupersedes_key\x18\x01 \x01(\tR\rsupersedesKey\x12\x1d\n" +
 	"\n" +
@@ -1041,7 +1135,18 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"providerId\x12;\n" +
 	"\x1aestimated_ready_unix_nanos\x18\a \x01(\x03R\x17estimatedReadyUnixNanos\x12\x1d\n" +
 	"\n" +
-	"last_error\x18\b \x01(\tR\tlastError\"\xb4\x06\n" +
+	"last_error\x18\b \x01(\tR\tlastError\x12F\n" +
+	"\x06labels\x18\t \x03(\v2..bigfleet.v1alpha1.NodeStateUpdate.LabelsEntryR\x06labels\x12:\n" +
+	"\tresources\x18\n" +
+	" \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\tresources\x120\n" +
+	"\x06taints\x18\v \x03(\v2\x18.bigfleet.v1alpha1.TaintR\x06taints\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
+	"\x05Taint\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
+	"\x06effect\x18\x03 \x01(\tR\x06effect\"\xb4\x06\n" +
 	"\x17AvailableCapacityUpdate\x12%\n" +
 	"\x0esupersedes_key\x18\x01 \x01(\tR\rsupersedesKey\x12N\n" +
 	"\frequirements\x18\x02 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12:\n" +
@@ -1082,7 +1187,7 @@ func file_bigfleet_v1alpha1_shard_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_shard_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bigfleet_v1alpha1_shard_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_bigfleet_v1alpha1_shard_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_bigfleet_v1alpha1_shard_proto_goTypes = []any{
 	(AvailableCapacityUpdate_Confidence)(0), // 0: bigfleet.v1alpha1.AvailableCapacityUpdate.Confidence
 	(*OperatorMessage)(nil),                 // 1: bigfleet.v1alpha1.OperatorMessage
@@ -1094,36 +1199,41 @@ var file_bigfleet_v1alpha1_shard_proto_goTypes = []any{
 	(*ReclaimInstruction)(nil),              // 7: bigfleet.v1alpha1.ReclaimInstruction
 	(*ReclaimAck)(nil),                      // 8: bigfleet.v1alpha1.ReclaimAck
 	(*NodeStateUpdate)(nil),                 // 9: bigfleet.v1alpha1.NodeStateUpdate
-	(*AvailableCapacityUpdate)(nil),         // 10: bigfleet.v1alpha1.AvailableCapacityUpdate
-	nil,                                     // 11: bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
-	(*ClusterCapacityNeeds)(nil),            // 12: bigfleet.v1alpha1.ClusterCapacityNeeds
-	(*NodeSelectorRequirement)(nil),         // 13: bigfleet.v1alpha1.NodeSelectorRequirement
-	(MachineState)(0),                       // 14: bigfleet.v1alpha1.MachineState
-	(*Resources)(nil),                       // 15: bigfleet.v1alpha1.Resources
+	(*Taint)(nil),                           // 10: bigfleet.v1alpha1.Taint
+	(*AvailableCapacityUpdate)(nil),         // 11: bigfleet.v1alpha1.AvailableCapacityUpdate
+	nil,                                     // 12: bigfleet.v1alpha1.NodeStateUpdate.LabelsEntry
+	nil,                                     // 13: bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
+	(*ClusterCapacityNeeds)(nil),            // 14: bigfleet.v1alpha1.ClusterCapacityNeeds
+	(*NodeSelectorRequirement)(nil),         // 15: bigfleet.v1alpha1.NodeSelectorRequirement
+	(MachineState)(0),                       // 16: bigfleet.v1alpha1.MachineState
+	(*Resources)(nil),                       // 17: bigfleet.v1alpha1.Resources
 }
 var file_bigfleet_v1alpha1_shard_proto_depIdxs = []int32{
 	3,  // 0: bigfleet.v1alpha1.OperatorMessage.hello:type_name -> bigfleet.v1alpha1.Hello
-	12, // 1: bigfleet.v1alpha1.OperatorMessage.rollup:type_name -> bigfleet.v1alpha1.ClusterCapacityNeeds
+	14, // 1: bigfleet.v1alpha1.OperatorMessage.rollup:type_name -> bigfleet.v1alpha1.ClusterCapacityNeeds
 	6,  // 2: bigfleet.v1alpha1.OperatorMessage.bootstrap_response:type_name -> bigfleet.v1alpha1.BootstrapBlobResponse
 	8,  // 3: bigfleet.v1alpha1.OperatorMessage.reclaim_ack:type_name -> bigfleet.v1alpha1.ReclaimAck
 	4,  // 4: bigfleet.v1alpha1.ShardMessage.ack:type_name -> bigfleet.v1alpha1.Acknowledgement
 	5,  // 5: bigfleet.v1alpha1.ShardMessage.bootstrap_request:type_name -> bigfleet.v1alpha1.BootstrapRequest
 	7,  // 6: bigfleet.v1alpha1.ShardMessage.reclaim_instruction:type_name -> bigfleet.v1alpha1.ReclaimInstruction
 	9,  // 7: bigfleet.v1alpha1.ShardMessage.node_state_update:type_name -> bigfleet.v1alpha1.NodeStateUpdate
-	10, // 8: bigfleet.v1alpha1.ShardMessage.available_capacity:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate
-	13, // 9: bigfleet.v1alpha1.BootstrapRequest.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	14, // 10: bigfleet.v1alpha1.NodeStateUpdate.state:type_name -> bigfleet.v1alpha1.MachineState
-	13, // 11: bigfleet.v1alpha1.AvailableCapacityUpdate.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	15, // 12: bigfleet.v1alpha1.AvailableCapacityUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
-	0,  // 13: bigfleet.v1alpha1.AvailableCapacityUpdate.confidence:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.Confidence
-	11, // 14: bigfleet.v1alpha1.AvailableCapacityUpdate.node_template_labels:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
-	1,  // 15: bigfleet.v1alpha1.Shard.Session:input_type -> bigfleet.v1alpha1.OperatorMessage
-	2,  // 16: bigfleet.v1alpha1.Shard.Session:output_type -> bigfleet.v1alpha1.ShardMessage
-	16, // [16:17] is the sub-list for method output_type
-	15, // [15:16] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	11, // 8: bigfleet.v1alpha1.ShardMessage.available_capacity:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate
+	15, // 9: bigfleet.v1alpha1.BootstrapRequest.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	16, // 10: bigfleet.v1alpha1.NodeStateUpdate.state:type_name -> bigfleet.v1alpha1.MachineState
+	12, // 11: bigfleet.v1alpha1.NodeStateUpdate.labels:type_name -> bigfleet.v1alpha1.NodeStateUpdate.LabelsEntry
+	17, // 12: bigfleet.v1alpha1.NodeStateUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
+	10, // 13: bigfleet.v1alpha1.NodeStateUpdate.taints:type_name -> bigfleet.v1alpha1.Taint
+	15, // 14: bigfleet.v1alpha1.AvailableCapacityUpdate.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	17, // 15: bigfleet.v1alpha1.AvailableCapacityUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
+	0,  // 16: bigfleet.v1alpha1.AvailableCapacityUpdate.confidence:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.Confidence
+	13, // 17: bigfleet.v1alpha1.AvailableCapacityUpdate.node_template_labels:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
+	1,  // 18: bigfleet.v1alpha1.Shard.Session:input_type -> bigfleet.v1alpha1.OperatorMessage
+	2,  // 19: bigfleet.v1alpha1.Shard.Session:output_type -> bigfleet.v1alpha1.ShardMessage
+	19, // [19:20] is the sub-list for method output_type
+	18, // [18:19] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_shard_proto_init() }
@@ -1152,7 +1262,7 @@ func file_bigfleet_v1alpha1_shard_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_shard_proto_rawDesc), len(file_bigfleet_v1alpha1_shard_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

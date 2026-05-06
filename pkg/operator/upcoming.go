@@ -37,11 +37,7 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		// Fresh — create.
 		un := &bfv1alpha1.UpcomingNode{
 			ObjectMeta: metav1.ObjectMeta{Name: name},
-			Spec: bfv1alpha1.UpcomingNodeSpec{
-				// Resources / Labels / Taints arrive on subsequent
-				// updates if the shard chooses to populate them.
-				Resources: corev1.ResourceList{},
-			},
+			Spec:       upcomingNodeSpecFromUpdate(u),
 		}
 		if err := o.cfg.KubeClient.Create(ctx, un); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("create UpcomingNode: %w", err)
@@ -52,6 +48,20 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		}
 	case getErr != nil:
 		return fmt.Errorf("get UpcomingNode: %w", getErr)
+	default:
+		// ADR-0016: refresh Spec on every update so observers see the
+		// latest labels/resources/taints. The shard always sends them
+		// (or empty maps for pre-host-binding states); we always
+		// write them through.
+		freshSpec := upcomingNodeSpecFromUpdate(u)
+		if !upcomingSpecEqual(existing.Spec, freshSpec) {
+			specPatched := existing.DeepCopy()
+			specPatched.Spec = freshSpec
+			if err := o.cfg.KubeClient.Update(ctx, specPatched); err != nil {
+				return fmt.Errorf("update UpcomingNode spec: %w", err)
+			}
+			existing = *specPatched
+		}
 	}
 
 	// Drained is the terminal post-drain phase — observed as a state
@@ -183,6 +193,75 @@ func availableCapacityConfidence(c pb.AvailableCapacityUpdate_Confidence) bfv1al
 // already are by convention.
 func upcomingNodeName(machineID string) string {
 	return "un-" + machineID
+}
+
+// upcomingNodeSpecFromUpdate builds an UpcomingNodeSpec from the
+// shard's NodeStateUpdate per ADR-0016. Empty Labels/Resources/Taints
+// are preserved as zero values; the spec round-trips faithfully.
+func upcomingNodeSpecFromUpdate(u *pb.NodeStateUpdate) bfv1alpha1.UpcomingNodeSpec {
+	spec := bfv1alpha1.UpcomingNodeSpec{
+		Resources: corev1.ResourceList{},
+	}
+	if l := u.GetLabels(); len(l) > 0 {
+		spec.Labels = make(map[string]string, len(l))
+		for k, v := range l {
+			spec.Labels[k] = v
+		}
+	}
+	if r := u.GetResources(); r != nil {
+		for k, v := range r.GetResources() {
+			q, err := resource.ParseQuantity(v)
+			if err != nil {
+				// Skip malformed quantity rather than fail the
+				// whole update; the shard should be sending valid
+				// values, so this is a should-not-happen path.
+				continue
+			}
+			spec.Resources[corev1.ResourceName(k)] = q
+		}
+	}
+	if ts := u.GetTaints(); len(ts) > 0 {
+		spec.Taints = make([]corev1.Taint, 0, len(ts))
+		for _, t := range ts {
+			spec.Taints = append(spec.Taints, corev1.Taint{
+				Key:    t.GetKey(),
+				Value:  t.GetValue(),
+				Effect: corev1.TaintEffect(t.GetEffect()),
+			})
+		}
+	}
+	return spec
+}
+
+// upcomingSpecEqual compares two specs cheaply for the "do we need
+// to write?" check. Any structural difference returns false.
+func upcomingSpecEqual(a, b bfv1alpha1.UpcomingNodeSpec) bool {
+	if len(a.Labels) != len(b.Labels) {
+		return false
+	}
+	for k, v := range a.Labels {
+		if b.Labels[k] != v {
+			return false
+		}
+	}
+	if len(a.Resources) != len(b.Resources) {
+		return false
+	}
+	for k, v := range a.Resources {
+		bv, ok := b.Resources[k]
+		if !ok || v.Cmp(bv) != 0 {
+			return false
+		}
+	}
+	if len(a.Taints) != len(b.Taints) {
+		return false
+	}
+	for i := range a.Taints {
+		if a.Taints[i] != b.Taints[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func upcomingNodePhase(state pb.MachineState) bfv1alpha1.UpcomingNodePhase {

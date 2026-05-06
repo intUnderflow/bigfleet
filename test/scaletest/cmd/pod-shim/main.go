@@ -173,17 +173,15 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 // upcomingNodeBinder reconciles UpcomingNode → (k8s Node, Pod binding).
 // When an UpcomingNode reaches Phase=Ready, the binder:
 //
-//  1. Creates a k8s Node named "fake-{machineID}" carrying the
-//     UpcomingNode's Labels, Resources and Taints (or no-op if a
-//     Node with that name already exists — idempotent).
-//  2. Walks pending Pods (no nodeName) in the cluster; finds the
-//     first whose nodeAffinity / nodeSelector match the new Node's
-//     labels; sets `pod.spec.nodeName` to bind.
+//  1. Reads UpcomingNode.Spec.{Labels, Resources, Taints} populated
+//     by the operator from the shard's NodeStateUpdate (ADR-0016).
+//  2. Creates a k8s Node named "fake-{machineID}" carrying those.
+//  3. Walks pending Pods in the cluster; binds the first whose
+//     nodeAffinity matches the new Node's labels.
+//  4. Sets PodScheduled=True on the bound Pod.
 //
-// This stands in for the real "kubelet joins → kube-scheduler binds
-// pending Pods" chain. We don't model resource fit (single Pod per
-// Node assumed, which matches the test's 1:1 CR→machine pattern); a
-// future enhancement would track per-Node remaining capacity.
+// Single-Pod-per-Node assumed (matches the test's 1:1 CR→machine
+// pattern); multi-Pod packing is a future enhancement.
 type upcomingNodeBinder struct {
 	client.Client
 }
@@ -197,7 +195,7 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, nil
 	}
 
-	// 1. Ensure the k8s Node exists.
+	// 1. Ensure the k8s Node exists (idempotent).
 	nodeName := nodeNameFromUpcoming(upn.Name)
 	var existing corev1.Node
 	err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
@@ -206,7 +204,7 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 	}
 	if apierrors.IsNotFound(err) {
 		node := &corev1.Node{
-			ObjectMeta: ctrlObjectMeta(nodeName, upn.Spec.Labels),
+			ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
 			Spec: corev1.NodeSpec{
 				Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
 			},
@@ -214,13 +212,11 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
 			return reconcile.Result{}, fmt.Errorf("create node: %w", err)
 		}
-		// Patch status with allocatable/capacity so kube-scheduler-style
-		// resource matchers (and humans) see the fake Node as Ready.
 		var fresh corev1.Node
 		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &fresh); err != nil {
 			return reconcile.Result{}, fmt.Errorf("re-get node: %w", err)
 		}
-		patch := client.MergeFrom(fresh.DeepCopy())
+		statusPatch := client.MergeFrom(fresh.DeepCopy())
 		fresh.Status.Capacity = upn.Spec.Resources
 		fresh.Status.Allocatable = upn.Spec.Resources
 		fresh.Status.Conditions = []corev1.NodeCondition{{
@@ -229,12 +225,12 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 			Reason:  "KubeletReady",
 			Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
 		}}
-		if err := r.Status().Patch(ctx, &fresh, patch); err != nil {
+		if err := r.Status().Patch(ctx, &fresh, statusPatch); err != nil {
 			return reconcile.Result{}, fmt.Errorf("patch node status: %w", err)
 		}
 	}
 
-	// 2. Bind one pending Pod that matches.
+	// 2. Bind one pending Pod that matches the Node's labels.
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods); err != nil {
 		return reconcile.Result{}, fmt.Errorf("list pods: %w", err)
@@ -250,47 +246,31 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		patch := client.MergeFrom(pod.DeepCopy())
 		pod.Spec.NodeName = nodeName
 		if err := r.Patch(ctx, pod, patch); err != nil {
-			// Race with another reconcile or pod deletion is OK; try
-			// the next candidate next tick.
 			continue
 		}
-		// Also flip PodScheduled=True so observers see the bind.
-		statusPatch := client.MergeFrom(pod.DeepCopy())
+		condPatch := client.MergeFrom(pod.DeepCopy())
 		setPodScheduledTrue(pod)
-		_ = r.Status().Patch(ctx, pod, statusPatch)
+		_ = r.Status().Patch(ctx, pod, condPatch)
 		break
 	}
 	return reconcile.Result{}, nil
 }
 
-// nodeNameFromUpcoming maps "un-{machineID}" → "fake-{machineID}". The
-// "fake-" prefix flags this as a test artefact in `kubectl get nodes`.
-func nodeNameFromUpcoming(upcomingName string) string {
-	return "fake-" + strings.TrimPrefix(upcomingName, "un-")
-}
-
-// ctrlObjectMeta builds an ObjectMeta with the given name and labels.
-// Helper so the upcomingNodeBinder doesn't reach for metav1 directly.
-func ctrlObjectMeta(name string, labels map[string]string) metav1ObjectMeta {
-	out := metav1ObjectMeta{Name: name}
-	if len(labels) > 0 {
-		out.Labels = make(map[string]string, len(labels))
-		for k, v := range labels {
-			out.Labels[k] = v
-		}
+func cloneLabels(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }
 
-// metav1ObjectMeta is an alias just so the imports stay tight.
-type metav1ObjectMeta = metav1.ObjectMeta
-
-// podMatchesNodeLabels checks Pod's nodeAffinity (required terms only)
-// + nodeSelector against the Node's labels. Standard
-// In/NotIn/Exists/DoesNotExist semantics; returns false for any
-// unrecognised operator (conservative). Multiple terms in
-// requiredDuringSchedulingIgnoredDuringExecution are OR'd; multiple
-// matchExpressions within a term are AND'd.
+// podMatchesNodeLabels checks the Pod's nodeAffinity (required terms
+// only) + nodeSelector against the Node's labels. Standard
+// In/NotIn/Exists/DoesNotExist semantics; multiple terms ORed,
+// matchExpressions within a term ANDed.
 func podMatchesNodeLabels(pod *corev1.Pod, nodeLabels map[string]string) bool {
 	for k, v := range pod.Spec.NodeSelector {
 		if nodeLabels[k] != v {
@@ -301,10 +281,7 @@ func podMatchesNodeLabels(pod *corev1.Pod, nodeLabels map[string]string) bool {
 		return true
 	}
 	req := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
-	if req == nil {
-		return true
-	}
-	if len(req.NodeSelectorTerms) == 0 {
+	if req == nil || len(req.NodeSelectorTerms) == 0 {
 		return true
 	}
 	for _, term := range req.NodeSelectorTerms {
@@ -345,11 +322,16 @@ func termMatches(term corev1.NodeSelectorTerm, nodeLabels map[string]string) boo
 				return false
 			}
 		default:
-			// Unknown operator — be conservative.
 			return false
 		}
 	}
 	return true
+}
+
+// nodeNameFromUpcoming maps "un-{machineID}" → "fake-{machineID}". The
+// "fake-" prefix flags this as a test artefact in `kubectl get nodes`.
+func nodeNameFromUpcoming(upcomingName string) string {
+	return "fake-" + strings.TrimPrefix(upcomingName, "un-")
 }
 
 func setPodScheduledTrue(pod *corev1.Pod) {

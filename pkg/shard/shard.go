@@ -643,6 +643,27 @@ func (s *Shard) notifyNodeState(m machine.Machine) {
 	if m.LastError != "" {
 		upd.LastError = m.LastError
 	}
+	// ADR-0016: NodeStateUpdate carries node identity so the operator
+	// can populate UpcomingNode.Spec with the labels / resources /
+	// taints the kubelet will register with. Empty values are valid
+	// for transitional states where no host has been bound yet (e.g.
+	// SPECULATIVE) — the operator writes them through as-is.
+	if m.Profile.InstanceType != "" || m.Profile.Zone != "" || len(m.Profile.Labels) > 0 {
+		labels := make(map[string]string, len(m.Profile.Labels)+2)
+		for k, v := range m.Profile.Labels {
+			labels[k] = v
+		}
+		if m.Profile.InstanceType != "" {
+			labels["node.kubernetes.io/instance-type"] = m.Profile.InstanceType
+		}
+		if m.Profile.Zone != "" {
+			labels["topology.kubernetes.io/zone"] = m.Profile.Zone
+		}
+		upd.Labels = labels
+	}
+	if len(m.Profile.Resources) > 0 {
+		upd.Resources = &pb.Resources{Resources: m.Profile.Resources}
+	}
 	if err := sess.SendNodeStateUpdate(upd); err != nil {
 		s.log.Debug("notifyNodeState send failed", "machine", m.ID, "err", err)
 	}
