@@ -19,14 +19,20 @@
 
 kwok:
   clusterCount: 3
+  # Bumped budgets for Pod-mode validation: each kwok cluster is now
+  # absorbing the combined CR + Pod + UpcomingNode write load. The
+  # earlier 700 MiB / 600 m apiserver budget couldn't keep up with
+  # kine sqlite under that pressure ("Endpoints kubernetes invalid"
+  # warnings, >2s write traces). 2 GiB / 2 CPU gives clear headroom
+  # for the loopback validation. Workload bumped similarly so the
+  # extra controller-runtime processes (pod-shim + unschedulable-
+  # pod-controller) don't compete with the operator + load-driver.
   apiserverResources:
-    requests: { cpu: 100m, memory: 200Mi }
-    limits:   { cpu: 600m, memory: 700Mi }
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 2Gi }
   workloadResources:
-    # Pod-mode runs operator + load-driver + pod-shim + unschedulable
-    # controller in one container; 1Gi gives them room without OOM.
-    requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 800m, memory: 1Gi }
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 2Gi }
 
 shard:
   replicas: 1
