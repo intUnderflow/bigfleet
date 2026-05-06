@@ -265,14 +265,19 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		if !podMatchesNodeLabels(pod, upn.Spec.Labels) {
 			continue
 		}
-		patch := client.MergeFrom(pod.DeepCopy())
-		pod.Spec.NodeName = nodeName
-		if err := r.Patch(ctx, pod, patch); err != nil {
+		// Pod.spec.nodeName is immutable via PATCH; bindings are
+		// created via the /binding subresource. controller-runtime's
+		// SubResource("binding").Create routes through that endpoint.
+		binding := &corev1.Binding{
+			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
+			Target: corev1.ObjectReference{
+				Kind: "Node",
+				Name: nodeName,
+			},
+		}
+		if err := r.SubResource("binding").Create(ctx, pod, binding); err != nil {
 			continue
 		}
-		condPatch := client.MergeFrom(pod.DeepCopy())
-		setPodScheduledTrue(pod)
-		_ = r.Status().Patch(ctx, pod, condPatch)
 		bound = true
 		break
 	}
@@ -364,17 +369,7 @@ func nodeNameFromUpcoming(upcomingName string) string {
 	return "fake-" + strings.TrimPrefix(upcomingName, "un-")
 }
 
-func setPodScheduledTrue(pod *corev1.Pod) {
-	cond := corev1.PodCondition{
-		Type:    corev1.PodScheduled,
-		Status:  corev1.ConditionTrue,
-		Message: "bigfleet-scaletest-pod-shim: bound by upcomingNodeBinder after BigFleet provisioning",
-	}
-	for i := range pod.Status.Conditions {
-		if pod.Status.Conditions[i].Type == corev1.PodScheduled {
-			pod.Status.Conditions[i] = cond
-			return
-		}
-	}
-	pod.Status.Conditions = append(pod.Status.Conditions, cond)
-}
+// (M43c earlier had setPodScheduledTrue; the /binding subresource
+// flips PodScheduled=True automatically — kube-scheduler's actual
+// behaviour. Helper removed in favour of the apiserver's built-in
+// transition.)
