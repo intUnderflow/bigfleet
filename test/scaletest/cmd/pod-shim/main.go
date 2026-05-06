@@ -38,6 +38,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -94,6 +95,15 @@ func run(args []string) error {
 		return fmt.Errorf("manager: %w", err)
 	}
 
+	// Typed clientset for the /binding subresource — controller-
+	// runtime's SubResource("binding") path has subtle issues with
+	// the cache layer; the typed client.CoreV1().Pods(ns).Bind() is
+	// well-tested and goes straight to the apiserver.
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return fmt.Errorf("clientset: %w", err)
+	}
+
 	r := &podSchedulerShim{Client: mgr.GetClient()}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}).
@@ -107,7 +117,7 @@ func run(args []string) error {
 	// creates a matching k8s Node (idempotent) and binds one
 	// pending Pod whose nodeAffinity matches the new Node's
 	// labels.
-	un := &upcomingNodeBinder{Client: mgr.GetClient()}
+	un := &upcomingNodeBinder{Client: mgr.GetClient(), clientset: clientset}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&bfv1alpha1.UpcomingNode{}).
 		Named("bigfleet-scaletest-upcoming-node-binder").
@@ -185,6 +195,7 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 // pattern); multi-Pod packing is a future enhancement.
 type upcomingNodeBinder struct {
 	client.Client
+	clientset kubernetes.Interface
 }
 
 func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
@@ -266,8 +277,10 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 			continue
 		}
 		// Pod.spec.nodeName is immutable via PATCH; bindings are
-		// created via the /binding subresource. controller-runtime's
-		// SubResource("binding").Create routes through that endpoint.
+		// created via the /binding subresource. The typed
+		// clientset.CoreV1().Pods(ns).Bind() goes straight at the
+		// apiserver (no controller-runtime cache layer in the way),
+		// matching what real kube-scheduler does.
 		binding := &corev1.Binding{
 			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
 			Target: corev1.ObjectReference{
@@ -275,7 +288,7 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 				Name: nodeName,
 			},
 		}
-		if err := r.SubResource("binding").Create(ctx, pod, binding); err != nil {
+		if err := r.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
 			continue
 		}
 		bound = true
