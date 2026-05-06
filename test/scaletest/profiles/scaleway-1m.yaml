@@ -137,6 +137,13 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
+# ADR-0017: CR-mode profile, fingerprint-grained metric. 100
+# clusters × 10K-CR ramp per fingerprint → larger fan-out window
+# than scaleway-{50k,500k}; 120 s reflects that.
+slo:
+  bindingLatencyP99Seconds: 120
+  shardCycleDurationP99Seconds: 5
+
 prometheus:
   resources:
     requests: { cpu: 1, memory: 4Gi }

@@ -133,6 +133,13 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
+# ADR-0017: CR-mode profile, fingerprint-grained metric. 500
+# clusters × 10K-CR ramp per fingerprint. Same per-cluster shape as
+# scaleway-1m.yaml → 120 s.
+slo:
+  bindingLatencyP99Seconds: 120
+  shardCycleDurationP99Seconds: 5
+
 prometheus:
   # 5M-CR fan-out: histogram bucket cardinality scales with kwok pod
   # count × bucket count. 4 GiB → 8 GiB to handle 500-pod histograms

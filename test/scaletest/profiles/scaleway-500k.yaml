@@ -118,6 +118,21 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
+# ADR-0017: this profile is CR-mode (load-driver creates CRs directly,
+# no pod-shim, no per-Pod histogram). The runner falls back to the
+# fingerprint-grained shard provisioning histogram, which at this
+# profile's shape (50 clusters × 1 fingerprint × 1000-CR ramp)
+# measures fingerprint fan-out latency, not user-facing per-CR
+# latency. The override codifies "fan-out at this shape ≤ 60 s" —
+# longer than the in-process default 5 s, honest about what's being
+# measured. Pod-mode profiles (dev-5k-pods-loopback, future
+# scaleway-*-realistic with mode: pods) get sub-second per-Pod
+# binding-latency from the pod-shim's histogram and don't need this
+# override.
+slo:
+  bindingLatencyP99Seconds: 60
+  shardCycleDurationP99Seconds: 5
+
 prometheus:
   resources:
     requests: { cpu: 1, memory: 4Gi }

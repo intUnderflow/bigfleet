@@ -66,6 +66,13 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
+# ADR-0017: CR-mode profile, fingerprint-grained metric. See
+# scaleway-500k.yaml for the full explanation. 60 s reflects fan-out
+# at this profile's shape (50 clusters × 1 fingerprint each).
+slo:
+  bindingLatencyP99Seconds: 60
+  shardCycleDurationP99Seconds: 5
+
 prometheus:
   resources:
     requests: { cpu: 500m, memory: 2Gi }

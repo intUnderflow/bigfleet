@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,11 +45,32 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 )
+
+// podBindLatencySeconds is ADR-0017's per-Pod binding-latency
+// histogram — wall-clock from Pod.metadata.creationTimestamp to the
+// moment this shim issues clientset.CoreV1().Pods.Bind. This is
+// what users feel from "I asked for capacity" to "my Pod is bound";
+// the runner gates on it directly. Per-Pod granularity, sub-second
+// to ~100 s buckets covering the plausible range from in-process
+// fake provider (sub-second) to real cloud provisioning (~minutes).
+var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+	Name:    "bigfleet_scaletest_pod_bind_latency_seconds",
+	Help:    "Wall-clock from Pod.metadata.creationTimestamp to the moment the bigfleet-scaletest-pod-shim issues the binding subresource Create on a fake Node. Per-Pod granularity (the ADR-0014 user-facing binding-latency target). ADR-0017.",
+	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12), // 0.05s, 0.1s, 0.2s, ... 102.4s
+})
+
+func init() {
+	// Register on controller-runtime's metrics registry so the
+	// histogram is served on the same :8772 endpoint as the
+	// reconciler's internal metrics.
+	ctrlmetrics.Registry.MustRegister(podBindLatencySeconds)
+}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -290,6 +312,13 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		}
 		if err := r.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
 			continue
+		}
+		// ADR-0017: record per-Pod binding latency at the moment of
+		// successful Bind. CreationTimestamp is server-assigned at
+		// Create, so it's a meaningful T0 even for Pods we discover
+		// late after a re-list.
+		if !pod.CreationTimestamp.IsZero() {
+			podBindLatencySeconds.Observe(time.Since(pod.CreationTimestamp.Time).Seconds())
 		}
 		bound = true
 		break
