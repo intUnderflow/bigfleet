@@ -76,9 +76,9 @@ spec:
             - --seed-configured-per-cluster={{ .Values.shard.seedConfiguredPerCluster }}
             - --seed-cluster-total={{ .Values.kwok.clusterCount | default 0 }}
             - --seed-cluster-stride={{ .Values.shard.replicas | default 1 }}
+            {{- end }}
             {{- if .Values.loadProfile.archetypes }}
             - --archetypes=/etc/loadgen/profile.yaml
-            {{- end }}
             {{- end }}
             - --max-actions-per-cycle={{ .Values.shard.maxActionsPerCycle | default 0 }}
             - --execute-concurrency={{ .Values.shard.executeConcurrency | default 1 }}

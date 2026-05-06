@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -195,46 +196,67 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, nil
 	}
 
-	// 1. Ensure the k8s Node exists (idempotent).
+	// 1. Ensure the k8s Node exists (idempotent — if a previous
+	// reconcile created it, skip Create + status patch but still
+	// attempt to bind a Pod below).
 	nodeName := nodeNameFromUpcoming(upn.Name)
 	var existing corev1.Node
-	err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return reconcile.Result{}, fmt.Errorf("get node: %w", err)
+	getErr := r.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return reconcile.Result{}, fmt.Errorf("get node: %w", getErr)
 	}
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(getErr) {
 		node := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
 			Spec: corev1.NodeSpec{
 				Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
 			},
+			Status: corev1.NodeStatus{
+				Capacity:    upn.Spec.Resources,
+				Allocatable: upn.Spec.Resources,
+				Conditions: []corev1.NodeCondition{{
+					Type:    corev1.NodeReady,
+					Status:  corev1.ConditionTrue,
+					Reason:  "KubeletReady",
+					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
+				}},
+			},
 		}
+		// Best-effort status fill — apiserver typically strips Status
+		// on Create, but we try a follow-up Status().Update on the
+		// returned object's resourceVersion. Cache lag means a Get
+		// here often misses the object, so we build the patch off
+		// `node` directly which Create populated. Failure here is
+		// non-fatal for binding (binding only requires the Node to
+		// exist; allocatable/Ready advertisement is a kwok-stage
+		// hint that the harness can live without).
 		if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
 			return reconcile.Result{}, fmt.Errorf("create node: %w", err)
 		}
-		var fresh corev1.Node
-		if err := r.Get(ctx, client.ObjectKey{Name: nodeName}, &fresh); err != nil {
-			return reconcile.Result{}, fmt.Errorf("re-get node: %w", err)
-		}
-		statusPatch := client.MergeFrom(fresh.DeepCopy())
-		fresh.Status.Capacity = upn.Spec.Resources
-		fresh.Status.Allocatable = upn.Spec.Resources
-		fresh.Status.Conditions = []corev1.NodeCondition{{
-			Type:    corev1.NodeReady,
-			Status:  corev1.ConditionTrue,
-			Reason:  "KubeletReady",
-			Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
-		}}
-		if err := r.Status().Patch(ctx, &fresh, statusPatch); err != nil {
-			return reconcile.Result{}, fmt.Errorf("patch node status: %w", err)
+		if node.ResourceVersion != "" {
+			statusPatch := node.DeepCopy()
+			statusPatch.Status = corev1.NodeStatus{
+				Capacity:    upn.Spec.Resources,
+				Allocatable: upn.Spec.Resources,
+				Conditions: []corev1.NodeCondition{{
+					Type:    corev1.NodeReady,
+					Status:  corev1.ConditionTrue,
+					Reason:  "KubeletReady",
+					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
+				}},
+			}
+			_ = r.Status().Update(ctx, statusPatch)
 		}
 	}
 
-	// 2. Bind one pending Pod that matches the Node's labels.
+	// 2. Bind one pending Pod that matches the Node's labels. Runs
+	// every reconcile regardless of whether the Node was just created
+	// or already existed.
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods); err != nil {
 		return reconcile.Result{}, fmt.Errorf("list pods: %w", err)
 	}
+	bound := false
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if pod.Spec.NodeName != "" {
@@ -251,7 +273,15 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		condPatch := client.MergeFrom(pod.DeepCopy())
 		setPodScheduledTrue(pod)
 		_ = r.Status().Patch(ctx, pod, condPatch)
+		bound = true
 		break
+	}
+	if !bound {
+		// No matching Pod was Pending yet — requeue. This handles
+		// the race where the UpcomingNode races ahead of the Pod that
+		// triggered the CR creation. RequeueAfter is short because
+		// the Pod usually arrives within a single rollup interval.
+		return reconcile.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 	return reconcile.Result{}, nil
 }

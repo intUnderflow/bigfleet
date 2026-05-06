@@ -1,0 +1,75 @@
+# dev-5k-pods-loopback — validates the full Pod → CR → Configured →
+# fake-Node → Pod-bound loop end-to-end on kind. Smaller than dev-5k
+# but exercises every component M43 introduces:
+#   - load-driver Pod-mode (M43a)
+#   - bigfleet-scaletest-pod-shim's Pod → Unschedulable patcher (M43b)
+#   - bigfleet-unschedulable-pod-controller (M43b)
+#   - bigfleet-scaletest-pod-shim's UpcomingNode → fake Node →
+#     Pod-binding loop (M43c)
+#   - ADR-0016 NodeStateUpdate-carries-labels plumbing
+#
+# Shape:
+#   3 kwok clusters × 200 Pods each = 600 demand
+#   shard pre-seeded with 700 Idle machines (enough to bind every Pod
+#   plus headroom). One archetype, one size, one instance type so the
+#   matching is exact and Phase 1 doesn't need to reason about
+#   diversity.
+#   10 min soak, so the runner's min_over_time(5m) window finishes
+#   well outside the ramp samples.
+
+kwok:
+  clusterCount: 3
+  apiserverResources:
+    requests: { cpu: 100m, memory: 200Mi }
+    limits:   { cpu: 600m, memory: 700Mi }
+  workloadResources:
+    # Pod-mode runs operator + load-driver + pod-shim + unschedulable
+    # controller in one container; 1Gi gives them room without OOM.
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 800m, memory: 1Gi }
+
+shard:
+  replicas: 1
+  # 700 Idle machines, archetype-distributed to match the load-driver's
+  # demand. With 1 archetype and 1 size bucket the seed is homogeneous.
+  # The chart mounts the kwok-load-profile ConfigMap into the shard
+  # pod and passes --archetypes when loadProfile.archetypes is non-
+  # empty, so the seed reads the catalog automatically.
+  seedMachines: 700
+
+loadProfile:
+  target: 200
+  durationSeconds: 600   # 10 min soak — outside the 5m min_over_time window
+  mode: pods
+  # Single archetype: one instance type, one size bucket, one priority.
+  # Phase 1's matching is then deterministic and we measure the
+  # binding loopback rather than archetype-mix behaviour.
+  archetypes:
+    - name: cpu-small
+      weight: 1
+      instanceTypes: [c6i.4xlarge]
+      sizeBuckets:
+        - { weight: 1, resources: { cpu: "2", memory: "8Gi" } }
+      priorityClasses: [1000]
+      interruptionPenalty: 1024
+      reclamationPenalty: 8192
+
+operator:
+  qps: 50
+  burst: 100
+  ackConcurrency: 16
+  rollupInterval: 10s
+
+# ADR-0014: in-process tier targets. With kind + fake provider the
+# bind-to-Configured latency is sub-second; the loop closure (fake
+# Node creation + Pod binding) adds a controller-runtime reconcile
+# round-trip. 10 s gives enough headroom for kind's host-load.
+slo:
+  bindingLatencyP99Seconds: 10
+  shardCycleDurationP99Seconds: 5
+
+costEstimate:
+  vCPU: 2
+  memoryGB: 4
+  awsSpotUsdPerHour: 0.0
+  notes: "Free on M5 Max kind. ~12 min run end-to-end. Validates the M43 Pod-mode loopback before any cloud spend."
