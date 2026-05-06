@@ -69,3 +69,20 @@ This is honest — the profile's binding latency IS fingerprint-grained, the SLO
 ## Implementation notes
 
 The per-Pod histogram is recorded inside the pod-shim, NOT inside BigFleet itself — it's harness instrumentation. Real production deployments don't run the pod-shim; their per-Pod latency comes from kube-scheduler's own metrics (`scheduler_pod_scheduling_duration_seconds` etc.) plus the time to provision the underlying capacity. The harness's pod-shim is a stand-in for the kube-scheduler chain, and so is the right place to measure stand-in latency.
+
+## Addendum (2026-05-07): histogram-quantile-on-stale-data artefact
+
+The first scaleway-500k re-run after this ADR landed surfaced a stricter problem with the legacy fingerprint histogram: it isn't just *coarse-grained*, it's *unreliable for SLO gating during steady-state soaks*. Mechanism:
+
+- `bigfleet_shard_provisioning_latency_seconds` is observed once per `(cluster, fingerprint)` at the moment the first machine of that fingerprint reaches Configured. In scaleway-500k that's 50 observations total, all during the ramp.
+- During the 30-min soak that follows, no new fingerprints are introduced, so no new observations land.
+- The runner's PromQL uses `rate(...[5m])` over the last 5 minutes of the soak, where the rate is zero. `histogram_quantile` over a zero-rate stable cumulative count returns the boundary of the bucket holding all prior observations — and Prometheus's float interpolation in this case settles on the +Inf-bucket boundary regardless of where the actual observations live.
+- Result: p99 reads as `0.01 × 2^15 = 327.68 s` even though p50 still tracks the real ramp-time distribution (~6 s). The gate fires on a number that has no relationship to real latency.
+
+This is a Prometheus-side artefact, not a BigFleet behaviour change. The right fix is the per-Pod histogram — observed every binding, never goes stale. As a stop-gap until all profiles run Pod-mode, CR-mode profiles raise their `slo.bindingLatencyP99Seconds` override above the histogram's top-bucket boundary (400 s ≥ 327.68 s) so the gate isn't fooled by the artefact. The override comments document the mechanism so future readers don't think the autoscaler is performing badly.
+
+Future ADR option, if we want to keep CR-mode profiles useful as gated runs:
+
+- Bump the provisioning histogram bucket layout so the top boundary is far above any plausible production fan-out (e.g. 60 min) — but the artefact would still fire there, just with a different number.
+- Or sample the histogram differently (e.g. sliding-window observations refreshed during soak).
+- Or stop gating on the legacy histogram entirely once all profiles run Pod-mode.

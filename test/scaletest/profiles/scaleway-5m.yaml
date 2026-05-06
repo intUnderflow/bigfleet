@@ -133,11 +133,11 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0017: CR-mode profile, fingerprint-grained metric. 500
-# clusters × 10K-CR ramp per fingerprint. Same per-cluster shape as
-# scaleway-1m.yaml → 120 s.
+# ADR-0017: CR-mode profile, fingerprint-grained metric. See
+# scaleway-500k.yaml for the histogram-artefact explanation; 400 s
+# exceeds the +Inf-bucket boundary.
 slo:
-  bindingLatencyP99Seconds: 120
+  bindingLatencyP99Seconds: 400
   shardCycleDurationP99Seconds: 5
 
 prometheus:

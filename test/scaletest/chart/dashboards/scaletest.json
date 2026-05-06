@@ -3,15 +3,52 @@
   "title": "BigFleet — Scale Test",
   "tags": ["bigfleet", "scaletest"],
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-1h", "to": "now" },
   "timezone": "",
   "panels": [
     {
+      "id": 100, "type": "row", "title": "SLO live verdict (ADR-0014 / ADR-0017)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "id": 101, "type": "stat", "title": "Binding latency p99 (ADR-0017) — SLO ≤ 5 s",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))) or max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 102, "type": "stat", "title": "Cycle duration p99 — envelope ≤ 5 s",
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 103, "type": "stat", "title": "Operator rollup p99 — SLO ≤ 1 s",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.8}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 104, "type": "stat", "title": "Operator ack p99 — SLO ≤ 12 s",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 12}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
       "id": 1, "type": "stat", "title": "Active CRs",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum(scaletest_loadgen_cr_active)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}}, "overrides": []},
@@ -19,58 +56,73 @@
     },
     {
       "id": 2, "type": "timeseries", "title": "CR creates / sec",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))", "refId": "A", "legendFormat": "creates/s"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
     },
     {
-      "id": 3, "type": "stat", "title": "Shortfalls",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "id": 3, "type": "stat", "title": "Shortfalls — SLO 0",
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum(bigfleet_shard_shortfalls)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
-      "id": 4, "type": "stat", "title": "Operator outbox drops / sec",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "id": 4, "type": "stat", "title": "Operator outbox drops / sec — SLO 0",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum(rate(bigfleet_operator_outbox_dropped_total[1m]))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.001}]}, "color": {"mode": "thresholds"}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
-      "id": 5, "type": "timeseries", "title": "Shard cycle p99 (worst shard) — SLO 100 ms",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 200, "type": "row", "title": "Latency timeseries (with SLO threshold lines)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "collapsed": false
+    },
+    {
+      "id": 201, "type": "timeseries", "title": "Binding latency p99 — SLO line at 5 s (ADR-0014 in-process tier)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
+        {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "fingerprint fan-out (legacy)"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}, "drawStyle": "line"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}, "color": {"mode": "palette-classic"}}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Shard cycle p99 (worst shard) — envelope line at 5 s",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "cycle p99"}],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.1}]}, "color": {"mode": "thresholds"}}, "overrides": []}
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
       "id": 6, "type": "timeseries", "title": "Cycle p99 by phase",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max by (phase) (histogram_quantile(0.99, sum by (le, pod, phase) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "{{phase}}"}],
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
     },
     {
-      "id": 7, "type": "timeseries", "title": "Operator rollup p99",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 12},
+      "id": 7, "type": "timeseries", "title": "Operator rollup p99 — SLO line at 1 s",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "rollup p99"}],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
-      "id": 8, "type": "timeseries", "title": "Operator acknowledge p99",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 12},
+      "id": 8, "type": "timeseries", "title": "Operator acknowledge p99 — SLO line at 12 s",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "ack p99"}],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 12}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
-      "id": 9, "type": "timeseries", "title": "Provisioning latency (CR → Configured)",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
+      "id": 9, "type": "timeseries", "title": "Provisioning latency (fingerprint fan-out — diagnostic)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "p50"},
@@ -80,14 +132,14 @@
     },
     {
       "id": 10, "type": "timeseries", "title": "Coordinator apply ops/sec by outcome",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum by (outcome) (rate(bigfleet_coordinator_apply_total[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}],
       "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
     },
     {
       "id": 11, "type": "stat", "title": "Coordinator pending instructions",
-      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 20},
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 34},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(bigfleet_coordinator_pending_instructions)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -95,7 +147,7 @@
     },
     {
       "id": 12, "type": "stat", "title": "Shards reporting cycle",
-      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 20},
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 34},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "count(count by (pod) (bigfleet_shard_cycle_duration_seconds_count{component=\"shard\"}))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -103,7 +155,7 @@
     },
     {
       "id": 13, "type": "stat", "title": "Coordinator Raft term",
-      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 20},
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 34},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(bigfleet_coordinator_raft_term)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -111,7 +163,7 @@
     },
     {
       "id": 14, "type": "timeseries", "title": "Per-shard inventory",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum by (pod) (bigfleet_shard_inventory_machines)", "refId": "A", "legendFormat": "{{pod}}"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
