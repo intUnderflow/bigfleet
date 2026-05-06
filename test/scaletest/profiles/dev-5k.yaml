@@ -1,5 +1,11 @@
 # dev-5k — smallest sensible profile, runs free on a laptop.
 # 5 simulated clusters × 1K CRs each = 5K total demand.
+#
+# M43 Pod-mode: opts into the production-shaped Pod → CR loop.
+# Each kwok pod runs (in addition to operator + load-driver) the
+# bigfleet-scaletest-pod-shim + bigfleet-unschedulable-pod-controller
+# so Pod-mode tests work end-to-end. Workload container budget is
+# bumped to 1 Gi to fit the extra two controller-runtime processes.
 
 kwok:
   clusterCount: 5
@@ -7,8 +13,8 @@ kwok:
     requests: { cpu: 100m, memory: 200Mi }
     limits:   { cpu: 600m, memory: 700Mi }
   workloadResources:
-    requests: { cpu: 100m, memory: 200Mi }
-    limits:   { cpu: 400m, memory: 400Mi }
+    requests: { cpu: 200m, memory: 400Mi }
+    limits:   { cpu: 800m, memory: 1Gi }
 
 shard:
   replicas: 1
@@ -17,6 +23,7 @@ loadProfile:
   target: 1000
   churnPerMinute: 0.05
   durationSeconds: 600
+  mode: pods
 
 costEstimate:
   vCPU: 3

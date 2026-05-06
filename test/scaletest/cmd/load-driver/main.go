@@ -703,7 +703,13 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 				Name:  "workload",
 				Image: "registry.k8s.io/pause:3.10",
 				Resources: corev1.ResourceRequirements{
+					// Extended resources (nvidia.com/gpu and any
+					// custom resource we model) are non-overcommitable
+					// in Kubernetes and require Limits to equal
+					// Requests. Mirror it for every resource so the
+					// apiserver doesn't reject the Pod.
 					Requests: resources,
+					Limits:   resources,
 				},
 			}},
 			Affinity: &corev1.Affinity{
@@ -725,6 +731,9 @@ func (d *driver) buildLegacyPod(name string) *corev1.Pod {
 	if len(d.prof.PriorityClasses) > 0 {
 		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
 	}
+	resources := corev1.ResourceList{
+		"nvidia.com/gpu": resource.MustParse("8"),
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -740,9 +749,8 @@ func (d *driver) buildLegacyPod(name string) *corev1.Pod {
 				Name:  "workload",
 				Image: "registry.k8s.io/pause:3.10",
 				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						"nvidia.com/gpu": resource.MustParse("8"),
-					},
+					Requests: resources,
+					Limits:   resources,
 				},
 			}},
 			Affinity: &corev1.Affinity{
