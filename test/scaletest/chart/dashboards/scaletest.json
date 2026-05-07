@@ -118,13 +118,13 @@
     },
     {
       "id": 200, "type": "row", "title": "Latency timeseries (with SLO threshold lines)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
       "collapsed": false
     },
     {
       "id": 201, "type": "timeseries", "title": "Internal binding latency p99 — SLO line at 5 s (ADR-0018 in-process tier)",
       "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
@@ -134,35 +134,35 @@
     },
     {
       "id": 5, "type": "timeseries", "title": "Shard cycle p99 (worst shard) — envelope line at 5 s",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "cycle p99"}],
       "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
       "id": 6, "type": "timeseries", "title": "Cycle p99 by phase",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 22},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max by (phase) (histogram_quantile(0.99, sum by (le, pod, phase) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "{{phase}}"}],
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
     },
     {
       "id": 7, "type": "timeseries", "title": "Operator rollup p99 — SLO line at 1 s",
-      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 18},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 22},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "rollup p99"}],
       "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
       "id": 8, "type": "timeseries", "title": "Operator acknowledge p99 — SLO line at 12 s",
-      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 18},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 22},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "ack p99"}],
       "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 12}]}, "color": {"mode": "thresholds"}}, "overrides": []}
     },
     {
       "id": 9, "type": "timeseries", "title": "Provisioning latency (fingerprint fan-out — diagnostic)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "p50"},
@@ -172,14 +172,14 @@
     },
     {
       "id": 10, "type": "timeseries", "title": "Coordinator apply ops/sec by outcome",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 26},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum by (outcome) (rate(bigfleet_coordinator_apply_total[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}],
       "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
     },
     {
       "id": 11, "type": "stat", "title": "Coordinator pending instructions",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 34},
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 38},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(bigfleet_coordinator_pending_instructions)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -187,7 +187,7 @@
     },
     {
       "id": 12, "type": "stat", "title": "Shards reporting cycle",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 34},
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 38},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "count(count by (pod) (bigfleet_shard_cycle_duration_seconds_count{component=\"shard\"}))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -195,7 +195,7 @@
     },
     {
       "id": 13, "type": "stat", "title": "Coordinator Raft term",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 34},
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 38},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(bigfleet_coordinator_raft_term)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
@@ -203,20 +203,20 @@
     },
     {
       "id": 14, "type": "timeseries", "title": "Per-shard inventory",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum by (pod) (bigfleet_shard_inventory_machines)", "refId": "A", "legendFormat": "{{pod}}"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
     },
     {
       "id": 300, "type": "row", "title": "Phase 1 sub-paths (ADR-0019 / M44.4)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 42},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 46},
       "collapsed": false
     },
     {
       "id": 301, "type": "timeseries", "title": "Phase 1 sub-path mean duration",
       "description": "ADR-0019: per-sub-path attribution of Phase 1 wall-clock. take is the head-cursor walk; takeCoLocated is the Same-rack bucket pick (the cloud-only hot path the operator's owner-grouping forces every Pod-derived Need through); takeSpread is the strict-spread bucket pick. After M44.4's optimisation, the cached bucketing + per-bucket head cursors should drop takeCoLocated mean to sub-millisecond.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 43},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 47},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_take_duration_seconds_count[2m])", "refId": "A", "legendFormat": "{{path}} mean"}
@@ -226,7 +226,7 @@
     {
       "id": 302, "type": "timeseries", "title": "Phase 1 sub-path call rate",
       "description": "Calls per second by sub-path. takeCoLocated dominating reflects the Pod → CR → Same(rack) translation at scale; take dominating reflects single-archetype profiles without sameRack.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 43},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 47},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "rate(bigfleet_shard_phase1_calls_total[2m])", "refId": "A", "legendFormat": "{{path}} /s"}
@@ -236,7 +236,7 @@
     {
       "id": 303, "type": "timeseries", "title": "Phase 1 sub-path CPU share (sum/sec)",
       "description": "How much wall-clock per second of soak each sub-path consumes. ≈1.0 means the sub-path is fully saturating one shard CPU; ≪1 means it's fine. Pre-M44.4 takeCoLocated landed near 1.0 at scaleway-50k.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 51},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 55},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m])", "refId": "A", "legendFormat": "{{path}} s/s"}
@@ -246,7 +246,7 @@
     {
       "id": 304, "type": "timeseries", "title": "Phase 1 pool build duration (cache miss cost)",
       "description": "buildPoolSource time per (state, fingerprint). Cached after first build per cycle; high values here mean pool merging+sorting (multi-instance-type profiles) is dominating, not the take path.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 51},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 55},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))", "refId": "A", "legendFormat": "p99"},
@@ -256,13 +256,13 @@
     },
     {
       "id": 400, "type": "row", "title": "Pipeline drop-off (M44.4)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 59},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 63},
       "collapsed": false
     },
     {
       "id": 401, "type": "timeseries", "title": "Pod-mode chain stage cumulative — per stage",
       "description": "From load-driver Pod creates down to fake-Node bindings. Watch the gap between consecutive stages — that's where the chain throttles. Right after gate-cleared the curves should track each other; if they diverge, identify the rate-limited stage by which curve flattens first.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 60},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 64},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "sum(scaletest_loadgen_cr_created_total) - sum(scaletest_loadgen_cr_deleted_total)", "refId": "A", "legendFormat": "1) Pods alive (created - deleted)"},
@@ -278,7 +278,7 @@
     {
       "id": 402, "type": "timeseries", "title": "Pipeline stage rate (events / sec)",
       "description": "Per-stage events per second. Equal rates = chain in steady-state; the slowest curve here is the throttling stage.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 60},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 64},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))", "refId": "A", "legendFormat": "1) Pod creates/s"},
@@ -293,7 +293,7 @@
     {
       "id": 403, "type": "timeseries", "title": "Action execute outcomes by reason",
       "description": "Drop A diagnostic: which return path silently dropped Bootstraps. no_session = operator stream gone for that cluster (the M44.4 hypothesis); transition_error = state-machine refused; blob_error = bootstrap-blob fetch failed; provider_error = fake provider rejected; ctx_canceled = cycleCtx timeout.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 68},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 72},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "sum by (outcome) (rate(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\"}[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}
@@ -303,7 +303,7 @@
     {
       "id": 404, "type": "timeseries", "title": "Operator sessions: active count + lifecycle rate",
       "description": "active = current count of installed sessions; should equal cluster.replicas for the shard. installed/removed/replaced = lifecycle event rate; high replaced rate = grpc keepalive churn under load.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 68},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 72},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "max(bigfleet_shard_active_sessions)", "refId": "A", "legendFormat": "active sessions"},
