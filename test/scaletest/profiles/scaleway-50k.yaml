@@ -72,14 +72,9 @@ loadProfile:
 # Kapsule's apiserver can absorb significantly more than kine+sqlite
 # can. Combined with the M11.14 patch-based ack writes (1 RPC per CR
 # instead of 2), this should drop ack p99 well below 12 s.
-#
-# M44.4 Drop B: bumped 200 → 600 QPS. The pod-shim binder shares this
-# budget and does 3 apiserver writes per UpcomingNode. At 1000 Pods/
-# cluster × 3 / 200 ≈ 15 s p99 binding — still 3× the 5 s SLO. 600
-# QPS lands at ~5 s; the per-cluster kine sqlite on tmpfs absorbs it.
 operator:
-  qps: 600
-  burst: 1200
+  qps: 200
+  burst: 400
   ackConcurrency: 64
   rollupInterval: 0s
 

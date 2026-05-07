@@ -177,13 +177,18 @@ func run(args []string) error {
 	// MaxConcurrentReconciles bumped from the controller-runtime
 	// default of 1: at 1K Pods/cluster the serial reconcile queue
 	// produces ~37s mean binding latency (each bind takes ~1s of
-	// apiserver round-trips). 16 workers brings binding-latency p99
-	// down well under the ADR-0014 in-process tier (5-10 s).
+	// apiserver round-trips). M44.4 Drop B: 16 → 64. The shard can
+	// emit up to maxActionsPerCycle (1000) Bootstrap actions per
+	// cycle, so during the demand-clear burst the binder sees
+	// ~1000 UpcomingNodes back-to-back per cluster; with ~250 ms
+	// per reconcile (apiserver round-trips on Kapsule) and 16
+	// workers it took ~15 s to drain — pushing binding p99 well
+	// over the 5 s SLO. 64 workers drains the same burst in ~4 s.
 	un := &upcomingNodeBinder{Client: mgr.GetClient(), clientset: clientset}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&bfv1alpha1.UpcomingNode{}).
 		Named("bigfleet-scaletest-upcoming-node-binder").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 16}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 64}).
 		Complete(un); err != nil {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}
@@ -290,41 +295,16 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 			Spec: corev1.NodeSpec{
 				Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
 			},
-			Status: corev1.NodeStatus{
-				Capacity:    upn.Spec.Resources,
-				Allocatable: upn.Spec.Resources,
-				Conditions: []corev1.NodeCondition{{
-					Type:    corev1.NodeReady,
-					Status:  corev1.ConditionTrue,
-					Reason:  "KubeletReady",
-					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
-				}},
-			},
 		}
-		// Best-effort status fill — apiserver typically strips Status
-		// on Create, but we try a follow-up Status().Update on the
-		// returned object's resourceVersion. Cache lag means a Get
-		// here often misses the object, so we build the patch off
-		// `node` directly which Create populated. Failure here is
-		// non-fatal for binding (binding only requires the Node to
-		// exist; allocatable/Ready advertisement is a kwok-stage
-		// hint that the harness can live without).
+		// M44.4 Drop B: dropped the post-Create Status().Update.
+		// allocatable/Ready advertisement is a kwok-stage hint that
+		// the harness can live without — binding only requires the
+		// Node to exist, and the runner gates on bind latency, not
+		// on Pods reaching Running. Removing the second write per
+		// Pod reduces binder writes from 3 → 2, ≈33 % less work
+		// during the demand-clear burst.
 		if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
 			return reconcile.Result{}, fmt.Errorf("create node: %w", err)
-		}
-		if node.ResourceVersion != "" {
-			statusPatch := node.DeepCopy()
-			statusPatch.Status = corev1.NodeStatus{
-				Capacity:    upn.Spec.Resources,
-				Allocatable: upn.Spec.Resources,
-				Conditions: []corev1.NodeCondition{{
-					Type:    corev1.NodeReady,
-					Status:  corev1.ConditionTrue,
-					Reason:  "KubeletReady",
-					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
-				}},
-			}
-			_ = r.Status().Update(ctx, statusPatch)
 		}
 	}
 
