@@ -1,67 +1,43 @@
-# scaleway-1m — 1,000,000-machine fleet test on Scaleway, two shards.
+# scaleway-1m — 1,000,000-machine fleet test, two shards, Pod-mode.
 #
-# **M44: still CR-mode.** Pod-mode (M44 default for the 50K-Pod
-# profiles) doesn't fit at this per-cluster shape — 100 clusters ×
-# 10K Pods each = 10K Pod-mode objects per kwok cluster, which
-# exceeds the kine sqlite budget proven at dev-5k-pods. Reshaping
-# this profile to Pod-mode (smaller per-cluster Pod count + matching
-# M29 seed adjustment) is M44-followup. For now the algorithmic
-# SLOs (cycle, rollup, ack, shortfalls) gate the run; bindingLatency
-# is skipped per ADR-0017 -1 sentinel.
+# Aggregate-named: 2 shards × 500K under management each = 1M total.
+# Demand: 100 kwok clusters × 1K Pods/cluster = 100K Pods through the
+# full M43 chain. Inherits Pod-mode + the realistic 6-archetype
+# catalog from the chart defaults.
 #
-# **M29: production-realistic seed shape.** Earlier revisions of this
-# profile pre-seeded the entire 1M aggregate inventory as Idle. That
-# does not match a real fleet, where the vast majority of machines are
-# already bound to workloads (Configured) and Idle is a small
-# headroom pool for new bursts. With M29 the seed is split:
-#   - 9000 Configured per cluster × 100 clusters = 900K Configured
-#     (already-bound, AssignedPriority=1000000 so the burst can't
-#     preempt them, instance-type a3-highgpu-8g matching the
-#     load-driver's CR profile so Phase 3 keeps them as "wanted")
-#   - 100K Idle headroom (50K per shard) for the burst's new bindings
+# **M29 production-realistic seed shape.** Each shard owns 50 owned
+# clusters with seedConfiguredPerCluster=9000 (from realistic
+# archetype catalog, weighted) — 450K Configured per shard, 900K
+# fleet-wide already-bound workloads. 100K demand at any moment is
+# the unsatisfied burst Phase 1 binds from Idle (50K per shard,
+# 100K total). 1:10 burst regime against the 1M aggregate (ADR-0013).
 #
-# Demand: 100 KWOK clusters × 10K CRs each = 1M total CRs. Of those
-# 1M, 900K are matched by the seed Configured (no Phase 1 work,
-# Phase 3 keeps) and 100K are *unsatisfied burst* that Phase 1 must
-# bind from Idle. That's a 1:10 burst regime (ADR-0013) at the
-# pending-demand-to-inventory level, the way real production fleets
-# actually look during deploy ramps.
+# Why 1:10 and not 1:1: ADR-0013 codifies BigFleet's cycle-p99 SLO
+# at burst density (≤10% pending demand). 1:1 reprovisioning is its
+# own regime gated on convergence rate, not cycle p99 — that lived
+# in scaleway-{1m,5m}-reprovision before M44 and is reachable by
+# scaling demand up if needed (changes the gate semantics, not the
+# binary).
 #
-# Per-shard: 500K Configured + 50K Idle = 550K under management,
-# with ~50K pending demand from the 50 owned clusters. Phase 2/3
-# work scales with Configured count (per M27); Phase 1 work scales
-# with the unsatisfied-demand count.
-#
-# Why 1:10 rather than 1:1: ADR-0013 codifies that BigFleet's
-# cycle-p99 SLO is promised at burst-density (≤10 % pending demand,
-# the worst case real production fleets hit during deploy ramps).
-# A complete reprovisioning event (1:1) is its own regime gated on
-# convergence rate, not cycle p99 — see scaleway-1m-reprovision for
-# that shape.
-#
-# Sized for 2× PRO2-L Kapsule (32 vCPU / 128 GiB each):
+# Sized for 4× PRO2-L Kapsule (32 vCPU / 128 GiB each):
 #   shards:       2 × 2 vCPU / 3 GiB                =  4 vCPU / 6 GiB
-#   coordinator:  1 × default                        =  ~0.5 vCPU / 0.5 GiB
-#   prometheus:   1 × 1 vCPU / 4 GiB                 =  1 vCPU / 4 GiB
-#   kwok pods:    100 × 0.3 vCPU / 0.8 GiB           = 30 vCPU / 80 GiB
-#                                                       (apiserver + workload split)
-#   total:        ~36 vCPU req / ~91 GiB             → fits 2× PRO2-L
-#                                                       (64 vCPU / 256 GiB)
-#                                                       ~56 % CPU, ~36 % memory reservation
-#
-# PRO2-L is a separate per-zone instance-type quota counter from
-# PRO2-M. Default 10/zone, so 2 fits comfortably.
+#   coordinator:  1 × default                       = ~0.5 vCPU / 1 GiB
+#   prometheus:   1 × 2 vCPU / 8 GiB                =  2 vCPU / 8 GiB
+#   kwok pods:  100 × 1 vCPU / 2 GiB combined req   = 100 vCPU / 200 GiB
+#                  (M44 Pod-mode floor)
+#   total:       ~107 vCPU req / ~215 GiB            → fits 4× PRO2-L
+#                                                       (128 vCPU / 512 GiB)
+#                                                       ~84 % CPU, ~42 % memory reservation
 #
 # Provisioning:
 #
 #   scw k8s cluster create name=bigfleet-1m \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
+#     pools.0.size=4 pools.0.min-size=4 pools.0.max-size=4 \
 #     region=fr-par project-id=<bigfleet-project-id>
 #
-# Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
-# A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74).
+# Cost: 4× PRO2-L × ~€0.42/hr ≈ €1.68/hr. ~50 min run ≈ €1.40/$1.50.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -75,32 +51,12 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  # 100 clusters × 10K CRs each = 1M total CRs. With M29's seed
-  # 9K of those 10K CRs per cluster are pre-matched by Configured
-  # (no Phase 1 binding work, Phase 3 keeps); the other 1K is
-  # unsatisfied burst that Phase 1 must bind from Idle.
   clusterCount: 100
-  apiserverResources:
-    requests: { cpu: 150m, memory: 500Mi }
-    limits:   { cpu: 2,    memory: 3Gi }
-  workloadResources:
-    # 10K CRs/cluster (10× the old 1K shape) to support the
-    # production-realistic seed alignment. Same per-pod budget as
-    # scaleway-5m-reprovision, which already validates 10K CRs/cluster.
-    requests: { cpu: 150m, memory: 400Mi }
-    limits:   { cpu: 2,    memory: 1500Mi }
 
 shard:
-  # 2 shards: kwok-cluster-N → bigfleet-shard-(N % 2). Each shard
-  # owns 50 clusters × 9000 = 450K Configured + 50K Idle ≈ 500K
-  # under management. The realistic split — most of which is
-  # workloads-already-bound, not Idle headroom.
   replicas: 2
-  # Idle headroom for the 100K unsatisfied burst (50K per shard).
-  seedMachines: 50000
-  # M29: 9000 Configured per kwok cluster owned by this shard.
-  # 50 clusters × 9000 = 450K Configured per shard.
-  seedConfiguredPerCluster: 9000
+  seedMachines: 50000        # 50K Idle per shard, 100K aggregate
+  seedConfiguredPerCluster: 9000   # M29: 450K Configured per shard, 900K aggregate
   maxActionsPerCycle: 1000
   executeConcurrency: 128
   incrementalReconcile: true
@@ -114,47 +70,28 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 10K CRs per cluster × 100 clusters = 1M total CRs. M29's
-  # Configured seed pre-matches 9K of those 10K per cluster, so
-  # at any moment ~100K CRs remain unsatisfied — the 1:10 burst
-  # ratio against the 1M aggregate inventory (ADR-0013). The
-  # other 900K live in steady-state Configured under Phase 3's
-  # "kept" path.
-  target: 10000
+  target: 1000
   churnPerMinute: 0.05
-  # Pin all CRs to priority 1000 (vs the default [100, 1000, 1000000]
-  # ladder). The seed lives at priority 1000000 so it can never be
-  # preempted, but we don't want load-driver CRs at 1000000 either —
-  # those would trigger Phase 2 against fellow CRs at lower priority,
-  # which is a different regime than what this profile validates.
-  # The 1000-only setting keeps the test focused on the steady-state +
-  # burst path and avoids Phase 2 inversion fan-out from priority
-  # diversity.
-  priorityClasses: [1000]
   durationSeconds: 1800
-  # M44 explicit opt-out: 10K Pods/cluster doesn't fit the M44
-  # Pod-mode kwok floor without separate sizing. CR-mode preserved
-  # until the Pod-mode reshape lands (see header).
-  mode: cr
 
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
   rollupInterval: 0s
+  coLocationKey: topology.bigfleet/rack
 
-# ADR-0017 / M44: CR-mode (opt-out). pass() skips bindingLatency
-# gate via -1 sentinel; algorithmic SLOs gate the run.
 slo:
+  bindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
   resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 4, memory: 12Gi }
+    requests: { cpu: 2, memory: 8Gi }
+    limits:   { cpu: 4, memory: 16Gi }
 
 costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management each (450K Configured + 50K Idle) = 1M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013). M44 CR-mode opt-out — Pod-mode reshape pending. ~$0.74 for a 50-min run end-to-end."
+  vCPU: 128
+  memoryGB: 512
+  awsSpotUsdPerHour: 1.68
+  notes: "4× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management (450K Configured + 50K Idle) = 1M aggregate; 100K Pod-mode demand through the full M43 chain. bindingLatency p99 ≤ 5s gated. ~$1.50 for a 50-min run end-to-end."

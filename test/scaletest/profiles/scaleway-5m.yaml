@@ -1,71 +1,44 @@
-# scaleway-5m — fleet-scale realism test on Scaleway (M13).
+# scaleway-5m — fleet-scale realism test, ten shards, Pod-mode.
 #
-# **M29 production-realistic seed.** Each shard owns 50 kwok clusters
-# under the `c % 10` mapping; per-cluster pre-seed is 9000 Configured
-# (already-bound, AssignedPriority=1000000, instance-type
-# a3-highgpu-8g matching the load-driver's CR profile). Per-shard:
-#   - 9000 × 50 = 450K Configured (steady-state running workloads)
-#   - 50K Idle headroom for the burst's new bindings
-#   - Total 500K under management, 4.5M aggregate Configured fleet-wide
+# Aggregate-named: 10 shards × 500K under management each = 5M total.
+# Demand: 500 kwok clusters × 1K Pods/cluster = 500K Pods through the
+# full M43 chain. Inherits Pod-mode + the realistic 6-archetype
+# catalog from the chart defaults.
 #
-# Demand: 500 kwok clusters × 10K CRs each = 5M total CRs. Phase 3
-# pre-matches 9K of each cluster's 10K CRs against the seed Configured
-# (kept, no work); the remaining 1K per cluster is unsatisfied burst
-# Phase 1 binds from Idle. Total pending demand: 500K against 5M
-# inventory = 1:10 burst regime (ADR-0013) — what the 100 ms cycle
-# p99 SLO is measured under per ADR-0013.
+# Per-shard shape mirrors scaleway-500k: 450K Configured (M29 seed)
+# + 50K Idle headroom + 50K demand from 50 owned clusters. Each shard
+# runs at its M11-validated 500K burst-regime ceiling while the fleet
+# aggregates 5M. ADR-0013 1:10 burst regime; cycle p99 ≤ 5s gated.
 #
-# This is the architectural-scale test: each shard runs at its
-# M11-validated 500K burst-regime ceiling while the fleet aggregates
-# 5M. Per-shard cycle p99 ≤ 100 ms is the SLO; a single overshooting
-# shard fails the gate (runner queries are max(by pod)). ADR-0013
-# codifies the regime-aware SLO landscape — burst (1:10) is what the
-# 100 ms SLO is measured under, not 1:1 reprovisioning. Reprovisioning
-# at this scale lives in scaleway-5m-reprovision and gates on
-# convergence rate instead of cycle p99.
+# Sized for 16× PRO2-L Kapsule (32 vCPU / 128 GiB each):
+#   shards:       10 × 2 vCPU / 3 GiB              =  20 vCPU / 30 GiB
+#   coordinator:   1 × default                      =  ~1 vCPU / 1 GiB
+#   prometheus:    1 × 4 vCPU / 16 GiB              =   4 vCPU / 16 GiB
+#                  (5M demand → big histogram fan-out)
+#   kwok pods:   500 × 1 vCPU / 2 GiB combined req  = 500 vCPU / 1 TiB
+#                   (M44 Pod-mode floor)
+#   total:        ~525 vCPU req / ~1050 GiB          → fits 16× PRO2-L
+#                                                        (512 vCPU / 2048 GiB)
+#                                                        ~quota: PRO2-L 10/zone
+#                                                        default — needs quota
+#                                                        bump or split across
+#                                                        2 zones (8 + 8).
 #
-# Sized for 7× PRO2-L (32 vCPU / 128 GiB) Scaleway Kapsule:
-#   shards:        10 × 2 vCPU / 3 GiB                   =  20 vCPU / 30 GiB
-#   coordinator:   1 × default                            =  ~0.5 vCPU / 0.5 GiB
-#   prometheus:    1 × 2 vCPU / 8 GiB (5M demand → bigger histogram fan-out)
-#   kwok pods:     500 × 0.3 vCPU / 0.8 GiB (apiserver + workload split)
-#                                                        = 150 vCPU / 400 GiB
-#   total:         ~175 vCPU req / ~440 GiB              → fits 7× PRO2-L
-#                                                          (224 vCPU / 896 GiB)
-#                                                          ~78 % CPU, ~49 % memory reservation
+# Pre-flight: confirm PRO2-L quota in chosen zones is ≥16 (or split
+# 8+8 across two zones). M12 multi-shard merged. Coordinator scrape
+# gap (task #146) means coordinatorApplyOpsPerSec stays -1 in summary
+# — algorithmic SLOs gate the run.
 #
-# Sizing history:
-#   - First sketch: 8× PRO2-XXL (256 vCPU / 1024 GiB) @ ~€3.40/hr ≈ $3.00/run.
-#     Substantially overprovisioned given measured per-pod CPU on the M11
-#     500K runs (115 m steady-state per kwok container; 10× the CRs/cluster
-#     scales linearly so ~300 m per container is a comfortable assumption).
-#   - 7× PRO2-L: same total CPU/memory order with PRO2-L (32 vCPU / 128 GiB)
-#     instead of the bigger PRO2-XXL. ~22 % cheaper. PRO2-L is a different
-#     instance-type quota counter from PRO2-M / PRO2-XXL, so the 10/zone
-#     PRO2-M quota we've been bumping into for the 500K runs doesn't apply.
-#
-# Pre-flight before running this profile:
-#   1. Confirm PRO2-L quota in the chosen zone is ≥7. Default is 10/zone.
-#   2. M12 (multi-shard) must be merged (it is — see commits da15e8d / aa7fe20).
-#   3. The runner emits per-shard cycle p99 via max(... by pod ...) so a
-#      single overshooting shard breaks the gate; older single-shard runs
-#      reduce to the same number under that aggregation.
-#   4. Coordinator scrape gap (task #146) is unfixed: coordinatorApplyOpsPerSec
-#      will still be -1 in the summary. The ~500-domain assignment workload
-#      is covered by integration tests; if the run uncovers a coordinator
-#      bottleneck we'll see it as cycle p99 stalls, not as a missing metric.
-#
-# Provisioning (single zone, fr-par-1 — adjust to whichever has quota):
+# Provisioning (single zone if quota allows):
 #
 #   scw k8s cluster create name=bigfleet-5m \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=7 pools.0.min-size=7 pools.0.max-size=7 \
+#     pools.0.size=16 pools.0.min-size=16 pools.0.max-size=16 \
 #     pools.0.zone=fr-par-1 \
 #     region=fr-par project-id=<bigfleet-project-id>
 #
-# Expected cost: 7× PRO2-L × ~€0.42/hr ≈ €2.94/hr.
-# A 30-min run + setup + teardown ≈ 50 min ≈ €2.45 (~$2.60).
+# Cost: 16× PRO2-L × ~€0.42/hr ≈ €6.72/hr. ~50 min run ≈ €5.60/$6.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -80,28 +53,11 @@ bigfleet:
 
 kwok:
   clusterCount: 500
-  apiserverResources:
-    requests: { cpu: 150m, memory: 500Mi }
-    limits:   { cpu: 2,    memory: 3Gi }
-  workloadResources:
-    # 10× the CRs per cluster (10K vs 1K). The operator's rollup work
-    # scales with CRs; bump the limit so workload-side fan-out has room.
-    requests: { cpu: 150m, memory: 400Mi }
-    limits:   { cpu: 2,    memory: 1500Mi }
 
 shard:
-  # 10 shards at the M11-validated ceiling. Coordinator-scrape gap
-  # (-1 for coordinatorApplyOpsPerSec, see task #146) means we won't
-  # have explicit coordinator capacity confirmation in summary.json
-  # for this run — but the integration tests already cover the
-  # ~500-domain assignment workload at a per-FSM-apply level.
   replicas: 10
-  # Idle headroom: 50K per shard × 10 = 500K total Idle, sized for
-  # the 500K unsatisfied-burst demand fleet-wide.
-  seedMachines: 50000
-  # M29: 9000 Configured per kwok cluster owned by this shard.
-  # 50 clusters × 9000 = 450K Configured per shard; 4.5M fleet-wide.
-  seedConfiguredPerCluster: 9000
+  seedMachines: 50000        # 50K Idle per shard, 500K aggregate
+  seedConfiguredPerCluster: 9000   # M29: 450K Configured per shard, 4.5M aggregate
   maxActionsPerCycle: 1000
   executeConcurrency: 128
   incrementalReconcile: true
@@ -115,43 +71,31 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  # 10K CRs per cluster × 500 clusters = 5M total CRs. M29's seed
-  # pre-matches 9K of those 10K per cluster, so at any moment ~500K
-  # CRs remain unsatisfied — the 1:10 burst ratio against the 5M
-  # aggregate inventory (ADR-0013).
-  target: 10000
+  target: 1000
   churnPerMinute: 0.05
-  # See scaleway-1m.yaml — pin to priority 1000 only so the seed
-  # (priority 1000000) is never preempted and the test exercises the
-  # steady-state + burst path rather than priority-mix Phase 2 fan-out.
-  priorityClasses: [1000]
   durationSeconds: 1800
-  # M44 explicit opt-out: 10K Pods/cluster × 500 clusters would need
-  # separate sizing; this profile is gated on algorithmic SLOs
-  # (cycle, ack, rollup) which Pod-mode doesn't change.
-  mode: cr
 
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
   rollupInterval: 0s
+  coLocationKey: topology.bigfleet/rack
 
-# ADR-0017 (revised): CR-mode profile. See scaleway-500k.yaml for
-# the explanation; pass() skips bindingLatency gate in CR-mode.
 slo:
+  bindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
-  # 5M-CR fan-out: histogram bucket cardinality scales with kwok pod
-  # count × bucket count. 4 GiB → 8 GiB to handle 500-pod histograms
-  # without the scraper's TSDB head-block growing past memory.
+  # 5M-CR / 500K-Pod fan-out: histogram bucket cardinality scales
+  # with kwok pod count × bucket count. 16 GiB request gives the
+  # head block room.
   resources:
-    requests: { cpu: 2, memory: 8Gi }
-    limits:   { cpu: 4, memory: 16Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 costEstimate:
-  vCPU: 224
-  memoryGB: 896
-  awsSpotUsdPerHour: 3.10
-  notes: "7× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management each (450K Configured + 50K Idle) = 5M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013); cycle p99 ≤ 100 ms SLO. ~$2.60 for a 50-min run end-to-end."
+  vCPU: 512
+  memoryGB: 2048
+  awsSpotUsdPerHour: 6.72
+  notes: "16× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management (450K Configured + 50K Idle) = 5M aggregate; 500K Pod-mode demand through the full M43 chain. bindingLatency p99 ≤ 5s gated per shard. ~$6 for a 50-min run end-to-end. Watch PRO2-L zone quota."

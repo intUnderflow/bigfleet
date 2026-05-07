@@ -129,7 +129,7 @@ scaletest-images: ## Build the two images the scaletest harness needs (bigfleet,
 	docker build -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
 
 .PHONY: scaletest
-scaletest: ## Run the dev-5k profile end-to-end. Override with PROFILE=local-50k etc.
+scaletest: ## Run the dev-5k profile end-to-end. Override with PROFILE=scaleway-500k etc.
 	@mkdir -p test/scaletest/results
 	$(GO) run ./test/scaletest/cmd/scaletest-runner \
 		--profile=test/scaletest/profiles/$(or $(PROFILE),dev-5k).yaml \
