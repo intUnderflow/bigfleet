@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -455,6 +456,22 @@ func runShard(args []string) error {
 	if *metricsAddr != "0" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
+		// ADR-0019 / M44.4: pprof endpoints for live cpu/heap/goroutine
+		// capture during cloud runs. The bench at 50K Phase 1 calls
+		// takes 20 ms total on M5 Max; the same workload measures
+		// ~134 s mean per cycle in cloud. The 6000× discrepancy isn't
+		// algorithmic (else the bench would reproduce it) — it's
+		// cloud-specific: GC pressure, allocator contention with the
+		// fold goroutine, lock contention, or CPU steal we can't see
+		// from the shard's Prometheus surface. Live pprof closes that
+		// gap. Off-by-default in production: leave only on the
+		// scaletest harness builds (the metrics endpoint is itself
+		// scaletest-shaped — no auth, no TLS).
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		logger.Info("metrics serving", "addr", *metricsAddr)
 		go func() { errCh <- metricsSrv.ListenAndServe() }()
