@@ -66,12 +66,9 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0017: CR-mode profile, fingerprint-grained metric. See
-# scaleway-500k.yaml for the full explanation. 400 s exceeds the
-# histogram's +Inf-bucket boundary (327.68 s), preventing spurious
-# gate fires from histogram_quantile-on-stale-data during the soak.
+# ADR-0017 (revised): CR-mode profile. See scaleway-500k.yaml for
+# the explanation; pass() skips bindingLatency gate in CR-mode.
 slo:
-  bindingLatencyP99Seconds: 400
   shardCycleDurationP99Seconds: 5
 
 prometheus:
