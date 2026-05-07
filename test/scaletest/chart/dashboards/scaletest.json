@@ -289,6 +289,27 @@
         {"expr": "sum(rate(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"}[1m]))", "refId": "G", "legendFormat": "7) Pod binds/s"}
       ],
       "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 403, "type": "timeseries", "title": "Action execute outcomes by reason",
+      "description": "Drop A diagnostic: which return path silently dropped Bootstraps. no_session = operator stream gone for that cluster (the M44.4 hypothesis); transition_error = state-machine refused; blob_error = bootstrap-blob fetch failed; provider_error = fake provider rejected; ctx_canceled = cycleCtx timeout.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 68},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (outcome) (rate(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\"}[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 404, "type": "timeseries", "title": "Operator sessions: active count + lifecycle rate",
+      "description": "active = current count of installed sessions; should equal cluster.replicas for the shard. installed/removed/replaced = lifecycle event rate; high replaced rate = grpc keepalive churn under load.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 68},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "max(bigfleet_shard_active_sessions)", "refId": "A", "legendFormat": "active sessions"},
+        {"expr": "sum by (event) (rate(bigfleet_shard_session_lifecycle_total[1m]))", "refId": "B", "legendFormat": "{{event}}/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
     }
   ]
 }

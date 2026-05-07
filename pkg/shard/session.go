@@ -16,6 +16,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
@@ -111,21 +112,27 @@ func (s *Shard) handleOperatorMessage(ctx context.Context, sess *operatorSession
 // prior session for the same cluster.
 func (s *Shard) installSession(cluster machine.ClusterID, sess *operatorSession) {
 	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
 	if prev, ok := s.sessionsByCluster[cluster]; ok {
 		prev.close()
+		metrics.ShardSessionLifecycle.WithLabelValues("replaced").Inc()
+	} else {
+		metrics.ShardSessionLifecycle.WithLabelValues("installed").Inc()
 	}
 	s.sessionsByCluster[cluster] = sess
+	metrics.ShardActiveSessions.Set(float64(len(s.sessionsByCluster)))
+	s.sessionsMu.Unlock()
 }
 
 // removeSession unregisters a session. The argument check ensures we
 // don't accidentally remove a session that has already been replaced.
 func (s *Shard) removeSession(cluster machine.ClusterID, sess *operatorSession) {
 	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
 	if cur, ok := s.sessionsByCluster[cluster]; ok && cur == sess {
 		delete(s.sessionsByCluster, cluster)
+		metrics.ShardSessionLifecycle.WithLabelValues("removed").Inc()
 	}
+	metrics.ShardActiveSessions.Set(float64(len(s.sessionsByCluster)))
+	s.sessionsMu.Unlock()
 	sess.close()
 	// Forget AvailableCapacity dedup state so a reconnecting operator
 	// (which may have lost its CRs across an API-server restart)

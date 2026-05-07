@@ -111,6 +111,28 @@ var (
 		Help: "Count of decision actions deferred to a later cycle by MaxActionsPerCycle. Phase 1/2/3 are idempotent so deferred work re-derives next cycle.",
 	})
 
+	// M44.4 Drop A diagnostic: per-execute-outcome counters. The
+	// scaleway-50k pipeline run found 71% of Bootstrap actions emitted
+	// by Phase 1 don't translate to Configured machines — execute
+	// returned errors silently. This counter localises which return
+	// path each error takes; combined with ShardSessionLifecycle and
+	// ShardActiveSessions below, it pinpoints whether nil-session
+	// is the dominant failure mode.
+	ShardActionExecuteOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_action_execute_outcomes_total",
+		Help: "Count of action-execute outcomes by kind + outcome. Sums to (or close to) ShardActionsTotal — gaps point at unaccounted return paths. Outcomes: success, no_session (operator stream gone), transition_error (state-machine refused), blob_error (operator/local bootstrap blob fetch failed), configure_error (provider Configure rejected), ctx_canceled (cycleCtx timeout).",
+	}, []string{"kind", "outcome"})
+
+	ShardSessionLifecycle = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_session_lifecycle_total",
+		Help: "Count of operator-session lifecycle events. installed = new operator dialed, removed = stream ended, replaced = same cluster's prior session was kicked. High replaced rate = grpc keepalive churn under load.",
+	}, []string{"event"})
+
+	ShardActiveSessions = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_active_sessions",
+		Help: "Number of currently-installed operator sessions on this shard. Should equal the count of clusters bound to this shard's domain assignment; lower means at least one cluster's operator hasn't dialed (or got disconnected).",
+	})
+
 	// ADR-0019: per-sub-path Phase 1 instrumentation. The cloud-vs-
 	// bench discrepancy in M44.4 required attribution of where Phase 1
 	// wall-clock actually goes — pool build (merge+sort across multi-

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
 )
 
@@ -16,7 +18,15 @@ import (
 // matching provider RPC. Errors are returned to the caller (the cycle)
 // so they can be logged, but they do not abort the cycle: the next
 // cycle re-derives actions from current state.
-func (s *Shard) execute(ctx context.Context, a decision.Action) error {
+func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
+	// M44.4 Drop A diagnostic: classify the outcome of each action
+	// execution. The pre-instrumentation cloud run found 71% of
+	// Bootstrap actions emitted by Phase 1 don't translate to
+	// Configured machines; without per-outcome attribution we can't
+	// tell which return path is the silent drop.
+	defer func() {
+		metrics.ShardActionExecuteOutcomes.WithLabelValues(a.Kind.String(), classifyExecuteError(ctx, err)).Inc()
+	}()
 	switch a.Kind {
 	case decision.ActionKindBootstrap:
 		return s.executeBootstrap(ctx, a)
@@ -26,6 +36,37 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) error {
 		return s.executeDrain(ctx, a)
 	}
 	return fmt.Errorf("unknown action kind: %s", a.Kind)
+}
+
+// classifyExecuteError maps the err return of execute() to one of a
+// fixed set of outcome labels for the per-execute counter.
+func classifyExecuteError(ctx context.Context, err error) string {
+	if err == nil {
+		return "success"
+	}
+	if ctx.Err() != nil {
+		return "ctx_canceled"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no active operator session"):
+		return "no_session"
+	case strings.Contains(msg, "→ Configuring"),
+		strings.Contains(msg, "→ Creating"),
+		strings.Contains(msg, "→ Draining"),
+		strings.Contains(msg, "post-Create transition"),
+		strings.Contains(msg, "post-Configure transition"):
+		return "transition_error"
+	case strings.Contains(msg, "LocalBootstrap"),
+		strings.Contains(msg, "requestBootstrap"):
+		return "blob_error"
+	case strings.Contains(msg, "provider.Configure"),
+		strings.Contains(msg, "provider.Create"),
+		strings.Contains(msg, "provider.Drain"),
+		strings.Contains(msg, "provider.Delete"):
+		return "provider_error"
+	}
+	return "other"
 }
 
 // executeProvision turns a Speculative machine into a Configured one for
