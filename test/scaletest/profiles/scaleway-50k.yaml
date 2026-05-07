@@ -30,13 +30,13 @@
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
   tag: dev
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 bigfleet:
   image:
     repository: ghcr.io/intunderflow/bigfleet
     tag: dev
-    pullPolicy: IfNotPresent
+    pullPolicy: Always
 
 kwok:
   clusterCount: 50

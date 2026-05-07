@@ -430,6 +430,14 @@ func (t *Table) Replace(cluster machine.ClusterID, n []Need) {
 // Snapshot returns the full needs list, sorted by priority desc and then
 // by arrival time asc (older first). The returned slice is owned by the
 // caller and may be mutated freely.
+//
+// Performance (M44.4 / ADR-0019): the cloud profile of scaleway-50k
+// found this function consuming ~25 % of all shard CPU — a
+// reflection-based sort.SliceStable on 50 K Need structs (each ~128 B
+// with embedded slices and maps) drove typedmemmove + tryDeferToSpanScan
+// to dominate. Replaced with a sort-by-indices design: we sort an
+// []int permutation and gather the result, so swaps are int swaps
+// instead of struct copies.
 func (t *Table) Snapshot() []Need {
 	t.mu.RLock()
 	if !t.dirty && t.cached != nil {
@@ -451,19 +459,32 @@ func (t *Table) Snapshot() []Need {
 	for _, ns := range t.byCluster {
 		all = append(all, ns...)
 	}
-	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Profile.priority != all[j].Profile.priority {
-			return all[i].Profile.priority > all[j].Profile.priority
+
+	// Sort by indices to avoid struct-sized swaps during sort. Each
+	// permutation entry is a uint32; sorting + final gather move 4 B
+	// per element instead of ~128 B.
+	idx := make([]uint32, len(all))
+	for i := range idx {
+		idx[i] = uint32(i)
+	}
+	sort.SliceStable(idx, func(i, j int) bool {
+		a, b := &all[idx[i]], &all[idx[j]]
+		if a.Profile.priority != b.Profile.priority {
+			return a.Profile.priority > b.Profile.priority
 		}
-		if all[i].ArrivalUnixNanos != all[j].ArrivalUnixNanos {
-			return all[i].ArrivalUnixNanos < all[j].ArrivalUnixNanos
+		if a.ArrivalUnixNanos != b.ArrivalUnixNanos {
+			return a.ArrivalUnixNanos < b.ArrivalUnixNanos
 		}
-		return all[i].ClusterID < all[j].ClusterID
+		return a.ClusterID < b.ClusterID
 	})
-	t.cached = all
+	sorted := make([]Need, len(all))
+	for i, j := range idx {
+		sorted[i] = all[j]
+	}
+	t.cached = sorted
 	t.dirty = false
-	out := make([]Need, len(all))
-	copy(out, all)
+	out := make([]Need, len(sorted))
+	copy(out, sorted)
 	return out
 }
 
