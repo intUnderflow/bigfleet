@@ -169,6 +169,52 @@
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "sum by (pod) (bigfleet_shard_inventory_machines)", "refId": "A", "legendFormat": "{{pod}}"}],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "id": 300, "type": "row", "title": "Phase 1 sub-paths (ADR-0019 / M44.4)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 42},
+      "collapsed": false
+    },
+    {
+      "id": 301, "type": "timeseries", "title": "Phase 1 sub-path mean duration",
+      "description": "ADR-0019: per-sub-path attribution of Phase 1 wall-clock. take is the head-cursor walk; takeCoLocated is the Same-rack bucket pick (the cloud-only hot path the operator's owner-grouping forces every Pod-derived Need through); takeSpread is the strict-spread bucket pick. After M44.4's optimisation, the cached bucketing + per-bucket head cursors should drop takeCoLocated mean to sub-millisecond.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 43},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_take_duration_seconds_count[2m])", "refId": "A", "legendFormat": "{{path}} mean"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 302, "type": "timeseries", "title": "Phase 1 sub-path call rate",
+      "description": "Calls per second by sub-path. takeCoLocated dominating reflects the Pod → CR → Same(rack) translation at scale; take dominating reflects single-archetype profiles without sameRack.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 43},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(bigfleet_shard_phase1_calls_total[2m])", "refId": "A", "legendFormat": "{{path}} /s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 303, "type": "timeseries", "title": "Phase 1 sub-path CPU share (sum/sec)",
+      "description": "How much wall-clock per second of soak each sub-path consumes. ≈1.0 means the sub-path is fully saturating one shard CPU; ≪1 means it's fine. Pre-M44.4 takeCoLocated landed near 1.0 at scaleway-50k.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 51},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m])", "refId": "A", "legendFormat": "{{path}} s/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}, "overrides": []}
+    },
+    {
+      "id": 304, "type": "timeseries", "title": "Phase 1 pool build duration (cache miss cost)",
+      "description": "buildPoolSource time per (state, fingerprint). Cached after first build per cycle; high values here mean pool merging+sorting (multi-instance-type profiles) is dominating, not the take path.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 51},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))", "refId": "A", "legendFormat": "p99"},
+        {"expr": "rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m])", "refId": "B", "legendFormat": "mean"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
     }
   ]
 }
