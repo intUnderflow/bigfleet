@@ -169,6 +169,10 @@ var (
 	active = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "scaletest_loadgen_cr_active",
 	})
+	target = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "scaletest_loadgen_cr_target",
+		Help: "Effective per-cluster CR/Pod target after M36 cluster-size-skew adjustments. Summing across clusters gives the runner's totalCRs gate denominator. Used by the dashboard's sustained-load SLO panel (load-active / target).",
+	})
 	errs = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "scaletest_loadgen_errors_total",
 	}, []string{"kind"})
@@ -228,6 +232,7 @@ func run(args []string) error {
 		logger.Info("cluster-size skew applied", "base_target", prof.Target, "multiplier", clamped, "effective_target", newTarget)
 		prof.Target = newTarget
 	}
+	target.Set(float64(prof.Target))
 	logger.Info("profile loaded",
 		"target", prof.Target,
 		"churn_per_minute", prof.ChurnPerMinute,
