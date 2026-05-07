@@ -253,6 +253,42 @@
         {"expr": "rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m])", "refId": "B", "legendFormat": "mean"}
       ],
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 400, "type": "row", "title": "Pipeline drop-off (M44.4)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 59},
+      "collapsed": false
+    },
+    {
+      "id": 401, "type": "timeseries", "title": "Pod-mode chain stage cumulative — per stage",
+      "description": "From load-driver Pod creates down to fake-Node bindings. Watch the gap between consecutive stages — that's where the chain throttles. Right after gate-cleared the curves should track each other; if they diverge, identify the rate-limited stage by which curve flattens first.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 60},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(scaletest_loadgen_cr_created_total) - sum(scaletest_loadgen_cr_deleted_total)", "refId": "A", "legendFormat": "1) Pods alive (created - deleted)"},
+        {"expr": "sum(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"})", "refId": "B", "legendFormat": "2) marked Unschedulable by pod-shim"},
+        {"expr": "sum(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"})", "refId": "C", "legendFormat": "3) CRs created by UPC"},
+        {"expr": "sum(bigfleet_shard_actions_total{kind=\"Bootstrap\"})", "refId": "D", "legendFormat": "4) Bootstrap actions emitted (shard)"},
+        {"expr": "sum(bigfleet_shard_inventory_machines{state=\"Configured\"})", "refId": "E", "legendFormat": "5) Configured machines"},
+        {"expr": "sum(bigfleet_scaletest_pod_shim_fake_nodes_created_total)", "refId": "F", "legendFormat": "6) fake Nodes created"},
+        {"expr": "sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"})", "refId": "G", "legendFormat": "7) Pod binds (success)"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "id": 402, "type": "timeseries", "title": "Pipeline stage rate (events / sec)",
+      "description": "Per-stage events per second. Equal rates = chain in steady-state; the slowest curve here is the throttling stage.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 60},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))", "refId": "A", "legendFormat": "1) Pod creates/s"},
+        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"}[1m]))", "refId": "B", "legendFormat": "2) Unschedulable patches/s"},
+        {"expr": "sum(rate(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"}[1m]))", "refId": "C", "legendFormat": "3) CRs created/s"},
+        {"expr": "sum(rate(bigfleet_shard_actions_total{kind=\"Bootstrap\"}[1m]))", "refId": "D", "legendFormat": "4) Bootstraps emitted/s"},
+        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_fake_nodes_created_total[1m]))", "refId": "F", "legendFormat": "6) fake Nodes/s"},
+        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"}[1m]))", "refId": "G", "legendFormat": "7) Pod binds/s"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
     }
   ]
 }

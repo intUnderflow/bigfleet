@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -29,9 +30,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 )
+
+// M44.4 chain-drop diagnostic counters. These count what the
+// reconciler actually does per Pod event so we can localise where
+// the load-driver → Configured chain throttles. Compare to
+// scaletest_loadgen_cr_created_total (Pods created upstream) to find
+// the drop between Pods and CRs.
+var (
+	upcReconciles = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_unschedulable_pod_controller_reconciles_total",
+		Help: "Count of Reconcile invocations by outcome.",
+	}, []string{"outcome"}) // outcome: cr_created, cr_exists, not_unschedulable, pod_gone, error
+)
+
+func init() {
+	ctrlmetrics.Registry.MustRegister(upcReconciles)
+}
 
 const (
 	// AnnotationInterruptionPenalty is the pod annotation users set to
@@ -136,30 +154,38 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Pod gone — its CR is GC'd via ownerRef.
+			upcReconciles.WithLabelValues("pod_gone").Inc()
 			return ctrl.Result{}, nil
 		}
+		upcReconciles.WithLabelValues("error").Inc()
 		return ctrl.Result{}, err
 	}
 
 	if !isUnschedulable(&pod) {
+		upcReconciles.WithLabelValues("not_unschedulable").Inc()
 		return ctrl.Result{}, nil
 	}
 	// Idempotent: skip if a CR already exists for this pod.
 	exists, err := r.crExistsForPod(ctx, &pod)
 	if err != nil {
+		upcReconciles.WithLabelValues("error").Inc()
 		return ctrl.Result{}, err
 	}
 	if exists {
+		upcReconciles.WithLabelValues("cr_exists").Inc()
 		return ctrl.Result{}, nil
 	}
 
 	newCR := r.buildCRForPod(&pod)
 	if err := r.Create(ctx, newCR); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			upcReconciles.WithLabelValues("cr_exists").Inc()
 			return ctrl.Result{}, nil
 		}
+		upcReconciles.WithLabelValues("error").Inc()
 		return ctrl.Result{}, fmt.Errorf("create CR: %w", err)
 	}
+	upcReconciles.WithLabelValues("cr_created").Inc()
 	logger.Info("created CapacityRequest", "cr", newCR.Name)
 	// M19: stamp the initial Pending phase. Status subresource — needs a
 	// separate write since Create cannot set status. The operator's

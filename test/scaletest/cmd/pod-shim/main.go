@@ -66,11 +66,38 @@ var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12), // 0.05s, 0.1s, 0.2s, ... 102.4s
 })
 
+// M44.4 chain-drop diagnostic counters. The 50K-Pod-mode cloud run
+// surfaced ~30× drop between Pods created (148 K) and Pods bound
+// (4 K). Per-stage counters localise where the chain throttles.
+var (
+	podsMarkedUnschedulable = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total",
+		Help: "Count of Pods this shim has patched to PodScheduled=False (Unschedulable). Compare to load-driver's scaletest_loadgen_cr_created_total to localise the first hop drop.",
+	}, []string{"outcome"}) // outcome: patched, already_marked, error
+	upcomingNodesObserved = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_scaletest_pod_shim_upcoming_nodes_observed_total",
+		Help: "Count of UpcomingNode reconcile events seen by the upcoming-node-binder. Compare to shard's bigfleet_shard_actions_total{kind=Bootstrap} to find shard→cluster propagation gaps.",
+	}, []string{"outcome"}) // outcome: bound, no_pod (no Pending Pod matched the new Node)
+	fakeNodesCreated = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_scaletest_pod_shim_fake_nodes_created_total",
+		Help: "Count of fake Node objects this shim has created from UpcomingNodes. Should match upcoming_nodes_observed{outcome=bound}.",
+	})
+	podBindAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_scaletest_pod_shim_pod_bind_attempts_total",
+		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count.",
+	}, []string{"outcome"}) // outcome: success, no_pod, error
+)
+
 func init() {
-	// Register on controller-runtime's metrics registry so the
-	// histogram is served on the same :8772 endpoint as the
-	// reconciler's internal metrics.
-	ctrlmetrics.Registry.MustRegister(podBindLatencySeconds)
+	// Register on controller-runtime's metrics registry so all
+	// histograms + counters are served on the same :8772 endpoint.
+	ctrlmetrics.Registry.MustRegister(
+		podBindLatencySeconds,
+		podsMarkedUnschedulable,
+		upcomingNodesObserved,
+		fakeNodesCreated,
+		podBindAttempts,
+	)
 }
 
 func main() {
@@ -172,6 +199,7 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 	var pod corev1.Pod
 	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
 		if client.IgnoreNotFound(err) != nil {
+			podsMarkedUnschedulable.WithLabelValues("error").Inc()
 			return reconcile.Result{}, err
 		}
 		return reconcile.Result{}, nil
@@ -183,6 +211,7 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 	}
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
+			podsMarkedUnschedulable.WithLabelValues("already_marked").Inc()
 			return reconcile.Result{}, nil
 		}
 	}
@@ -206,8 +235,10 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 		pod.Status.Conditions = append(pod.Status.Conditions, cond)
 	}
 	if err := r.Status().Patch(ctx, &pod, patch); err != nil {
+		podsMarkedUnschedulable.WithLabelValues("error").Inc()
 		return reconcile.Result{}, fmt.Errorf("patch status: %w", err)
 	}
+	podsMarkedUnschedulable.WithLabelValues("patched").Inc()
 	return reconcile.Result{}, nil
 }
 
@@ -247,6 +278,7 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		return reconcile.Result{}, fmt.Errorf("get node: %w", getErr)
 	}
 	if apierrors.IsNotFound(getErr) {
+		fakeNodesCreated.Inc()
 		node := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
 			Spec: corev1.NodeSpec{
@@ -319,8 +351,10 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 			},
 		}
 		if err := r.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
+			podBindAttempts.WithLabelValues("error").Inc()
 			continue
 		}
+		podBindAttempts.WithLabelValues("success").Inc()
 		// ADR-0017: record per-Pod binding latency at the moment of
 		// successful Bind. CreationTimestamp is server-assigned at
 		// Create, so it's a meaningful T0 even for Pods we discover
@@ -336,8 +370,10 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		// the race where the UpcomingNode races ahead of the Pod that
 		// triggered the CR creation. RequeueAfter is short because
 		// the Pod usually arrives within a single rollup interval.
+		upcomingNodesObserved.WithLabelValues("no_pod").Inc()
 		return reconcile.Result{RequeueAfter: 2 * time.Second}, nil
 	}
+	upcomingNodesObserved.WithLabelValues("bound").Inc()
 	return reconcile.Result{}, nil
 }
 
