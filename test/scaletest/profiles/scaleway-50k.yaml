@@ -45,6 +45,17 @@ kwok:
 
 shard:
   replicas: 1
+  # 60K Idle headroom over the 50K Pod demand so Phase 1 actually
+  # binds, the pod-shim closes the loop, and internalBindingLatency
+  # is measured. Without a seed every Pod is a shortfall, the chain
+  # stays open at the unsatisfied-burst step, and the test only
+  # validates rollup + Phase 1 attempt — not the M44 user-facing
+  # default we want.
+  seedMachines: 60000
+  maxActionsPerCycle: 1000
+  executeConcurrency: 128
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
   resources:
     requests: { cpu: 1, memory: 2Gi }
     limits:   { cpu: 4, memory: 8Gi }

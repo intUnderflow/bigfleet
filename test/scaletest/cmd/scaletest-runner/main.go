@@ -276,14 +276,21 @@ func run(args []string) error {
 		return err
 	}
 
-	// Snapshot Prometheus TSDB.
+	// Snapshot Prometheus TSDB. Hard deadline so a dead cluster
+	// (apiserver gone, kubectl exec hangs) can't pin the runner
+	// indefinitely — M44.3's cloud run hung 7h50m on this exact path
+	// when the in-cluster Prometheus pod went away mid-soak.
+	snapCtx, cancelSnap := context.WithTimeout(context.Background(), 5*time.Minute)
 	snapPath := filepath.Join(*output, "prometheus-snapshot.tar.gz")
-	if err := snapshotPrometheus(context.Background(), *kubeconfig, namespace, snapPath); err != nil {
+	if err := snapshotPrometheus(snapCtx, *kubeconfig, namespace, snapPath); err != nil {
 		fmt.Fprintln(os.Stderr, "prometheus snapshot:", err)
 	}
+	cancelSnap()
 
-	// Pull metrics summary.
-	metrics := readKeyMetrics(context.Background(), *kubeconfig, namespace)
+	// Pull metrics summary. Same deadline rationale.
+	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 2*time.Minute)
+	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace)
+	cancelMetrics()
 
 	res := runResult{
 		RunID:   runID,
