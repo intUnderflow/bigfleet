@@ -112,7 +112,7 @@
       "description": "bigfleet_shard_inventory_machines{state=\"Failed\"}. Includes M38 spot/hardware-fault simulator + execute-path Bootstrap timeouts (ADR-0019 followup). Reported, not gated.",
       "gridPos": {"h": 4, "w": 6, "x": 18, "y": 9},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(bigfleet_shard_inventory_machines{state=\"Failed\"})", "refId": "A"}],
+      "targets": [{"expr": "sum(bigfleet_shard_inventory_machines{state=\"Failed\"}) or vector(0)", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}]}, "color": {"mode": "thresholds"}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
