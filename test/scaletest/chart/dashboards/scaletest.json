@@ -319,6 +319,52 @@
         {"expr": "sum by (event) (rate(bigfleet_shard_session_lifecycle_total[1m]))", "refId": "B", "legendFormat": "{{event}}/s"}
       ],
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "id": 500, "type": "row", "title": "Operator → UpcomingNode bottleneck (M44.4 Drop B)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 84},
+      "collapsed": false
+    },
+    {
+      "id": 501, "type": "timeseries", "title": "handleNodeStateUpdate p99 by phase",
+      "description": "End-to-end wall-clock for the operator's NodeStateUpdate handler. Each call does a Get (cache), a Create-or-Update for spec, and a Status().Update. p99 above ~100 ms means apiserver writes are queued behind the per-op QPS limiter or there's controller-runtime cache lag forcing extra round-trips.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 85},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le, phase) (rate(bigfleet_operator_node_state_update_duration_seconds_bucket[1m])))", "refId": "A", "legendFormat": "{{phase}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 502, "type": "timeseries", "title": "UpcomingNode write rate by op + outcome",
+      "description": "Rate of UpcomingNode CRD apiserver writes from the operator, split by op (create/spec_update/status_update) and outcome (success/conflict/error). Sum / NodeStateUpdate-rate ≈ apiserver round-trips per binding (expected ~2 for fresh, 1 for status-only updates). High conflict rate = controller-runtime cache disagreeing with apiserver under burst.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 85},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "sum by (op, outcome) (rate(bigfleet_operator_upcoming_node_writes_total[1m]))", "refId": "A", "legendFormat": "{{op}} / {{outcome}}"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 503, "type": "timeseries", "title": "Operator dispatch goroutines in flight",
+      "description": "Currently-running stream-dispatch goroutines per operator. recvLoop spawns one goroutine per inbound frame with no semaphore — sustained high values mean apiserver-write back-pressure (per-cluster QPS limiter draining slower than the inbound stream). Pair with handleNodeStateUpdate p99 to confirm.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 93},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "max(bigfleet_operator_dispatch_inflight)", "refId": "A", "legendFormat": "max"},
+        {"expr": "avg(bigfleet_operator_dispatch_inflight)", "refId": "B", "legendFormat": "avg across operators"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+    },
+    {
+      "id": 504, "type": "timeseries", "title": "Shard execute() goroutines in flight",
+      "description": "Currently-running execute() goroutines on the shard (configured cap = executeConcurrency, default 128). Sustained at the cap = parallelism-bound; well below the cap with low chain throughput = downstream bottleneck (operator stream RTT or blob fetch).",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 93},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "max(bigfleet_shard_execute_inflight)", "refId": "A", "legendFormat": "in-flight"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
     }
   ]
 }

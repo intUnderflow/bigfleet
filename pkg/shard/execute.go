@@ -24,6 +24,8 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
 	// Bootstrap actions emitted by Phase 1 don't translate to
 	// Configured machines; without per-outcome attribution we can't
 	// tell which return path is the silent drop.
+	metrics.ShardExecuteInflight.Inc()
+	defer metrics.ShardExecuteInflight.Dec()
 	defer func() {
 		metrics.ShardActionExecuteOutcomes.WithLabelValues(a.Kind.String(), classifyExecuteError(ctx, err)).Inc()
 	}()

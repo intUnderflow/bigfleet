@@ -133,6 +133,18 @@ var (
 		Help: "Number of currently-installed operator sessions on this shard. Should equal the count of clusters bound to this shard's domain assignment; lower means at least one cluster's operator hasn't dialed (or got disconnected).",
 	})
 
+	// M44.4 Drop B: gauge of currently-running execute() goroutines.
+	// Compare against the configured executeConcurrency cap to see if
+	// the shard is parallelism-bound during burst — a sustained gauge
+	// at the cap with low per-execute latency means we're shipping
+	// less than the cap allows; sustained at cap with high per-execute
+	// latency means downstream (operator stream RTT, blob fetch) is
+	// the gate.
+	ShardExecuteInflight = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_execute_inflight",
+		Help: "Currently-running execute() goroutines on this shard. Compare against the configured executeConcurrency to see whether burst processing is parallelism-bound.",
+	})
+
 	// ADR-0019: per-sub-path Phase 1 instrumentation. The cloud-vs-
 	// bench discrepancy in M44.4 required attribution of where Phase 1
 	// wall-clock actually goes — pool build (merge+sort across multi-
@@ -225,5 +237,34 @@ var (
 	OperatorSessionReconnects = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "bigfleet_operator_session_reconnects_total",
 		Help: "Count of Shard.Session reconnect attempts (transport closed and re-dialled).",
+	})
+
+	// M44.4 Drop B observability: localise where the shard → operator →
+	// UpcomingNode → binder chain bleeds throughput when binding-latency
+	// p99 exceeds expectations. Each NodeStateUpdate the operator
+	// receives translates to 2-3 apiserver writes (Get cache; Create on
+	// new; re-fetch; Status().Update); this histogram captures the full
+	// end-to-end handler cost so we can attribute slow stages.
+	OperatorNodeStateUpdateDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bigfleet_operator_node_state_update_duration_seconds",
+		Help:    "Wall-clock duration of handleNodeStateUpdate per inbound NodeStateUpdate frame, by resulting UpcomingNode phase. p99 above ~100 ms means apiserver-write back-pressure is bleeding into chain throughput.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
+	}, []string{"phase"})
+
+	// Per-op outcome counter for UpcomingNode CRD writes. Splits the
+	// handler's 2-3 apiserver hops by op so we can see which one's
+	// erroring or being retried.
+	OperatorUpcomingNodeWrites = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_operator_upcoming_node_writes_total",
+		Help: "UpcomingNode CRD apiserver write attempts, by op (create, spec_update, status_update) and outcome (success, conflict, error). Sum / NodeStateUpdate-rate ≈ apiserver round-trips per binding.",
+	}, []string{"op", "outcome"})
+
+	// recvLoop spawns one goroutine per inbound frame with no semaphore.
+	// At high inbound rates this can balloon into thousands of in-flight
+	// handlers all queuing on the apiserver-write rate-limiter. Gauge so
+	// we can correlate inflight depth with handler-duration p99.
+	OperatorDispatchInflight = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_operator_dispatch_inflight",
+		Help: "Currently-running stream-dispatch goroutines on this operator. Sustained high values point at apiserver-side back-pressure (per-cluster QPS limiter draining slower than the inbound stream).",
 	})
 )

@@ -12,8 +12,24 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
+
+// classifyWriteErr maps an error from a controller-runtime Client write
+// to one of {success, conflict, error} for the UpcomingNode write
+// counter. AlreadyExists on Create and Conflict on Update are common
+// retryable signals that the cache disagreed with the apiserver — count
+// them separately so a healthy cache lag doesn't look like an error.
+func classifyWriteErr(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
+		return "conflict"
+	}
+	return "error"
+}
 
 // handleNodeStateUpdate upserts an UpcomingNode CR for the given
 // machine. Phase mapping per the paper §6.3 — every transitional /
@@ -29,6 +45,10 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 	}
 	name := upcomingNodeName(u.GetMachineId())
 	phase := upcomingNodePhase(u.GetState())
+	start := time.Now()
+	defer func() {
+		metrics.OperatorNodeStateUpdateDuration.WithLabelValues(string(phase)).Observe(time.Since(start).Seconds())
+	}()
 
 	var existing bfv1alpha1.UpcomingNode
 	getErr := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
@@ -39,8 +59,10 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec:       upcomingNodeSpecFromUpdate(u),
 		}
-		if err := o.cfg.KubeClient.Create(ctx, un); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create UpcomingNode: %w", err)
+		createErr := o.cfg.KubeClient.Create(ctx, un)
+		metrics.OperatorUpcomingNodeWrites.WithLabelValues("create", classifyWriteErr(createErr)).Inc()
+		if createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+			return fmt.Errorf("create UpcomingNode: %w", createErr)
 		}
 		// Re-fetch so the status update below operates on a fresh copy.
 		if err := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing); err != nil {
@@ -57,8 +79,10 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		if !upcomingSpecEqual(existing.Spec, freshSpec) {
 			specPatched := existing.DeepCopy()
 			specPatched.Spec = freshSpec
-			if err := o.cfg.KubeClient.Update(ctx, specPatched); err != nil {
-				return fmt.Errorf("update UpcomingNode spec: %w", err)
+			updErr := o.cfg.KubeClient.Update(ctx, specPatched)
+			metrics.OperatorUpcomingNodeWrites.WithLabelValues("spec_update", classifyWriteErr(updErr)).Inc()
+			if updErr != nil {
+				return fmt.Errorf("update UpcomingNode spec: %w", updErr)
 			}
 			existing = *specPatched
 		}
@@ -88,8 +112,10 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		now := metav1.Now()
 		existing.Status.ProvisioningStartTime = &now
 	}
-	if err := o.cfg.KubeClient.Status().Update(ctx, &existing); err != nil {
-		return fmt.Errorf("update UpcomingNode status: %w", err)
+	statusErr := o.cfg.KubeClient.Status().Update(ctx, &existing)
+	metrics.OperatorUpcomingNodeWrites.WithLabelValues("status_update", classifyWriteErr(statusErr)).Inc()
+	if statusErr != nil {
+		return fmt.Errorf("update UpcomingNode status: %w", statusErr)
 	}
 	return nil
 }

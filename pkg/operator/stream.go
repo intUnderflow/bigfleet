@@ -170,6 +170,8 @@ func (s *session) recvLoop(ctx context.Context) error {
 			return err
 		}
 		go func(msg *pb.ShardMessage) {
+			metrics.OperatorDispatchInflight.Inc()
+			defer metrics.OperatorDispatchInflight.Dec()
 			if err := s.dispatch(ctx, msg); err != nil {
 				s.op.log.Warn("dispatch failed", "err", err)
 			}
