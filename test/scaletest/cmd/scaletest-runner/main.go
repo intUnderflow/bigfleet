@@ -615,11 +615,18 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// flipped Pod-mode to the default, so every profile populates
 		// this histogram; the gate is active everywhere. The -1
 		// sentinel skip in pass() is retained for opt-in CR-mode
-		// runs (mode: cr) and for failed scrapes. The legacy
-		// fingerprint histogram is exposed as
-		// shardProvisioningLatencyP{50,99}Seconds for diagnostic
-		// reading; never used as a release gate after ADR-0017.
-		"internalBindingLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))`,
+		// runs (mode: cr) and for failed scrapes.
+		//
+		// M44.4: query the cumulative histogram instead of rate[5m].
+		// At cloud Pod-mode scale most bind events happen during
+		// ramp / early soak; by the end of the runner's soak the
+		// rate over the trailing 5 min is zero (steady-state churn
+		// rebinds are rare, especially with the optimized cycle).
+		// rate-over-zero-data made histogram_quantile return NaN →
+		// -1, masking a passing run. The cumulative histogram is
+		// fresh per shard binary start, so the p99 reflects the
+		// p99 of every bind event recorded during this run.
+		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_seconds_bucket))`,
 		"operatorRollupP99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
 		"operatorAckP99Seconds":            `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":        `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
