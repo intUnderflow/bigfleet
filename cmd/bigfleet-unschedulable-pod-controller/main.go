@@ -42,6 +42,8 @@ func run(args []string) error {
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster or $KUBECONFIG)")
 	metricsAddr := fs.String("metrics-addr", ":8080", "Prometheus metrics listen address (\"0\" disables)")
 	defaultsPath := fs.String("priority-class-defaults", "", "path to a YAML file mapping PriorityClass name → {interruptionPenalty, reclamationPenalty}. Used as fallback when a pod has no bigfleet.lucy.sh/{interruption,reclamation}-penalty annotation. Empty path → no defaults applied.")
+	qps := fs.Float64("qps", 50, "client-go QPS budget for apiserver requests; raise for scale-test profiles whose apiserver can absorb more")
+	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -63,9 +65,12 @@ func run(args []string) error {
 		return err
 	}
 	// Bump QPS for similar reasons to the operator: status writes can
-	// be bursty during large unschedulable-pod spikes.
-	restCfg.QPS = 50
-	restCfg.Burst = 100
+	// be bursty during large unschedulable-pod spikes. The default 50/100
+	// is production-safe; scale-test profiles override (M44.4 — at 1000
+	// Pods/cluster the per-cluster apiserver-write hop dominates the
+	// chain's binding-latency p99 unless the budget is raised).
+	restCfg.QPS = float32(*qps)
+	restCfg.Burst = *burst
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

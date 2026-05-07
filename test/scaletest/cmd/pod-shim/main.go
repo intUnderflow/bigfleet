@@ -112,6 +112,8 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster or $KUBECONFIG)")
 	metricsAddr := fs.String("metrics-addr", ":8772", "Prometheus metrics listen address (\"0\" disables)")
+	qps := fs.Float64("qps", 50, "client-go QPS budget for apiserver requests; raise for scale-test profiles whose apiserver can absorb more")
+	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -128,9 +130,13 @@ func run(args []string) error {
 		return err
 	}
 	// Match the operator's QPS budget — the shim's writes are bursty
-	// during ramp (one per new Pod).
-	restCfg.QPS = 50
-	restCfg.Burst = 100
+	// during ramp (one per new Pod). The default 50/100 is production-
+	// safe; scale-test profiles override (M44.4 — the binder does 3
+	// apiserver writes per UpcomingNode (Create Node + Status Update +
+	// Bind), so 1000 Pods/cluster × 3 / 50 QPS ≈ 60 s p99 binding
+	// latency unless the budget is raised).
+	restCfg.QPS = float32(*qps)
+	restCfg.Burst = *burst
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

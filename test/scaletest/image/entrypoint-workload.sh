@@ -92,18 +92,23 @@ OPERATOR_PID=$!
 PODSHIM_PID=""
 UPC_PID=""
 if [[ "${POD_MODE:-pods}" == "pods" ]]; then
-  log podshim "starting"
-  bigfleet-scaletest-pod-shim \
-    --kubeconfig="$KCFG" \
-    --metrics-addr="0.0.0.0:8772" \
-    >"$WORK/logs/podshim.log" 2>&1 &
+  # Pod-shim and unschedulable-pod-controller both hit the same
+  # per-cluster apiserver as the operator, so they share its QPS/Burst
+  # budget. M44.4: the pod-shim binder does 3 writes per UpcomingNode
+  # (Create Node + Status Update + Bind) — at 50 QPS / 1000 Pods that
+  # is ~60 s of queueing per cluster, which dominates user-facing
+  # binding latency.
+  podshim_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8772")
+  upc_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8773")
+  [[ -n "${OPERATOR_QPS:-}"   ]] && { podshim_args+=(--qps="$OPERATOR_QPS");   upc_args+=(--qps="$OPERATOR_QPS"); }
+  [[ -n "${OPERATOR_BURST:-}" ]] && { podshim_args+=(--burst="$OPERATOR_BURST"); upc_args+=(--burst="$OPERATOR_BURST"); }
+
+  log podshim "starting (qps=${OPERATOR_QPS:-default})"
+  bigfleet-scaletest-pod-shim "${podshim_args[@]}" >"$WORK/logs/podshim.log" 2>&1 &
   PODSHIM_PID=$!
 
-  log upc "starting"
-  bigfleet-unschedulable-pod-controller \
-    --kubeconfig="$KCFG" \
-    --metrics-addr="0.0.0.0:8773" \
-    >"$WORK/logs/upc.log" 2>&1 &
+  log upc "starting (qps=${OPERATOR_QPS:-default})"
+  bigfleet-unschedulable-pod-controller "${upc_args[@]}" >"$WORK/logs/upc.log" 2>&1 &
   UPC_PID=$!
 fi
 
