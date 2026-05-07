@@ -89,12 +89,15 @@ shard:
   # the steady-state p99.
   metricsWarmupCycles: 0
   # M38 (Item 5): per-second per-machine probability of an unsolicited
-  # provider failure (spot reclaim / hardware fault). ADR-0019 found
-  # the chart default of 1.16e-8 produced ~380× the expected count of
-  # Failed machines in the 50k cloud run (611 observed vs ~1 expected).
-  # Defaulting to 0 until the units issue is resolved; profiles can
-  # opt in once we know what value is correctly interpreted.
-  failureRatePerSec: 0
+  # provider failure (spot reclaim / hardware fault). Real fleets see
+  # ~0.1-1%/day → ~1.16e-8 to 1.16e-7 per second per machine. ADR-0019
+  # rewrote the injector after finding the original 32-sample heuristic
+  # would never fire at these rates; the new implementation uses
+  # ConfiguredCount × Poisson and lands at the requested mean. Default
+  # is the upper-realism end (1%/day): in a 30-min soak with ~50K
+  # Configured machines that's ~10 induced failures — enough to
+  # exercise the recovery path, low enough not to dominate.
+  failureRatePerSec: 0.000000116
 
 provider:
   resources:

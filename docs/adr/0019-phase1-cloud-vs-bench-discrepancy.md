@@ -38,15 +38,31 @@ Phase 1 emits ~50 K Bootstraps each cycle (one per Need × deficit). `maxActions
 
 The hypothesis is: high re-defer rate × concurrent action emit × stale snapshot view causes Phase 1 to keep emitting Bootstraps for the same Idle machines over many cycles. A few execute, the rest are deferred. The shard never converges. Phase 1 timing dominates because it emits 50 K actions even though only 1 K can ever land per cycle.
 
-### Finding 3: M38 failure injector is over-firing 380×
+### Finding 3: 611 Failed machines were Bootstrap timeouts, not the M38 injector
 
-```
-shard.failureRatePerSec = 1.16e-8 (chart default, M44 / ADR-0015 §5)
-expected over 30 min × 60 K machines = 60_000 × 1.16e-8 × 1800 ≈ 1.25
-observed Failed at end of soak       = 611
+The first read of the data was that M38 over-fired 380×. Tracing the code paths to StateFailed showed five distinct sources, only one of which is the M38 injector. The other four live in `pkg/shard/execute.go` (Provision/Bootstrap timeout, drain failure). With `BootstrapTimeout` defaulting to 30 s and 1000 actions/cycle racing through the operator stream against a kine-sqlite-backed kwok apiserver under heavy concurrent write load, **30-second timeouts firing on the bootstrap-blob fetch is the most likely 611-Failed cause** — the operator can't return the bootstrap blob fast enough under contention.
+
+Subsequent investigation of the M38 injector confirmed the implementation was nonetheless broken — but in the opposite direction:
+
+```go
+// pre-ADR-0019 implementation
+sampleN := 32
+seen := make(map[string]struct{}, sampleN)
+for i := 0; i < sampleN; i++ {
+    id := prov.RandomConfiguredMachine()
+    seen[string(id)] = struct{}{}
+}
+perCallProb := ratePerSec
+for id := range seen {
+    if rng.Float64() < perCallProb { ... }
+}
 ```
 
-Either `failureRatePerSec` is interpreted as per-cycle, per-tick, or per-something other than per-second; or the implementation has a bug. A 380× over-firing is a strong signal to check the units before using this in any further runs. Aside: the bench doesn't exercise the failure injector at all, so it can't reveal this.
+Per tick, expected failures ≈ 32 × ratePerSec, capped at 32 regardless of fleet size. At 1.16e-8/sec/machine that's 6.7e-4 expected over a 30-min run — the injector would never fire, regardless of fleet size. The intended semantics ("per-second per-machine probability") would have given 1.04 expected per 30-min soak at 50 K Configured. Off by ~1500×, in the *under*-firing direction.
+
+ADR-0019 rewrites the injector to use `prov.ConfiguredCount() × ratePerSec` as the Poisson mean per tick. The default chart `failureRatePerSec` is restored to a value (`1.16e-7`, the upper "1%/day" end of the realism band) that produces ~10 induced failures per 30-min soak at 50 K Configured — enough to exercise the recovery path, low enough not to dominate.
+
+The 611 number is unexplained by M38 (with the bug, the injector fires <1 time over the run; with the fix, ~10 times). The remaining 600 Failed machines are an execute-path concern, listed below.
 
 ## Decision
 
@@ -95,16 +111,16 @@ The Configured-stuck-at-1019 finding is an *execute-path* concern, not a Phase 1
 - Add a `reason` label to `bigfleet_shard_actions_deferred_total` (the existing counter has a `reason` label that is rendered as `null` in the prom snapshot — fix the label assignment so it actually carries the defer reason).
 - Investigate whether per-cluster operator stream RTT is the bottleneck on action ack: at 1000 actions/cycle × 50 clusters × 5 ms execute, executing through 128-concurrent workers, the bound is 5 ms × 1000/128 ≈ 40 ms — but reality says only 1019 land across 30 min, so something blocks the operator return path.
 
-### Separate followup: M38 failure injector units
+### Separate followup: Bootstrap timeout rate
 
-Read the M38 code, confirm whether `failureRatePerSec` is correctly interpreted, fix the bug or the docs. Until done, set the chart default back to `0` so it's not muddying scale-test results.
+Most of the 611 Failed machines came through `pkg/shard/execute.go`'s timeout path (BootstrapTimeout default 30 s). At 1000 actions/cycle × 50 clusters × 128 concurrent shard executors, the operator's bootstrap-blob fetch is the long pole; if kwok's kine-sqlite is contended under combined CR + Pod + Node write load, blob fetches stretch past 30 s. Worth tracking with a histogram on the bootstrap-blob fetch wall-clock and a counter on timeout outcomes — same instrumentation pattern as Phase 1's sub-paths.
 
 ## Consequences
 
 - **No code change to `pkg/decision/` until instrumentation re-runs surface the actual hot path.** Resist the urge to optimise on bench results that don't reflect cloud reality.
 - **A second cloud run is required** after instrumentation lands (likely scaleway-50k again, $0.60/run). The instrumentation itself is a regression artifact — we should commit it permanently rather than as a debug branch, because cloud-vs-bench discrepancies will recur and the histograms are useful generally.
 - **The 5 s cycle envelope is honest**: real production fleets at this scale need this resolved, not papered over with a profile-level SLO override.
-- **M38 failure-injector default reverts to 0** (in the same commit that adds the instrumentation), so the next cloud run isn't muddying the data while we're still measuring.
+- **M38 failure-injector reimplemented + default raised**: the previous 32-sample heuristic couldn't fire at the realistic per-machine rates regardless of fleet size. New implementation uses `prov.ConfiguredCount() × ratePerSec` as the Poisson mean per tick. Chart default is now `1.16e-7` (1%/day, the upper realism bound), giving ~10 induced failures per 30-min soak at 50 K Configured.
 - **Bench stays committed** (`pkg/decision/phase1_realistic_bench_test.go`) as a regression detector — it didn't reproduce the cloud bottleneck, but it's the right tool for catching algorithmic regressions in Phase 1 at the realistic shape, separate from the cloud-only path issues this ADR investigates.
 
 ## Open questions to revisit after the instrumented run

@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 
+	"math"
 	"math/rand"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
@@ -29,11 +30,20 @@ import (
 )
 
 // runFailureInjector is M38's spot-reclaim / hardware-fault simulator.
-// Per second, computes expected_failures = ratePerSec × ConfiguredCount
-// (approximated by counting Configured machines via repeated
-// RandomConfiguredMachine sampling). Draws Poisson(expected) and
-// fails that many random machines via prov.FailMachine. Exits when
-// ctx is cancelled.
+//
+// Each tick (1 s) computes expected_failures = ratePerSec ×
+// ConfiguredCount(), draws Poisson(expected), and fails that many
+// distinct random Configured machines.
+//
+// ADR-0019 (M44.4) rewrote this from a 32-sample heuristic that
+// failed sampled machines with probability == ratePerSec — which at
+// the realistic 1.16e-8 to 1.16e-7 per-second-per-machine rates
+// would never fire (32 × 1.16e-8 × 1800 ≈ 6.7e-4 expected over a
+// 30-min run). The Failed counts seen in the M44.3 / scaleway-50k
+// runs (478, 611) were not from this injector; they were Bootstrap
+// timeout transitions from pkg/shard/execute.go. Tracked separately.
+//
+// Exits when ctx is cancelled.
 func runFailureInjector(ctx context.Context, prov *fake.Provider, ratePerSec float64, logger *slog.Logger) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	tick := time.NewTicker(time.Second)
@@ -45,44 +55,41 @@ func runFailureInjector(ctx context.Context, prov *fake.Provider, ratePerSec flo
 			logger.Info("failure injector exiting", "total_failed", totalFailed)
 			return
 		case <-tick.C:
-			// Approximate ConfiguredCount: take 32 samples and
-			// estimate population by the count of distinct IDs
-			// returned. RandomConfiguredMachine returns one ID per
-			// call (Go map iteration order); good enough as an
-			// estimate with few samples.
-			sampleN := 32
-			seen := make(map[string]struct{}, sampleN)
-			for i := 0; i < sampleN; i++ {
+			n := prov.ConfiguredCount()
+			if n == 0 {
+				continue
+			}
+			expected := ratePerSec * float64(n)
+			k := poissonDraw(rng, expected)
+			for i := 0; i < k; i++ {
 				id := prov.RandomConfiguredMachine()
 				if id == "" {
 					break
 				}
-				seen[string(id)] = struct{}{}
-			}
-			if len(seen) == 0 {
-				continue
-			}
-			// 32 distinct samples ≈ scaling factor; we don't actually
-			// know configuredCount, just use the rate × sample to keep
-			// the math simple. Each sample's failure probability is
-			// `ratePerSec` per machine; the expected per-tick
-			// failure count is rate × count(Configured). Without an
-			// exact count we approximate by failing each sampled
-			// machine with probability rate × (sample_size scale).
-			//
-			// Practical compromise: fail each of `sampleN` random
-			// Configured machines independently with probability
-			// `ratePerSec × (configured_estimate / sampleN)`. Estimate
-			// configured = sample diversity (few duplicates → at
-			// least sampleN unique).
-			perCallProb := ratePerSec
-			for id := range seen {
-				if rng.Float64() < perCallProb {
-					if prov.FailMachine(machine.ID(id), "scaletest M38: simulated spot reclaim") {
-						totalFailed++
-					}
+				if prov.FailMachine(id, "scaletest M38: simulated spot reclaim") {
+					totalFailed++
 				}
 			}
+		}
+	}
+}
+
+// poissonDraw returns a sample from Poisson(λ). Knuth's algorithm
+// is fine for λ ≤ ~30 (each iteration draws one Float64). For the
+// realistic-fleet rates × 30-min soaks × 60K Configured we expect
+// λ in the 0.1–10 range; well inside the comfort zone.
+func poissonDraw(rng *rand.Rand, lambda float64) int {
+	if lambda <= 0 {
+		return 0
+	}
+	L := math.Exp(-lambda)
+	k := 0
+	p := 1.0
+	for {
+		k++
+		p *= rng.Float64()
+		if p <= L {
+			return k - 1
 		}
 	}
 }

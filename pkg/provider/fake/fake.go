@@ -243,6 +243,25 @@ func (p *Provider) RandomConfiguredMachine() machine.ID {
 	return ""
 }
 
+// ConfiguredCount returns the number of machines currently in
+// StateConfigured. Used by the M38 failure injector to scale its
+// per-tick draw correctly: expected_failures_per_tick = ratePerSec
+// × configuredCount. ADR-0019 (M44.4) rewrote the injector to use
+// this method after the previous 32-sample heuristic was found
+// unable to fire at all under the 1.16e-8/sec/machine real-fleet
+// rate.
+func (p *Provider) ConfiguredCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, m := range p.machines {
+		if m.State == machine.StateConfigured {
+			n++
+		}
+	}
+	return n
+}
+
 // Create implements provider.Provider.
 func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opCreate, func(m *machine.Machine) {
