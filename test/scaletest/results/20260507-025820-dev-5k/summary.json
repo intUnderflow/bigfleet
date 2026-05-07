@@ -1,0 +1,45 @@
+{
+  "runId": "20260507-005820-dev-5k",
+  "profile": "dev-5k",
+  "target": {
+    "context": "kind-bigfleet-m44",
+    "kind": "kind"
+  },
+  "cost": {
+    "estimatedUsd": 0.006666666666666667,
+    "hours": 0.03333333333333333
+  },
+  "scale": {
+    "kwokClusters": 5,
+    "machinesPerCr": 1000,
+    "totalCrs": 5000,
+    "shardReplicas": 1,
+    "seedMachinesPerShard": 6000,
+    "aggregateInventory": 6000
+  },
+  "metrics": {
+    "bindingLatencyP99Seconds": 50.40307750873325,
+    "coordinatorApplyErrorRate": -1,
+    "coordinatorApplyOpsPerSec": 0,
+    "coordinatorPendingMax": 0,
+    "coordinatorTermChanges15m": 1,
+    "loadgenCRsActive": 3339,
+    "loadgenCRsCreatedPerSec": 4.463188332462241,
+    "operatorAckP99Seconds": 5.015919748618943,
+    "operatorOutboxDropsPerSec": 0,
+    "operatorRollupP99Seconds": 1.5155321955509273,
+    "shardCycleDurationP99Seconds": 0.8243199999999979,
+    "shardInventoryMinMaxRatio": 1,
+    "shardPhase1P99Seconds": 0.46208000000000016,
+    "shardPhase2P99Seconds": 0.00099,
+    "shardPhase3P99Seconds": 0.0038959999999999993,
+    "shardPhaseExecuteP99Seconds": 0.12736,
+    "shardPhaseReconcileP99Seconds": 0.015376000000000006,
+    "shardProvisioningLatencyP50Seconds": 0.44,
+    "shardProvisioningLatencyP99Seconds": 0.636,
+    "shardShortfalls": 0,
+    "shardsReportingCycle": 1
+  },
+  "passed": false,
+  "failure": "loadgenCRsActive 3339 \u003c 4995 (99.9% of target 5000) — run did not sustain target load"
+}

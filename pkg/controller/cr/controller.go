@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
@@ -79,13 +80,14 @@ type Reconciler struct {
 // "bigfleet-unschedulable-pod-controller"; tests that instantiate
 // multiple managers in one process should pass a unique name.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts ...SetupOption) error {
-	cfg := setupConfig{name: "bigfleet-unschedulable-pod-controller"}
+	cfg := setupConfig{name: "bigfleet-unschedulable-pod-controller", maxConcurrent: 16}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}).
 		Named(cfg.name).
+		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.maxConcurrent}).
 		Complete(r)
 }
 
@@ -93,7 +95,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, opts ...SetupOption) err
 type SetupOption func(*setupConfig)
 
 type setupConfig struct {
-	name string
+	name          string
+	maxConcurrent int
 }
 
 // WithControllerName overrides the default controller name. Useful in

@@ -44,6 +44,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -130,6 +131,7 @@ func run(args []string) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}).
 		Named("bigfleet-scaletest-pod-shim").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 16}).
 		Complete(r); err != nil {
 		return fmt.Errorf("controller: %w", err)
 	}
@@ -139,10 +141,16 @@ func run(args []string) error {
 	// creates a matching k8s Node (idempotent) and binds one
 	// pending Pod whose nodeAffinity matches the new Node's
 	// labels.
+	// MaxConcurrentReconciles bumped from the controller-runtime
+	// default of 1: at 1K Pods/cluster the serial reconcile queue
+	// produces ~37s mean binding latency (each bind takes ~1s of
+	// apiserver round-trips). 16 workers brings binding-latency p99
+	// down well under the ADR-0014 in-process tier (5-10 s).
 	un := &upcomingNodeBinder{Client: mgr.GetClient(), clientset: clientset}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&bfv1alpha1.UpcomingNode{}).
 		Named("bigfleet-scaletest-upcoming-node-binder").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 16}).
 		Complete(un); err != nil {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}

@@ -1,0 +1,45 @@
+{
+  "runId": "20260507-003831-dev-5k",
+  "profile": "dev-5k",
+  "target": {
+    "context": "kind-bigfleet-m44",
+    "kind": "kind"
+  },
+  "cost": {
+    "estimatedUsd": 0.03333333333333333,
+    "hours": 0.16666666666666666
+  },
+  "scale": {
+    "kwokClusters": 5,
+    "machinesPerCr": 1000,
+    "totalCrs": 5000,
+    "shardReplicas": 1,
+    "seedMachinesPerShard": 0,
+    "aggregateInventory": 0
+  },
+  "metrics": {
+    "bindingLatencyP99Seconds": -1,
+    "coordinatorApplyErrorRate": -1,
+    "coordinatorApplyOpsPerSec": -1,
+    "coordinatorPendingMax": -1,
+    "coordinatorTermChanges15m": -1,
+    "loadgenCRsActive": -1,
+    "loadgenCRsCreatedPerSec": -1,
+    "operatorAckP99Seconds": -1,
+    "operatorOutboxDropsPerSec": -1,
+    "operatorRollupP99Seconds": -1,
+    "shardCycleDurationP99Seconds": -1,
+    "shardInventoryMinMaxRatio": -1,
+    "shardPhase1P99Seconds": -1,
+    "shardPhase2P99Seconds": -1,
+    "shardPhase3P99Seconds": -1,
+    "shardPhaseExecuteP99Seconds": -1,
+    "shardPhaseReconcileP99Seconds": -1,
+    "shardProvisioningLatencyP50Seconds": -1,
+    "shardProvisioningLatencyP99Seconds": -1,
+    "shardShortfalls": -1,
+    "shardsReportingCycle": -1
+  },
+  "passed": false,
+  "failure": "loadgenCRsActive -1 \u003c 4995 (99.9% of target 5000) — run did not sustain target load"
+}

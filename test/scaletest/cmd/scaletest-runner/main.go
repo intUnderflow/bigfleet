@@ -96,6 +96,8 @@ type profileFile struct {
 type sloOverrides struct {
 	BindingLatencyP99Seconds     float64 `yaml:"bindingLatencyP99Seconds"`
 	ShardCycleDurationP99Seconds float64 `yaml:"shardCycleDurationP99Seconds"`
+	OperatorRollupP99Seconds     float64 `yaml:"operatorRollupP99Seconds"`
+	OperatorAckP99Seconds        float64 `yaml:"operatorAckP99Seconds"`
 }
 
 type runnerAction struct {
@@ -774,6 +776,14 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	if slo.ShardCycleDurationP99Seconds > 0 {
 		cycleEnvelopeTarget = slo.ShardCycleDurationP99Seconds
 	}
+	rollupTarget := 1.0
+	if slo.OperatorRollupP99Seconds > 0 {
+		rollupTarget = slo.OperatorRollupP99Seconds
+	}
+	ackTarget := 12.0
+	if slo.OperatorAckP99Seconds > 0 {
+		ackTarget = slo.OperatorAckP99Seconds
+	}
 	// Sustained-load floor: the run is invalid if loadgenCRsActive
 	// drifted away from the target during the soak. We already gate
 	// at the steady-state ramp, but a ramp that just-barely-passed
@@ -811,11 +821,11 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	if v, ok := m["shardCycleDurationP99Seconds"]; ok && v > cycleEnvelopeTarget {
 		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > %.1fs throughput envelope (rollupInterval/2; backlog will accumulate)", v, cycleEnvelopeTarget)
 	}
-	if v, ok := m["operatorRollupP99Seconds"]; ok && v > 1.0 {
-		return false, fmt.Sprintf("operatorRollupP99Seconds %.3fs > 1s SLO", v)
+	if v, ok := m["operatorRollupP99Seconds"]; ok && v > rollupTarget {
+		return false, fmt.Sprintf("operatorRollupP99Seconds %.3fs > %.1fs SLO", v, rollupTarget)
 	}
-	if v, ok := m["operatorAckP99Seconds"]; ok && v > 12.0 {
-		return false, fmt.Sprintf("operatorAckP99Seconds %.3fs > 12s SLO", v)
+	if v, ok := m["operatorAckP99Seconds"]; ok && v > ackTarget {
+		return false, fmt.Sprintf("operatorAckP99Seconds %.3fs > %.1fs SLO", v, ackTarget)
 	}
 	// Coordinator-side gates (M12 onwards: shards self-register, so
 	// coordinator metrics are real signal). FSM Apply errors mean

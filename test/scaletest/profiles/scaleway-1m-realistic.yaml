@@ -130,96 +130,12 @@ loadProfile:
     - { fraction: 0.50, targetMultiplier: 1.0 }
     - { fraction: 0.25, targetMultiplier: 0.3 }
 
-  # M31/M33 archetype catalog — inlined so the chart's ConfigMap
-  # picks it up directly. Mirrors
-  # test/scaletest/profiles/archetypes/realistic.yaml.
-  archetypes:
-    - name: gpu-training
-      weight: 5
-      instanceTypes: [a3-highgpu-8g]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 70, resources: { nvidia.com/gpu: "8"  } }
-        - { weight: 30, resources: { nvidia.com/gpu: "16" } }
-      priorityClasses: [1000]
-      interruptionPenalty: 65536
-      reclamationPenalty: 65536
-      sameRack: true
-      groupSizeRange: [2, 8]
-
-    - name: gpu-inference
-      weight: 15
-      instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 60, resources: { nvidia.com/gpu: "1" } }
-        - { weight: 40, resources: { nvidia.com/gpu: "2" } }
-      priorityClasses: [100, 1000]
-      interruptionPenalty: 4096
-      reclamationPenalty: 8192
-
-    - name: cpu-batch
-      weight: 35
-      instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 30, resources: { cpu: "4",  memory: "8Gi"  } }
-        - { weight: 35, resources: { cpu: "8",  memory: "16Gi" } }
-        - { weight: 25, resources: { cpu: "16", memory: "32Gi" } }
-        - { weight: 10, resources: { cpu: "32", memory: "64Gi" } }
-      # M35: production-shape label axes. Batch jobs typically
-      # carry team + queue labels; small Count values (10/20)
-      # multiply fingerprints without blowing past kine sqlite
-      # memory budgets in the harness pods.
-      labelAxes:
-        - { key: app.bigfleet/team, count: 10 }
-        - { key: app.bigfleet/queue, count: 20 }
-      priorityClasses: [100]
-      interruptionPenalty: 64
-      reclamationPenalty: 256
-      meanLifetimeSeconds: 600
-
-    - name: cpu-service
-      weight: 30
-      instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 40, resources: { cpu: "2",  memory: "8Gi"  } }
-        - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
-        - { weight: 20, resources: { cpu: "8",  memory: "32Gi" } }
-        - { weight: 5,  resources: { cpu: "16", memory: "64Gi" } }
-      # M35: services tend to carry team + app labels.
-      labelAxes:
-        - { key: app.bigfleet/team, count: 10 }
-        - { key: app.bigfleet/app, count: 50 }
-      priorityClasses: [1000]
-      interruptionPenalty: 1024
-      reclamationPenalty: 8192
-
-    - name: memory-db
-      weight: 10
-      instanceTypes: [r6i.xlarge, r6i.2xlarge]
-      zones: [zone-a, zone-b]
-      sizeBuckets:
-        - { weight: 50, resources: { cpu: "4", memory: "32Gi"  } }
-        - { weight: 30, resources: { cpu: "4", memory: "64Gi"  } }
-        - { weight: 20, resources: { cpu: "8", memory: "128Gi" } }
-      priorityClasses: [1000]
-      interruptionPenalty: 4096
-      reclamationPenalty: 32768
-      sameRack: true
-      groupSizeRange: [3, 5]
-
-    - name: critical-realtime
-      weight: 5
-      instanceTypes: [c6i.4xlarge, m6i.2xlarge]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 70, resources: { cpu: "8",  memory: "16Gi" } }
-        - { weight: 30, resources: { cpu: "16", memory: "32Gi" } }
-      priorityClasses: [1000000]
-      interruptionPenalty: 65536
-      reclamationPenalty: 65536
+  # archetypes inherit the chart's realistic catalog default (M44).
+  # This profile's distinguishing trait is the additional M33-M42
+  # realism layered on top: jitteredChurn, micro-bursts, concentrated
+  # cpu-service burst at t=300s, cluster-size skew, failure injection,
+  # production-defensible operator client-go defaults, 30s rollup.
+  # The base 6-archetype mix comes from the chart.
 
 operator:
   # M39 (Item 6): production-defensible client-go defaults.

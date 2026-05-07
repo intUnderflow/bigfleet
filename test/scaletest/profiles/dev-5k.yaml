@@ -1,33 +1,52 @@
 # dev-5k — smallest sensible profile, runs free on a laptop.
-# 5 simulated clusters × 1K CRs each = 5K total demand.
+# 5 simulated clusters × 1K Pods each = 5K total demand.
 #
-# M44: Pod-mode is the default. The chart's kwok floor (500m/1Gi
-# req, 2/2Gi lim, 1Gi tmpfs) is exactly what each cluster needs to
-# run apiserver + kine + operator + load-driver + pod-shim +
-# unschedulable-pod-controller without kine warnings — proven by
-# dev-5k-pods-loopback at the same per-cluster shape. So this file
-# inherits the chart kwok defaults rather than redeclaring them.
+# M44: Pod-mode + realistic archetype catalog are the chart defaults.
+# This profile inherits both — kwok floor (500m/1Gi req, 2/2Gi lim,
+# 1Gi tmpfs) and the 6-archetype realistic catalog (GPU training,
+# GPU inference, CPU batch, CPU service, memory-DB, critical-realtime).
+# The shard's seed reads the same catalog (M34) so seed and demand
+# match by archetype.
+#
+# Pod-mode requires inventory for binding to actually happen; without
+# a seed every Pod becomes a shortfall and the chain isn't exercised.
 
 kwok:
   clusterCount: 5
 
 shard:
   replicas: 1
+  # 6000 Idle machines — slightly above the 5000 Pod demand so Phase 1
+  # has headroom to bind every Pod. Distributed across the realistic
+  # archetypes by weight (M34).
+  seedMachines: 6000
 
 loadProfile:
   target: 1000
   churnPerMinute: 0.05
   durationSeconds: 600
+  # archetypes inherits the chart's realistic catalog default.
 
-# ADR-0014 in-process tier: binding-latency p99 ≤ 10 s on kind, cycle
-# envelope ≤ 5 s. ADR-0017 / M44: pod-shim is on by default so the
-# binding-latency gate fires on real per-Pod data.
+operator:
+  qps: 50
+  burst: 100
+  ackConcurrency: 16
+  rollupInterval: 10s
+  # M37: route owner-grouped CRs through Same(rack) — required by
+  # the realistic catalog's gpu-training and memory-db archetypes
+  # which set sameRack: true.
+  coLocationKey: topology.bigfleet/rack
+
+# ADR-0014 in-process tier on kind: binding-latency p99 ≤ 10 s. The
+# realistic archetype mix has more fingerprint diversity than a
+# single-archetype run, so rollup carries more variation; raise to 2 s.
 slo:
   bindingLatencyP99Seconds: 10
   shardCycleDurationP99Seconds: 5
+  operatorRollupP99Seconds: 2
 
 costEstimate:
   vCPU: 10
   memoryGB: 10
   awsSpotUsdPerHour: 0.20
-  notes: "Free on M5 Max kind. ~10 min run. 5 clusters × ~1 vCPU req each = ~5 vCPU at the M44 Pod-mode floor."
+  notes: "Free on M5 Max kind. ~10 min run. 5 clusters × ~1 vCPU req each = ~5 vCPU at the M44 Pod-mode floor; full Pod → bound loopback exercised against a 6000-machine seed across 6 realistic archetypes."
