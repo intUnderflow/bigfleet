@@ -24,31 +24,39 @@ The runner prints scale and cost upfront, prompts before any paid run, and tears
 
 ## Profiles
 
-| Profile | KWOK clusters | CRs/cluster | Total | Best target | Cost / run |
+Size tiers (all Pod-mode + realistic 6-archetype catalog by default — M44):
+
+| Profile | KWOK clusters | Pods/cluster | Total Pods | Best target | Cost / run |
 |---|---|---|---|---|---|
 | `dev-5k` | 5 | 1K | 5K | laptop kind | $0 |
-| `local-50k` | 50 | 1K | 50K | M5 Max kind | $0 |
-| `homelab-500k` | 500 | 1K | 500K | homelab | $0 |
-| `cloud-5m` | 5,000 | 1K | 5M | EKS spot | ~$35–40 |
-| `thundering-herd` | 100 | 5K burst | 500K peak | homelab | $0 |
-| `failover-soak` | 50 | 1K | 50K | M5 Max / homelab | $0 |
+| `scaleway-50k` | 50 | 1K | 50K | 2× PRO2-L Kapsule | ~$0.60 |
+| `scaleway-500k` | 50 | 1K | 50K (against 500K seeded inventory) | 2× PRO2-L Kapsule | ~$0.74 |
+| `scaleway-1m` | 100 | 1K | 100K (against 1M aggregate) | 4× PRO2-L Kapsule | ~$1.50 |
+| `scaleway-5m` | 500 | 1K | 500K (against 5M aggregate) | 16× PRO2-L Kapsule | ~$6 |
 
-Cost numbers assume AWS spot `c6i.4xlarge` × the resources declared in each profile's `costEstimate` block. Homelab and laptop runs are free (amortised power not counted).
+Failover scenarios (50 clusters × 1K Pods, distinct purpose — exercise static-stability under coordinator/shard/network disturbance mid-soak):
+
+| Profile | What it kills | Best target |
+|---|---|---|
+| `failover-leader-kill` | one coordinator-leader-pod | 2× PRO2-L Kapsule |
+| `failover-shard-kill` | one shard-pod | 2× PRO2-L Kapsule |
+| `failover-partition` | 60s control-plane network partition | 2× PRO2-L Kapsule |
+| `failover-soak` | belt-and-braces (2 leader-kills + 1 shard-kill, 60-min soak) | 2× PRO2-L Kapsule |
+
+Cost numbers assume Scaleway Kapsule pricing × the resources declared in each profile's `costEstimate` block. Laptop runs are free.
 
 ## Picking a target
 
-Resource budget rule: **(cluster total RAM in GB) × 5 = max KWOK pod count**. A 64 GB target fits ~300 pods comfortably. The runner's confirmation prompt shows the estimated cost based on your selected profile's `costEstimate.awsSpotUsdPerHour × duration`; you can override duration with `--duration=` and skip the prompt with `--yes`.
+Resource budget rule (M44 Pod-mode floor): **each KWOK pod needs 1 vCPU + 2 GiB combined**. A 64 GB target fits ~30 KWOK pods plus the BigFleet shard/coordinator/Prometheus/Grafana overhead. The runner's confirmation prompt shows the estimated cost based on your selected profile's `costEstimate.awsSpotUsdPerHour × duration`; you can override duration with `--duration=` and skip the prompt with `--yes`.
 
 | Target | What works there | What it costs |
 |---|---|---|
-| Laptop kind | dev-5k, failover-soak | $0 |
-| M5 Max kind | dev-5k, local-50k, failover-soak | $0 |
-| Homelab k3s/Talos | up to homelab-500k, thundering-herd | $0 |
-| Scaleway Kapsule | scaleway-50k baseline, up to homelab-500k | ~ $0.15/run for 50K, ~ $25/hr for cloud-5m equivalent |
-| GKE Autopilot | up to homelab-500k (cost ~ Standard tier) | ~ $1.50/vCPU-hr |
-| EKS spot | every profile incl. cloud-5m | ~ $0.20–0.30/vCPU-hr |
+| Laptop / M5 Max kind | dev-5k | $0 |
+| 2× PRO2-L Kapsule | scaleway-{50k, 500k}, failover-* | ~$0.60–0.74/run |
+| 4× PRO2-L Kapsule | scaleway-1m | ~$1.50/run |
+| 16× PRO2-L Kapsule | scaleway-5m | ~$6/run |
 
-**Scaleway Kapsule** is the cheapest cloud option that's still a real Kubernetes cluster: free control plane on the Essential tier, per-second billing, ~$0.055/vCPU-hr on PRO2 instances. The `scaleway-50k` profile is sized for one PRO2-M node (16 vCPU / 64 GB / €0.21/hr); see the profile YAML for the `scw` CLI commands to provision and tear down a cluster.
+**Scaleway Kapsule** is the cheapest cloud option that's still a real Kubernetes cluster: free control plane on the Essential tier, per-second billing, ~$0.42/hr on PRO2-L. See each profile YAML for the `scw` CLI commands to provision and tear down a cluster.
 
 Nothing in the harness assumes a specific distro; pure Helm + standard Kubernetes APIs. GKE Autopilot is OK because the combined image runs as non-root and declares its ports.
 
@@ -66,7 +74,7 @@ Nothing in the harness assumes a specific distro; pure Helm + standard Kubernete
 
 The runner will:
 
-1. **Estimate cost up front**. `--profile=cloud-5m --duration=60m → ~$35 estimated`.
+1. **Estimate cost up front**. `--profile=scaleway-5m --duration=30m → ~$6 estimated`.
 2. **Prompt for confirmation** when the target context name suggests a cloud (`eks`, `gke`, `aks`, `aws`, `gcp`, `azure` substring) and the estimated cost ≥ $5. Skipped with `--yes`.
 3. **Hard-cap runtime** with `--max-duration` (default 2h). Auto-teardown if the soak hangs.
 4. **Always run teardown**, even on Ctrl-C, via `defer helm uninstall`.
@@ -136,12 +144,12 @@ Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
 | Cadence | Profile | Cost/run | Where |
 |---|---|---|---|
 | Every PR (optional, local) | dev-5k | $0 | M5 Max kind |
-| Weekly | homelab-500k | $0 | Homelab |
-| Monthly | thundering-herd | $0 | Homelab |
-| Quarterly | cloud-5m | $35 | EKS spot |
-| Pre-release | failover-soak | $0 | M5 Max / homelab |
+| Weekly | scaleway-50k | ~$0.60 | 2× PRO2-L Kapsule |
+| Monthly | scaleway-500k | ~$0.74 | 2× PRO2-L Kapsule |
+| Quarterly | scaleway-1m or scaleway-5m | $1.50–$6 | 4–16× PRO2-L Kapsule |
+| Pre-release | failover-soak | ~$0.90 | 2× PRO2-L Kapsule |
 
-Annual budget at this cadence: **~$160/yr.**
+Annual budget at this cadence: **~$50/yr** (12 × scaleway-500k + 4 × scaleway-1m + 4 × scaleway-5m + a handful of failover-soaks).
 
 ## Adding a new profile
 

@@ -20,13 +20,11 @@ Per ADR-0013, the cycle-p99 SLO is *measured* under burst conditions (the worst 
 
 | profile | regime | demand:inventory | SLO |
 |---|---|---|---|
-| `scaleway-500k` | burst (single shard) | 1:10 | cycle p99 ≤ 100 ms |
-| `scaleway-1m` | burst (2 shards) | 1:10 | cycle p99 ≤ 100 ms |
-| `scaleway-5m` | burst (10 shards) | 1:10 | cycle p99 ≤ 100 ms |
-| `scaleway-1m-reprovision` | reprovisioning | 1:1 | convergence rate |
-| `scaleway-5m-reprovision` | reprovisioning | 1:1 | convergence rate |
+| `scaleway-500k` | burst (single shard) | 1:10 | cycle p99 ≤ 5 s, binding-latency p99 ≤ 5 s |
+| `scaleway-1m` | burst (2 shards) | 1:10 | same |
+| `scaleway-5m` | burst (10 shards) | 1:10 | same |
 
-Convergence-rate gating in the runner is currently manual (interpret `bigfleet_shard_actions_total{kind="Bootstrap"}` from the snapshot); automating it is a follow-up.
+The 1:1 reprovisioning regime (gated on convergence rate, not cycle p99) used to live in dedicated `scaleway-{1m,5m}-reprovision.yaml` profiles — those were dropped in M44 to keep the profile set focused on size tiers. Scale-up demand × 10 in any profile to drive reprovisioning; convergence-rate gating in the runner is manual (interpret `bigfleet_shard_actions_total{kind="Bootstrap"}` from the snapshot).
 
 ## Per-shard machine ceiling (revised by scale tests)
 
@@ -121,10 +119,10 @@ Resolved budgets for the in-tree profiles:
 | profile | totalCRs | resolved budget | which clause |
 |---|---|---|---|
 | `dev-5k` | 5K | 15 min | floor |
-| `local-50k` | 50K | 15 min | floor |
-| `scaleway-500k` | 50K | 15 min | floor |
-| `scaleway-1m` | 1M | ~22 min | 750 CR/sec |
-| `scaleway-5m` | 5M | ~112 min | 750 CR/sec |
+| `scaleway-50k` | 50K | 15 min | floor |
+| `scaleway-500k` | 50K (against 500K seeded inventory) | 15 min | floor |
+| `scaleway-1m` | 100K (against 1M aggregate) | 15 min | floor |
+| `scaleway-5m` | 500K (against 5M aggregate) | ~12 min | 750 CR/sec |
 | `failover-soak` | 50K (60 min soak) | 30 min | durationSeconds × 0.5 |
 
 The 750 CR/sec floor is empirical: the 1M de-risk run sustained ~1110 CR/sec aggregate; sizing budget at 750 gives ~1.5× headroom over the observed throughput. If a real run is missing the gate by a small margin (the 1M de-risk landed at 998 975 / 999 000), the resolved budget value gets logged at runner startup so the failure mode is obvious from `runner.log`.

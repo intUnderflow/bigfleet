@@ -634,11 +634,11 @@ if t := time.Duration(prof.LoadProfile.DurationSeconds) * time.Second / 2; t > r
    rampBudget = max(15 min, totalCRs / 750 CR/sec, durationSeconds × 0.5)
    ```
    Empirical: the 1M de-risk's 998975 CRs in 900s = ~1110 CR/sec aggregate; sizing budget at 750 CR/sec gives ~1.5× headroom over observed throughput.
-   - dev-5k:    15 min  (already comfortable)
-   - local-50k: 15 min
-   - scaleway-500k: 15 min (was 11 min at 750 CR/sec — bumped to floor)
-   - scaleway-1m:   23 min  (1M / 750 = 22.2 min, rounded)
-   - scaleway-5m:   112 min (5M / 750 = 111 min)
+   - dev-5k:        15 min  (floor)
+   - scaleway-50k:  15 min  (floor)
+   - scaleway-500k: 15 min  (floor; 50K demand against 500K inventory)
+   - scaleway-1m:   15 min  (100K demand at 1:10 burst against 1M)
+   - scaleway-5m:   ~12 min (500K demand at 1:10 burst against 5M)
 3. Runner logs the resolved budget at startup so the failure mode "ramp aborted at exactly the budget" is obvious from `runner.log`.
 4. `docs/scaling-guide.md` entry documenting the formula and the empirical CR/sec floor it's based on.
 
