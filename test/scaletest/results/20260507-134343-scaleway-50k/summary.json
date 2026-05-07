@@ -1,0 +1,45 @@
+{
+  "runId": "20260507-114344-scaleway-50k",
+  "profile": "scaleway-50k",
+  "target": {
+    "context": "admin@bigfleet-50k-instr",
+    "kind": "unknown"
+  },
+  "cost": {
+    "estimatedUsd": 0.42,
+    "hours": 0.5
+  },
+  "scale": {
+    "kwokClusters": 50,
+    "machinesPerCr": 1000,
+    "totalCrs": 50000,
+    "shardReplicas": 1,
+    "seedMachinesPerShard": 60000,
+    "aggregateInventory": 60000
+  },
+  "metrics": {
+    "coordinatorApplyErrorRate": -1,
+    "coordinatorApplyOpsPerSec": 0,
+    "coordinatorPendingMax": 0,
+    "coordinatorTermChanges15m": 0,
+    "internalBindingLatencyP99Seconds": -1,
+    "loadgenCRsActive": 49999,
+    "loadgenCRsCreatedPerSec": 67.75254237288135,
+    "operatorAckP99Seconds": 0.9540741222846686,
+    "operatorOutboxDropsPerSec": 0,
+    "operatorRollupP99Seconds": 0.12470857118235895,
+    "shardCycleDurationP99Seconds": 8.192,
+    "shardInventoryMinMaxRatio": 1,
+    "shardPhase1P99Seconds": 8.192,
+    "shardPhase2P99Seconds": 0.12672,
+    "shardPhase3P99Seconds": 0.25344,
+    "shardPhaseExecuteP99Seconds": 0.00796,
+    "shardPhaseReconcileP99Seconds": 0.00099,
+    "shardProvisioningLatencyP50Seconds": -1,
+    "shardProvisioningLatencyP99Seconds": -1,
+    "shardShortfalls": 18,
+    "shardsReportingCycle": 1
+  },
+  "passed": false,
+  "failure": "shardCycleDurationP99Seconds 8.192s \u003e 5.0s throughput envelope (rollupInterval/2; backlog will accumulate)"
+}

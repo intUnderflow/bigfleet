@@ -47,10 +47,28 @@ type phase1Allocator struct {
 // shared bucket; for multi-type pools it's a freshly-allocated merged
 // slice. take() never mutates src; it just advances head and applies
 // the lazy MatchProfile + claimed filter.
+//
+// coLocated* fields are M44.4 / ADR-0019: cache the MatchProfile-and-
+// bucketed-by-sameKey layout, with per-bucket head cursors. Subsequent
+// takeCoLocated calls don't re-walk pool.src, and don't re-bucket the
+// already-walked machines — they advance head cursors past claimed
+// machines (O(claimed) amortised) and pick the best bucket in
+// O(buckets) per call. At cloud scale this is the path the operator's
+// owner-grouped → Same translation routes every Need through, so the
+// optimization matters for every realistic Pod-mode profile.
 type phase1Pool struct {
-	src     []machine.Machine
-	profile needs.Profile
-	head    int
+	src              []machine.Machine
+	profile          needs.Profile
+	head             int
+	coLocatedBuilt   bool
+	coLocatedSameKey string
+	coLocatedBuckets []coLocatedBucket
+}
+
+type coLocatedBucket struct {
+	key      string
+	machines []machine.Machine
+	head     int // advances past claimed machines across calls
 }
 
 func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
@@ -141,87 +159,117 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		return nil
 	}
 
-	// Bucket unclaimed, MatchProfile-passing candidates by the Same
-	// key's value. pool.src is pre-sorted by (price, id) so each
-	// bucket inherits that order.
-	buckets := make(map[string][]machine.Machine)
-	keys := make([]string, 0)
-	for _, m := range pool.src {
-		if _, claimed := a.claimed[m.ID]; claimed {
-			continue
+	// ADR-0019 (M44.4): cache the MatchProfile-and-bucketed layout
+	// once per pool. Subsequent calls advance per-bucket head cursors
+	// past claimed machines and pick the best bucket in O(buckets).
+	// Pre-cache, takeCoLocated re-walked pool.src on every call;
+	// at scaleway-50k cloud scale (50 K Same-everywhere Needs against
+	// ~10 K Idle per pool) that was ~5×10⁸ MatchProfile calls per
+	// cycle and dominated Phase 1 wall-clock.
+	if !pool.coLocatedBuilt || pool.coLocatedSameKey != sameKey {
+		index := make(map[string]int)
+		pool.coLocatedBuckets = pool.coLocatedBuckets[:0]
+		for _, m := range pool.src {
+			if !MatchProfile(pool.profile, m) {
+				continue
+			}
+			v, ok := lookupAttribute(sameKey, m)
+			if !ok {
+				continue
+			}
+			i, exists := index[v]
+			if !exists {
+				i = len(pool.coLocatedBuckets)
+				index[v] = i
+				pool.coLocatedBuckets = append(pool.coLocatedBuckets, coLocatedBucket{key: v})
+			}
+			pool.coLocatedBuckets[i].machines = append(pool.coLocatedBuckets[i].machines, m)
 		}
-		if !MatchProfile(pool.profile, m) {
-			continue
-		}
-		v, ok := lookupAttribute(sameKey, m)
-		if !ok {
-			continue
-		}
-		if _, exists := buckets[v]; !exists {
-			keys = append(keys, v)
-		}
-		buckets[v] = append(buckets[v], m)
-	}
-	if len(keys) == 0 {
-		return nil
+		pool.coLocatedBuilt = true
+		pool.coLocatedSameKey = sameKey
 	}
 
-	// Pick the best bucket.
-	//   1. Atomic-satisfiable (≥ n) preferred.
-	//   2. Within atomic-satisfiable: cheapest head price wins; tie
-	//      breaks by smallest size (tighter packing) then by key.
-	//   3. If none atomic: pick the largest bucket (best partial fill);
-	//      tie breaks by cheapest head price then key.
-	var bestKey string
-	var best []machine.Machine
-	for _, k := range keys {
-		b := buckets[k]
-		if best == nil {
-			best, bestKey = b, k
+	// Advance each bucket's head cursor past machines claimed in
+	// earlier calls. Total advancement across the cycle is O(claims),
+	// amortised to O(1) per claim.
+	for i := range pool.coLocatedBuckets {
+		b := &pool.coLocatedBuckets[i]
+		for b.head < len(b.machines) {
+			if _, claimed := a.claimed[b.machines[b.head].ID]; !claimed {
+				break
+			}
+			b.head++
+		}
+	}
+
+	// Pick the best non-empty bucket.
+	//   1. Atomic-satisfiable (≥ n unclaimed) preferred.
+	//   2. Within atomic-satisfiable: cheapest head price, then
+	//      smaller available, then key.
+	//   3. If none atomic: pick the largest available, then cheapest
+	//      head, then key.
+	bestIdx := -1
+	for i := range pool.coLocatedBuckets {
+		b := &pool.coLocatedBuckets[i]
+		avail := len(b.machines) - b.head
+		if avail <= 0 {
 			continue
 		}
-		bestAtomic := len(best) >= n
-		bAtomic := len(b) >= n
+		if bestIdx < 0 {
+			bestIdx = i
+			continue
+		}
+		bb := &pool.coLocatedBuckets[bestIdx]
+		bestAvail := len(bb.machines) - bb.head
+		bestAtomic := bestAvail >= n
+		bAtomic := avail >= n
+		better := false
 		switch {
 		case bAtomic && !bestAtomic:
-			best, bestKey = b, k
+			better = true
 		case bAtomic == bestAtomic:
-			better := false
 			if bAtomic {
-				// Both atomic: cheapest head, then smaller, then key.
+				// Both atomic: cheapest head, then smaller available, then key.
 				switch {
-				case b[0].PricePerHour < best[0].PricePerHour:
+				case b.machines[b.head].PricePerHour < bb.machines[bb.head].PricePerHour:
 					better = true
-				case b[0].PricePerHour == best[0].PricePerHour && len(b) < len(best):
+				case b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && avail < bestAvail:
 					better = true
-				case b[0].PricePerHour == best[0].PricePerHour && len(b) == len(best) && k < bestKey:
+				case b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && avail == bestAvail && b.key < bb.key:
 					better = true
 				}
 			} else {
-				// Both partial: largest, then cheapest head, then key.
+				// Both partial: largest available, then cheapest head, then key.
 				switch {
-				case len(b) > len(best):
+				case avail > bestAvail:
 					better = true
-				case len(b) == len(best) && b[0].PricePerHour < best[0].PricePerHour:
+				case avail == bestAvail && b.machines[b.head].PricePerHour < bb.machines[bb.head].PricePerHour:
 					better = true
-				case len(b) == len(best) && b[0].PricePerHour == best[0].PricePerHour && k < bestKey:
+				case avail == bestAvail && b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && b.key < bb.key:
 					better = true
 				}
 			}
-			if better {
-				best, bestKey = b, k
-			}
+		}
+		if better {
+			bestIdx = i
 		}
 	}
+	if bestIdx < 0 {
+		return nil
+	}
+	best := &pool.coLocatedBuckets[bestIdx]
 
+	avail := len(best.machines) - best.head
 	take := n
-	if take > len(best) {
-		take = len(best)
+	if take > avail {
+		take = avail
 	}
 	out := make([]machine.Machine, take)
 	for i := 0; i < take; i++ {
-		out[i] = best[i]
-		a.claimed[best[i].ID] = struct{}{}
+		m := best.machines[best.head]
+		best.head++
+		out[i] = m
+		a.claimed[m.ID] = struct{}{}
 	}
 	return out
 }

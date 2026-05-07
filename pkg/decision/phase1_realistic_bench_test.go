@@ -32,6 +32,25 @@ func BenchmarkPhase1_Realistic_50K(b *testing.B) {
 	}
 }
 
+// BenchmarkPhase1_Realistic_50K_AllSame mirrors the cloud-only
+// regime where the operator's coLocationKey + ownerReference
+// translation puts a Same() requirement on EVERY Need (each Pod
+// has its own ownerRef UID, so each CR gets a unique group, but
+// all are forced through takeCoLocated). ADR-0019 (M44.4) found
+// this is the actual cloud bottleneck — the basic Realistic_50K
+// bench above only exercises takeCoLocated for 15% of Needs
+// (gpu-training + memory-db archetypes).
+func BenchmarkPhase1_Realistic_50K_AllSame(b *testing.B) {
+	snap := buildRealisticIdle(b, 60_000)
+	allNeeds := buildRealisticDemandAllSame(50, 1000)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = decision.Phase1(snap, allNeeds)
+	}
+}
+
 // archetypeSpec mirrors the realistic catalog: instance types, zones,
 // size-bucket resources, priorities, sameRack hint. weight controls
 // how many clusters / machines this archetype claims.
@@ -207,6 +226,51 @@ func buildRealisticDemand(clusters, perCluster int) []needs.Need {
 				Profile:   profile,
 				Count:     1,
 			})
+		}
+	}
+	return out
+}
+
+// buildRealisticDemandAllSame mirrors the cloud regime: every Need
+// carries a Same(topology.bigfleet/rack) requirement (per-Pod
+// ownerRef → operator translates to Same regardless of archetype's
+// own sameRack flag). Each Need's archetype, instance type, size,
+// priority is otherwise drawn from the realistic catalog.
+func buildRealisticDemandAllSame(clusters, perCluster int) []needs.Need {
+	cat := realisticCatalog()
+	totalWeight := 0
+	for _, a := range cat {
+		totalWeight += a.weight
+	}
+
+	out := make([]needs.Need, 0, clusters*perCluster)
+	for c := 0; c < clusters; c++ {
+		clusterID := machine.ClusterID("cluster-" + strconv.Itoa(c))
+		for i := 0; i < perCluster; i++ {
+			r := (c*perCluster + i) % totalWeight
+			var a archetypeSpec
+			for _, candidate := range cat {
+				if r < candidate.weight {
+					a = candidate
+					break
+				}
+				r -= candidate.weight
+			}
+
+			it := a.instanceTypes[i%len(a.instanceTypes)]
+			size := a.sizes[i%len(a.sizes)]
+			pri := a.priorities[i%len(a.priorities)]
+
+			reqs := []needs.Requirement{
+				{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{it}},
+				{Key: "topology.bigfleet/rack", Operator: needs.OperatorSame},
+			}
+			res := []needs.ResourceQty{}
+			for k, v := range size {
+				res = append(res, needs.ResourceQty{Name: k, Quantity: v})
+			}
+			profile := needs.NewProfile(reqs, res, nil, pri, needs.PenaltyBucket8192, needs.PenaltyBucket8192)
+			out = append(out, needs.Need{ClusterID: clusterID, Profile: profile, Count: 1})
 		}
 	}
 	return out
