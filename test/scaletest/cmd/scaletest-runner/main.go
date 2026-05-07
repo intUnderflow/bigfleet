@@ -764,9 +764,15 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // the second term lives outside this harness (provider conformance
 // suite + production canaries — see ADR-0018).
 //
-//   - internalBindingLatencyP99 ≤ 5 s.   Regression detector. ADR-0018.
+//   - internalBindingLatencyP99 ≤ 15 s.  Regression detector. ADR-0018, ADR-0020.
 //     Measured via the per-Pod histogram (ADR-0017) emitted by the
-//     bigfleet-scaletest-pod-shim.
+//     bigfleet-scaletest-pod-shim. The 15 s budget = ~10 s rollupInterval
+//     ceiling (a Pod arriving just after a rollup tick waits one full
+//     interval before the shard sees its CR) + ~5 s chain-execution
+//     headroom (shard cycle + binder burst-drain). Profiles that
+//     lower rollupInterval may lower this SLO accordingly:
+//     `internalBindingLatencyP99 ≤ rollupInterval + 5 s` is the
+//     recommended ceiling. ADR-0020.
 //
 //   - shardCycleDurationP99 ≤ rollupInterval / 2 (default 10 s → 5 s).
 //     Throughput envelope — if the shard can't finish a snapshot
@@ -790,7 +796,7 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // informational metrics; they're alerted on by the operator's
 // monitoring stack but no longer block a release.
 func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
-	internalBindingLatencyTarget := 5.0
+	internalBindingLatencyTarget := 15.0 // ADR-0020: ~10 s rollupInterval ceiling + ~5 s chain headroom
 	if slo.InternalBindingLatencyP99Seconds > 0 {
 		internalBindingLatencyTarget = slo.InternalBindingLatencyP99Seconds
 	}

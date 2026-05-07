@@ -83,7 +83,7 @@ operator:
   coLocationKey: topology.bigfleet/rack
 
 slo:
-  internalBindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 15
   shardCycleDurationP99Seconds: 5
 
 prometheus:

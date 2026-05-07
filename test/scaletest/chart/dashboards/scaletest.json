@@ -11,10 +11,10 @@
   "panels": [
     {
       "id": 99, "type": "stat", "title": "Overall SLO verdict",
-      "description": "Sums the number of pass() gates currently failing. 0 = green PASS, ≥1 = red FAIL. Mirrors the runner's pass() — same thresholds, same metrics. Profile-level SLO overrides aren't reflected here; the panel uses the in-process tier defaults: cycle ≤ 5 s, rollup ≤ 1 s, ack ≤ 12 s, internal binding ≤ 5 s, sustained load ≥ 99.9 %, outbox drops = 0, coordinator FSM error rate ≤ 0.1 %.",
+      "description": "Sums the number of pass() gates currently failing. 0 = green PASS, ≥1 = red FAIL. Mirrors the runner's pass() — same thresholds, same metrics. Profile-level SLO overrides aren't reflected here; the panel uses the in-process tier defaults: cycle ≤ 5 s, rollup ≤ 1 s, ack ≤ 12 s, internal binding ≤ 15 s (ADR-0020), sustained load ≥ 99.9 %, outbox drops = 0, coordinator FSM error rate ≤ 0.1 %.",
       "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_seconds_bucket)) > bool 5) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))", "refId": "A"}],
+      "targets": [{"expr": "((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_seconds_bucket)) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "mappings": [{"type": "value", "options": {"0": {"text": "PASS", "color": "green", "index": 0}}}, {"type": "range", "options": {"from": 0.5, "to": 999, "result": {"text": "FAIL", "color": "red", "index": 1}}}]}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
@@ -24,12 +24,12 @@
       "collapsed": false
     },
     {
-      "id": 101, "type": "stat", "title": "Internal binding latency p99 (per-Pod, ADR-0018) — SLO ≤ 5 s",
-      "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. CR-mode opt-out profiles have no shim → metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
+      "id": 101, "type": "stat", "title": "Internal binding latency p99 (per-Pod, ADR-0018) — SLO ≤ 15 s (ADR-0020)",
+      "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. CR-mode opt-out profiles have no shim → metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "s", "noValue": "CR-mode (no shim)", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "CR-mode (no shim)", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 12}, {"color": "red", "value": 15}]}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
@@ -131,15 +131,15 @@
       "collapsed": false
     },
     {
-      "id": 201, "type": "timeseries", "title": "Internal binding latency p99 — SLO line at 5 s (ADR-0018 in-process tier)",
-      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
+      "id": 201, "type": "timeseries", "title": "Internal binding latency p99 — SLO line at 15 s (ADR-0020)",
+      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). ADR-0020: 15 s = ~10 s rollupInterval ceiling + ~5 s chain headroom. Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
         {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "fingerprint fan-out (legacy / diagnostic)"}
       ],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}, "drawStyle": "line"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}, "color": {"mode": "palette-classic"}}, "overrides": []}
+      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}, "drawStyle": "line"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 15}]}, "color": {"mode": "palette-classic"}}, "overrides": []}
     },
     {
       "id": 5, "type": "timeseries", "title": "Shard cycle p99 (worst shard) — envelope line at 5 s",

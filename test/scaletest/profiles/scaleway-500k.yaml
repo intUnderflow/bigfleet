@@ -117,7 +117,7 @@ operator:
 # binding latency. User-facing latency = this + provider time
 # (not measured here, see ADR-0018).
 slo:
-  internalBindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 15
   shardCycleDurationP99Seconds: 5
 
 prometheus:

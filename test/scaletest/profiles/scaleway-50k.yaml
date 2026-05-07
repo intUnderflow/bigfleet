@@ -81,7 +81,7 @@ operator:
 # ADR-0014 + ADR-0017 / M44: internalBindingLatency gate active (ADR-0018). In-process
 # tier targets at cloud scale.
 slo:
-  internalBindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 15
   shardCycleDurationP99Seconds: 5
 
 prometheus:
