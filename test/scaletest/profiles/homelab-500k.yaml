@@ -19,6 +19,10 @@ loadProfile:
   target: 1000
   churnPerMinute: 0.05
   durationSeconds: 3600
+  # M44 explicit opt-out: Pod-mode floor at 500 clusters needs ~500
+  # vCPU req which most homelabs don't have. CR-mode keeps this
+  # profile homelab-runnable.
+  mode: cr
 
 prometheus:
   resources:

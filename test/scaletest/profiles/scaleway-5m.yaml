@@ -126,6 +126,10 @@ loadProfile:
   # steady-state + burst path rather than priority-mix Phase 2 fan-out.
   priorityClasses: [1000]
   durationSeconds: 1800
+  # M44 explicit opt-out: 10K Pods/cluster × 500 clusters would need
+  # separate sizing; this profile is gated on algorithmic SLOs
+  # (cycle, ack, rollup) which Pod-mode doesn't change.
+  mode: cr
 
 operator:
   qps: 200

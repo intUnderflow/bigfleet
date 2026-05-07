@@ -91,6 +91,10 @@ loadProfile:
   target: 10000
   churnPerMinute: 0.05
   durationSeconds: 1800
+  # M44 explicit opt-out: 10K Pods/cluster doesn't fit the M44
+  # Pod-mode kwok floor. The reprovisioning regime is gated on
+  # convergence rate, not bindingLatency, so Pod-mode adds nothing.
+  mode: cr
 
 operator:
   qps: 200

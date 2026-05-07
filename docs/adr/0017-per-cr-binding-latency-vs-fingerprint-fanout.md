@@ -96,3 +96,19 @@ The legacy histogram is still exposed as `shardProvisioningLatencyP{50,99}Second
 **Future direction.** When all profiles run Pod-mode (the realistic harness from M31/M33 + the dev-5k-pods-loopback validation from M43d), the per-Pod metric covers every release-gate path. The legacy histogram retires as a deprecated diagnostic, and the runner can drop the metric entirely.
 
 We don't bump CR-mode profile overrides to game the legacy metric. Gaming an unreliable metric to make a gate pass is worse than not gating on it at all — it normalises the artefact and disguises future regressions.
+
+## Addendum (2026-05-07): M44 — Pod-mode is the default
+
+The previous addendum left CR-mode as the default and Pod-mode as opt-in. After running scaleway-500k under that arrangement we flipped it: Pod-mode is the realistic shape, it's what users feel, so it's the default. CR-mode becomes the explicit opt-out for profiles where the per-cluster Pod scale doesn't fit the kwok kine budget without separate sizing work.
+
+Concrete changes:
+
+- **Load-driver default**: empty `loadProfile.mode` normalises to `"pods"` in `loadProfile`. Was `"cr"` (legacy shape).
+- **Chart kwok defaults bumped** to the dev-5k-pods-loopback floor (apiserver + workload at 500m/1Gi req, 2/2Gi lim, 1Gi tmpfs). dev-5k-pods proved that's the minimum where kine sqlite stops warning under combined CR + Pod + UpcomingNode + Node write load.
+- **`entrypoint-workload.sh`** defaults `POD_MODE` env var to `pods`; the chart only emits the env when `loadProfile.mode` is non-empty, so unset → default-Pod-mode. Both pod-shim and unschedulable-pod-controller start by default.
+- **Cloud profiles resized** where the new floor doesn't fit the prior pool: scaleway-{50k,500k} 2× PRO2-M → 2× PRO2-L; failover-* 2× PRO2-M → 2× PRO2-L. Cost ~doubles, buys the user-facing binding-latency gate at scale.
+- **CR-mode opt-outs** kept on profiles where Pod-mode at the per-cluster scale would need separate sizing work: scaleway-{1m,5m} (10K Pods/cluster), scaleway-{1m,5m}-reprovision (1:1 reprovisioning regime, gated on convergence rate not binding latency), homelab-500k (homelab can't fit 500-cluster Pod-mode floor), cloud-5m (5000 clusters), thundering-herd (peak 5K Pods/cluster), local-50k (M5 Max can't fit Pod-mode floor at 50 clusters).
+- **`bindingLatencyP99Seconds` SLO override** added on every Pod-mode profile so `pass()` actively gates on it. CR-mode profiles still skip the gate via the -1 sentinel.
+- **`scaleway-500k-pods.yaml` deleted** (folded into scaleway-500k.yaml — the regular profile is now Pod-mode by default).
+
+The legacy fingerprint histogram stays exposed as a diagnostic until all profiles are Pod-mode; once the 1m/5m reshape lands the metric retires.

@@ -20,6 +20,11 @@ loadProfile:
   target: 1000
   churnPerMinute: 0.02
   durationSeconds: 3600
+  # M44 explicit opt-out: 5000 clusters × 1 vCPU Pod-mode floor =
+  # 5000 vCPU req. The realistic-shape Pod-mode test already lives
+  # in scaleway-{50k,500k}.yaml; this profile gates on aggregate
+  # algorithmic SLOs at 5M scale, which Pod-mode doesn't change.
+  mode: cr
 
 prometheus:
   retentionDays: 1

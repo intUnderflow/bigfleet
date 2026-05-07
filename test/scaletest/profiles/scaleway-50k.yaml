@@ -1,23 +1,32 @@
 # scaleway-50k — 50K-CR run on a Scaleway Kapsule cluster.
 #
-# Sized for a 2-node PRO2-M Kapsule pool (32 vCPU / 128 GB RAM total).
-# Pre-harness-split this fit on 1 node, but the 2-container split per
-# kwok pod (apiserver + workload) bumped per-pod CPU req from ~200m
-# to ~300m — 50 pods × 300m + shard + coordinator + prometheus
-# overflows a single 16-vCPU PRO2-M.
+# M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
+# 50K Pods exercised through the full Pod → CR → Configured →
+# fake-Node → Pod-bound chain. bindingLatency p99 ≤ 5 s SLO is
+# active. Pool sized for the M44 Pod-mode kwok floor (1 vCPU req
+# per cluster); 2× PRO2-M no longer fits — bumped to 2× PRO2-L.
+#
+# Sizing math:
+#   shard:        1 × 1 vCPU / 2 GiB                = 1 vCPU / 2 GiB
+#   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
+#   kwok pods:   50 × 1 vCPU / 2 GiB combined req   = 50 vCPU / 100 GiB
+#                  (apiserver 500m/1Gi + workload 500m/1Gi, M44 floor)
+#   total:       ~53 vCPU req / ~107 GiB req         → fits 2× PRO2-L
+#                                                       (64 vCPU / 256 GiB)
+#                                                       ~83 % CPU, ~42 % memory reservation
 #
 # Provisioning:
 #   scw k8s cluster create name=bigfleet-scaletest \
 #     version=1.35.3 cni=cilium type=kapsule \
-#     pools.0.name=default pools.0.node-type=PRO2-M \
+#     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2
 #
-# Cost (Scaleway, May 2026): 2× PRO2-M × €0.21/hr ≈ €0.42/hr. A
-# 30-min run + ~5min ramp + teardown ≈ 40 min ≈ €0.28 / ~$0.30.
+# Cost (Scaleway, May 2026): 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr. A
+# 30-min run + ~5min ramp + teardown ≈ 40 min ≈ €0.56 / ~$0.60.
+# About 2× the CR-mode cost ($0.30) — buys the user-facing
+# binding-latency gate at scale.
 
-# Scaleway pulls images from a registry (no kind side-load), so point
-# at the GHCR-published copies. These are public; the Kapsule cluster
-# pulls anonymously.
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
   tag: dev
@@ -31,16 +40,8 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  # Two-container split (post-M11.24a harness reshape): apiserver +
-  # kine + kwok-controller in one container, operator + load-driver in
-  # the other, each with its own cgroup CPU budget so they stop
-  # competing for one limit.
-  apiserverResources:
-    requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 1,    memory: 1Gi }
-  workloadResources:
-    requests: { cpu: 100m, memory: 200Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
+  # Per-pod budgets inherited from the chart's M44 Pod-mode floor
+  # (500m/1Gi req, 2/2Gi lim, 1Gi tmpfs).
 
 shard:
   replicas: 1
@@ -66,18 +67,19 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0017 (revised): CR-mode profile. See scaleway-500k.yaml for
-# the explanation; pass() skips bindingLatency gate in CR-mode.
+# ADR-0014 + ADR-0017 / M44: bindingLatency gate active. In-process
+# tier targets at cloud scale.
 slo:
+  bindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
   resources:
-    requests: { cpu: 500m, memory: 2Gi }
+    requests: { cpu: 1, memory: 4Gi }
     limits:   { cpu: 2, memory: 8Gi }
 
 costEstimate:
-  vCPU: 60
-  memoryGB: 60
-  awsSpotUsdPerHour: 0.25
-  notes: "1× Scaleway PRO2-M (16 vCPU / 64 GB) at ~€0.21/hr. ~$0.15 for a 40-min run end-to-end."
+  vCPU: 64
+  memoryGB: 256
+  awsSpotUsdPerHour: 0.84
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each) at ~€0.42/hr. ~$0.60 for a 40-min run end-to-end. Pod-mode (M44 default) — bindingLatency gate active."

@@ -595,14 +595,13 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardProvisioningLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
 		"shardProvisioningLatencyP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
 		// ADR-0014 release gate: binding-latency p99 — what users feel.
-		// ADR-0017 (revised): only the per-Pod histogram gates a
-		// release. CR-mode profiles return NaN here (no pod-shim →
-		// no per-Pod samples). The runner's pass() treats a
-		// -1 sentinel from promQuery as "metric unavailable, skip
-		// the gate" — CR-mode runs are then gated only on the
-		// algorithmic SLOs (cycle envelope, ack, rollup, 0
-		// shortfalls). The legacy fingerprint histogram is exposed
-		// as shardProvisioningLatencyP{50,99}Seconds for diagnostic
+		// ADR-0017: only the per-Pod histogram gates a release. M44
+		// flipped Pod-mode to the default, so every profile populates
+		// this histogram; the gate is active everywhere. The -1
+		// sentinel skip in pass() is retained for opt-in CR-mode
+		// runs (mode: cr) and for failed scrapes. The legacy
+		// fingerprint histogram is exposed as
+		// shardProvisioningLatencyP{50,99}Seconds for diagnostic
 		// reading; never used as a release gate after ADR-0017.
 		"bindingLatencyP99Seconds":  `max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))`,
 		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,

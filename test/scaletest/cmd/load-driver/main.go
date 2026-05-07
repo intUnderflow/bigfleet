@@ -123,14 +123,16 @@ type profile struct {
 	MicroBurstRatePerMinute float64 `yaml:"microBurstRatePerMinute"`
 	MicroBurstFactor        float64 `yaml:"microBurstFactor"`
 
-	// Mode (M43a / Item 10): "" or "cr" emit CapacityRequests
-	// directly (the legacy harness shape — bypasses the user-facing
-	// Pod → CR loop). "pods" emits Pods with archetype-shaped
-	// nodeAffinity + resources, leaving the rest of the production
-	// loop (mark-Unschedulable, unschedulable-pod-controller, Node
-	// creation, Pod binding) to the bigfleet-scaletest-pod-shim
-	// (M43b). With no shim wired, Pod-mode just leaves Pods Pending
-	// forever — that's expected during M43a's standalone landing.
+	// Mode (M43a / Item 10, M44 default flip): "" or "pods" emit
+	// Pods with archetype-shaped nodeAffinity + resources, leaving
+	// the rest of the production loop (mark-Unschedulable,
+	// bigfleet-unschedulable-pod-controller, Node creation, Pod
+	// binding) to the bigfleet-scaletest-pod-shim (M43b/c). This is
+	// the realistic shape — what users actually feel — so it's the
+	// default. "cr" is the opt-in legacy shape that bypasses the
+	// Pod layer entirely (cheap, but doesn't exercise the user-
+	// facing binding-latency path; bindingLatencyP99 gate skipped
+	// via -1 sentinel per ADR-0017).
 	Mode string `yaml:"mode"`
 }
 
@@ -1012,6 +1014,12 @@ func loadProfile(path string) (profile, error) {
 	}
 	if p.Target <= 0 {
 		return profile{}, errors.New("profile.target must be > 0")
+	}
+	// M44: Pod-mode is the default. Empty Mode normalises to "pods"
+	// so every profile exercises the user-facing Pod → bound chain
+	// unless it explicitly opts into the legacy "cr" shape.
+	if p.Mode == "" {
+		p.Mode = "pods"
 	}
 	return p, nil
 }

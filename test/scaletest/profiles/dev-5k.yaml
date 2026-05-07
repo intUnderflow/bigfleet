@@ -1,20 +1,15 @@
 # dev-5k — smallest sensible profile, runs free on a laptop.
 # 5 simulated clusters × 1K CRs each = 5K total demand.
 #
-# M43 Pod-mode: opts into the production-shaped Pod → CR loop.
-# Each kwok pod runs (in addition to operator + load-driver) the
-# bigfleet-scaletest-pod-shim + bigfleet-unschedulable-pod-controller
-# so Pod-mode tests work end-to-end. Workload container budget is
-# bumped to 1 Gi to fit the extra two controller-runtime processes.
+# M44: Pod-mode is the default. The chart's kwok floor (500m/1Gi
+# req, 2/2Gi lim, 1Gi tmpfs) is exactly what each cluster needs to
+# run apiserver + kine + operator + load-driver + pod-shim +
+# unschedulable-pod-controller without kine warnings — proven by
+# dev-5k-pods-loopback at the same per-cluster shape. So this file
+# inherits the chart kwok defaults rather than redeclaring them.
 
 kwok:
   clusterCount: 5
-  apiserverResources:
-    requests: { cpu: 100m, memory: 200Mi }
-    limits:   { cpu: 600m, memory: 700Mi }
-  workloadResources:
-    requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 800m, memory: 1Gi }
 
 shard:
   replicas: 1
@@ -23,10 +18,16 @@ loadProfile:
   target: 1000
   churnPerMinute: 0.05
   durationSeconds: 600
-  mode: pods
+
+# ADR-0014 in-process tier: binding-latency p99 ≤ 10 s on kind, cycle
+# envelope ≤ 5 s. ADR-0017 / M44: pod-shim is on by default so the
+# binding-latency gate fires on real per-Pod data.
+slo:
+  bindingLatencyP99Seconds: 10
+  shardCycleDurationP99Seconds: 5
 
 costEstimate:
-  vCPU: 3
-  memoryGB: 9
+  vCPU: 10
+  memoryGB: 10
   awsSpotUsdPerHour: 0.20
-  notes: "Free on M5 Max kind. ~10 min run."
+  notes: "Free on M5 Max kind. ~10 min run. 5 clusters × ~1 vCPU req each = ~5 vCPU at the M44 Pod-mode floor."

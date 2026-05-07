@@ -1,35 +1,46 @@
 # scaleway-500k — production-shape 500K-machine scale test on Scaleway.
 #
-# Sized for a 2-node PRO2-M Kapsule pool. Total resource requests:
-#   shard:        1 pod, 2 vCPU / 3 GiB    (holds 500K-machine inventory)
-#   coordinator:  1 pod, default
-#   prometheus:   1 pod, 1 vCPU / 4 GiB
-#   kwok pods:   50 × 0.3 vCPU / 0.8 GiB   (apiserver + workload split)
-#                 → 15 vCPU / 40 GiB
-#   total:       ~18 vCPU req / ~48 GiB  → fits 2 PRO2-M (32 vCPU / 128 GiB)
-#                                          with ~30 % CPU + ~60 % memory headroom
+# M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
+# 50K Pods exercised through the full Pod → CR → Configured →
+# fake-Node → Pod-bound chain, against a 500K Idle inventory pool.
+# bindingLatency p99 ≤ 5 s gate active per ADR-0014 / ADR-0017.
+#
+# Sized for a 2-node PRO2-L Kapsule pool. The CR-mode 2× PRO2-M
+# sizing no longer fits the M44 kwok floor (1 vCPU req per cluster
+# × 50 = 50 vCPU on a 32-vCPU pool).
+#
+# Sizing math:
+#   shard:        1 × 2 vCPU / 3 GiB                = 2 vCPU / 3 GiB
+#   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 2 vCPU / 8 GiB                = 2 vCPU / 8 GiB
+#                  (Pod-mode adds per-Pod histogram + Node objects)
+#   kwok pods:   50 × 1 vCPU / 2 GiB combined req   = 50 vCPU / 100 GiB
+#                  (apiserver 500m/1Gi + workload 500m/1Gi, M44 floor)
+#   total:       ~55 vCPU req / ~112 GiB req         → fits 2× PRO2-L
+#                                                       (64 vCPU / 256 GiB)
+#                                                       ~86 % CPU, ~44 % memory reservation
 #
 # Sizing history:
-#   - 5× PRO2-M (initial): cluster utilisation 5-15 %, ~80 % headroom paid for.
-#   - 3× PRO2-M (rightsize-1): observed kwok pods steady at ~115m per container
-#     vs 300m requested, total cluster CPU 9-11 % across 3 nodes. Reservation
-#     math forced a 3-node minimum (50 × 600m + 3.5 = 33.5 cores reserved,
-#     above 2-node 32-core capacity), but real CPU only used ~5 cores.
-#   - 2× PRO2-M (current): kwok per-container requests trimmed 300m → 150m
-#     (still 30 % above observed 115m). Reservations now ~18 cores → fits 2
-#     PRO2-M cleanly. Limits unchanged so kwok pods can still burst.
+#   - Original 5× PRO2-M, then 3× PRO2-M, then 2× PRO2-M (all CR-mode)
+#     by trimming kwok requests below what Pod-mode needs.
+#   - M44 Pod-mode default: floor is 1 vCPU / 2 GiB combined per kwok
+#     pod (matches dev-5k-pods-loopback). 2× PRO2-M no longer fits;
+#     2× PRO2-L is the cleanest match. PRO2-L is a separate quota
+#     counter from PRO2-M (default 10/zone), so the 2/zone PRO2-M
+#     limit doesn't apply.
 #
 # Provisioning:
 #
 #   scw k8s cluster create name=bigfleet-scaletest \
 #     version=1.35.3 cni=cilium type=kapsule \
-#     pools.0.name=default pools.0.node-type=PRO2-M \
+#     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
 #     region=nl-ams project-id=<bigfleet-project-id>
 #
-# Expected cost on Scaleway nl-ams: 2× PRO2-M × €0.21/hr ≈ €0.42/hr.
-# A 30-min run + setup + teardown ≈ 50 min ≈ €0.35 (~$0.38). 33 % cheaper
-# than the 3-node sizing, 60 % cheaper than the original 5-node.
+# Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
+# A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74). About
+# 2× the CR-mode cost — buys the user-facing binding-latency gate at
+# 50K-Pod scale.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -46,27 +57,11 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  # Split per-container budgets — the pre-split design pinned the
-  # apiserver+kine + operator+load-driver under a single 1-core
-  # limit and the operator-side write fan-in starved the apiserver,
-  # producing a 600 ms execute-side p99 tail in the M11.24a cloud
-  # run. With the split, each side gets its own cgroup CPU budget.
-  apiserverResources:
-    # Observed steady-state on the 3-node rightsize run was ~115m per
-    # container; 150m gives ~30 % headroom above observed and lets 50
-    # kwok pods + bigfleet pods fit on 2× PRO2-M (32 vCPU). Limits
-    # unchanged — bursts up to 2 cores still allowed.
-    requests: { cpu: 150m, memory: 500Mi }
-    # tmpfs sharedVolume (default 512Mi) plus kine + apiserver +
-    # kwok-controller working set. 3Gi ceiling so the tmpfs has
-    # headroom under steady churn.
-    limits:   { cpu: 2,    memory: 3Gi }
-  workloadResources:
-    requests: { cpu: 150m, memory: 300Mi }
-    # Previous 500m → 1 cpu was too tight: load-driver couldn't keep
-    # up (loadgenCRsActive 14,755 vs 50,000 target). 1.5 cores gives
-    # operator + load-driver room under burst.
-    limits:   { cpu: 1500m, memory: 1Gi }
+  # Per-pod budgets inherited from the chart's M44 Pod-mode floor
+  # (apiserver 500m/1Gi req, 2/2Gi lim; workload same; sharedVolume
+  # 1Gi). dev-5k-pods-loopback proved that's the minimum where kine
+  # sqlite stops warning under combined CR + Pod + UpcomingNode +
+  # Node write load.
 
 shard:
   # Single-shard 500K. Multi-shard configurations are aggregate-named
@@ -80,7 +75,7 @@ shard:
   # only, not the algorithmic ceiling we actually want to test.
   seedMachines: 500000
   # Cap per-cycle work so a 50K-Need demand burst spreads across
-  # cycles instead of blowing the 100ms SLO with 50K Configure RPCs
+  # cycles instead of blowing the 5s SLO with 50K Configure RPCs
   # in one cycle. 1000/cycle × ~50 cycles = full ramp in <1 min.
   maxActionsPerCycle: 1000
   # M11.18: parallel execute through operator streams. With 1000
@@ -98,8 +93,6 @@ shard:
   # steady-state cycle work. Skip the first 5 cycles' histogram
   # observations so cycle p99 reflects the SLO-relevant work.
   metricsWarmupCycles: 5
-  # localBootstrap left false (default) so we exercise the real
-  # operator-stream path. M11.18 should make that fast enough.
   resources:
     requests: { cpu: 2, memory: 3Gi }
     limits:   { cpu: 6, memory: 12Gi }
@@ -118,27 +111,23 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0017 (revised): CR-mode profile, no pod-shim, no per-Pod
-# histogram. The runner's bindingLatencyP99 query targets the
-# per-Pod histogram only; in CR-mode it returns NaN and the gate is
-# skipped. CR-mode runs are gated by the algorithmic SLOs (cycle
-# envelope, ack p99, rollup p99, 0 shortfalls) — what BigFleet
-# actually controls.
-#
-# shardCycleDurationP99Seconds is set to 5 s (default in-process
-# tier from ADR-0014); this profile runs the operator at the same
-# default rollup interval (10 s) so the throughput envelope is the
-# default 5 s.
+# ADR-0014 + ADR-0017 / M44: bindingLatency gate is active because
+# Pod-mode is the default. In-process tier: ≤ 5 s for both
+# binding-latency p99 and the shard cycle envelope.
 slo:
+  bindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
+  # Bumped from CR-mode's 1/4 GiB: per-Pod bind-latency histogram
+  # (12 buckets) + fake Node objects + UpcomingNode series add
+  # cardinality. 8 GiB request gives the head block room.
   resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 4, memory: 12Gi }
+    requests: { cpu: 2, memory: 8Gi }
+    limits:   { cpu: 4, memory: 16Gi }
 
 costEstimate:
-  vCPU: 32
-  memoryGB: 128
-  awsSpotUsdPerHour: 0.42
-  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 500K seeded inventory + 50K demand. ~$0.38 for a 50-min run end-to-end. Sized down twice from the original 5-node profile (cluster CPU was 5-15 %): rightsize-1 went 5→3 nodes, then trimming kwok requests 300m→150m per container freed enough reservation headroom to fit on 2 nodes while still leaving kwok pods their 1.5-core burst limit."
+  vCPU: 64
+  memoryGB: 256
+  awsSpotUsdPerHour: 0.84
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 500K seeded inventory + 50K Pod-mode demand through the full M43 chain. bindingLatency p99 ≤ 5s gate active per ADR-0014/0017. ~$0.74 for a 50-min run end-to-end (~2× the CR-mode cost; the M44 Pod-mode floor needs PRO2-L)."

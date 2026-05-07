@@ -1,5 +1,14 @@
 # scaleway-1m — 1,000,000-machine fleet test on Scaleway, two shards.
 #
+# **M44: still CR-mode.** Pod-mode (M44 default for the 50K-Pod
+# profiles) doesn't fit at this per-cluster shape — 100 clusters ×
+# 10K Pods each = 10K Pod-mode objects per kwok cluster, which
+# exceeds the kine sqlite budget proven at dev-5k-pods. Reshaping
+# this profile to Pod-mode (smaller per-cluster Pod count + matching
+# M29 seed adjustment) is M44-followup. For now the algorithmic
+# SLOs (cycle, rollup, ack, shortfalls) gate the run; bindingLatency
+# is skipped per ADR-0017 -1 sentinel.
+#
 # **M29: production-realistic seed shape.** Earlier revisions of this
 # profile pre-seeded the entire 1M aggregate inventory as Idle. That
 # does not match a real fleet, where the vast majority of machines are
@@ -29,13 +38,6 @@
 # A complete reprovisioning event (1:1) is its own regime gated on
 # convergence rate, not cycle p99 — see scaleway-1m-reprovision for
 # that shape.
-#
-# Prior history: the M13.gate rundir
-# `test/scaletest/results/20260505-203638-scaleway-1m` drove the 1:1
-# shape and measured cycle p99 = 967 ms. M27 brought that down ~5×
-# but 1:1 still doesn't meet a 100 ms cycle SLO at PRO2-M speeds —
-# nor would it meet a useful one. ADR-0013 reframes that result as
-# a regime mismatch, not a system limitation.
 #
 # Sized for 2× PRO2-L Kapsule (32 vCPU / 128 GiB each):
 #   shards:       2 × 2 vCPU / 3 GiB                =  4 vCPU / 6 GiB
@@ -130,6 +132,10 @@ loadProfile:
   # diversity.
   priorityClasses: [1000]
   durationSeconds: 1800
+  # M44 explicit opt-out: 10K Pods/cluster doesn't fit the M44
+  # Pod-mode kwok floor without separate sizing. CR-mode preserved
+  # until the Pod-mode reshape lands (see header).
+  mode: cr
 
 operator:
   qps: 200
@@ -137,8 +143,8 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0017 (revised): CR-mode profile. See scaleway-500k.yaml for
-# the explanation; pass() skips bindingLatency gate in CR-mode.
+# ADR-0017 / M44: CR-mode (opt-out). pass() skips bindingLatency
+# gate via -1 sentinel; algorithmic SLOs gate the run.
 slo:
   shardCycleDurationP99Seconds: 5
 
@@ -151,4 +157,4 @@ costEstimate:
   vCPU: 64
   memoryGB: 256
   awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management each (450K Configured + 50K Idle) = 1M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013). ~$0.74 for a 50-min run end-to-end."
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management each (450K Configured + 50K Idle) = 1M aggregate fleet. M29 production-realistic seed: 9000 Configured per kwok cluster pre-matched to load-driver CRs, only 1K of each cluster's 10K CRs is unsatisfied burst. 1:10 burst regime (ADR-0013). M44 CR-mode opt-out — Pod-mode reshape pending. ~$0.74 for a 50-min run end-to-end."

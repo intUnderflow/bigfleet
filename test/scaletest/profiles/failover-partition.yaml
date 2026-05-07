@@ -23,12 +23,6 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  apiserverResources:
-    requests: { cpu: 150m, memory: 500Mi }
-    limits:   { cpu: 2,    memory: 3Gi }
-  workloadResources:
-    requests: { cpu: 150m, memory: 300Mi }
-    limits:   { cpu: 1500m, memory: 1Gi }
 
 shard:
   replicas: 2
@@ -63,7 +57,7 @@ runnerActions:
   - { atSeconds: 600, action: partition-coordinator-from-shard-bigfleet-shard-1 }
 
 costEstimate:
-  vCPU: 32
-  memoryGB: 128
-  awsSpotUsdPerHour: 0.42
-  notes: "2× Scaleway PRO2-M (16 vCPU / 64 GB each). 30-min soak with one 60-s control-plane partition mid-soak. ~$0.38 for a 50-min run end-to-end. Requires a CNI that enforces NetworkPolicy (Cilium on Kapsule does); kind clusters need explicit calico/cilium installs."
+  vCPU: 64
+  memoryGB: 256
+  awsSpotUsdPerHour: 0.84
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each, M44 Pod-mode floor). 30-min soak with one 60-s control-plane partition mid-soak. ~$0.74 for a 50-min run end-to-end. Requires a CNI that enforces NetworkPolicy (Cilium on Kapsule does); kind clusters need explicit calico/cilium installs."

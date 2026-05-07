@@ -105,19 +105,25 @@ kwok:
   clusterCount: 5
   # The shared emptyDir between the apiserver and workload containers
   # is tmpfs-backed so kine sqlite WAL fsyncs go to RAM instead of the
-  # node's local disk. Sized per pod; counts against the pod's memory
-  # request/limit so don't oversize on small nodes.
-  sharedVolumeSizeLimit: "512Mi"
+  # node's local disk. 1Gi is the M44 Pod-mode floor — at 5K Pods on
+  # kind, the pod-shim's binding traffic plus per-Pod + per-Node
+  # apiserver writes pushed kine warnings under the previous 512Mi.
+  # CR-mode profiles can drop back to 512Mi via override.
+  sharedVolumeSizeLimit: "1Gi"
   # Per-container resource budgets. The pod splits the harness across
   # two containers (apiserver-side and workload-side) sharing a single
   # emptyDir; each gets its own cgroup CPU budget so neither side can
-  # starve the other under load.
+  # starve the other under load. Defaults are the M44 Pod-mode floor
+  # — proven by dev-5k-pods-loopback as the minimum where kine sqlite
+  # stops warning under combined CR + Pod + UpcomingNode + Node
+  # write load. CR-mode profiles can downsize via apiserverResources
+  # / workloadResources overrides.
   apiserverResources:
-    requests: { cpu: 200m, memory: 400Mi }
-    limits:   { cpu: 1,    memory: 1Gi }
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 2Gi }
   workloadResources:
-    requests: { cpu: 100m, memory: 200Mi }
-    limits:   { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 2,    memory: 2Gi }
 
 # Operator tunables. Profiles override to push the apiserver budget
 # higher when the underlying apiserver can absorb more (Scaleway PRO2
@@ -144,6 +150,13 @@ loadProfile:
   burstAtStart: 0
   priorityClasses: [100, 1000, 1000000]
   durationSeconds: 600
+  # Driver mode (M43a / M44 default flip). "" or "pods" emits Pods
+  # through the full M43 chain (Pod → Unschedulable → CR → Configured
+  # → fake Node → Pod-bound) — the realistic, gated-on-binding-
+  # latency path. "cr" is the opt-in legacy shape that emits CRs
+  # directly and skips the Pod layer; bindingLatency gate becomes a
+  # no-op on those runs (pass() skips via -1 sentinel per ADR-0017).
+  mode: ""
 
 prometheus:
   enabled: true

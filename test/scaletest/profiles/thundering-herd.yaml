@@ -17,6 +17,11 @@ loadProfile:
   burstAtStart: 4000     # +4000 above target = 5K CRs each at peak
   churnPerMinute: 0.10
   durationSeconds: 1800
+  # M44 explicit opt-out: peak 5K Pods/cluster × 100 clusters = 500K
+  # Pod objects across the kwok apiservers — exceeds the M44 kine
+  # budget. This profile stresses Phase 1 throughput / coalescing,
+  # which is shard-side work and unaffected by Pod-mode.
+  mode: cr
 
 costEstimate:
   vCPU: 150

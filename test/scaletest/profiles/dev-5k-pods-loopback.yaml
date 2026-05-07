@@ -1,38 +1,24 @@
-# dev-5k-pods-loopback — validates the full Pod → CR → Configured →
-# fake-Node → Pod-bound loop end-to-end on kind. Smaller than dev-5k
-# but exercises every component M43 introduces:
-#   - load-driver Pod-mode (M43a)
-#   - bigfleet-scaletest-pod-shim's Pod → Unschedulable patcher (M43b)
-#   - bigfleet-unschedulable-pod-controller (M43b)
-#   - bigfleet-scaletest-pod-shim's UpcomingNode → fake Node →
-#     Pod-binding loop (M43c)
-#   - ADR-0016 NodeStateUpdate-carries-labels plumbing
+# dev-5k-pods-loopback — explicit validation of the full Pod → CR →
+# Configured → fake-Node → Pod-bound loop end-to-end on kind. With
+# M44's default flip Pod-mode is on by default everywhere, so this
+# profile's distinguishing trait is the deliberate single-archetype
+# shape: one instance type, one size bucket, one priority. That makes
+# Phase 1 matching deterministic so the loopback path is what's being
+# measured, not archetype-mix behaviour.
 #
 # Shape:
 #   3 kwok clusters × 200 Pods each = 600 demand
 #   shard pre-seeded with 700 Idle machines (enough to bind every Pod
-#   plus headroom). One archetype, one size, one instance type so the
-#   matching is exact and Phase 1 doesn't need to reason about
-#   diversity.
+#   plus headroom)
 #   10 min soak, so the runner's min_over_time(5m) window finishes
 #   well outside the ramp samples.
+#
+# Kwok per-cluster budgets are inherited from the chart's M44 floor
+# (500m/1Gi req, 2/2Gi lim, 1Gi tmpfs) — that floor was originally
+# proven on this profile.
 
 kwok:
   clusterCount: 3
-  # Bumped budgets for Pod-mode validation: each kwok cluster is now
-  # absorbing the combined CR + Pod + UpcomingNode write load. The
-  # earlier 700 MiB / 600 m apiserver budget couldn't keep up with
-  # kine sqlite under that pressure ("Endpoints kubernetes invalid"
-  # warnings, >2s write traces). 2 GiB / 2 CPU gives clear headroom
-  # for the loopback validation. Workload bumped similarly so the
-  # extra controller-runtime processes (pod-shim + unschedulable-
-  # pod-controller) don't compete with the operator + load-driver.
-  apiserverResources:
-    requests: { cpu: 500m, memory: 1Gi }
-    limits:   { cpu: 2,    memory: 2Gi }
-  workloadResources:
-    requests: { cpu: 500m, memory: 1Gi }
-    limits:   { cpu: 2,    memory: 2Gi }
 
 shard:
   replicas: 1
@@ -46,7 +32,6 @@ shard:
 loadProfile:
   target: 200
   durationSeconds: 600   # 10 min soak — outside the 5m min_over_time window
-  mode: pods
   # Single archetype: one instance type, one size bucket, one priority.
   # Phase 1's matching is then deterministic and we measure the
   # binding loopback rather than archetype-mix behaviour.
@@ -78,4 +63,4 @@ costEstimate:
   vCPU: 2
   memoryGB: 4
   awsSpotUsdPerHour: 0.0
-  notes: "Free on M5 Max kind. ~12 min run end-to-end. Validates the M43 Pod-mode loopback before any cloud spend."
+  notes: "Free on M5 Max kind. ~12 min run end-to-end. Validates the M43 Pod-mode loopback before any cloud spend; the explicit single-archetype shape decouples binding-latency measurement from archetype-mix concerns."

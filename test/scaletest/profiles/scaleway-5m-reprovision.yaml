@@ -108,6 +108,10 @@ loadProfile:
   target: 10000
   churnPerMinute: 0.05
   durationSeconds: 1800
+  # M44 explicit opt-out: reprovisioning regime is convergence-rate
+  # gated, Pod-mode adds no SLO signal here. Per-cluster shape too
+  # heavy for the M44 kwok floor regardless.
+  mode: cr
 
 operator:
   qps: 200

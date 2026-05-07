@@ -1,4 +1,11 @@
 # local-50k — M5 Max kind ceiling. 50 simulated clusters × 1K CRs.
+#
+# M44: this profile opts out of the default Pod-mode. The Pod-mode
+# floor (1 vCPU req per cluster) × 50 clusters = 50 vCPU on a host
+# that has 18 cores. Pod-mode at this clusterCount belongs on cloud
+# (scaleway-50k); here we keep CR-mode so the profile fits on the
+# dev box. cycle/rollup/ack/shortfalls are all still gated; only
+# bindingLatency is skipped per ADR-0017.
 
 kwok:
   clusterCount: 50
@@ -22,9 +29,13 @@ loadProfile:
   target: 1000
   churnPerMinute: 0.05
   durationSeconds: 1800
+  mode: cr   # M44 opt-out — see header comment
+
+slo:
+  shardCycleDurationP99Seconds: 5
 
 costEstimate:
   vCPU: 100
   memoryGB: 75
   awsSpotUsdPerHour: 3.00
-  notes: "Free on M5 Max (18C/64GB). ~30 min run. 50 × 2 vCPU pods = 100 vCPU peak; M5 Max has 18 cores, so kwok pods will burst into Docker Desktop's CFS throttling at peak. Adequate for 50 clusters; tighter at higher counts."
+  notes: "Free on M5 Max (18C/64GB). ~30 min run. CR-mode (M44 opt-out): Pod-mode floor would need 50 vCPU req on an 18-core host. For Pod-mode at 50 clusters, run scaleway-50k on cloud."

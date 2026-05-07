@@ -84,14 +84,14 @@ log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPE
 bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
 OPERATOR_PID=$!
 
-# ---- 3. (M43b) optionally start the pod-shim + unschedulable-pod-controller.
-# These are needed only when the load-driver runs in mode=pods. The
-# chart sets POD_MODE=pods in the entrypoint env when the profile
-# opts in; otherwise both processes stay off and the harness behaves
-# as pre-M43.
+# ---- 3. (M43b) start the pod-shim + unschedulable-pod-controller.
+# These run in Pod-mode (M44 default). The chart passes POD_MODE
+# through the entrypoint env from loadProfile.mode; unset → "pods"
+# (default), explicit "cr" opts into the legacy shape and skips the
+# shim + unschedulable-pod-controller.
 PODSHIM_PID=""
 UPC_PID=""
-if [[ "${POD_MODE:-cr}" == "pods" ]]; then
+if [[ "${POD_MODE:-pods}" == "pods" ]]; then
   log podshim "starting"
   bigfleet-scaletest-pod-shim \
     --kubeconfig="$KCFG" \

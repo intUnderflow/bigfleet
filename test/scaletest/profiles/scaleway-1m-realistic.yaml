@@ -94,6 +94,11 @@ loadProfile:
   churnPerMinute: 0.05
   durationSeconds: 1800
   priorityClasses: [100, 1000, 1000000]   # legacy fallback; unused when archetypes non-empty
+  # M44 explicit opt-out: 10K Pods/cluster doesn't fit the M44
+  # Pod-mode kwok floor without separate sizing. The realistic
+  # archetype-mix shape this profile validates is orthogonal to
+  # Pod-mode anyway — algorithmic SLOs are what we're checking.
+  mode: cr
 
   # M41 (Item 8): Poisson jitter on per-tick churn + minute-scale
   # micro-bursts. Models the second-by-second + minute-scale variance
