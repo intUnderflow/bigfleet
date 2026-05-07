@@ -62,7 +62,7 @@ import (
 // fake provider (sub-second) to real cloud provisioning (~minutes).
 var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Name:    "bigfleet_scaletest_pod_bind_latency_seconds",
-	Help:    "Wall-clock from Pod.metadata.creationTimestamp to the moment the bigfleet-scaletest-pod-shim issues the binding subresource Create on a fake Node. Per-Pod granularity (the ADR-0014 user-facing binding-latency target). ADR-0017.",
+	Help:    "BigFleet-internal binding latency: wall-clock from Pod.metadata.creationTimestamp to the bigfleet-scaletest-pod-shim issuing the binding subresource Create on a fake Node. Per-Pod granularity. ADR-0018: the harness fake provider returns instantly, so this measures BigFleet's contribution only — user-facing latency = this + provider_capacity_create_latency, and the second term is not measured here.",
 	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12), // 0.05s, 0.1s, 0.2s, ... 102.4s
 })
 

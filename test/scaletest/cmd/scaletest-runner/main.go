@@ -86,18 +86,20 @@ type profileFile struct {
 	CostEstimate  costEstimate   `yaml:"costEstimate"`
 
 	// SLO holds per-profile gate overrides. ADR-0014's defaults
-	// (bindingLatencyP99 ≤ 5s, cycle p99 ≤ 5s) target the in-process
-	// fake-provider tier. Profiles running at production-defensible
-	// settings (M39 conservative QPS, M40 30-60s rollup) raise these
-	// to match the priority-tier targets in ADR-0014's table.
+	// (cycle p99 ≤ 5s, internal binding p99 ≤ 5s) target the
+	// in-process fake-provider tier. Profiles running at production-
+	// defensible settings (M39 conservative QPS, M40 30-60s rollup)
+	// raise these. ADR-0018: internalBindingLatencyP99Seconds is
+	// BigFleet-internal-only — the harness's fake provider returns
+	// instantly, so user-facing latency is not measured here.
 	SLO sloOverrides `yaml:"slo"`
 }
 
 type sloOverrides struct {
-	BindingLatencyP99Seconds     float64 `yaml:"bindingLatencyP99Seconds"`
-	ShardCycleDurationP99Seconds float64 `yaml:"shardCycleDurationP99Seconds"`
-	OperatorRollupP99Seconds     float64 `yaml:"operatorRollupP99Seconds"`
-	OperatorAckP99Seconds        float64 `yaml:"operatorAckP99Seconds"`
+	InternalBindingLatencyP99Seconds float64 `yaml:"internalBindingLatencyP99Seconds"`
+	ShardCycleDurationP99Seconds     float64 `yaml:"shardCycleDurationP99Seconds"`
+	OperatorRollupP99Seconds         float64 `yaml:"operatorRollupP99Seconds"`
+	OperatorAckP99Seconds            float64 `yaml:"operatorAckP99Seconds"`
 }
 
 type runnerAction struct {
@@ -596,7 +598,12 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardCycleDurationP99Seconds":       `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))`,
 		"shardProvisioningLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
 		"shardProvisioningLatencyP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))`,
-		// ADR-0014 release gate: binding-latency p99 — what users feel.
+		// ADR-0018: internal binding latency. The harness's fake
+		// provider returns instantly, so this measures BigFleet's
+		// internal contribution only — *not* user-facing latency.
+		// Production user-facing latency = this + provider time
+		// (5-180s real-cloud bring-up); validate that elsewhere
+		// (provider conformance suite + production canaries).
 		// ADR-0017: only the per-Pod histogram gates a release. M44
 		// flipped Pod-mode to the default, so every profile populates
 		// this histogram; the gate is active everywhere. The -1
@@ -605,11 +612,11 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// fingerprint histogram is exposed as
 		// shardProvisioningLatencyP{50,99}Seconds for diagnostic
 		// reading; never used as a release gate after ADR-0017.
-		"bindingLatencyP99Seconds":  `max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))`,
-		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
+		"internalBindingLatencyP99Seconds": `max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))`,
+		"operatorRollupP99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":            `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec":        `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":                  `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last
@@ -735,16 +742,17 @@ func kArgs(kubeconfig string, rest ...string) []string {
 	return rest
 }
 
-// pass enforces the runner's SLO budget per ADR-0014 (binding-latency
-// is the user-facing release gate; cycle wall-clock is a tracked
-// throughput envelope).
+// pass enforces the runner's SLO budget per ADR-0014 + ADR-0018:
+// internal binding latency (BigFleet's contribution, harness fake
+// provider returns instantly) is a regression detector; cycle
+// wall-clock is a tracked throughput envelope. User-facing
+// binding latency = this + provider_capacity_create_latency, and
+// the second term lives outside this harness (provider conformance
+// suite + production canaries — see ADR-0018).
 //
-//   - bindingLatencyP99 ≤ 5 s.   Release gate. Measured via
-//     bigfleet_shard_provisioning_latency_seconds (shard-side wall-clock
-//     from first rollup observation to Configured). 5 s is the
-//     in-process fake-provider floor — real-provider deployments add
-//     their provisioning-latency p99 on top per ADR-0014's
-//     priority-tier table. This is what users feel; it is the SLO.
+//   - internalBindingLatencyP99 ≤ 5 s.   Regression detector. ADR-0018.
+//     Measured via the per-Pod histogram (ADR-0017) emitted by the
+//     bigfleet-scaletest-pod-shim.
 //
 //   - shardCycleDurationP99 ≤ rollupInterval / 2 (default 10 s → 5 s).
 //     Throughput envelope — if the shard can't finish a snapshot
@@ -768,9 +776,9 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // informational metrics; they're alerted on by the operator's
 // monitoring stack but no longer block a release.
 func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
-	bindingLatencyTarget := 5.0
-	if slo.BindingLatencyP99Seconds > 0 {
-		bindingLatencyTarget = slo.BindingLatencyP99Seconds
+	internalBindingLatencyTarget := 5.0
+	if slo.InternalBindingLatencyP99Seconds > 0 {
+		internalBindingLatencyTarget = slo.InternalBindingLatencyP99Seconds
 	}
 	cycleEnvelopeTarget := 5.0
 	if slo.ShardCycleDurationP99Seconds > 0 {
@@ -810,8 +818,8 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	// ADR-0014 release gate: binding latency. -1 means the metric was
 	// unavailable (Prometheus query failed); skip rather than gate on
 	// a sentinel.
-	if v, ok := m["bindingLatencyP99Seconds"]; ok && v >= 0 && v > bindingLatencyTarget {
-		return false, fmt.Sprintf("bindingLatencyP99Seconds %.3fs > %.1fs SLO (ADR-0014 — profile.slo override or in-process default)", v, bindingLatencyTarget)
+	if v, ok := m["internalBindingLatencyP99Seconds"]; ok && v >= 0 && v > internalBindingLatencyTarget {
+		return false, fmt.Sprintf("internalBindingLatencyP99Seconds %.3fs > %.1fs SLO (ADR-0018 — internal-only; real-provider time is not measured here, see also ADR-0014)", v, internalBindingLatencyTarget)
 	}
 	// ADR-0014 throughput envelope: cycle p99 ≤ rollupInterval / 2 so
 	// the shard always finishes one snapshot before the next rollup

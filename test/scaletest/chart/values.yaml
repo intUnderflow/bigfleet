@@ -89,11 +89,13 @@ shard:
   # the steady-state p99.
   metricsWarmupCycles: 0
   # M38 (Item 5): per-second per-machine probability of an unsolicited
-  # provider failure (spot reclaim / hardware fault). 0 disables.
-  # Real fleets see ~0.1-1%/day → ~1.16e-8 to 1.16e-7 per second per
-  # machine. The realistic profile opts in; other profiles default off
-  # to keep behaviour deterministic.
-  failureRatePerSec: 0
+  # provider failure (spot reclaim / hardware fault). Real fleets see
+  # ~0.1-1%/day → ~1.16e-8 to 1.16e-7 per second per machine. M44:
+  # default to the lower bound (~0.1%/day) so every scaletest exercises
+  # the failure-recovery path; profiles that need deterministic
+  # behaviour (failover scenarios where the runner injects specific
+  # disturbances) can override to 0.
+  failureRatePerSec: 0.0000000116
 
 provider:
   resources:
@@ -154,11 +156,27 @@ loadProfile:
   durationSeconds: 600
   # Driver mode (M43a / M44 default flip). "" or "pods" emits Pods
   # through the full M43 chain (Pod → Unschedulable → CR → Configured
-  # → fake Node → Pod-bound) — the realistic, gated-on-binding-
-  # latency path. "cr" is the opt-in legacy shape that emits CRs
-  # directly and skips the Pod layer; bindingLatency gate becomes a
+  # → fake Node → Pod-bound) — the realistic path. "cr" is the
+  # opt-in legacy shape that emits CRs directly and skips the Pod
+  # layer; the internal-binding-latency gate (ADR-0018) becomes a
   # no-op on those runs (pass() skips via -1 sentinel per ADR-0017).
   mode: ""
+  # M44 / ADR-0015 realism extras — defaulted on across every profile
+  # so we don't have a separate "realistic" variant. Production
+  # apiserver write patterns aren't smooth: per-tick churn jitters
+  # by Poisson, occasional minute-scale micro-bursts (deploy ramps,
+  # CI queue drains) push 5× the normal rate for a single tick.
+  # Without these the p99.9 tail in summary.json is artificially flat.
+  jitteredChurn: true
+  microBurstRatePerMinute: 1.0
+  microBurstFactor: 5.0
+  # ADR-0015 §5 (M36): cluster-size skew is available as a profile
+  # opt-in via clusterSizeDistribution. Not defaulted because the
+  # runner's totalCRs / steady-state gate is computed as
+  # kwok.ClusterCount × loadProfile.Target (no weighting); profiles
+  # that opt in must pick a distribution whose weighted-mean
+  # multiplier ≈ 1.0, or accept gate-cleared shifts. M44 follow-up
+  # to teach the runner to compute the weighted total.
   # M44 default: production-realistic archetype catalog (M31/ADR-0015).
   # Six archetypes (GPU training, GPU inference, CPU batch, CPU service,
   # memory-DB, critical-realtime) with multi-instance-type pools, zone

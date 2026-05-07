@@ -1,6 +1,6 @@
 # ADR-0014: SLO posture — binding latency is the user-facing gate, cycle wall-clock is a tracked perf metric
 
-**Status**: Accepted
+**Status**: Accepted (see also ADR-0018: the binding-latency *we measure in this harness* is BigFleet-internal-only, not user-facing — provider time is zero under the fake provider)
 
 **Date**: 2026-05-06
 

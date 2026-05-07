@@ -83,7 +83,7 @@ operator:
   coLocationKey: topology.bigfleet/rack
 
 slo:
-  bindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
@@ -98,4 +98,4 @@ costEstimate:
   vCPU: 512
   memoryGB: 2048
   awsSpotUsdPerHour: 6.72
-  notes: "16× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management (450K Configured + 50K Idle) = 5M aggregate; 500K Pod-mode demand through the full M43 chain. bindingLatency p99 ≤ 5s gated per shard. ~$6 for a 50-min run end-to-end. Watch PRO2-L zone quota."
+  notes: "16× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management (450K Configured + 50K Idle) = 5M aggregate; 500K Pod-mode demand through the full M43 chain. internalBindingLatency p99 ≤ 5s (ADR-0018) gated per shard. ~$6 for a 50-min run end-to-end. Watch PRO2-L zone quota."

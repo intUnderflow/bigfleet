@@ -67,10 +67,10 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0014 + ADR-0017 / M44: bindingLatency gate active. In-process
+# ADR-0014 + ADR-0017 / M44: internalBindingLatency gate active (ADR-0018). In-process
 # tier targets at cloud scale.
 slo:
-  bindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
@@ -82,4 +82,4 @@ costEstimate:
   vCPU: 64
   memoryGB: 256
   awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each) at ~€0.42/hr. ~$0.60 for a 40-min run end-to-end. Pod-mode (M44 default) — bindingLatency gate active."
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each) at ~€0.42/hr. ~$0.60 for a 40-min run end-to-end. Pod-mode (M44 default) — internalBindingLatency gate active (ADR-0018)."

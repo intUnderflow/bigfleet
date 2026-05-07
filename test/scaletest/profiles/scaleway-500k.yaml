@@ -3,7 +3,7 @@
 # M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
 # 50K Pods exercised through the full Pod → CR → Configured →
 # fake-Node → Pod-bound chain, against a 500K Idle inventory pool.
-# bindingLatency p99 ≤ 5 s gate active per ADR-0014 / ADR-0017.
+# internalBindingLatency p99 ≤ 5 s (ADR-0018) gate active per ADR-0014 / ADR-0017.
 #
 # Sized for a 2-node PRO2-L Kapsule pool. The CR-mode 2× PRO2-M
 # sizing no longer fits the M44 kwok floor (1 vCPU req per cluster
@@ -39,8 +39,8 @@
 #
 # Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
 # A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74). About
-# 2× the CR-mode cost — buys the user-facing binding-latency gate at
-# 50K-Pod scale.
+# 2× the CR-mode cost — buys the *internal* binding-latency gate at
+# 50K-Pod scale (ADR-0018: real-provider time is not measured here).
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -111,11 +111,13 @@ operator:
   ackConcurrency: 64
   rollupInterval: 0s
 
-# ADR-0014 + ADR-0017 / M44: bindingLatency gate is active because
-# Pod-mode is the default. In-process tier: ≤ 5 s for both
-# binding-latency p99 and the shard cycle envelope.
+# ADR-0014 + ADR-0017 + ADR-0018 / M44: internal binding-latency
+# gate is active because Pod-mode is the default. In-process tier:
+# ≤ 5 s for both the cycle envelope and BigFleet's contribution to
+# binding latency. User-facing latency = this + provider time
+# (not measured here, see ADR-0018).
 slo:
-  bindingLatencyP99Seconds: 5
+  internalBindingLatencyP99Seconds: 5
   shardCycleDurationP99Seconds: 5
 
 prometheus:
@@ -130,4 +132,4 @@ costEstimate:
   vCPU: 64
   memoryGB: 256
   awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 500K seeded inventory + 50K Pod-mode demand through the full M43 chain. bindingLatency p99 ≤ 5s gate active per ADR-0014/0017. ~$0.74 for a 50-min run end-to-end (~2× the CR-mode cost; the M44 Pod-mode floor needs PRO2-L)."
+  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 500K seeded inventory + 50K Pod-mode demand through the full M43 chain. internalBindingLatency p99 ≤ 5s (ADR-0018) gate active per ADR-0014/0017. ~$0.74 for a 50-min run end-to-end (~2× the CR-mode cost; the M44 Pod-mode floor needs PRO2-L)."

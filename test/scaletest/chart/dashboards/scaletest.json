@@ -10,13 +10,13 @@
   "timezone": "",
   "panels": [
     {
-      "id": 100, "type": "row", "title": "SLO live verdict (ADR-0014 / ADR-0017)",
+      "id": 100, "type": "row", "title": "SLO live verdict (ADR-0014 / 0017 / 0018)",
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
       "collapsed": false
     },
     {
-      "id": 101, "type": "stat", "title": "Binding latency p99 (per-Pod, ADR-0017) — SLO ≤ 5 s",
-      "description": "Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. Only Pod-mode profiles run the shim (e.g. dev-5k-pods-loopback). CR-mode profiles (scaleway-{50k,500k,1m,5m}) have no shim → metric is empty by design; the runner skips this gate via the -1 sentinel and gates on algorithmic SLOs only. See ADR-0017.",
+      "id": 101, "type": "stat", "title": "Internal binding latency p99 (per-Pod, ADR-0018) — SLO ≤ 5 s",
+      "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. CR-mode opt-out profiles have no shim → metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 1},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A"}],
@@ -84,8 +84,8 @@
       "collapsed": false
     },
     {
-      "id": 201, "type": "timeseries", "title": "Binding latency p99 — SLO line at 5 s (ADR-0014 in-process tier)",
-      "description": "Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
+      "id": 201, "type": "timeseries", "title": "Internal binding latency p99 — SLO line at 5 s (ADR-0018 in-process tier)",
+      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [

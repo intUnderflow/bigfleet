@@ -41,7 +41,7 @@ operator:
 # realistic archetype mix has more fingerprint diversity than a
 # single-archetype run, so rollup carries more variation; raise to 2 s.
 slo:
-  bindingLatencyP99Seconds: 10
+  internalBindingLatencyP99Seconds: 10
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
 
