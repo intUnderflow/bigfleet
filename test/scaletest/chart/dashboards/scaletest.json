@@ -249,8 +249,8 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 51},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))", "refId": "A", "legendFormat": "p99"},
-        {"expr": "rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m])", "refId": "B", "legendFormat": "mean"}
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))", "refId": "A", "legendFormat": "p99"},
+        {"expr": "sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m])) / sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m]))", "refId": "B", "legendFormat": "mean"}
       ],
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
     },
