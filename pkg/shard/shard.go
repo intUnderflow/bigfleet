@@ -332,13 +332,18 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("reconcile").Observe(time.Since(reconcileStart).Seconds())
 	}
 
-	// CycleSnapshot returns the cached pointer from the inventory's
-	// background fold loop in O(1). Stale by at most foldDebounce +
-	// buildTime; safe because applyTransition rejects re-attempts on
-	// already-moved machines and Phase 1/2/3 re-derive any missed
-	// actions next cycle.
+	// M44.4 (Drop A fix): use Snapshot() not CycleSnapshot(). The
+	// cached pointer can lag by foldDebounce (250 ms); with cycles
+	// running back-to-back at 0.25 s after the Phase 1 fix, that
+	// staleness made Phase 1 emit Bootstraps for already-Configured
+	// machines (~50 % of all Bootstraps in scaleway-50k cloud). The
+	// state-machine then rejected them with "expected Idle" — wasted
+	// work but invisible to release gates because the shard kept
+	// re-emitting next cycle. Snapshot() builds fresh under RLock
+	// (~4 ms with the M44.4 needs.Snapshot index-sort fix), trading a
+	// tiny per-cycle cost for ~2× useful Bootstrap throughput.
 	snapStart := time.Now()
-	snap := s.inv.CycleSnapshot()
+	snap := s.inv.Snapshot()
 	demand := s.needs.Snapshot()
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("snapread").Observe(time.Since(snapStart).Seconds())
