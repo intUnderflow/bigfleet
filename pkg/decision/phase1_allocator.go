@@ -2,9 +2,11 @@ package decision
 
 import (
 	"sort"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -92,6 +94,11 @@ func (a *phase1Allocator) take(
 	if key, skew, ok := strictSpread(profile); ok {
 		return a.takeSpread(state, profile, n, key, skew)
 	}
+	start := time.Now()
+	defer func() {
+		metrics.ShardPhase1TakeDuration.WithLabelValues("take").Observe(time.Since(start).Seconds())
+		metrics.ShardPhase1Calls.WithLabelValues("take").Inc()
+	}()
 	pool := a.poolFor(state, profile)
 	if pool == nil {
 		return nil
@@ -124,6 +131,11 @@ func (a *phase1Allocator) take(
 // calls on the same pool still behave normally; the global claimed set
 // catches anything we consumed.
 func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profile, n int, sameKey string) []machine.Machine {
+	start := time.Now()
+	defer func() {
+		metrics.ShardPhase1TakeDuration.WithLabelValues("takeCoLocated").Observe(time.Since(start).Seconds())
+		metrics.ShardPhase1Calls.WithLabelValues("takeCoLocated").Inc()
+	}()
 	pool := a.poolFor(state, profile)
 	if pool == nil {
 		return nil
@@ -256,6 +268,11 @@ func strictSpread(p needs.Profile) (string, int32, bool) {
 // implies a whole-pool walk, and the global claimed set handles
 // dedup across Needs.
 func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile, n int, key string, maxSkew int32) []machine.Machine {
+	start := time.Now()
+	defer func() {
+		metrics.ShardPhase1TakeDuration.WithLabelValues("takeSpread").Observe(time.Since(start).Seconds())
+		metrics.ShardPhase1Calls.WithLabelValues("takeSpread").Inc()
+	}()
 	pool := a.poolFor(state, profile)
 	if pool == nil {
 		return nil
@@ -389,6 +406,10 @@ func (a *phase1Allocator) poolFor(
 // Multi-type and unpinned profiles fall back to a merged-and-sorted
 // slice for both states.
 func (a *phase1Allocator) buildPoolSource(state machine.State, profile needs.Profile) []machine.Machine {
+	start := time.Now()
+	defer func() {
+		metrics.ShardPhase1PoolBuildDuration.Observe(time.Since(start).Seconds())
+	}()
 	types := pinnedInstanceTypes(profile)
 
 	if state == machine.StateIdle && len(types) == 1 {

@@ -110,6 +110,29 @@ var (
 		Name: "bigfleet_shard_actions_deferred_total",
 		Help: "Count of decision actions deferred to a later cycle by MaxActionsPerCycle. Phase 1/2/3 are idempotent so deferred work re-derives next cycle.",
 	})
+
+	// ADR-0019: per-sub-path Phase 1 instrumentation. The cloud-vs-
+	// bench discrepancy in M44.4 required attribution of where Phase 1
+	// wall-clock actually goes — pool build (merge+sort across multi-
+	// type profiles) vs take (head-cursor walk + MatchProfile) vs
+	// takeCoLocated (whole-pool bucket walk for sameRack profiles).
+	// Buckets match the cycle/phase histograms so the views align.
+	ShardPhase1PoolBuildDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_phase1_pool_build_duration_seconds",
+		Help:    "Wall-clock duration of phase1Allocator.poolFor's buildPoolSource. One observation per unique (state, fingerprint) visited per cycle.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
+	})
+
+	ShardPhase1TakeDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_phase1_take_duration_seconds",
+		Help:    "Wall-clock duration of phase1Allocator.take and its sub-paths. One observation per Need that called the allocator.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
+	}, []string{"path"}) // path ∈ {take, takeCoLocated, takeSpread}
+
+	ShardPhase1Calls = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_phase1_calls_total",
+		Help: "Counter of phase1Allocator sub-path invocations, so mean cost = sum(duration) / count emerges from the same data.",
+	}, []string{"path"})
 )
 
 // Coordinator metrics.
