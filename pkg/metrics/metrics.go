@@ -145,6 +145,24 @@ var (
 		Help: "Currently-running execute() goroutines on this shard. Compare against the configured executeConcurrency to see whether burst processing is parallelism-bound.",
 	})
 
+	// ADR-0021 (persistent execute pool): action queue depth. Sustained
+	// climb means the persistent pool can't keep up with cycle
+	// emissions; drops will follow. Healthy steady-state stays well
+	// below the queue cap (ExecuteConcurrency × 2).
+	ShardActionQueueDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_action_queue_depth",
+		Help: "Current depth of the persistent execute pool's action queue (ADR-0021). Cap = ExecuteConcurrency × 2. Climbing toward cap = workers can't drain as fast as cycles emit; drops next.",
+	})
+
+	// ADR-0021: actions dropped because the action queue was full. Phase
+	// emissions are idempotent so the next cycle re-derives — but a
+	// non-zero rate here signals sustained worker-pool back-pressure
+	// (operator handler latency × queue cap < cycle's emit rate).
+	ShardActionsDropped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_actions_dropped_total",
+		Help: "Cumulative actions dropped at cycle-emit time because the persistent execute pool's queue was full (ADR-0021). Distinct from ShardActionsDeferred (MaxActionsPerCycle truncation) — same intent, different mechanism.",
+	})
+
 	// ADR-0019: per-sub-path Phase 1 instrumentation. The cloud-vs-
 	// bench discrepancy in M44.4 required attribution of where Phase 1
 	// wall-clock actually goes — pool build (merge+sort across multi-

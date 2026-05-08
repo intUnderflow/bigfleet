@@ -62,6 +62,14 @@ type Config struct {
 	// Configure action this cycle. Default 30s.
 	BootstrapTimeout time.Duration
 
+	// ExecuteTimeout caps the duration of a single action's execution
+	// in the persistent-execute-pool model (ADR-0021). Each worker
+	// derives a per-action context with this deadline; cycle deadlines
+	// no longer gate in-flight executes. Default 30s — same as
+	// BootstrapTimeout, since most action latency is the BootstrapRequest
+	// blob fetch.
+	ExecuteTimeout time.Duration
+
 	// Logger receives structured events. nil → discard.
 	Logger *slog.Logger
 
@@ -199,6 +207,14 @@ type Shard struct {
 	demandMu         sync.Mutex
 	demandObservedAt map[machine.ClusterID]map[string]time.Time
 
+	// actionQueue feeds the persistent execute pool (ADR-0021).
+	// Cycles enqueue actions and return immediately; workers drain
+	// the queue at their own pace, each holding a per-action context
+	// independent of any cycle deadline. Sized at 2 ×
+	// ExecuteConcurrency so cycles rarely drop emissions when the
+	// pool is keeping up.
+	actionQueue chan decision.Action
+
 	log *slog.Logger
 }
 
@@ -232,6 +248,9 @@ func New(cfg Config) (*Shard, error) {
 	if cfg.CycleInterval == 0 {
 		cfg.CycleInterval = 10 * time.Second
 	}
+	if cfg.ExecuteTimeout == 0 {
+		cfg.ExecuteTimeout = 30 * time.Second
+	}
 	if cfg.BootstrapTimeout == 0 {
 		cfg.BootstrapTimeout = 30 * time.Second
 	}
@@ -264,12 +283,28 @@ func (s *Shard) ID() string { return s.cfg.ID }
 func (s *Shard) Epoch() int64 { return s.cfg.Epoch.Value() }
 
 // Run drives the worker loop until ctx is cancelled. Cycles fire on the
-// configured interval and on rollup-triggered wake-ups.
+// configured interval and on rollup-triggered wake-ups. ADR-0021: a
+// pool of executeWorker goroutines drains the action queue
+// independently of cycle ticks.
 func (s *Shard) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.cfg.CycleInterval)
 	defer ticker.Stop()
 
-	s.log.Info("shard started")
+	conc := s.cfg.ExecuteConcurrency
+	if conc <= 0 {
+		conc = 1
+	}
+	// Queue is sized large enough that under healthy steady-state the
+	// cycle never blocks on the send. Drops are reported via
+	// ShardActionsDropped (separate from ShardActionsDeferred, which
+	// remains the MaxActionsPerCycle truncation counter for legacy
+	// scenarios where the cycle still caps emissions).
+	s.actionQueue = make(chan decision.Action, conc*2)
+	for i := 0; i < conc; i++ {
+		go s.executeWorker(ctx)
+	}
+
+	s.log.Info("shard started", "execute_workers", conc, "queue_capacity", cap(s.actionQueue))
 	defer s.log.Info("shard stopped")
 
 	for {
@@ -280,6 +315,30 @@ func (s *Shard) Run(ctx context.Context) error {
 			s.runCycle(ctx)
 		case <-s.wakeup:
 			s.runCycle(ctx)
+		}
+	}
+}
+
+// executeWorker drains the per-shard action queue. Each action gets a
+// fresh context capped by ExecuteTimeout (default 30 s) — independent
+// of the cycle that produced it. ADR-0021: cycle deadlines no longer
+// gate in-flight executes, so a slow operator handler delays binding
+// instead of cancelling and dropping the work.
+func (s *Shard) executeWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case a, ok := <-s.actionQueue:
+			if !ok {
+				return
+			}
+			execCtx, cancel := context.WithTimeout(ctx, s.cfg.ExecuteTimeout)
+			if err := s.execute(execCtx, a); err != nil {
+				s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+			}
+			cancel()
+			metrics.ShardActionQueueDepth.Set(float64(len(s.actionQueue)))
 		}
 	}
 }
@@ -396,46 +455,42 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		all = all[:limit]
 	}
 
-	// Parallel execute: each Bootstrap action blocks on a per-cluster
-	// gRPC stream RTT (`requestBootstrap`), so a serial loop turns the
-	// cycle into N × stream RTT regardless of how cheap the local
-	// compute is. The operator session supports concurrent in-flight
-	// requests (sync.Map keyed by request_id), so we just need the
-	// shard to fire them in parallel. Inventory.Apply, the fake
-	// provider, and the operator session are all thread-safe.
-	conc := s.cfg.ExecuteConcurrency
-	if conc <= 0 {
-		conc = 1 // serial — preserves the historical default
-	}
-	if conc > len(all) {
-		conc = len(all)
-	}
-	if conc > 0 {
-		executeStart := time.Now()
-		jobs := make(chan decision.Action)
-		var wg sync.WaitGroup
-		for i := 0; i < conc; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for a := range jobs {
-					if err := s.execute(cycleCtx, a); err != nil {
-						s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
-					}
-				}
-			}()
-		}
+	// ADR-0021: enqueue actions to the persistent execute pool and
+	// return immediately. Workers drain at their own pace with their
+	// own per-action context — the cycle no longer waits on the
+	// slowest of the batch, and a transient operator-side latency
+	// spike doesn't gate cycle progress. The queue is fall-through:
+	// if it's full (workers can't keep up), drop the new emission
+	// and re-derive next cycle. Phase emissions are idempotent
+	// against an unchanged snapshot, so re-emission is safe.
+	executeStart := time.Now()
+	dropped := 0
+	if s.actionQueue != nil {
 		for _, a := range all {
 			select {
-			case <-cycleCtx.Done():
-			case jobs <- a:
+			case <-ctx.Done():
+				break
+			case s.actionQueue <- a:
+			default:
+				dropped++
 			}
 		}
-		close(jobs)
-		wg.Wait()
-		if recordMetrics {
-			metrics.ShardCyclePhaseDuration.WithLabelValues("execute").Observe(time.Since(executeStart).Seconds())
+		if dropped > 0 {
+			metrics.ShardActionsDropped.Add(float64(dropped))
 		}
+		metrics.ShardActionQueueDepth.Set(float64(len(s.actionQueue)))
+	} else {
+		// Step / runCycleCapturing called outside Run() — fall back
+		// to inline serial execute so simulator and tests still work
+		// without spawning a worker pool. Production never hits this.
+		for _, a := range all {
+			if err := s.execute(ctx, a); err != nil {
+				s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+			}
+		}
+	}
+	if recordMetrics {
+		metrics.ShardCyclePhaseDuration.WithLabelValues("execute").Observe(time.Since(executeStart).Seconds())
 	}
 	if deferred > 0 {
 		metrics.ShardActionsDeferred.Add(float64(deferred))
