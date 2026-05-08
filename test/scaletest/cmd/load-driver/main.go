@@ -177,6 +177,18 @@ var (
 	errs = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "scaletest_loadgen_errors_total",
 	}, []string{"kind"})
+
+	// steadyStateMetric is 1 once this load-driver has filled to its
+	// target Pod count (cluster has finished its initial fill); new
+	// Pods after that are churn replacements carrying the
+	// scaletest.bigfleet/state="steady" label. Aggregate across all
+	// clusters to drive the dashboard's "test phase" indicator: sum =
+	// kwok.clusterCount means the whole fleet is in steady state and
+	// the SLO histogram is recording.
+	steadyStateMetric = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "scaletest_loadgen_steady_state",
+		Help: "1 if this cluster's load-driver has reached its target Pod count (so subsequent Pod creations are churn replacements tagged scaletest.bigfleet/state=\"steady\"); 0 during initial fill. Aggregate sum across clusters drives the dashboard's test-phase indicator.",
+	})
 )
 
 func main() {
@@ -564,7 +576,9 @@ func (d *driver) rampTo(ctx context.Context, want int) error {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	d.steadyState.Store(true)
+	if !d.steadyState.Swap(true) {
+		steadyStateMetric.Set(1)
+	}
 	return nil
 }
 
@@ -645,12 +659,12 @@ func (d *driver) createOnePod(ctx context.Context) error {
 	active.Set(float64(now))
 	// Flip steady-state once the cluster has reached its target Pod
 	// count. Subsequent Pods (churn replacements) carry the
-	// bigfleet.lucy.sh/steady-state=true label so pod-shim can record
+	// scaletest.bigfleet/state="steady" label so pod-shim can record
 	// their bind latency in the steady-state histogram. Idempotent —
 	// the atomic stays true once flipped, even if churn briefly drops
 	// the count below target.
-	if d.prof.Target > 0 && now >= d.prof.Target {
-		d.steadyState.Store(true)
+	if d.prof.Target > 0 && now >= d.prof.Target && !d.steadyState.Swap(true) {
+		steadyStateMetric.Set(1)
 	}
 	return nil
 }
