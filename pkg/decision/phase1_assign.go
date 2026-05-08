@@ -42,28 +42,61 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 
 	alloc := newPhase1Allocator(snap)
 
+	// M44.4 Drop D: deficit math is per (cluster, fingerprint) supply,
+	// distributed across Needs in priority order — not per-Need.
+	//
+	// Drop C counted machines with `AssignedNeedFingerprint == fp` but
+	// compared that count to ONE Need's count (typically 1). When many
+	// CRs share a fingerprint — the load-driver case: each Pod gets its
+	// own CR with its own ownerRef UID, so Aggregate keeps every Need
+	// with Count=1 — the count-1000-bound-200 cluster looked like
+	// `deficit = 1 - 200 = -199` on every single one of the 1000 Needs.
+	// Phase 1 skipped them all even though 800 were unsatisfied.
+	// Surfaced as the scaleway-50k cliff at ~19 K bootstraps with
+	// Phase 1 emit rate 0/sec.
+	//
+	// Correct math: for each (cluster, fingerprint), `have` is the
+	// supply (configured machines bound to that fp); `total` is the
+	// sum of Need.Count across every Need with that fp; deficit =
+	// total - have. Walked in priority order, each Need claims
+	// available supply first, then deficit-allocates from Idle/spec.
+	//
+	// Per-fingerprint state is created lazily on first sight and
+	// remembered across Needs sharing the fingerprint, so high-priority
+	// Needs claim the supply before low-priority Needs see it — Phase 2
+	// preemption then sees the right Unsatisfied set.
+	type fpKey struct {
+		cluster machine.ClusterID
+		fp      string
+	}
+	type fpState struct {
+		supplyRemaining int
+	}
+	state := make(map[fpKey]*fpState, len(sorted))
+
 	result := Phase1Result{}
 	for _, n := range sorted {
-		// M44.4 Drop C: count by AssignedNeedFingerprint equality, not
-		// MatchProfile. MatchProfile is a one-way subset check (machine's
-		// resolved Profile satisfies the Need's requirements), so a
-		// machine configured for a high-spec Need also "matches" any
-		// lower-spec Need whose requirements are a subset. With M35's
-		// label-axis fingerprint multiplier this over-counts: a cluster
-		// holding 15 K machines bound to fingerprint A makes Phase 1
-		// believe every Need with looser requirements is already
-		// satisfied, even though zero machines are actually serving
-		// fingerprint B. Surfaced in scaleway-50k post-Drop-B: ramp
-		// stalled at 15 305 / 50 000 with 45 K Idle still available
-		// because Phase 1 emitted zero Bootstraps for the unsatisfied
-		// fingerprints. AssignedNeedFingerprint is set on bootstrap
-		// completion and cleared on drain — exact 1:1 attribution.
 		profile := n.Profile
 		fp := profile.Fingerprint()
-		have := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, func(m machine.Machine) bool {
-			return m.AssignedNeedFingerprint == fp
-		})
-		deficit := n.Count - have
+		k := fpKey{n.ClusterID, fp}
+		s, ok := state[k]
+		if !ok {
+			supply := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, func(m machine.Machine) bool {
+				return m.AssignedNeedFingerprint == fp
+			})
+			s = &fpState{supplyRemaining: supply}
+			state[k] = s
+		}
+		// Claim from existing supply first.
+		fromSupply := n.Count
+		if fromSupply > s.supplyRemaining {
+			fromSupply = s.supplyRemaining
+		}
+		if fromSupply < 0 {
+			fromSupply = 0
+		}
+		s.supplyRemaining -= fromSupply
+		deficit := n.Count - fromSupply
 		if deficit <= 0 {
 			continue
 		}

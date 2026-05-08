@@ -216,3 +216,56 @@ func idN(n int) machine.ID {
 	const digits = "0123456789"
 	return machine.ID("i-" + string(digits[n/10]) + string(digits[n%10]))
 }
+
+// M44.4 Drop D regression: many CRs sharing a fingerprint each become a
+// separate Need with Count=1 (different ownerRef UIDs → different Groups
+// → Aggregate keeps them separate). Phase 1 must compute deficit at
+// the (cluster, fingerprint) level, distributed across the Needs in
+// priority order — not per-Need.
+//
+// Pre-Drop-D, with Count=1 per Need and 5 already configured for the
+// fingerprint, every Need's per-need deficit was `1 - 5 = -4` and Phase
+// 1 emitted zero actions even though 25 Needs were unsatisfied. This
+// test would have caught the cliff scaleway-50k hit at ~19 K bootstraps.
+func TestPhase1_ManyNeedsSharingFingerprint_DistributesAcrossNeeds(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	// 5 already configured for the fingerprint (already-bound supply).
+	pf := gpuProfile(1_000_000)
+	fp := pf.Fingerprint()
+	for i := 0; i < 5; i++ {
+		m := gpuMachine(idN(i), machine.StateConfigured, "cluster-a", machine.CapacityTypeBareMetal, 0)
+		m.AssignedNeedFingerprint = fp
+		_ = inv.Insert(m)
+	}
+	// 25 Idle waiting to be picked up.
+	for i := 5; i < 30; i++ {
+		_ = inv.Insert(gpuMachine(idN(i), machine.StateIdle, "", machine.CapacityTypeBareMetal, 0))
+	}
+
+	// 30 Needs, each Count=1, each with a unique Group (the load-driver
+	// case: every Pod is its own ownerRef UID).
+	allNeeds := make([]needs.Need, 0, 30)
+	for i := 0; i < 30; i++ {
+		allNeeds = append(allNeeds, needs.Need{
+			ClusterID: "cluster-a",
+			Profile:   pf,
+			Count:     1,
+			Group:     "pod-" + string(rune('a'+i%26)),
+		})
+	}
+	r := decision.Phase1(inv.Snapshot(), allNeeds)
+
+	// 5 already configured + 25 freshly emitted = 30 total demand met.
+	if got := len(r.Actions); got != 25 {
+		t.Fatalf("actions = %d, want 25 (30 demand - 5 supply)", got)
+	}
+	for _, a := range r.Actions {
+		if a.Kind != decision.ActionKindBootstrap {
+			t.Errorf("expected Bootstrap, got %s", a.Kind)
+		}
+	}
+	if len(r.Unsatisfied) != 0 {
+		t.Errorf("unsatisfied = %d, want 0 (Idle pool covers everything)", len(r.Unsatisfied))
+	}
+}
