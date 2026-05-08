@@ -493,20 +493,19 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	defer tick.Stop()
 	// Steady state requires (a) every kwok pod's containers all Ready,
 	// (b) load-driver has ramped to ≥ 99.9 % of target, AND (c) the
-	// chain is alive — at least chainAliveThreshold Bootstraps have
-	// executed.
+	// chain has bound ≥ 99 % of target.
 	//
-	// M44.4: with steady-state-only SLO measurement, we no longer
-	// require the cold-start ramp to fully drain before soak begins.
-	// The load-driver tags Pods scaletest.bigfleet/state="steady" only
-	// once active >= target, so the steady histogram naturally
-	// excludes the initial fill regardless of when its bootstraps
-	// complete. The bootstraps gate's threshold is now a liveness
-	// check (5 % of target), not a "wait for chain to drain ramp"
-	// barrier. The 0.1 % slop on active absorbs transient create/
-	// delete races during churn — a hard 100 % is too tight.
+	// ADR-0021: with the persistent execute pool, the chain sustains
+	// ~50-85 binds/sec on scaleway-50k — ramps drain in the budget.
+	// Re-tightened the gate so soak begins only after the ramp
+	// backlog is fully drained. Otherwise post-fill steady-tagged
+	// Pods queue behind the unfinished ramp and their binding
+	// latency includes that wait time, even though the load-driver
+	// has long since hit target. The 1 % slop absorbs transient
+	// create/delete races during churn (the load-driver may briefly
+	// drop below target as deletions run ahead of creations).
 	target := int(0.999 * float64(clusterCount*perClusterTarget))
-	chainAliveThreshold := int(0.05 * float64(clusterCount*perClusterTarget))
+	chainAliveThreshold := int(0.99 * float64(clusterCount*perClusterTarget))
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
@@ -518,7 +517,7 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 			active = readActiveCRs(ctx, kubeconfig, ns)
 			bootstraps = readBootstrapsExecuted(ctx, kubeconfig, ns)
 			if active >= target && bootstraps >= chainAliveThreshold {
-				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (chain-alive ≥ %d, gate cleared)\n",
+				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (≥ %d, gate cleared)\n",
 					ready, clusterCount, active, target, bootstraps, target, chainAliveThreshold)
 				return nil
 			}

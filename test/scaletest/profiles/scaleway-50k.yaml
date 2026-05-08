@@ -73,6 +73,13 @@ loadProfile:
   churnPerMinute: 0.05
   durationSeconds: 1800
 
+# ADR-0021: post-pool throughput is ~50-85 binds/sec; 50 K-Pod ramp
+# drains in ~10-17 min depending on operator-handler tail. 25 min
+# floor leaves plenty of headroom and ensures the gate's 99 %
+# bootstraps requirement clears before soak starts (so steady-state
+# Pods aren't queued behind unfinished ramp).
+rampBudget: 25m
+
 # Push the operator harder than its production-safe defaults — Scaleway
 # Kapsule's apiserver can absorb significantly more than kine+sqlite
 # can. Combined with the M11.14 patch-based ack writes (1 RPC per CR
