@@ -157,28 +157,6 @@ func pinnedInstanceTypes(p needs.Profile) []string {
 	return nil
 }
 
-// profileIsInstanceTypePinOnly reports whether the profile's only
-// match obligations are an `instance-type In [...]` pin — i.e. zero
-// resources, zero spread constraints, and no requirement other than
-// the instance-type pin. When true, MatchProfile is redundant for
-// any machine whose instance type is in the pin: the prefilter alone
-// is sufficient. M30.2 Phase 3 fast path reads this to skip per-
-// machine MatchProfile calls in the M29 burst regime (the load-driver
-// emits this exact shape for every CR it creates).
-func profileIsInstanceTypePinOnly(p needs.Profile) bool {
-	if len(p.ResourcesRO()) > 0 {
-		return false
-	}
-	reqs := p.RequirementsRO()
-	if len(reqs) != 1 {
-		return false
-	}
-	r := reqs[0]
-	return r.Key == "node.kubernetes.io/instance-type" &&
-		r.Operator == needs.OperatorIn &&
-		len(r.Values) > 0
-}
-
 func sortIdleCandidates(s []machine.Machine) {
 	sort.SliceStable(s, func(i, j int) bool {
 		if s[i].PricePerHour != s[j].PricePerHour {

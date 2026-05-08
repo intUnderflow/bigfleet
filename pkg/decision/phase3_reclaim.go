@@ -66,72 +66,6 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 
 		groups := byCluster[cluster] // nil for clusters with no needs
 
-		// M27: pre-resolve each group's pinned instance-type set ONCE
-		// instead of re-walking the requirement list per machine. The
-		// inner loop's instance-type prefilter then skips MatchProfile
-		// when the machine's instance type isn't on the pinned list,
-		// which at the M13.gate scale shape (10K configured per
-		// cluster, 3 groups, 5 instance types) collapses ~30K
-		// MatchProfile calls per cluster to ~6K — most pairs short-
-		// circuit on the cheap string compare.
-		type resolvedGroup struct {
-			profile     needs.Profile
-			pinnedTypes []string // empty when unpinned (multi-type or no instance-type In requirement)
-		}
-		resolved := make([]resolvedGroup, len(groups))
-		for i := range groups {
-			resolved[i] = resolvedGroup{
-				profile:     groups[i].profile,
-				pinnedTypes: pinnedInstanceTypes(groups[i].profile),
-			}
-		}
-
-		// M30.2 fast path: when there is exactly one group whose
-		// profile is "instance-type pin only" (no resources, no
-		// non-prefilter requirements) and its remaining budget covers
-		// every Configured machine of the pinned type, the prefilter
-		// alone suffices to decide kept/reclaim — MatchProfile is
-		// redundant for prefilter-matching machines. This is the
-		// dominant shape in the M29 burst regime: 1 group per cluster,
-		// pinned to a3-highgpu-8g, no resource requirements, ~9K
-		// Configured/cluster. Skips 450K MatchProfile calls per cycle
-		// at the M29 shape and emits reclaim actions only for
-		// configured machines whose instance type doesn't match the
-		// pin (zero in the burst test).
-		if len(groups) == 1 && len(resolved[0].pinnedTypes) > 0 && profileIsInstanceTypePinOnly(resolved[0].profile) {
-			matched := 0
-			for _, m := range configured {
-				for _, t := range resolved[0].pinnedTypes {
-					if t == m.Profile.InstanceType {
-						matched++
-						break
-					}
-				}
-			}
-			if groups[0].remaining >= matched {
-				groups[0].remaining -= matched
-				for _, m := range configured {
-					hit := false
-					for _, t := range resolved[0].pinnedTypes {
-						if t == m.Profile.InstanceType {
-							hit = true
-							break
-						}
-					}
-					if !hit {
-						out.Actions = append(out.Actions, Action{
-							Kind:        ActionKindReclaim,
-							MachineID:   m.ID,
-							Cluster:     cluster,
-							GracePeriod: 0,
-							Reason:      "phase3.excess",
-						})
-					}
-				}
-				continue
-			}
-		}
-
 		// M44.4 Drop F: keep on AssignedNeedFingerprint equality, not
 		// MatchProfile. Same bug class as Drop B/C in Phase 1: with
 		// label-axis fingerprint multiplicity (M35), a machine bound
@@ -150,6 +84,15 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 		// Machines with empty AssignedNeedFingerprint (never bound,
 		// shouldn't happen in practice for Configured) reclaim by
 		// default.
+		//
+		// The map lookup also retires the M27 instance-type prefilter
+		// and the M30.2 instance-type-pin-only fast path; both were
+		// optimisations that assumed the legacy single-archetype shape.
+		// Under M35 / Drop F, the per-machine fingerprint key gives the
+		// answer directly — no prefilter needed, and the fast path's
+		// "match by instance-type alone" semantics are actively wrong
+		// (a machine pinned to type T can have AssignedNeedFingerprint
+		// for any of several distinct Needs that all use T).
 		fpIdx := make(map[string]int, len(groups))
 		for i := range groups {
 			fpIdx[groups[i].profile.Fingerprint()] = i
@@ -169,7 +112,6 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 				Reason:      "phase3.excess",
 			})
 		}
-		_ = resolved // M44.4 Drop F: instance-type prefilter is moot once we key by fingerprint
 	}
 
 	return out
