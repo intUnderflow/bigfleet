@@ -18,6 +18,7 @@
 #
 # Provisioning:
 #   scw k8s cluster create name=bigfleet-scaletest \
+#     project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6 \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2
@@ -29,13 +30,13 @@
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
+  tag: main
   pullPolicy: Always
 
 bigfleet:
   image:
     repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
+    tag: main
     pullPolicy: Always
 
 kwok:

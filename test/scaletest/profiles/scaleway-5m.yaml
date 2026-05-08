@@ -36,19 +36,19 @@
 #     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=16 pools.0.min-size=16 pools.0.max-size=16 \
 #     pools.0.zone=fr-par-1 \
-#     region=fr-par project-id=<bigfleet-project-id>
+#     region=fr-par project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
 #
 # Cost: 16× PRO2-L × ~€0.42/hr ≈ €6.72/hr. ~50 min run ≈ €5.60/$6.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
+  tag: main
   pullPolicy: Always
 
 bigfleet:
   image:
     repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
+    tag: main
     pullPolicy: Always
 
 kwok:

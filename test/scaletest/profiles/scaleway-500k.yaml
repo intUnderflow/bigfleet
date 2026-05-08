@@ -35,7 +35,7 @@
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
 #     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
-#     region=nl-ams project-id=<bigfleet-project-id>
+#     region=nl-ams project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
 #
 # Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
 # A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74). About
@@ -44,7 +44,7 @@
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
+  tag: main
   # Always pull so iterative scaletest changes pick up the freshly-
   # pushed `:dev` image. Production uses immutable tags + IfNotPresent.
   pullPolicy: Always
@@ -52,7 +52,7 @@ image:
 bigfleet:
   image:
     repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
+    tag: main
     pullPolicy: Always
 
 kwok:
