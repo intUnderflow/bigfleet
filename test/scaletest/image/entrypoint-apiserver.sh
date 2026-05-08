@@ -172,7 +172,7 @@ kube-controller-manager \
   --authentication-kubeconfig="$KCFG" \
   --authorization-kubeconfig="$KCFG" \
   --leader-elect=false \
-  --controllers=garbage-collector,namespace \
+  --controllers=garbage-collector-controller,namespace-controller \
   --root-ca-file="$WORK/certs/ca.crt" \
   --service-account-private-key-file="$WORK/certs/sa.key" \
   --use-service-account-credentials=false \
