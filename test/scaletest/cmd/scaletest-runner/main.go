@@ -491,14 +491,15 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	deadline := time.Now().Add(budget)
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
-	// Steady state requires (a) every kwok pod's containers all Ready
-	// and (b) load-driver has ramped to ≥ 99.9 % of target. Tests
-	// that soak against an under-loaded shard measure the wrong
-	// thing; runs that don't reach target fail at the gate. The
+	// Steady state requires (a) every kwok pod's containers all Ready,
+	// (b) load-driver has ramped to ≥ 99.9 % of target, AND (c) the
+	// shard has Bootstrap-succeeded for ≥ 99.9 % of target. (a)+(b)
+	// alone are insufficient — they only confirm the load-driver
+	// finished CR creation, not that the chain produced bindings. M44.4
+	// found a 50 K-CR run "clearing" with only 2 K Bootstrap successes,
+	// so the soak measured behaviour of a 96 %-stalled chain. The
 	// 0.1 % slop absorbs transient create/delete races during the
-	// load-driver's churn phase (a single CR being recreated as
-	// the gate measures, etc.) — a hard 100 % is too tight in
-	// practice.
+	// load-driver's churn phase — a hard 100 % is too tight in practice.
 	target := int(0.999 * float64(clusterCount*perClusterTarget))
 	for {
 		if time.Now().After(deadline) {
@@ -506,14 +507,18 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 		}
 		ready, err := countReadyKWOKPods(ctx, kubeconfig, ns)
 		active := -1
+		bootstraps := -1
 		if err == nil && ready >= clusterCount {
 			active = readActiveCRs(ctx, kubeconfig, ns)
-			if active >= target {
-				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d (gate cleared)\n", ready, clusterCount, active, target)
+			bootstraps = readBootstrapsExecuted(ctx, kubeconfig, ns)
+			if active >= target && bootstraps >= target {
+				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (gate cleared)\n",
+					ready, clusterCount, active, target, bootstraps, target)
 				return nil
 			}
 		}
-		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d\n", ready, clusterCount, active, target)
+		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d\n",
+			ready, clusterCount, active, target, bootstraps, target)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -557,6 +562,28 @@ func readActiveCRs(ctx context.Context, kubeconfig, ns string) int {
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	v, err := promQuery(queryCtx, kubeconfig, ns, "sum(scaletest_loadgen_cr_active)")
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readBootstrapsExecuted returns the cumulative count of successfully-
+// completed Bootstrap actions from the shard. Each = one machine
+// successfully transitioned Idle → Configured for some demand.
+//
+// M44.4 Drop B: the original gate read scaletest_loadgen_cr_active —
+// the count of CRs the load-driver has *created*, not the count of
+// machines actually bound. A 50 K-CR run could "clear the gate" with
+// only ~2 K bindings while 48 K CRs sat unbound; soak then ran
+// against a chain catastrophically falling behind, and the binding
+// histogram only reported p99 over the small fraction that did bind.
+// Gating on Bootstrap success ensures the chain has caught up before
+// soak begins, regardless of mode.
+func readBootstrapsExecuted(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap",outcome="success"})`)
 	if err != nil {
 		return -1
 	}
