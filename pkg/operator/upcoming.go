@@ -2,6 +2,8 @@ package operator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -219,8 +221,16 @@ func (o *Operator) handleAvailableCapacityUpdate(ctx context.Context, u *pb.Avai
 
 // availableCapacityName produces a DNS-1123 name from a profile
 // fingerprint. The "ac-" prefix avoids collisions with user-named CRs.
+//
+// Profile fingerprints are human-readable (e.g.
+// `p=100|ipb=9|reqs=node.kubernetes.io/instance-type:1:c6i.4xlarge,...`)
+// and contain colons, pipes, equals, slashes, commas, semicolons —
+// none of which are valid in metadata.name. Hash to a fixed-length hex
+// digest; the actual fingerprint round-trips via the AvailableCapacity
+// spec, which has no name-character restriction.
 func availableCapacityName(fingerprint string) string {
-	return "ac-" + fingerprint
+	sum := sha256.Sum256([]byte(fingerprint))
+	return "ac-" + hex.EncodeToString(sum[:16])
 }
 
 func availableCapacityRequirements(in []*pb.NodeSelectorRequirement) []corev1.NodeSelectorRequirement {

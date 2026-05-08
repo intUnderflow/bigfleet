@@ -49,7 +49,7 @@ type UpcomingNodeSpec struct {
 }
 
 type UpcomingNodeStatus struct {
-	// +kubebuilder:validation:Enum=Provisioning;Launched;Registered;Ready;Failed
+	// +kubebuilder:validation:Enum=Provisioning;Launched;Registered;Ready;Draining;Drained;Failed
 	Phase UpcomingNodePhase `json:"phase"`
 
 	// NodeRef is set once the kubelet has registered and the Kubernetes
