@@ -52,8 +52,13 @@ shard:
   # validates rollup + Phase 1 attempt — not the M44 user-facing
   # default we want.
   seedMachines: 60000
-  maxActionsPerCycle: 1000
-  executeConcurrency: 128
+  # M44.4 Drop B: maxActionsPerCycle == executeConcurrency so a cycle
+  # never queues actions in batches behind in-flight workers — every
+  # emitted action gets the full cycle ctx, not a fraction. Combined
+  # with 256-wide concurrency, sustained throughput at the operator's
+  # post-coalesce ~3 s handler p99 is ~85 actions/sec.
+  maxActionsPerCycle: 256
+  executeConcurrency: 256
   incrementalReconcile: true
   metricsWarmupCycles: 5
   resources:
