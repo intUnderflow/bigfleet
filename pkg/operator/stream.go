@@ -84,7 +84,9 @@ type session struct {
 	pendingRollup atomic.Pointer[pb.OperatorMessage]
 	rollupSignal  chan struct{}
 	outbox        chan *pb.OperatorMessage
-	// dispatchSem caps in-flight dispatch goroutines (see recvLoop).
+	// dispatchSem caps in-flight goroutines for apiserver-bound
+	// handlers (NodeStateUpdate, ReclaimInstruction, AvailableCapacity).
+	// BootstrapRequest bypasses the sem entirely (see recvLoop).
 	dispatchSem chan struct{}
 }
 
@@ -95,15 +97,18 @@ const (
 	// (paper §10.5).
 	outboxCap = 256
 
-	// dispatchConcurrency caps the number of in-flight dispatch
-	// goroutines per session. M44.4 Drop B: under burst, recvLoop was
-	// spawning 1000-1500 goroutines per operator (each handling a
-	// NodeStateUpdate that does 2-3 apiserver writes), causing 8 s+
-	// handler p99 and 63 % Create-conflict races. 32 is well under the
-	// per-cluster apiserver QPS budget (200) and large enough to keep
-	// the RTT-bound writes pipelined; the bound itself is what limits
-	// heap pressure, GC overhead, and cache races.
-	dispatchConcurrency = 32
+	// dispatchConcurrency caps the number of in-flight goroutines for
+	// apiserver-bound message handlers (NodeStateUpdate, ReclaimInstruction,
+	// AvailableCapacityUpdate). M44.4 Drop B: unbounded recvLoop spawned
+	// 1000-1500 goroutines per operator, causing 8 s+ handler p99 from
+	// heap pressure and Create-conflict races. The bound exists to limit
+	// heap pressure, not to throttle throughput — sized roughly equal to
+	// the per-cluster apiserver QPS budget so a saturated pool can still
+	// drain at the apiserver's natural rate. BootstrapRequest bypasses
+	// this bound entirely (see needsBoundedDispatch) since its handler
+	// is CPU-only and the shard's executeBootstrap blocks on it under
+	// cycle ctx — it must not queue behind apiserver-bound handlers.
+	dispatchConcurrency = 256
 )
 
 func newSession(stream pb.Shard_SessionClient, op *Operator) *session {

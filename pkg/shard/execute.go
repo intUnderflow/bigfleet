@@ -40,13 +40,35 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
 	return fmt.Errorf("unknown action kind: %s", a.Kind)
 }
 
+// handleBootstrapBlobErr decides whether a blob-fetch failure is an
+// orchestration timeout (rollback to Idle for retry) or a real failure
+// (Failed, terminal). M44.4 Drop B: pre-fix, every blob-fetch error
+// transitioned to Failed — so a slow operator under burst permanently
+// shrank the Idle pool one machine per cycle ctx timeout. Distinguishing
+// ctx errors from genuine failures restores retry semantics. Safe
+// because the blob fetch happens BEFORE provider.Configure — the
+// provider hasn't been touched yet, so rollback doesn't risk leaking
+// provider-side state.
+func (s *Shard) handleBootstrapBlobErr(id machine.ID, err error, lastErrPrefix string) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		_ = s.applyTransition(id, machine.StateIdle, func(m *machine.Machine) {
+			m.Cluster = ""
+			m.LastError = ""
+		})
+		return
+	}
+	_ = s.applyTransition(id, machine.StateFailed, func(m *machine.Machine) {
+		m.LastError = lastErrPrefix + err.Error()
+	})
+}
+
 // classifyExecuteError maps the err return of execute() to one of a
 // fixed set of outcome labels for the per-execute counter.
 func classifyExecuteError(ctx context.Context, err error) string {
 	if err == nil {
 		return "success"
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "ctx_canceled"
 	}
 	msg := err.Error()
@@ -151,22 +173,22 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		var err error
 		blob, err = s.cfg.LocalBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
 		if err != nil {
-			_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
-				m.LastError = "bootstrap: " + err.Error()
-			})
+			s.handleBootstrapBlobErr(a.MachineID, err, "bootstrap: ")
 			return formatErr("bootstrap: LocalBootstrap", err)
 		}
 	} else {
 		sess := s.lookupSession(a.Cluster)
 		if sess == nil {
+			// No session = orchestration failure, not provider failure.
+			// Rollback to Idle so the next cycle retries on a connected
+			// session.
+			_ = s.applyTransition(a.MachineID, machine.StateIdle, func(m *machine.Machine) { m.Cluster = "" })
 			return fmt.Errorf("bootstrap: no active operator session for cluster %s", a.Cluster)
 		}
 		var err error
 		blob, err = sess.requestBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
 		if err != nil {
-			_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
-				m.LastError = "bootstrap: " + err.Error()
-			})
+			s.handleBootstrapBlobErr(a.MachineID, err, "bootstrap: ")
 			return formatErr("bootstrap: requestBootstrap", err)
 		}
 	}

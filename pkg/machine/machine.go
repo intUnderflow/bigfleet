@@ -172,6 +172,14 @@ type Machine struct {
 // only emits transitions that begin in a stable state and target the
 // next stable state in sequence; the table is consulted by both the
 // inventory and provider implementations to validate reconciler output.
+// M44.4 Drop B: Configuring → Idle is a "rollback" transition for the
+// case where the shard abandons a bootstrap attempt before the provider
+// is touched (e.g., the operator-side BootstrapRequest RPC times out
+// under the cycle ctx). Distinct from Configuring → Failed, which is
+// for a real provider-side failure that consumes the machine. Rollback
+// returns the machine to the Idle pool for retry on the next cycle —
+// without it, every orchestration timeout permanently shrank the Idle
+// pool (StateFailed is terminal).
 var validTransitions = map[State]map[State]bool{
 	StateSpeculative: {StateCreating: true},
 	StateCreating:    {StateIdle: true, StateFailed: true},
@@ -179,7 +187,7 @@ var validTransitions = map[State]map[State]bool{
 		StateConfiguring: true,
 		StateDeleting:    true, // cloud only; the call is provider-rejected for bare metal
 	},
-	StateConfiguring: {StateConfigured: true, StateFailed: true},
+	StateConfiguring: {StateConfigured: true, StateFailed: true, StateIdle: true /* rollback, see comment above */},
 	StateConfigured:  {StateDraining: true},
 	StateDraining:    {StateIdle: true, StateFailed: true},
 	StateDeleting:    {StateSpeculative: true, StateFailed: true},

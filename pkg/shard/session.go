@@ -59,6 +59,20 @@ func (s *Shard) Session(stream pb.Shard_SessionServer) error {
 		}},
 	})
 
+	// M44.4 Drop B: split the recv pump from message handling. Slow
+	// handlers (Rollup → needs.Replace + triggerCycle) used to run
+	// inline and block delivery of every later message — including the
+	// BootstrapBlobResponses the shard's executeBootstrap was waiting on
+	// under the cycle ctx (10 s). One slow rollup could push every
+	// in-flight executeBootstrap past its deadline, marking machines
+	// Failed for an orchestration timeout that has nothing to do with
+	// the machines.
+	//
+	// Fast paths (BootstrapResponse, ReclaimAck, Hello-Ack) stay inline:
+	// they're channel sends or trivial Sends that complete in
+	// microseconds. Slow paths (Rollup) are handed to a per-session
+	// goroutine via sess.rollupChan so the read pump can keep draining
+	// the stream and delivering responses immediately.
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -69,35 +83,37 @@ func (s *Shard) Session(stream pb.Shard_SessionServer) error {
 			s.log.Info("operator session recv error", "cluster", cluster, "err", err)
 			return err
 		}
-		if err := s.handleOperatorMessage(stream.Context(), sess, msg); err != nil {
+		if err := s.routeOperatorMessage(stream.Context(), sess, msg); err != nil {
 			s.log.Warn("operator message handling", "cluster", cluster, "err", err)
 		}
 	}
 }
 
-func (s *Shard) handleOperatorMessage(ctx context.Context, sess *operatorSession, msg *pb.OperatorMessage) error {
+// routeOperatorMessage dispatches an inbound frame either inline (fast
+// paths whose handlers complete in microseconds) or to a per-session
+// background worker (slow paths whose handlers do real work).
+//
+// Per-session ordering is preserved within each lane: a session has at
+// most one rollup goroutine, so rollups for the same cluster apply in
+// arrival order. Cross-lane ordering is intentionally relaxed —
+// BootstrapResponses do not need to wait for an in-flight Rollup to
+// complete before being delivered to their waiter.
+func (s *Shard) routeOperatorMessage(ctx context.Context, sess *operatorSession, msg *pb.OperatorMessage) error {
 	switch p := msg.GetPayload().(type) {
 	case *pb.OperatorMessage_Hello:
-		// Operators may send Hello again after reconnect (rare). Ack it.
+		// Operators may send Hello again after reconnect (rare). Ack it
+		// inline; the response is a single Send.
 		return sess.send(&pb.ShardMessage{
 			Payload: &pb.ShardMessage_Ack{Ack: &pb.Acknowledgement{
 				Echo: "hello", CoordinatorTerm: s.term.HighWaterMark(), ShardEpoch: s.cfg.Epoch.Value(),
 			}},
 		})
 	case *pb.OperatorMessage_Rollup:
-		domainNeeds, err := conv.NeedsFromRollup(p.Rollup)
-		if err != nil {
-			return fmt.Errorf("rollup: %w", err)
-		}
-		s.needs.Replace(sess.cluster, domainNeeds)
-		s.observeRolledUpDemand(sess.cluster, domainNeeds)
-		s.triggerCycle()
-		_ = ctx
-		return sess.send(&pb.ShardMessage{
-			Payload: &pb.ShardMessage_Ack{Ack: &pb.Acknowledgement{
-				Echo: "rollup", CoordinatorTerm: s.term.HighWaterMark(), ShardEpoch: s.cfg.Epoch.Value(),
-			}},
-		})
+		// Rollup is the slow path: NeedsFromRollup decode, needs.Replace
+		// over the cluster's full demand, plus a cycle trigger. Hand it
+		// off so the read pump returns immediately.
+		sess.enqueueRollup(ctx, s, p.Rollup)
+		return nil
 	case *pb.OperatorMessage_BootstrapResponse:
 		sess.deliverBootstrapResponse(p.BootstrapResponse)
 		return nil
@@ -164,12 +180,81 @@ type operatorSession struct {
 
 	pendingBootstrap sync.Map // request_id (string) → chan *pb.BootstrapBlobResponse
 	pendingReclaim   sync.Map // instruction_id → chan *pb.ReclaimAck
+
+	// rollupChan and rollupOnce wire the session to a single per-session
+	// goroutine that processes rollups in arrival order. Slow rollup
+	// handling no longer blocks the recv pump (M44.4 Drop B). Buffer
+	// size 1 because rollups are full-replacement: we only ever need to
+	// process the latest, and one in flight + one queued is enough.
+	// If a third arrives while we have one queued, we drop the queued
+	// one (the newer arrival supersedes — paper §3.1).
+	rollupChan chan *pb.ClusterCapacityNeeds
+	rollupOnce sync.Once
 }
 
 func newOperatorSession(cluster machine.ClusterID, stream pb.Shard_SessionServer) *operatorSession {
 	return &operatorSession{
-		cluster: cluster,
-		stream:  stream,
+		cluster:    cluster,
+		stream:     stream,
+		rollupChan: make(chan *pb.ClusterCapacityNeeds, 1),
+	}
+}
+
+// enqueueRollup hands the rollup proto to the per-session rollup worker
+// (spawned lazily on first call). Buffer size 1: if a queued rollup is
+// already pending, replace it with the newer one — rollups are full
+// replacements per paper §3.1, so the older arrival is obsolete the
+// moment a newer one is in hand.
+func (sess *operatorSession) enqueueRollup(ctx context.Context, sh *Shard, rollup *pb.ClusterCapacityNeeds) {
+	sess.rollupOnce.Do(func() {
+		go sess.rollupWorker(ctx, sh)
+	})
+	for {
+		select {
+		case sess.rollupChan <- rollup:
+			return
+		default:
+			// Queue already has a rollup waiting. Drain the stale one
+			// and try again. The non-blocking drain may race with the
+			// worker, which is fine — either way the next send succeeds.
+			select {
+			case <-sess.rollupChan:
+			default:
+			}
+		}
+	}
+}
+
+// rollupWorker drains the per-session rollup queue, processing one at
+// a time so per-cluster rollup ordering is preserved. Runs for the
+// lifetime of the session; exits when the stream context cancels or
+// the session closes.
+func (sess *operatorSession) rollupWorker(ctx context.Context, sh *Shard) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case rollup, ok := <-sess.rollupChan:
+			if !ok {
+				return
+			}
+			if sess.closed.Load() {
+				return
+			}
+			domainNeeds, err := conv.NeedsFromRollup(rollup)
+			if err != nil {
+				sh.log.Warn("rollup decode failed", "cluster", sess.cluster, "err", err)
+				continue
+			}
+			sh.needs.Replace(sess.cluster, domainNeeds)
+			sh.observeRolledUpDemand(sess.cluster, domainNeeds)
+			sh.triggerCycle()
+			_ = sess.send(&pb.ShardMessage{
+				Payload: &pb.ShardMessage_Ack{Ack: &pb.Acknowledgement{
+					Echo: "rollup", CoordinatorTerm: sh.term.HighWaterMark(), ShardEpoch: sh.cfg.Epoch.Value(),
+				}},
+			})
+		}
 	}
 }
 
