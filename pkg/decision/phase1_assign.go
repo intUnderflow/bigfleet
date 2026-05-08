@@ -44,19 +44,24 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 
 	result := Phase1Result{}
 	for _, n := range sorted {
-		// M44.4 Drop B: deficit must compare to Configured machines that
-		// match THIS Need's profile, not the cluster's aggregate
-		// Configured count. The aggregate compare under-emits whenever
-		// a cluster's Configured pool spans multiple profiles: a Need
-		// for profile X with count N sees `have = total Configured`
-		// (incl. machines bound to other Needs Y/Z/…) and skips even
-		// though zero X-matching machines exist. Surfaced in scaleway-50k
-		// post-Drop-A: 79 K demand × 57 K Idle should have driven ~50 K
-		// Bootstrap actions, but Phase 1 emitted only 3 K because most
-		// cycles found `have ≥ count` for every Need.
+		// M44.4 Drop C: count by AssignedNeedFingerprint equality, not
+		// MatchProfile. MatchProfile is a one-way subset check (machine's
+		// resolved Profile satisfies the Need's requirements), so a
+		// machine configured for a high-spec Need also "matches" any
+		// lower-spec Need whose requirements are a subset. With M35's
+		// label-axis fingerprint multiplier this over-counts: a cluster
+		// holding 15 K machines bound to fingerprint A makes Phase 1
+		// believe every Need with looser requirements is already
+		// satisfied, even though zero machines are actually serving
+		// fingerprint B. Surfaced in scaleway-50k post-Drop-B: ramp
+		// stalled at 15 305 / 50 000 with 45 K Idle still available
+		// because Phase 1 emitted zero Bootstraps for the unsatisfied
+		// fingerprints. AssignedNeedFingerprint is set on bootstrap
+		// completion and cleared on drain — exact 1:1 attribution.
 		profile := n.Profile
+		fp := profile.Fingerprint()
 		have := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, func(m machine.Machine) bool {
-			return MatchProfile(profile, m)
+			return m.AssignedNeedFingerprint == fp
 		})
 		deficit := n.Count - have
 		if deficit <= 0 {

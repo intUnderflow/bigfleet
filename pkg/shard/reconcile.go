@@ -111,6 +111,7 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 		dm.AssignedPriority = existing.AssignedPriority
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
+		dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
 		_ = s.inv.Apply(dm)
 		return
 	}

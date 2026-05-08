@@ -218,6 +218,7 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		m.AssignedPriority = priority
 		m.AssignedInterruptionPenaltyDollars = intPen
 		m.AssignedReclamationPenaltyDollars = recPen
+		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
 	}); err != nil {
 		return formatErr("bootstrap: post-Configure transition", err)
 	}
@@ -274,6 +275,7 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 		m.AssignedPriority = 0
 		m.AssignedInterruptionPenaltyDollars = 0
 		m.AssignedReclamationPenaltyDollars = 0
+		m.AssignedNeedFingerprint = ""
 		if !drained.Host.Empty() {
 			m.Host = drained.Host
 		}

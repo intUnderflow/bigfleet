@@ -166,6 +166,20 @@ type Machine struct {
 	// machine, e.g. burned-in GPUs). Used by Phase 2 victim scoring and
 	// Phase 3 release tiebreaks.
 	AssignedReclamationPenaltyDollars float64
+
+	// AssignedNeedFingerprint is the needs.Profile.Fingerprint() of the
+	// Need this machine was bootstrapped to satisfy. Set when the shard
+	// transitions Configuring → Configured; cleared when the machine is
+	// drained back to Idle.
+	//
+	// Why not derive from machine.Profile: needs.Profile holds requirements
+	// (selectors), machine.Profile holds resolved attributes. A single
+	// machine satisfies many needs.Profiles' requirements via subset-match,
+	// so MatchProfile-based counting over-counts whenever multiple Needs
+	// in the same cluster have nested label selectors. Phase 1's deficit
+	// math needs exact 1:1 attribution: how many machines are *currently
+	// assigned to this Need*, not how many *could match* it.
+	AssignedNeedFingerprint string
 }
 
 // validTransitions encodes the legal state machine. The decision engine

@@ -210,6 +210,7 @@ func executeActions(t *testing.T, prov *fake.Provider, inv *inventory.Inventory,
 			final.AssignedPriority = pf.Priority()
 			final.AssignedInterruptionPenaltyDollars = intPen
 			final.AssignedReclamationPenaltyDollars = recPen
+			final.AssignedNeedFingerprint = pf.Fingerprint()
 			if err := inv.Apply(final); err != nil {
 				t.Fatalf("stamp penalties %s: %v", a.MachineID, err)
 			}
