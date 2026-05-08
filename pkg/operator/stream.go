@@ -88,6 +88,19 @@ type session struct {
 	// handlers (NodeStateUpdate, ReclaimInstruction, AvailableCapacity).
 	// BootstrapRequest bypasses the sem entirely (see recvLoop).
 	dispatchSem chan struct{}
+
+	// nodeStatePending coalesces NodeStateUpdate frames per machine.
+	// The shard emits a NodeStateUpdate for every transition (Idle →
+	// Configuring → Configured for a binding); under burst the handler
+	// runs against an apiserver write each time even though only the
+	// latest state is observable. nodeStatePending stores the latest
+	// inbound update per machine; nodeStateInFlight tracks which
+	// machines have a worker active so we never spawn two for the
+	// same ID. M44.4 Drop B: this halves operator-side apiserver
+	// writes during a burst.
+	nodeStateMu       sync.Mutex
+	nodeStatePending  map[string]*pb.NodeStateUpdate
+	nodeStateInFlight map[string]bool
 }
 
 const (
@@ -97,27 +110,63 @@ const (
 	// (paper §10.5).
 	outboxCap = 256
 
-	// dispatchConcurrency caps the number of in-flight goroutines for
-	// apiserver-bound message handlers (NodeStateUpdate, ReclaimInstruction,
-	// AvailableCapacityUpdate). M44.4 Drop B: unbounded recvLoop spawned
-	// 1000-1500 goroutines per operator, causing 8 s+ handler p99 from
-	// heap pressure and Create-conflict races. The bound exists to limit
-	// heap pressure, not to throttle throughput — sized roughly equal to
-	// the per-cluster apiserver QPS budget so a saturated pool can still
-	// drain at the apiserver's natural rate. BootstrapRequest bypasses
-	// this bound entirely (see needsBoundedDispatch) since its handler
-	// is CPU-only and the shard's executeBootstrap blocks on it under
-	// cycle ctx — it must not queue behind apiserver-bound handlers.
-	dispatchConcurrency = 256
+	// dispatchConcurrency caps in-flight goroutines for apiserver-bound
+	// message handlers (NodeStateUpdate, ReclaimInstruction,
+	// AvailableCapacityUpdate). M44.4 Drop B: 256 was actively
+	// counterproductive — handlers contended on the controller-runtime
+	// client's internal locks (cache RWMutex, write-rate-limiter token
+	// bucket) and the per-handler tail blew up to 32 s p99 even though
+	// apiserver throughput was at <1 % of budget. Dropped back to 32:
+	// matches what each operator actually needs to drive its slice of
+	// fleet-wide write traffic. Coalescing (see coalesceNodeStateUpdate)
+	// further reduces the per-machine write count, so the lower bound
+	// doesn't cap useful concurrency.
+	dispatchConcurrency = 32
 )
 
 func newSession(stream pb.Shard_SessionClient, op *Operator) *session {
 	return &session{
-		op:           op,
-		stream:       stream,
-		rollupSignal: make(chan struct{}, 1),
-		outbox:       make(chan *pb.OperatorMessage, outboxCap),
+		op:                op,
+		stream:            stream,
+		rollupSignal:      make(chan struct{}, 1),
+		outbox:            make(chan *pb.OperatorMessage, outboxCap),
+		nodeStatePending:  make(map[string]*pb.NodeStateUpdate),
+		nodeStateInFlight: make(map[string]bool),
 	}
+}
+
+// coalesceNodeStateUpdate stores update as the latest pending state for
+// its machine, returning true if a worker should be spawned to process
+// it (no in-flight worker for that machine yet). When the worker
+// finishes, it loops if a new update arrived in the meantime — so
+// rapid Idle→Configuring→Configured sequences for the same machine
+// collapse to a single apiserver write of the terminal state.
+func (s *session) coalesceNodeStateUpdate(update *pb.NodeStateUpdate) bool {
+	s.nodeStateMu.Lock()
+	defer s.nodeStateMu.Unlock()
+	id := update.GetMachineId()
+	s.nodeStatePending[id] = update
+	if s.nodeStateInFlight[id] {
+		return false
+	}
+	s.nodeStateInFlight[id] = true
+	return true
+}
+
+// takeNextNodeStateUpdate returns the latest pending update for the
+// given machine and clears the slot. If nothing is pending, drops the
+// in-flight flag and returns nil — the next coalesce call will spawn
+// a fresh worker.
+func (s *session) takeNextNodeStateUpdate(id string) *pb.NodeStateUpdate {
+	s.nodeStateMu.Lock()
+	defer s.nodeStateMu.Unlock()
+	update, ok := s.nodeStatePending[id]
+	if !ok {
+		delete(s.nodeStateInFlight, id)
+		return nil
+	}
+	delete(s.nodeStatePending, id)
+	return update
 }
 
 // enqueueRollup replaces the pending rollup atomically. Older pending
@@ -199,6 +248,42 @@ func (s *session) recvLoop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// NodeStateUpdate goes through the coalescer rather than a
+		// per-message goroutine: under burst the shard emits multiple
+		// state transitions per machine in rapid succession (Idle →
+		// Configuring → Configured) and the operator only needs to
+		// reflect the latest. coalesceNodeStateUpdate atomically stores
+		// the latest pending update for the machine; if no worker is
+		// already in flight for it we spawn one (taking a sem slot).
+		// The worker loops, picking up any newer update that arrived
+		// while it was processing.
+		if u := msg.GetNodeStateUpdate(); u != nil {
+			if !s.coalesceNodeStateUpdate(u) {
+				continue
+			}
+			select {
+			case s.dispatchSem <- struct{}{}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			go func(machineID string) {
+				metrics.OperatorDispatchInflight.Inc()
+				defer func() {
+					metrics.OperatorDispatchInflight.Dec()
+					<-s.dispatchSem
+				}()
+				for {
+					update := s.takeNextNodeStateUpdate(machineID)
+					if update == nil {
+						return
+					}
+					if err := s.op.handleNodeStateUpdate(ctx, update); err != nil {
+						s.op.log.Warn("dispatch failed", "err", err)
+					}
+				}
+			}(u.GetMachineId())
+			continue
+		}
 		bounded := needsBoundedDispatch(msg)
 		if bounded {
 			select {
@@ -229,9 +314,10 @@ func (s *session) recvLoop(ctx context.Context) error {
 // bypass the bound so they never get blocked behind a slow
 // NodeStateUpdate.
 func needsBoundedDispatch(msg *pb.ShardMessage) bool {
+	// NodeStateUpdate is handled separately via the coalescer in
+	// recvLoop, so it doesn't appear here.
 	switch msg.GetPayload().(type) {
-	case *pb.ShardMessage_NodeStateUpdate,
-		*pb.ShardMessage_AvailableCapacity,
+	case *pb.ShardMessage_AvailableCapacity,
 		*pb.ShardMessage_ReclaimInstruction:
 		return true
 	}

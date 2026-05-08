@@ -105,20 +105,47 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 	if phase == bfv1alpha1.UpcomingNodeLaunched && existing.Status.Phase == bfv1alpha1.UpcomingNodeDraining {
 		phase = bfv1alpha1.UpcomingNodeDrained
 	}
-	existing.Status.Phase = phase
+
+	// M44.4 Drop B: skip the Status().Update apiserver round-trip if
+	// nothing observable changed. With the recvLoop coalescer
+	// collapsing rapid state transitions per machine, most handler
+	// invocations have new content; but rebroadcasts (operator
+	// reconnect, supersedes_key replays) and idempotent re-emits
+	// happen often enough that this short-circuit measurably reduces
+	// apiserver write rate.
+	newNodeRef := existing.Status.NodeRef
 	if u.GetNodeName() != "" {
-		existing.Status.NodeRef = &corev1.ObjectReference{Kind: "Node", Name: u.GetNodeName()}
+		newNodeRef = &corev1.ObjectReference{Kind: "Node", Name: u.GetNodeName()}
 	}
+	newProviderID := existing.Status.ProviderID
 	if u.GetProviderId() != "" {
-		existing.Status.ProviderID = u.GetProviderId()
+		newProviderID = u.GetProviderId()
 	}
+	newEstReady := existing.Status.EstimatedReadyTime
 	if u.GetEstimatedReadyUnixNanos() != 0 {
 		t := metav1.NewTime(time.Unix(0, u.GetEstimatedReadyUnixNanos()))
-		existing.Status.EstimatedReadyTime = &t
+		newEstReady = &t
 	}
+	newLastError := existing.Status.LastError
 	if u.GetLastError() != "" {
-		existing.Status.LastError = u.GetLastError()
+		newLastError = u.GetLastError()
 	}
+	if existing.Status.Phase == phase &&
+		nodeRefEqual(existing.Status.NodeRef, newNodeRef) &&
+		existing.Status.ProviderID == newProviderID &&
+		timePtrEqual(existing.Status.EstimatedReadyTime, newEstReady) &&
+		existing.Status.LastError == newLastError &&
+		existing.Status.ProvisioningStartTime != nil {
+		// No observable change — don't burn an apiserver write.
+		metrics.OperatorUpcomingNodeWrites.WithLabelValues("status_update", "noop").Inc()
+		return nil
+	}
+
+	existing.Status.Phase = phase
+	existing.Status.NodeRef = newNodeRef
+	existing.Status.ProviderID = newProviderID
+	existing.Status.EstimatedReadyTime = newEstReady
+	existing.Status.LastError = newLastError
 	if existing.Status.ProvisioningStartTime == nil {
 		now := metav1.Now()
 		existing.Status.ProvisioningStartTime = &now
@@ -129,6 +156,20 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		return fmt.Errorf("update UpcomingNode status: %w", statusErr)
 	}
 	return nil
+}
+
+func nodeRefEqual(a, b *corev1.ObjectReference) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Kind == b.Kind && a.Name == b.Name
+}
+
+func timePtrEqual(a, b *metav1.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(b)
 }
 
 // handleAvailableCapacityUpdate upserts an AvailableCapacity CR for
