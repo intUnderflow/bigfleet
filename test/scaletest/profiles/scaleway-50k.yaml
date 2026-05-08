@@ -89,7 +89,11 @@ operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
-  rollupInterval: 0s
+  # 1s rollup tick — at 50 K demand × 0.05 churn/min/Pod ≈ 41 churns/sec
+  # in steady state, the binary's 10 s default would alone burn half the
+  # 15 s SLO. Kapsule's apiserver QPS budget easily absorbs 50× listed
+  # CRs every second; the rollup itself is ~10 ms p99 in this profile.
+  rollupInterval: 1s
 
 # ADR-0014 + ADR-0017 / M44: internalBindingLatency gate active (ADR-0018). In-process
 # tier targets at cloud scale.
