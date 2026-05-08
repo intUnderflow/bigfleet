@@ -44,12 +44,24 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 
 	result := Phase1Result{}
 	for _, n := range sorted {
-		have := snap.CountByClusterState(n.ClusterID, machine.StateConfigured)
+		// M44.4 Drop B: deficit must compare to Configured machines that
+		// match THIS Need's profile, not the cluster's aggregate
+		// Configured count. The aggregate compare under-emits whenever
+		// a cluster's Configured pool spans multiple profiles: a Need
+		// for profile X with count N sees `have = total Configured`
+		// (incl. machines bound to other Needs Y/Z/…) and skips even
+		// though zero X-matching machines exist. Surfaced in scaleway-50k
+		// post-Drop-A: 79 K demand × 57 K Idle should have driven ~50 K
+		// Bootstrap actions, but Phase 1 emitted only 3 K because most
+		// cycles found `have ≥ count` for every Need.
+		profile := n.Profile
+		have := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, func(m machine.Machine) bool {
+			return MatchProfile(profile, m)
+		})
 		deficit := n.Count - have
 		if deficit <= 0 {
 			continue
 		}
-		profile := n.Profile
 
 		// Idle first: cheapest path (one Configure call, no Create).
 		idle := alloc.take(machine.StateIdle, profile, deficit)

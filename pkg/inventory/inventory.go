@@ -637,6 +637,27 @@ func (s *Snapshot) CountByState(state machine.State) int {
 	return len(s.byState[state])
 }
 
+// CountByClusterStateMatching counts machines in (cluster, state) for
+// which matches(m) returns true. O(K) where K is the cluster's machines
+// in that state — bounded by the cluster's own population, not the
+// fleet's. Phase 1 uses this to count Configured machines that satisfy
+// a Need's profile (so its deficit calc respects per-Need profile
+// fingerprint rather than the cluster's aggregate Configured count).
+func (s *Snapshot) CountByClusterStateMatching(cluster machine.ClusterID, state machine.State, matches func(m machine.Machine) bool) int {
+	byState := s.bucketsByClusterState[cluster]
+	if byState == nil {
+		return 0
+	}
+	bucket := byState[state]
+	n := 0
+	for i := range bucket {
+		if matches(bucket[i]) {
+			n++
+		}
+	}
+	return n
+}
+
 // Len returns the number of machines.
 func (s *Snapshot) Len() int { return len(s.machines) }
 
