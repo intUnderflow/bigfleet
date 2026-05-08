@@ -132,44 +132,44 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 			}
 		}
 
-		for _, m := range configured {
-			kept := false
-			for i := range groups {
-				if groups[i].remaining <= 0 {
-					continue
-				}
-				// Fast prefilter: a pinned group only matches its
-				// listed instance types. Skipping MatchProfile when
-				// the type doesn't even fit drops the inner cost
-				// from a full requirement walk to one string compare.
-				if len(resolved[i].pinnedTypes) > 0 {
-					ok := false
-					for _, t := range resolved[i].pinnedTypes {
-						if t == m.Profile.InstanceType {
-							ok = true
-							break
-						}
-					}
-					if !ok {
-						continue
-					}
-				}
-				if MatchProfile(resolved[i].profile, m) {
-					groups[i].remaining--
-					kept = true
-					break
-				}
-			}
-			if !kept {
-				out.Actions = append(out.Actions, Action{
-					Kind:        ActionKindReclaim,
-					MachineID:   m.ID,
-					Cluster:     cluster,
-					GracePeriod: 0, // Reclaim is voluntary; the operator picks a normal grace at apply time.
-					Reason:      "phase3.excess",
-				})
-			}
+		// M44.4 Drop F: keep on AssignedNeedFingerprint equality, not
+		// MatchProfile. Same bug class as Drop B/C in Phase 1: with
+		// label-axis fingerprint multiplicity (M35), a machine bound
+		// for fp_X also satisfies any sibling Need whose requirements
+		// are a subset of fp_X — Phase 3 then "kept" the stale
+		// machine against an unrelated Need's budget, never reclaiming
+		// it. With churn this caused steady-state inventory to fill
+		// up with machines bound to long-dead fingerprints; new Pods
+		// could only bind via Phase 2 preemption thrash. Surfaced in
+		// the scaleway-50k Drop D run: Reclaim emit 0/sec, Preempt
+		// 1/sec, bindingLatency p99 = 102 s (45 % of binds >102 s).
+		//
+		// Correct keep semantics: a machine is kept iff a Need exists
+		// for the *same* (cluster, fingerprint) and that Need still
+		// has budget. Otherwise reclaim — its workload is gone.
+		// Machines with empty AssignedNeedFingerprint (never bound,
+		// shouldn't happen in practice for Configured) reclaim by
+		// default.
+		fpIdx := make(map[string]int, len(groups))
+		for i := range groups {
+			fpIdx[groups[i].profile.Fingerprint()] = i
 		}
+		for _, m := range configured {
+			i, ok := fpIdx[m.AssignedNeedFingerprint]
+			kept := ok && groups[i].remaining > 0
+			if kept {
+				groups[i].remaining--
+				continue
+			}
+			out.Actions = append(out.Actions, Action{
+				Kind:        ActionKindReclaim,
+				MachineID:   m.ID,
+				Cluster:     cluster,
+				GracePeriod: 0, // Reclaim is voluntary; the operator picks a normal grace at apply time.
+				Reason:      "phase3.excess",
+			})
+		}
+		_ = resolved // M44.4 Drop F: instance-type prefilter is moot once we key by fingerprint
 	}
 
 	return out

@@ -15,6 +15,9 @@ func configuredVictim(id machine.ID, cluster machine.ClusterID, priority int32, 
 	m.AssignedPriority = priority
 	m.AssignedInterruptionPenaltyDollars = intPen
 	m.AssignedReclamationPenaltyDollars = recPen
+	// Default to gpuProfile fingerprint at the matching priority so
+	// Phase 3's keep-on-fingerprint-equality has something to match.
+	m.AssignedNeedFingerprint = gpuProfile(priority).Fingerprint()
 	return m
 }
 
