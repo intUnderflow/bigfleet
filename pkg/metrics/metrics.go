@@ -163,6 +163,17 @@ var (
 		Help: "Cumulative actions dropped at cycle-emit time because the persistent execute pool's queue was full (ADR-0021). Distinct from ShardActionsDeferred (MaxActionsPerCycle truncation) — same intent, different mechanism.",
 	})
 
+	// ADR-0021: actions deduped at cycle-emit time because the same
+	// machine already has an action queued or in flight from a prior
+	// cycle. Without this counter we'd silently waste worker capacity
+	// on "expected Idle" failures from duplicate Bootstrap actions
+	// emitted across cycles before the first one completed its
+	// transition.
+	ShardActionsDeduped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_actions_deduped_total",
+		Help: "Cumulative actions skipped at enqueue time because the target machine already has an action queued or in flight (ADR-0021 in-flight set). High rates relative to ShardActionsTotal mean the cycle interval is firing faster than the worker pool drains — Phase keeps re-emitting for the same machines. Healthy steady state has near-zero dedup.",
+	})
+
 	// ADR-0019: per-sub-path Phase 1 instrumentation. The cloud-vs-
 	// bench discrepancy in M44.4 required attribution of where Phase 1
 	// wall-clock actually goes — pool build (merge+sort across multi-

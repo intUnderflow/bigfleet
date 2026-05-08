@@ -215,6 +215,18 @@ type Shard struct {
 	// pool is keeping up.
 	actionQueue chan decision.Action
 
+	// pendingActions tracks machine IDs with an action enqueued or in
+	// flight. ADR-0021's persistent pool decouples cycle emit from
+	// worker drain, so a machine can stay Idle in the snapshot for
+	// multiple cycles before the queued worker picks it up — Phase 1
+	// would re-emit each cycle and burn worker capacity processing
+	// duplicates that fail with "expected Idle". This set is
+	// consulted at enqueue time: if a machine is already pending we
+	// drop the duplicate. Workers remove the entry when execute
+	// returns (success or failure).
+	pendingMu      sync.Mutex
+	pendingActions map[machine.ID]struct{}
+
 	log *slog.Logger
 }
 
@@ -272,6 +284,7 @@ func New(cfg Config) (*Shard, error) {
 		assignedDomains:   make(map[domainKey]struct{}),
 		acCache:           newAvailableCapacityCache(cfg.AvailableCapacityInterval),
 		demandObservedAt:  make(map[machine.ClusterID]map[string]time.Time),
+		pendingActions:    make(map[machine.ID]struct{}),
 		log:               log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
 }
@@ -338,6 +351,13 @@ func (s *Shard) executeWorker(ctx context.Context) {
 				s.log.Warn("action failed", "kind", a.Kind, "machine", a.MachineID, "cluster", a.Cluster, "err", err)
 			}
 			cancel()
+			// Clear pending regardless of success: if the action
+			// failed (e.g. transient transition error), the next
+			// cycle's Phase 1 will re-derive cleanly with a fresh
+			// snapshot.
+			s.pendingMu.Lock()
+			delete(s.pendingActions, a.MachineID)
+			s.pendingMu.Unlock()
 			metrics.ShardActionQueueDepth.Set(float64(len(s.actionQueue)))
 		}
 	}
@@ -465,18 +485,43 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// against an unchanged snapshot, so re-emission is safe.
 	executeStart := time.Now()
 	dropped := 0
+	deduped := 0
 	if s.actionQueue != nil {
 		for _, a := range all {
+			// Per-machine in-flight dedup: skip emit if the machine
+			// already has an action queued or being processed. Without
+			// this, a deep queue + slow workers means several cycles
+			// re-emit the same Bootstrap before the first one
+			// transitions Idle → Configuring; the duplicates fail with
+			// "expected Idle" and burn worker capacity. Phase 1 will
+			// re-derive next cycle if the worker fails.
+			s.pendingMu.Lock()
+			if _, exists := s.pendingActions[a.MachineID]; exists {
+				s.pendingMu.Unlock()
+				deduped++
+				continue
+			}
+			s.pendingActions[a.MachineID] = struct{}{}
+			s.pendingMu.Unlock()
 			select {
 			case <-ctx.Done():
+				s.pendingMu.Lock()
+				delete(s.pendingActions, a.MachineID)
+				s.pendingMu.Unlock()
 				break
 			case s.actionQueue <- a:
 			default:
+				s.pendingMu.Lock()
+				delete(s.pendingActions, a.MachineID)
+				s.pendingMu.Unlock()
 				dropped++
 			}
 		}
 		if dropped > 0 {
 			metrics.ShardActionsDropped.Add(float64(dropped))
+		}
+		if deduped > 0 {
+			metrics.ShardActionsDeduped.Add(float64(deduped))
 		}
 		metrics.ShardActionQueueDepth.Set(float64(len(s.actionQueue)))
 	} else {
