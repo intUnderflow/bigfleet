@@ -66,6 +66,17 @@ RUN ARCH="${TARGETARCH:-amd64}" && \
       -o /usr/local/bin/kube-apiserver && \
     chmod +x /usr/local/bin/kube-apiserver
 
+# kube-controller-manager — needed for the garbage-collector controller
+# that cascade-deletes ownerRef-owned objects (CRs owned by Pods that
+# get churned). Without it, kwok cluster apiservers accumulate orphan
+# CRs from churn-deleted Pods and the operator's rollup carries stale
+# demand. Surfaced in scaleway-50k Drop F: 2810 CRs vs 1000 live Pods,
+# Phase 3 found nothing to reclaim, chain fell into Phase 2 thrash.
+RUN ARCH="${TARGETARCH:-amd64}" && \
+    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-controller-manager" \
+      -o /usr/local/bin/kube-controller-manager && \
+    chmod +x /usr/local/bin/kube-controller-manager
+
 # kubectl, used by entrypoint to apply CRDs and probe readiness.
 RUN ARCH="${TARGETARCH:-amd64}" && \
     curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kubectl" \

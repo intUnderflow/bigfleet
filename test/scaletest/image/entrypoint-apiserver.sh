@@ -153,16 +153,45 @@ kwok \
   >"$WORK/logs/kwok.log" 2>&1 &
 KWOK_PID=$!
 
+# ---- 7. start kube-controller-manager (garbage-collector only) ----
+#
+# Stock Kubernetes runs many controllers (replication, deployment, GC,
+# TTL, etc.). For the harness we only need garbage-collector — it's the
+# controller that walks ownerRef chains and cascade-deletes owned
+# objects when their owner is deleted. UPC creates each CR with the
+# owning Pod as its sole ownerRef; without GC the CRs accumulate as
+# orphans on every churn cycle.
+#
+# --controllers=garbage-collector,namespace disables every other
+# controller, so we don't pay CPU for replicaset / endpoint / etc.
+# work the harness has no use for. (namespace stays on so the empty
+# default namespace continues to exist.)
+log kcm "starting (garbage-collector only)"
+kube-controller-manager \
+  --kubeconfig="$KCFG" \
+  --authentication-kubeconfig="$KCFG" \
+  --authorization-kubeconfig="$KCFG" \
+  --leader-elect=false \
+  --controllers=garbage-collector,namespace \
+  --root-ca-file="$WORK/certs/ca.crt" \
+  --service-account-private-key-file="$WORK/certs/sa.key" \
+  --use-service-account-credentials=false \
+  --bind-address=127.0.0.1 \
+  --secure-port=10257 \
+  --concurrent-gc-syncs=20 \
+  >"$WORK/logs/kcm.log" 2>&1 &
+KCM_PID=$!
+
 # Signal the workload container that the apiserver is ready and the
 # kubeconfig is written. The workload script waits on this file.
 touch "$WORK/apiserver-ready"
 log entrypoint "apiserver-side ready; signalled workload container"
 
-# ---- 7. supervise: if any process dies, take the container down ----
-trap 'kill $KINE_PID $APISERVER_PID $KWOK_PID 2>/dev/null || true' SIGTERM SIGINT
+# ---- 8. supervise: if any process dies, take the container down ----
+trap 'kill $KINE_PID $APISERVER_PID $KWOK_PID $KCM_PID 2>/dev/null || true' SIGTERM SIGINT
 
 while true; do
-  for name in KINE APISERVER KWOK; do
+  for name in KINE APISERVER KWOK KCM; do
     pidvar="${name}_PID"
     if ! kill -0 "${!pidvar}" 2>/dev/null; then
       log entrypoint "$name (pid ${!pidvar}) exited; tailing logs and exiting"
