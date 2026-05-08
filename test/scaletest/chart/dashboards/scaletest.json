@@ -12,7 +12,7 @@
     {
       "id": 99, "type": "stat", "title": "Overall SLO verdict",
       "description": "Sums the number of pass() gates currently failing. -1 = WAIT (test isn't yet in steady-state soak — SLOs would be fired on cold-start tail data, which is meaningless). 0 = green PASS, ≥1 = red FAIL. The WAIT gate uses the same two-step phase signal as the Test phase panel: drivers at target AND ≥99 % of CRs Bootstrap-succeeded. Mirrors the runner's pass() — same thresholds, same metrics. The internal-binding-latency gate uses the steady-state-only histogram (M44.4) so it's not skewed by the cold-start fill. Profile-level SLO overrides aren't reflected here; the panel uses in-process tier defaults: cycle ≤ 5 s, rollup ≤ 1 s, ack ≤ 12 s, internal binding ≤ 15 s (ADR-0020), sustained load ≥ 99.9 %, outbox drops = 0, coordinator FSM error rate ≤ 0.1 %.",
-      "gridPos": {"h": 4, "w": 16, "x": 0, "y": 0},
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 0},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [{"expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) * (((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket)) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))) - (1 - (((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "green", "value": 0}, {"color": "red", "value": 1}]}, "mappings": [{"type": "value", "options": {"-1": {"text": "WAIT", "color": "yellow", "index": 0}, "0": {"text": "PASS", "color": "green", "index": 1}}}, {"type": "range", "options": {"from": 0.5, "to": 999, "result": {"text": "FAIL", "color": "red", "index": 2}}}]}, "overrides": []},
@@ -21,13 +21,22 @@
     {
       "id": 98, "type": "stat", "title": "Test phase",
       "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded ≥ 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog — gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
-      "gridPos": {"h": 4, "w": 8, "x": 16, "y": 0},
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
         {"expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "short", "noValue": "Initialising", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "blue", "value": 0.4}, {"color": "green", "value": 0.99}]}, "mappings": [{"type": "value", "options": {"0": {"text": "Ramp (load-driver filling)", "color": "yellow", "index": 0}, "0.5": {"text": "Filling (chain draining backlog)", "color": "blue", "index": 1}, "1": {"text": "Steady-state soak", "color": "green", "index": 2}}}]}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "id": 97, "type": "stat", "title": "Bootstraps / target",
+      "description": "Cumulative Bootstrap-success count vs total CR target (kwok.clusterCount × loadProfile.target). The runner's gate transitions to steady-state soak once this hits ≥ 99 %. Same numerator the Test phase panel reads internally — exposed here so you can watch the chain drain the cold-start backlog. Yellow until 99 %, green at 99 %.",
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "green", "value": 0.99}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
       "id": 100, "type": "row", "title": "SLO live verdict (ADR-0014 / 0017 / 0018)",
