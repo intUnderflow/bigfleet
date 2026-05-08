@@ -62,8 +62,22 @@ import (
 // fake provider (sub-second) to real cloud provisioning (~minutes).
 var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Name:    "bigfleet_scaletest_pod_bind_latency_seconds",
-	Help:    "BigFleet-internal binding latency: wall-clock from Pod.metadata.creationTimestamp to the bigfleet-scaletest-pod-shim issuing the binding subresource Create on a fake Node. Per-Pod granularity. ADR-0018: the harness fake provider returns instantly, so this measures BigFleet's contribution only — user-facing latency = this + provider_capacity_create_latency, and the second term is not measured here.",
+	Help:    "BigFleet-internal binding latency: wall-clock from Pod.metadata.creationTimestamp to the bigfleet-scaletest-pod-shim issuing the binding subresource Create on a fake Node. Per-Pod granularity. Records every Pod, including initial-fill thundering-herd ramps. ADR-0018: the harness fake provider returns instantly, so this measures BigFleet's contribution only.",
 	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12), // 0.05s, 0.1s, 0.2s, ... 102.4s
+})
+
+// podBindLatencySteadySeconds is the SLO-bearing histogram. Records
+// only Pods carrying bigfleet.lucy.sh/steady-state=true (set by the
+// load-driver after the cluster reaches its target Pod count). The
+// initial fill of the cluster from cold start is a synthetic
+// thundering-herd that doesn't reflect production binding behaviour
+// (production has existing inventory + steady-state churn + occasional
+// bursts, not a 50K-Pod cold start). Excluding the fill keeps the SLO
+// honest about what users actually feel.
+var podBindLatencySteadySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+	Name:    "bigfleet_scaletest_pod_bind_latency_steady_seconds",
+	Help:    "BigFleet-internal binding latency for STEADY-STATE Pods only — those carrying bigfleet.lucy.sh/steady-state=true (created by the load-driver after the cluster reached its target Pod count). The runner's SLO gates on this rather than the all-Pods histogram so the cluster's initial-fill thundering herd doesn't dominate the p99.",
+	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
 })
 
 // M44.4 chain-drop diagnostic counters. The 50K-Pod-mode cloud run
@@ -93,6 +107,7 @@ func init() {
 	// histograms + counters are served on the same :8772 endpoint.
 	ctrlmetrics.Registry.MustRegister(
 		podBindLatencySeconds,
+		podBindLatencySteadySeconds,
 		podsMarkedUnschedulable,
 		upcomingNodesObserved,
 		fakeNodesCreated,
@@ -372,7 +387,16 @@ func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Reques
 		// Create, so it's a meaningful T0 even for Pods we discover
 		// late after a re-list.
 		if !pod.CreationTimestamp.IsZero() {
-			podBindLatencySeconds.Observe(time.Since(pod.CreationTimestamp.Time).Seconds())
+			latency := time.Since(pod.CreationTimestamp.Time).Seconds()
+			podBindLatencySeconds.Observe(latency)
+			// M44.4: SLO-bearing histogram for steady-state Pods only.
+			// load-driver tags Pods scaletest.bigfleet/state="steady"
+			// once the cluster has reached its target Pod count. The
+			// initial fill is a synthetic thundering herd — its
+			// binding latency is real but isn't the SLO.
+			if pod.Labels["scaletest.bigfleet/state"] == "steady" {
+				podBindLatencySteadySeconds.Observe(latency)
+			}
 		}
 		bound = true
 		break

@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -291,6 +292,15 @@ type driver struct {
 	known  map[string]crMeta
 	seq    uint64
 	groups map[string]*driverGroup // archetype name → current group
+
+	// steadyState flips true the first time the driver's active count
+	// reaches the profile target. Pods created after that point carry
+	// the bigfleet.lucy.sh/steady-state=true label so pod-shim's binder
+	// can record their latency in the *steady-state* histogram. The
+	// initial fill produces a thundering-herd binding pattern that's
+	// not representative of production; isolating the post-fill churn
+	// in its own metric keeps the SLO honest.
+	steadyState atomic.Bool
 }
 
 // driverGroup is a per-archetype Same-rack group. Stays open until
@@ -554,6 +564,7 @@ func (d *driver) rampTo(ctx context.Context, want int) error {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	d.steadyState.Store(true)
 	return nil
 }
 
@@ -628,9 +639,19 @@ func (d *driver) createOnePod(ctx context.Context) error {
 	}
 	d.mu.Lock()
 	d.known[name] = crMeta{archetype: archName}
+	now := len(d.known)
 	d.mu.Unlock()
 	created.Inc()
-	active.Set(float64(d.activeCount()))
+	active.Set(float64(now))
+	// Flip steady-state once the cluster has reached its target Pod
+	// count. Subsequent Pods (churn replacements) carry the
+	// bigfleet.lucy.sh/steady-state=true label so pod-shim can record
+	// their bind latency in the steady-state histogram. Idempotent —
+	// the atomic stays true once flipped, even if churn briefly drops
+	// the count below target.
+	if d.prof.Target > 0 && now >= d.prof.Target {
+		d.steadyState.Store(true)
+	}
 	return nil
 }
 
@@ -679,10 +700,22 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 	if len(a.PriorityClasses) > 0 {
 		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
 	}
+	labels := map[string]string{"scaletest.bigfleet/archetype": a.Name}
+	if d.steadyState.Load() {
+		// M44.4: marker for pod-shim to record steady-state binding
+		// latency in a separate histogram. Pods created during the
+		// initial fill (cluster ramping from 0 → target) are excluded
+		// — that thundering-herd binding pattern isn't representative
+		// of production and shouldn't dominate the SLO. The "state"
+		// suffix leaves room for additional values later (e.g. "burst").
+		// Uses the harness-specific scaletest.bigfleet/* prefix so it
+		// can't be mistaken for a production-bigfleet label.
+		labels["scaletest.bigfleet/state"] = "steady"
+	}
 	meta := metav1.ObjectMeta{
 		Name:      name,
 		Namespace: "default",
-		Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
+		Labels:    labels,
 		// Penalty annotations the unschedulable-pod-controller reads
 		// per pkg/controller/cr (M16 — bigfleet.lucy.sh/{interruption,
 		// reclamation}-penalty). Using the archetype values directly

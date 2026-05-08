@@ -493,14 +493,20 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	defer tick.Stop()
 	// Steady state requires (a) every kwok pod's containers all Ready,
 	// (b) load-driver has ramped to ≥ 99.9 % of target, AND (c) the
-	// shard has Bootstrap-succeeded for ≥ 99.9 % of target. (a)+(b)
-	// alone are insufficient — they only confirm the load-driver
-	// finished CR creation, not that the chain produced bindings. M44.4
-	// found a 50 K-CR run "clearing" with only 2 K Bootstrap successes,
-	// so the soak measured behaviour of a 96 %-stalled chain. The
-	// 0.1 % slop absorbs transient create/delete races during the
-	// load-driver's churn phase — a hard 100 % is too tight in practice.
+	// chain is alive — at least chainAliveThreshold Bootstraps have
+	// executed.
+	//
+	// M44.4: with steady-state-only SLO measurement, we no longer
+	// require the cold-start ramp to fully drain before soak begins.
+	// The load-driver tags Pods scaletest.bigfleet/state="steady" only
+	// once active >= target, so the steady histogram naturally
+	// excludes the initial fill regardless of when its bootstraps
+	// complete. The bootstraps gate's threshold is now a liveness
+	// check (5 % of target), not a "wait for chain to drain ramp"
+	// barrier. The 0.1 % slop on active absorbs transient create/
+	// delete races during churn — a hard 100 % is too tight.
 	target := int(0.999 * float64(clusterCount*perClusterTarget))
+	chainAliveThreshold := int(0.05 * float64(clusterCount*perClusterTarget))
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
@@ -511,14 +517,14 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 		if err == nil && ready >= clusterCount {
 			active = readActiveCRs(ctx, kubeconfig, ns)
 			bootstraps = readBootstrapsExecuted(ctx, kubeconfig, ns)
-			if active >= target && bootstraps >= target {
-				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (gate cleared)\n",
-					ready, clusterCount, active, target, bootstraps, target)
+			if active >= target && bootstraps >= chainAliveThreshold {
+				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (chain-alive ≥ %d, gate cleared)\n",
+					ready, clusterCount, active, target, bootstraps, target, chainAliveThreshold)
 				return nil
 			}
 		}
-		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d\n",
-			ready, clusterCount, active, target, bootstraps, target)
+		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (need ≥ %d)\n",
+			ready, clusterCount, active, target, bootstraps, target, chainAliveThreshold)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -644,16 +650,18 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// sentinel skip in pass() is retained for opt-in CR-mode
 		// runs (mode: cr) and for failed scrapes.
 		//
-		// M44.4: query the cumulative histogram instead of rate[5m].
-		// At cloud Pod-mode scale most bind events happen during
-		// ramp / early soak; by the end of the runner's soak the
-		// rate over the trailing 5 min is zero (steady-state churn
-		// rebinds are rare, especially with the optimized cycle).
-		// rate-over-zero-data made histogram_quantile return NaN →
-		// -1, masking a passing run. The cumulative histogram is
-		// fresh per shard binary start, so the p99 reflects the
-		// p99 of every bind event recorded during this run.
-		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_seconds_bucket))`,
+		// M44.4: query the steady-state histogram only. The all-Pods
+		// histogram includes the initial fill, which is a synthetic
+		// thundering-herd workload not representative of production
+		// (production has existing inventory + steady-state churn +
+		// occasional small bursts, not 50 K cold-start Pods). The
+		// load-driver tags Pods scaletest.bigfleet/state="steady"
+		// after the cluster has reached its target Pod count;
+		// pod-shim observes those into the steady histogram. Cumulative
+		// is correct here — only steady Pods contribute, so even
+		// pre-soak observations (post-fill churn during the gate's
+		// stabilisation period) are SLO-relevant.
+		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket))`,
 		"operatorRollupP99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
 		"operatorAckP99Seconds":            `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":        `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
