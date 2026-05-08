@@ -20,13 +20,13 @@
     },
     {
       "id": 98, "type": "stat", "title": "Test phase",
-      "description": "Where the test currently is in its lifecycle. Computed from scaletest_loadgen_steady_state — the gauge each load-driver flips to 1 when its cluster reaches its target Pod count. Aggregate across clusters: 0 = no cluster filled (still ramping); 1..N-1 = mixed; N (cluster count) = every cluster is in steady-state churn (the SLO histogram is recording). The `noValue` mapping renders before the first scrape lands.",
+      "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded ≥ 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog — gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
       "gridPos": {"h": 4, "w": 8, "x": 16, "y": 0},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)", "refId": "A"}
+        {"expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2", "refId": "A"}
       ],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "noValue": "Initialising", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "blue", "value": 0.001}, {"color": "green", "value": 1}]}, "mappings": [{"type": "value", "options": {"0": {"text": "Ramp", "color": "yellow", "index": 0}, "1": {"text": "Steady-state soak", "color": "green", "index": 2}}}, {"type": "range", "options": {"from": 0.0001, "to": 0.999, "result": {"text": "Ramp (mixed)", "color": "blue", "index": 1}}}]}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Initialising", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "blue", "value": 0.4}, {"color": "green", "value": 0.99}]}, "mappings": [{"type": "value", "options": {"0": {"text": "Ramp (load-driver filling)", "color": "yellow", "index": 0}, "0.5": {"text": "Filling (chain draining backlog)", "color": "blue", "index": 1}, "1": {"text": "Steady-state soak", "color": "green", "index": 2}}}]}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
