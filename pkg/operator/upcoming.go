@@ -61,12 +61,23 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 		}
 		createErr := o.cfg.KubeClient.Create(ctx, un)
 		metrics.OperatorUpcomingNodeWrites.WithLabelValues("create", classifyWriteErr(createErr)).Inc()
-		if createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+		switch {
+		case createErr == nil:
+			// M44.4 Drop B: when Create succeeds, the controller-runtime
+			// Client populates `un` with the apiserver's response (incl.
+			// ResourceVersion). Use it directly instead of re-fetching;
+			// the re-fetch was paying a cache miss + apiserver round-trip
+			// per fresh handler.
+			existing = *un
+		case apierrors.IsAlreadyExists(createErr):
+			// Lost the race to a concurrent handler. Fetch the existing
+			// object so the status update below operates on the right
+			// ResourceVersion.
+			if err := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing); err != nil {
+				return fmt.Errorf("re-fetch UpcomingNode after AlreadyExists: %w", err)
+			}
+		default:
 			return fmt.Errorf("create UpcomingNode: %w", createErr)
-		}
-		// Re-fetch so the status update below operates on a fresh copy.
-		if err := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing); err != nil {
-			return fmt.Errorf("re-fetch UpcomingNode after create: %w", err)
 		}
 	case getErr != nil:
 		return fmt.Errorf("get UpcomingNode: %w", getErr)

@@ -246,9 +246,12 @@ var (
 	// new; re-fetch; Status().Update); this histogram captures the full
 	// end-to-end handler cost so we can attribute slow stages.
 	OperatorNodeStateUpdateDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "bigfleet_operator_node_state_update_duration_seconds",
-		Help:    "Wall-clock duration of handleNodeStateUpdate per inbound NodeStateUpdate frame, by resulting UpcomingNode phase. p99 above ~100 ms means apiserver-write back-pressure is bleeding into chain throughput.",
-		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
+		Name: "bigfleet_operator_node_state_update_duration_seconds",
+		Help: "Wall-clock duration of handleNodeStateUpdate per inbound NodeStateUpdate frame, by resulting UpcomingNode phase. p99 above ~100 ms means apiserver-write back-pressure is bleeding into chain throughput.",
+		// 0.001s … 65.536s — buckets reach 65 s so p99 doesn't saturate
+		// at the top under burst conditions where back-pressure stretches
+		// individual handlers into the 10-30 s range.
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 17),
 	}, []string{"phase"})
 
 	// Per-op outcome counter for UpcomingNode CRD writes. Splits the

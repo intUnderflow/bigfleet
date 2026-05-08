@@ -84,6 +84,8 @@ type session struct {
 	pendingRollup atomic.Pointer[pb.OperatorMessage]
 	rollupSignal  chan struct{}
 	outbox        chan *pb.OperatorMessage
+	// dispatchSem caps in-flight dispatch goroutines (see recvLoop).
+	dispatchSem chan struct{}
 }
 
 const (
@@ -92,6 +94,16 @@ const (
 	// regardless. Drop-newest under load is the documented behaviour
 	// (paper §10.5).
 	outboxCap = 256
+
+	// dispatchConcurrency caps the number of in-flight dispatch
+	// goroutines per session. M44.4 Drop B: under burst, recvLoop was
+	// spawning 1000-1500 goroutines per operator (each handling a
+	// NodeStateUpdate that does 2-3 apiserver writes), causing 8 s+
+	// handler p99 and 63 % Create-conflict races. 32 is well under the
+	// per-cluster apiserver QPS budget (200) and large enough to keep
+	// the RTT-bound writes pipelined; the bound itself is what limits
+	// heap pressure, GC overhead, and cache races.
+	dispatchConcurrency = 32
 )
 
 func newSession(stream pb.Shard_SessionClient, op *Operator) *session {
@@ -158,20 +170,39 @@ func (s *session) sendLoop(ctx context.Context) error {
 }
 
 // recvLoop reads frames from the stream and dispatches them. Dispatch
-// runs in a goroutine per frame so a slow handler (CRD write,
-// kubelet-template render) doesn't block the stream's read pump.
-// Without this, the shard's parallel-execute (M11.18) just queues
-// behind the operator's serial recv loop and the cycle SLO blows
-// regardless of shard concurrency.
+// runs in a bounded goroutine pool so a slow handler (CRD write,
+// kubelet-template render) doesn't block the stream's read pump while
+// also not unbounding heap pressure. Without the bound, the shard's
+// parallel-execute (M11.18) plus initial-burst NodeStateUpdate fan-out
+// produced 1000+ in-flight handlers per operator, all queueing behind
+// controller-runtime's cache layer; M44.4 Drop B saw 8 s+ handler p99
+// from this back-pressure alone.
+//
+// dispatchSem is acquired before launching each dispatcher; the read
+// pump blocks on Send-to-channel-or-context-cancel when the pool is
+// full, applying back-pressure at the gRPC stream level (which is
+// itself flow-controlled). This way the shard sees the operator's
+// drain rate and naturally paces its sends.
 func (s *session) recvLoop(ctx context.Context) error {
+	if s.dispatchSem == nil {
+		s.dispatchSem = make(chan struct{}, dispatchConcurrency)
+	}
 	for {
 		msg, err := s.stream.Recv()
 		if err != nil {
 			return err
 		}
+		select {
+		case s.dispatchSem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		go func(msg *pb.ShardMessage) {
 			metrics.OperatorDispatchInflight.Inc()
-			defer metrics.OperatorDispatchInflight.Dec()
+			defer func() {
+				metrics.OperatorDispatchInflight.Dec()
+				<-s.dispatchSem
+			}()
 			if err := s.dispatch(ctx, msg); err != nil {
 				s.op.log.Warn("dispatch failed", "err", err)
 			}
