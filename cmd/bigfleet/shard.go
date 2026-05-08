@@ -176,6 +176,16 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 	// archetype mix at fold time.
 	idlePicker := archetype.NewPicker(archetypes)
 	idleRng := rand.New(rand.NewSource(int64(shardOrdinal) + 17))
+	// M44.4 Drop E: Idle seed mirrors Configured seed's rack label so
+	// MatchProfile's `Same(topology.bigfleet/rack)` requirement (added
+	// by the operator's owner→Same translation when CoLocationKey is
+	// set to rack) finds candidates in the Idle pool. Without this,
+	// every Pod-mode CR carries Same(rack) — UPC sets ownerRef = Pod
+	// on every CR, so the operator's withSameRequirement triggers for
+	// all of them, not just sameRack archetypes — and zero Idle
+	// machines have a rack label, so no Bootstrap action ever emits.
+	// 10 racks per zone matches the Configured seed.
+	const idleRacksPerZone = 10
 	for i := 0; i < nIdle; i++ {
 		var profile machine.Profile
 		if a := idlePicker.Pick(idleRng); a != nil {
@@ -184,11 +194,18 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 			if len(a.Zones) > 0 {
 				z = a.Zones[i%len(a.Zones)]
 			}
+			labels := map[string]string{
+				"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%idleRacksPerZone),
+			}
+			for k, v := range a.PickLabels(idleRng) {
+				labels[k] = v
+			}
 			profile = machine.Profile{
 				InstanceType: it,
 				Zone:         z,
 				CapacityType: machine.CapacityTypeBareMetal,
 				Resources:    a.PickSize(idleRng),
+				Labels:       labels,
 			}
 		} else {
 			t := types[i%len(types)]
@@ -198,6 +215,9 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 				Zone:         z,
 				CapacityType: machine.CapacityTypeBareMetal,
 				Resources:    resources[t],
+				Labels: map[string]string{
+					"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%idleRacksPerZone),
+				},
 			}
 		}
 		id := machine.ID("idle-" + strconv.Itoa(i))
