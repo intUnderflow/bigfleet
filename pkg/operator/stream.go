@@ -169,20 +169,22 @@ func (s *session) sendLoop(ctx context.Context) error {
 	}
 }
 
-// recvLoop reads frames from the stream and dispatches them. Dispatch
-// runs in a bounded goroutine pool so a slow handler (CRD write,
-// kubelet-template render) doesn't block the stream's read pump while
-// also not unbounding heap pressure. Without the bound, the shard's
-// parallel-execute (M11.18) plus initial-burst NodeStateUpdate fan-out
-// produced 1000+ in-flight handlers per operator, all queueing behind
-// controller-runtime's cache layer; M44.4 Drop B saw 8 s+ handler p99
-// from this back-pressure alone.
+// recvLoop reads frames from the stream and dispatches them. The
+// pool of in-flight dispatchers is split by message kind:
 //
-// dispatchSem is acquired before launching each dispatcher; the read
-// pump blocks on Send-to-channel-or-context-cancel when the pool is
-// full, applying back-pressure at the gRPC stream level (which is
-// itself flow-controlled). This way the shard sees the operator's
-// drain rate and naturally paces its sends.
+//   - Slow / apiserver-bound messages (NodeStateUpdate,
+//     AvailableCapacityUpdate) go through a bounded semaphore. Without
+//     a bound the burst NodeStateUpdate fan-out spawns 1000+ in-flight
+//     handlers per operator, all queueing behind controller-runtime's
+//     cache layer (M44.4 Drop B: 8 s+ handler p99 from this).
+//
+//   - Fast / shard-blocking messages (BootstrapRequest) bypass the
+//     semaphore and run in their own goroutine. The shard's
+//     executeBootstrap blocks on requestBootstrap with a one-cycle
+//     deadline (10 s default); if those queue behind a slow
+//     NodeStateUpdate at the bounded pool's gate, the shard cancels
+//     and the machine ends up in Failed. Fast handlers don't write
+//     to the apiserver — the unbounded path is safe.
 func (s *session) recvLoop(ctx context.Context) error {
 	if s.dispatchSem == nil {
 		s.dispatchSem = make(chan struct{}, dispatchConcurrency)
@@ -192,22 +194,43 @@ func (s *session) recvLoop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		select {
-		case s.dispatchSem <- struct{}{}:
-		case <-ctx.Done():
-			return ctx.Err()
+		bounded := needsBoundedDispatch(msg)
+		if bounded {
+			select {
+			case s.dispatchSem <- struct{}{}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-		go func(msg *pb.ShardMessage) {
+		go func(msg *pb.ShardMessage, bounded bool) {
 			metrics.OperatorDispatchInflight.Inc()
 			defer func() {
 				metrics.OperatorDispatchInflight.Dec()
-				<-s.dispatchSem
+				if bounded {
+					<-s.dispatchSem
+				}
 			}()
 			if err := s.dispatch(ctx, msg); err != nil {
 				s.op.log.Warn("dispatch failed", "err", err)
 			}
-		}(msg)
+		}(msg, bounded)
 	}
+}
+
+// needsBoundedDispatch returns true for message kinds whose handler
+// does apiserver writes — those are the ones whose unbounded
+// concurrency caused the M44.4 Drop B back-pressure. Fast handlers
+// (BootstrapRequest = CPU-only blob render, Hello/Ack = no work)
+// bypass the bound so they never get blocked behind a slow
+// NodeStateUpdate.
+func needsBoundedDispatch(msg *pb.ShardMessage) bool {
+	switch msg.GetPayload().(type) {
+	case *pb.ShardMessage_NodeStateUpdate,
+		*pb.ShardMessage_AvailableCapacity,
+		*pb.ShardMessage_ReclaimInstruction:
+		return true
+	}
+	return false
 }
 
 // dispatch routes one inbound frame to the appropriate handler.
