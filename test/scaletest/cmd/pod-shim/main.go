@@ -37,7 +37,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -45,6 +47,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -52,6 +55,13 @@ import (
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 )
+
+// labelClaimedByPod is set on a fake-Node when the binder atomically
+// claims it for a Pod via apiserver Patch — the apiserver-side lock
+// that prevents two concurrent binders racing for the same Node and
+// double-binding it. The label's presence is the lock; its value
+// (the Pod name) is convenient for debugging but not load-bearing.
+const labelClaimedByPod = "scaletest.bigfleet/claimed-by-pod"
 
 // podBindLatencySeconds is ADR-0017's per-Pod binding-latency
 // histogram — wall-clock from Pod.metadata.creationTimestamp to the
@@ -90,16 +100,16 @@ var (
 	}, []string{"outcome"}) // outcome: patched, already_marked, error
 	upcomingNodesObserved = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_scaletest_pod_shim_upcoming_nodes_observed_total",
-		Help: "Count of UpcomingNode reconcile events seen by the upcoming-node-binder. Compare to shard's bigfleet_shard_actions_total{kind=Bootstrap} to find shard→cluster propagation gaps.",
-	}, []string{"outcome"}) // outcome: bound, no_pod (no Pending Pod matched the new Node)
+		Help: "Count of UpcomingNode reconcile events seen by the fake-Node reconciler. Compare to shard's bigfleet_shard_actions_total{kind=Bootstrap} to find shard→cluster propagation gaps.",
+	}, []string{"outcome"}) // outcome: created, exists, not_ready
 	fakeNodesCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "bigfleet_scaletest_pod_shim_fake_nodes_created_total",
-		Help: "Count of fake Node objects this shim has created from UpcomingNodes. Should match upcoming_nodes_observed{outcome=bound}.",
+		Help: "Count of fake Node objects this shim has created from UpcomingNodes.",
 	})
 	podBindAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_scaletest_pod_shim_pod_bind_attempts_total",
-		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count.",
-	}, []string{"outcome"}) // outcome: success, no_pod, error
+		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count. claim_lost = another binder beat us to the Node label patch (apiserver-side lock); bind_error = Bind subresource itself failed (Pod gone or apiserver issue).",
+	}, []string{"outcome"}) // outcome: success, claim_lost, bind_error
 )
 
 func init() {
@@ -175,37 +185,46 @@ func run(args []string) error {
 		return fmt.Errorf("clientset: %w", err)
 	}
 
-	r := &podSchedulerShim{Client: mgr.GetClient()}
+	// M44.4 Drop G: pod-driven binding. The Pod controller is now the
+	// binder — it owns the "find a fake-Node and Bind to it" path.
+	// The UpcomingNode controller is reduced to "create the fake-Node";
+	// it no longer races against itself across 64 reconcilers for the
+	// single matching Pod (M44.4 Drop F surfaced 64 % bind-attempt
+	// errors — concurrent reconcilers all picked the same pending Pod
+	// then collided on the Bind subresource).
+	//
+	// The binder also watches Nodes via Watches(): when a new fake-Node
+	// is created, all currently-pending Pods get re-enqueued (filtered
+	// by label compatibility). This is what unblocks the queue when a
+	// fresh fake-Node arrives — without it, a Pod that reconciled
+	// before any matching Node existed would only retry on its own
+	// status changes (rare for a still-unschedulable Pod).
+	pb := &podBinder{Client: mgr.GetClient(), clientset: clientset}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}).
-		Named("bigfleet-scaletest-pod-shim").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 16}).
-		Complete(r); err != nil {
-		return fmt.Errorf("controller: %w", err)
+		Watches(
+			&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return enqueueMatchingPendingPods(ctx, mgr.GetClient(), obj)
+			}),
+		).
+		Named("bigfleet-scaletest-pod-binder").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 64}).
+		Complete(pb); err != nil {
+		return fmt.Errorf("pod-binder controller: %w", err)
 	}
 
-	// M43c: UpcomingNode → Node + Pod-binding loop. Watches the
-	// UpcomingNode CRDs the operator publishes; on Phase=Ready,
-	// creates a matching k8s Node (idempotent) and binds one
-	// pending Pod whose nodeAffinity matches the new Node's
-	// labels.
-	// MaxConcurrentReconciles bumped from the controller-runtime
-	// default of 1: at 1K Pods/cluster the serial reconcile queue
-	// produces ~37s mean binding latency (each bind takes ~1s of
-	// apiserver round-trips). M44.4 Drop B: 16 → 64. The shard can
-	// emit up to maxActionsPerCycle (1000) Bootstrap actions per
-	// cycle, so during the demand-clear burst the binder sees
-	// ~1000 UpcomingNodes back-to-back per cluster; with ~3 sequential
-	// apiserver writes per reconcile (Get-Node, Create-Node + Status-
-	// Update, Bind) and 16 workers the burst took ~15 s to drain,
-	// pushing binding p99 well over the 5 s SLO. 64 workers drains
-	// the same burst in ~4 s.
-	un := &upcomingNodeBinder{Client: mgr.GetClient(), clientset: clientset}
+	// UpcomingNode → fake-Node only. No Pod binding here anymore.
+	// MaxConcurrentReconciles low because each reconcile is now O(1):
+	// Get the Node, Create-if-missing, done. Most events are
+	// already-exists no-ops (operator status updates fire many events
+	// per machine; only the first matters for Node creation).
+	fn := &upcomingNodeFakeNodeReconciler{Client: mgr.GetClient()}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&bfv1alpha1.UpcomingNode{}).
-		Named("bigfleet-scaletest-upcoming-node-binder").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 64}).
-		Complete(un); err != nil {
+		Named("bigfleet-scaletest-upcoming-node-fake-node").
+		WithOptions(controller.Options{MaxConcurrentReconciles: 8}).
+		Complete(fn); err != nil {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}
 
@@ -215,27 +234,60 @@ func run(args []string) error {
 	return nil
 }
 
-// podSchedulerShim sets PodScheduled=False, reason=Unschedulable on
-// any Pod that has no .spec.nodeName and no existing condition with
-// the same reason. Idempotent — re-reconciles are no-ops.
-type podSchedulerShim struct {
+// podBinder is the M44.4 Drop G refactor: the Pod controller owns the
+// "find a fake-Node and Bind to it" path. Per Pod reconcile:
+//
+//  1. Skip if already bound (Spec.NodeName != "").
+//  2. List unclaimed fake-Nodes (label !claimed-by-pod).
+//  3. Find one whose labels satisfy the Pod's nodeSelector + nodeAffinity.
+//  4. Atomically claim the Node by Patch-adding the claimed-by-pod
+//     label (apiserver-side optimistic-concurrency lock — only one
+//     binder wins). Lost claim ⇒ try the next candidate.
+//  5. Bind the Pod. On failure, the claim leaks but the Pod retries
+//     on the next reconcile against a different Node.
+//  6. Record bind latency.
+//
+// If no candidate Node matches, mark the Pod Unschedulable so the
+// unschedulable-pod-controller creates a CR; the chain wakes up and
+// Bootstraps a fresh fake-Node, the Watches(Node) hook re-enqueues
+// this Pod, and the next reconcile completes the bind.
+//
+// Why this beats the old UpcomingNode-driven binder: that binder
+// reconciled per-UpcomingNode-event and tried to claim the matching
+// pending Pod. With M35 unique fingerprints each fake-Node matches
+// one Pod, but with 64 concurrent reconcilers picking from a shared
+// pending-Pod set, ~64 % of Bind subresource calls collided and
+// errored — observed in scaleway-50k Drop F (19/sec error vs
+// 11/sec success). The Pod-driven shape inverts ownership: each
+// pending Pod is responsible for finding its own Node, and the
+// claimed-by-pod label is the apiserver-side lock that serialises
+// concurrent claims atomically.
+type podBinder struct {
 	client.Client
+	clientset kubernetes.Interface
 }
 
-func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+func (b *podBinder) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var pod corev1.Pod
-	if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
-		if client.IgnoreNotFound(err) != nil {
-			podsMarkedUnschedulable.WithLabelValues("error").Inc()
-			return reconcile.Result{}, err
-		}
-		return reconcile.Result{}, nil
+	if err := b.Get(ctx, req.NamespacedName, &pod); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if pod.Spec.NodeName != "" {
-		// Pod is already bound (M43c will be the path that did the
-		// binding). Nothing to do.
 		return reconcile.Result{}, nil
 	}
+
+	// 1. Try to find + claim + bind a matching fake-Node.
+	bound, err := b.tryBind(ctx, &pod)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	if bound {
+		return reconcile.Result{}, nil
+	}
+
+	// 2. No fake-Node fits → mark Unschedulable so UPC creates a CR
+	// and the chain provisions one. Idempotent — re-reconciles are
+	// no-ops.
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable {
 			podsMarkedUnschedulable.WithLabelValues("already_marked").Inc()
@@ -249,7 +301,6 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 		Reason:  corev1.PodReasonUnschedulable,
 		Message: "bigfleet-scaletest-pod-shim: no Node available; bigfleet-unschedulable-pod-controller will create a CR",
 	}
-	// Replace any existing PodScheduled condition; otherwise append.
 	replaced := false
 	for i := range pod.Status.Conditions {
 		if pod.Status.Conditions[i].Type == corev1.PodScheduled {
@@ -261,7 +312,7 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 	if !replaced {
 		pod.Status.Conditions = append(pod.Status.Conditions, cond)
 	}
-	if err := r.Status().Patch(ctx, &pod, patch); err != nil {
+	if err := b.Status().Patch(ctx, &pod, patch); err != nil {
 		podsMarkedUnschedulable.WithLabelValues("error").Inc()
 		return reconcile.Result{}, fmt.Errorf("patch status: %w", err)
 	}
@@ -269,148 +320,173 @@ func (r *podSchedulerShim) Reconcile(ctx context.Context, req reconcile.Request)
 	return reconcile.Result{}, nil
 }
 
-// upcomingNodeBinder reconciles UpcomingNode → (k8s Node, Pod binding).
-// When an UpcomingNode reaches Phase=Ready, the binder:
-//
-//  1. Reads UpcomingNode.Spec.{Labels, Resources, Taints} populated
-//     by the operator from the shard's NodeStateUpdate (ADR-0016).
-//  2. Creates a k8s Node named "fake-{machineID}" carrying those.
-//  3. Walks pending Pods in the cluster; binds the first whose
-//     nodeAffinity matches the new Node's labels.
-//  4. Sets PodScheduled=True on the bound Pod.
-//
-// Single-Pod-per-Node assumed (matches the test's 1:1 CR→machine
-// pattern); multi-Pod packing is a future enhancement.
-type upcomingNodeBinder struct {
-	client.Client
-	clientset kubernetes.Interface
+// tryBind iterates unclaimed fake-Nodes, atomically claims the first
+// label-compatible one, and binds the Pod. Returns (true, nil) on
+// success, (false, nil) when no Node matches, (false, err) on a hard
+// apiserver failure that should retry.
+func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	sel, err := labels.Parse("!" + labelClaimedByPod)
+	if err != nil {
+		return false, err
+	}
+	var nodes corev1.NodeList
+	if err := b.List(ctx, &nodes, &client.ListOptions{LabelSelector: sel}); err != nil {
+		return false, fmt.Errorf("list nodes: %w", err)
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		if !strings.HasPrefix(n.Name, fakeNodePrefix) {
+			continue
+		}
+		if !podMatchesNodeLabels(pod, n.Labels) {
+			continue
+		}
+		// Atomic claim via Patch with optimistic concurrency.
+		// MergeFrom captures the resourceVersion at the snapshot
+		// we read, so a concurrent claim by another reconciler
+		// (for the same Node) results in a Conflict error here.
+		patch := client.MergeFrom(n.DeepCopy())
+		if n.Labels == nil {
+			n.Labels = map[string]string{}
+		}
+		n.Labels[labelClaimedByPod] = pod.Name
+		if err := b.Patch(ctx, n, patch); err != nil {
+			// Conflict (race-lost) or NotFound (Node deleted under
+			// us). Either way, try the next candidate.
+			podBindAttempts.WithLabelValues("claim_lost").Inc()
+			continue
+		}
+		// Claim won — Bind the Pod. The /binding subresource is the
+		// scheduler-canonical path; the typed client goes straight
+		// at the apiserver, no controller-runtime cache between us
+		// and the truth.
+		binding := &corev1.Binding{
+			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
+			Target:     corev1.ObjectReference{Kind: "Node", Name: n.Name},
+		}
+		if err := b.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
+			// Bind failed after we claimed the Node. The claim
+			// label leaks (Node is now permanently un-bindable),
+			// but the Pod will pick a different Node next reconcile.
+			// Log but don't error — apiserver will retry the Pod.
+			podBindAttempts.WithLabelValues("bind_error").Inc()
+			continue
+		}
+		podBindAttempts.WithLabelValues("success").Inc()
+		if !pod.CreationTimestamp.IsZero() {
+			latency := time.Since(pod.CreationTimestamp.Time).Seconds()
+			podBindLatencySeconds.Observe(latency)
+			if pod.Labels["scaletest.bigfleet/state"] == "steady" {
+				podBindLatencySteadySeconds.Observe(latency)
+			}
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
-func (r *upcomingNodeBinder) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+// upcomingNodeFakeNodeReconciler is the M44.4 Drop G slimmed-down
+// successor to upcomingNodeBinder: it creates the fake-Node and
+// nothing else. Pod binding moved to podBinder, where the natural
+// Pod-driven cardinality avoids the 64-reconcilers-fighting-over-one-
+// Pod collision the old shape produced.
+type upcomingNodeFakeNodeReconciler struct {
+	client.Client
+}
+
+func (r *upcomingNodeFakeNodeReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var upn bfv1alpha1.UpcomingNode
 	if err := r.Get(ctx, req.NamespacedName, &upn); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
 	if upn.Status.Phase != bfv1alpha1.UpcomingNodeReady {
+		upcomingNodesObserved.WithLabelValues("not_ready").Inc()
 		return reconcile.Result{}, nil
 	}
 
-	// 1. Ensure the k8s Node exists (idempotent — if a previous
-	// reconcile created it, skip Create + status patch but still
-	// attempt to bind a Pod below).
 	nodeName := nodeNameFromUpcoming(upn.Name)
 	var existing corev1.Node
 	getErr := r.Get(ctx, client.ObjectKey{Name: nodeName}, &existing)
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
 		return reconcile.Result{}, fmt.Errorf("get node: %w", getErr)
 	}
-	if apierrors.IsNotFound(getErr) {
-		fakeNodesCreated.Inc()
-		node := &corev1.Node{
-			ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
-			Spec: corev1.NodeSpec{
-				Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
-			},
-			Status: corev1.NodeStatus{
-				Capacity:    upn.Spec.Resources,
-				Allocatable: upn.Spec.Resources,
-				Conditions: []corev1.NodeCondition{{
-					Type:    corev1.NodeReady,
-					Status:  corev1.ConditionTrue,
-					Reason:  "KubeletReady",
-					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
-				}},
-			},
-		}
-		// Best-effort status fill — apiserver typically strips Status
-		// on Create, but we try a follow-up Status().Update on the
-		// returned object's resourceVersion. Cache lag means a Get
-		// here often misses the object, so we build the patch off
-		// `node` directly which Create populated. Failure here is
-		// non-fatal for binding (binding only requires the Node to
-		// exist; allocatable/Ready advertisement is a kwok-stage
-		// hint that the harness can live without).
-		if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
-			return reconcile.Result{}, fmt.Errorf("create node: %w", err)
-		}
-		if node.ResourceVersion != "" {
-			statusPatch := node.DeepCopy()
-			statusPatch.Status = corev1.NodeStatus{
-				Capacity:    upn.Spec.Resources,
-				Allocatable: upn.Spec.Resources,
-				Conditions: []corev1.NodeCondition{{
-					Type:    corev1.NodeReady,
-					Status:  corev1.ConditionTrue,
-					Reason:  "KubeletReady",
-					Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
-				}},
-			}
-			_ = r.Status().Update(ctx, statusPatch)
-		}
+	if getErr == nil {
+		upcomingNodesObserved.WithLabelValues("exists").Inc()
+		return reconcile.Result{}, nil
 	}
 
-	// 2. Bind one pending Pod that matches the Node's labels. Runs
-	// every reconcile regardless of whether the Node was just created
-	// or already existed.
-	var pods corev1.PodList
-	if err := r.List(ctx, &pods); err != nil {
-		return reconcile.Result{}, fmt.Errorf("list pods: %w", err)
+	fakeNodesCreated.Inc()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
+		Spec: corev1.NodeSpec{
+			Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
+		},
+		Status: corev1.NodeStatus{
+			Capacity:    upn.Spec.Resources,
+			Allocatable: upn.Spec.Resources,
+			Conditions: []corev1.NodeCondition{{
+				Type:    corev1.NodeReady,
+				Status:  corev1.ConditionTrue,
+				Reason:  "KubeletReady",
+				Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
+			}},
+		},
 	}
-	bound := false
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		if pod.Spec.NodeName != "" {
-			continue
-		}
-		if !podMatchesNodeLabels(pod, upn.Spec.Labels) {
-			continue
-		}
-		// Pod.spec.nodeName is immutable via PATCH; bindings are
-		// created via the /binding subresource. The typed
-		// clientset.CoreV1().Pods(ns).Bind() goes straight at the
-		// apiserver (no controller-runtime cache layer in the way),
-		// matching what real kube-scheduler does.
-		binding := &corev1.Binding{
-			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
-			Target: corev1.ObjectReference{
-				Kind: "Node",
-				Name: nodeName,
-			},
-		}
-		if err := r.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
-			podBindAttempts.WithLabelValues("error").Inc()
-			continue
-		}
-		podBindAttempts.WithLabelValues("success").Inc()
-		// ADR-0017: record per-Pod binding latency at the moment of
-		// successful Bind. CreationTimestamp is server-assigned at
-		// Create, so it's a meaningful T0 even for Pods we discover
-		// late after a re-list.
-		if !pod.CreationTimestamp.IsZero() {
-			latency := time.Since(pod.CreationTimestamp.Time).Seconds()
-			podBindLatencySeconds.Observe(latency)
-			// M44.4: SLO-bearing histogram for steady-state Pods only.
-			// load-driver tags Pods scaletest.bigfleet/state="steady"
-			// once the cluster has reached its target Pod count. The
-			// initial fill is a synthetic thundering herd — its
-			// binding latency is real but isn't the SLO.
-			if pod.Labels["scaletest.bigfleet/state"] == "steady" {
-				podBindLatencySteadySeconds.Observe(latency)
-			}
-		}
-		bound = true
-		break
+	if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
+		return reconcile.Result{}, fmt.Errorf("create node: %w", err)
 	}
-	if !bound {
-		// No matching Pod was Pending yet — requeue. This handles
-		// the race where the UpcomingNode races ahead of the Pod that
-		// triggered the CR creation. RequeueAfter is short because
-		// the Pod usually arrives within a single rollup interval.
-		upcomingNodesObserved.WithLabelValues("no_pod").Inc()
-		return reconcile.Result{RequeueAfter: 2 * time.Second}, nil
+	if node.ResourceVersion != "" {
+		statusPatch := node.DeepCopy()
+		statusPatch.Status = corev1.NodeStatus{
+			Capacity:    upn.Spec.Resources,
+			Allocatable: upn.Spec.Resources,
+			Conditions: []corev1.NodeCondition{{
+				Type:    corev1.NodeReady,
+				Status:  corev1.ConditionTrue,
+				Reason:  "KubeletReady",
+				Message: "bigfleet-scaletest-pod-shim: fake Node provisioned by BigFleet",
+			}},
+		}
+		_ = r.Status().Update(ctx, statusPatch)
 	}
-	upcomingNodesObserved.WithLabelValues("bound").Inc()
+	upcomingNodesObserved.WithLabelValues("created").Inc()
 	return reconcile.Result{}, nil
+}
+
+// enqueueMatchingPendingPods is the Watches(Node) handler that wakes
+// up pending Pods when a fresh fake-Node arrives. Filtered by label
+// compatibility so a typical fake-Node enqueues exactly one Pod
+// reconcile (the M35 unique-fingerprint case) — controller-runtime
+// dedup handles the rest.
+func enqueueMatchingPendingPods(ctx context.Context, c client.Client, obj client.Object) []reconcile.Request {
+	if !strings.HasPrefix(obj.GetName(), fakeNodePrefix) {
+		return nil
+	}
+	node, ok := obj.(*corev1.Node)
+	if !ok {
+		return nil
+	}
+	// If the Node is already claimed, no point waking pending Pods —
+	// they couldn't bind to it anyway.
+	if node.Labels[labelClaimedByPod] != "" {
+		return nil
+	}
+	var pods corev1.PodList
+	if err := c.List(ctx, &pods); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, 4)
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName != "" {
+			continue
+		}
+		if !podMatchesNodeLabels(p, node.Labels) {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: p.Namespace, Name: p.Name}})
+	}
+	return out
 }
 
 func cloneLabels(in map[string]string) map[string]string {
@@ -485,10 +561,15 @@ func termMatches(term corev1.NodeSelectorTerm, nodeLabels map[string]string) boo
 	return true
 }
 
+// fakeNodePrefix flags a Node as a harness-created stand-in for a
+// BigFleet-provisioned machine. Used for filtering in the binder's
+// Watches(Node) mapper and tryBind candidate scan.
+const fakeNodePrefix = "fake-"
+
 // nodeNameFromUpcoming maps "un-{machineID}" → "fake-{machineID}". The
 // "fake-" prefix flags this as a test artefact in `kubectl get nodes`.
 func nodeNameFromUpcoming(upcomingName string) string {
-	return "fake-" + strings.TrimPrefix(upcomingName, "un-")
+	return fakeNodePrefix + strings.TrimPrefix(upcomingName, "un-")
 }
 
 // (M43c earlier had setPodScheduledTrue; the /binding subresource
