@@ -156,8 +156,8 @@
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
-        {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "fingerprint fan-out (legacy / diagnostic)"}
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
+        {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "fingerprint fan-out (worst shard, diagnostic)"}
       ],
       "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}, "drawStyle": "line"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 15}]}, "color": {"mode": "palette-classic"}}, "overrides": []}
     },
