@@ -48,7 +48,7 @@
       "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. CR-mode opt-out profiles have no shim → metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 5},
       "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m]))))", "refId": "A"}],
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))", "refId": "A"}],
       "fieldConfig": {"defaults": {"unit": "s", "noValue": "CR-mode (no shim)", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 12}, {"color": "red", "value": 15}]}}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
