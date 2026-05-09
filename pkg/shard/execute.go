@@ -155,10 +155,18 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		return fmt.Errorf("bootstrap: machine %s in state %s; expected Idle", a.MachineID, cur.State)
 	}
 
-	// Idle → Configuring (record the destination cluster early so
-	// observers can see it).
+	// Idle → Configuring (record the destination cluster + assigned
+	// Need fingerprint early so Phase 1's deficit math counts this
+	// machine as supply for its target Need *while it's in flight*.
+	// Without this, Phase 1 sees an in-flight machine as "not yet
+	// supply" and emits another Bootstrap on a fresh Idle machine
+	// for the same Need next cycle. Drop G surfaced this: 318 K of
+	// 522 K Bootstrap emits (61 %) were skipped at the dedup gate
+	// because Phase 1 had over-emitted on duplicate fresh machines
+	// for the same fingerprint.
 	if err := s.applyTransition(a.MachineID, machine.StateConfiguring, func(m *machine.Machine) {
 		m.Cluster = a.Cluster
+		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
 	}); err != nil {
 		return formatErr("bootstrap: → Configuring", err)
 	}

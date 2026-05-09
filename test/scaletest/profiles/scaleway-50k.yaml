@@ -53,12 +53,16 @@ shard:
   # validates rollup + Phase 1 attempt — not the M44 user-facing
   # default we want.
   seedMachines: 60000
-  # M44.4 Drop B: maxActionsPerCycle == executeConcurrency so a cycle
-  # never queues actions in batches behind in-flight workers — every
-  # emitted action gets the full cycle ctx, not a fraction. Combined
-  # with 256-wide concurrency, sustained throughput at the operator's
-  # post-coalesce ~3 s handler p99 is ~85 actions/sec.
-  maxActionsPerCycle: 256
+  # M44.4 Drop H: bumped from 256 → 4096. At 50 K demand × M35 unique
+  # fingerprints = ~50 K Needs, Phase 1's per-cycle emit ceiling
+  # caps how fast the chain processes new churn. Drop G snapshot
+  # showed 5,359 actions deferred per cycle — Phase 1 wanted ~5,600
+  # but only 256 fit. Cap at 4096 covers the steady-state demand
+  # comfortably (churn 67/sec × cycle 0.4 s ≈ 27 new Needs/cycle,
+  # plus accumulated backlog) without making any single cycle
+  # arbitrarily expensive. executeConcurrency stays at 256 — workers
+  # run async and the queue absorbs bursts above their drain rate.
+  maxActionsPerCycle: 4096
   executeConcurrency: 256
   incrementalReconcile: true
   metricsWarmupCycles: 5

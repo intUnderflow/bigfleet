@@ -81,9 +81,21 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		k := fpKey{n.ClusterID, fp}
 		s, ok := state[k]
 		if !ok {
-			supply := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, func(m machine.Machine) bool {
+			// M44.4 Drop H: count Configured AND Configuring with the
+			// matching fingerprint as supply. Configuring machines are
+			// committed to satisfy their Need (the Bootstrap action is
+			// in flight); pre-Drop-H, Phase 1 saw them as "not yet
+			// supply" and emitted another Bootstrap on a fresh Idle
+			// machine for the same Need on the next cycle. Combined
+			// with the pendingActions dedup, this caused 61 % of
+			// Bootstrap emits to be deduped silently — the cycle's
+			// emit cap (maxActionsPerCycle) was burned on duplicates
+			// instead of new demand.
+			matcher := func(m machine.Machine) bool {
 				return m.AssignedNeedFingerprint == fp
-			})
+			}
+			supply := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, matcher) +
+				snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfiguring, matcher)
 			s = &fpState{supplyRemaining: supply}
 			state[k] = s
 		}
