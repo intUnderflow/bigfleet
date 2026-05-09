@@ -1,7 +1,4 @@
----
-title: Architecture Decision Records
-description: A log of architectural decisions made during BigFleet's design and implementation.
----
+# Architecture Decision Records
 
 <!-- This file is synced from docs/adr/index.md at build time. Edit the canonical source. -->
 
