@@ -363,6 +363,39 @@ func (s *Shard) executeWorker(ctx context.Context) {
 	}
 }
 
+// actionStillApplicable re-checks the live inventory at emit time
+// to confirm the action's required starting state still holds. The
+// cycle's snapshot can be milliseconds-to-cycles old; the worker
+// pool runs concurrently and may have already done the work this
+// action is about to dispatch (a competing Bootstrap completed,
+// or a Reclaim flipped Configured back to Idle).
+//
+// Returns false when the action is moot — the machine has moved
+// past the state the action would transition from. Returns true
+// otherwise (including for inv.Get errors, since "fail open" matches
+// the pre-Drop-K behaviour and the worker's own state check is the
+// final authority).
+//
+// Drop K. The pre-existing pendingActions ledger handles "another
+// worker is mid-flight on M" but not "another worker just finished
+// on M". The race window is small but non-zero, and at 50K-Pod
+// cloud scale produced 39/sec wasted dispatches.
+func (s *Shard) actionStillApplicable(a decision.Action) bool {
+	cur, err := s.inv.Get(a.MachineID)
+	if err != nil {
+		return true
+	}
+	switch a.Kind {
+	case decision.ActionKindBootstrap:
+		return cur.State == machine.StateIdle
+	case decision.ActionKindProvision:
+		return cur.State == machine.StateSpeculative
+	case decision.ActionKindReclaim, decision.ActionKindPreempt:
+		return cur.State == machine.StateConfigured
+	}
+	return true
+}
+
 // triggerCycle requests an immediate cycle. Non-blocking; coalesces
 // repeated calls.
 func (s *Shard) triggerCycle() {
@@ -488,6 +521,35 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	deduped := 0
 	if s.actionQueue != nil {
 		for _, a := range all {
+			// Drop K: live-state guard at emit time. The cycle's
+			// snapshot is read once at the start; phases compute on
+			// it; emit runs at the end. Workers run concurrently,
+			// transitioning machines as they finish actions. The
+			// pendingActions ledger correctly dedups while a worker
+			// is mid-flight, but a worker that *finished* between
+			// the snapshot read and this emit will have cleared its
+			// pendingActions entry — leaving us about to enqueue an
+			// action whose target machine has already moved past
+			// the action's required start state. The worker would
+			// pick it up and error "expected Idle" / similar.
+			//
+			// Re-check live inventory here. If the machine isn't in
+			// the state this action requires, the action's intent
+			// either already holds (we'd be a duplicate) or has been
+			// invalidated by a competing transition (Reclaim etc.);
+			// either way, skip the enqueue. The next cycle's Phase
+			// 1/2/3 will re-derive the correct action against fresh
+			// state.
+			//
+			// Drop I diagnostics found 39/sec "expected Idle" at 50K-
+			// Pod cloud scale (29 % of all Bootstrap dispatches).
+			// Drop J added an idempotent fallback inside execute as
+			// a safety net; this guard prevents the wasted worker
+			// dispatch in the first place.
+			if !s.actionStillApplicable(a) {
+				deduped++
+				continue
+			}
 			// Per-machine in-flight dedup: skip emit if the machine
 			// already has an action queued or being processed. Without
 			// this, a deep queue + slow workers means several cycles
