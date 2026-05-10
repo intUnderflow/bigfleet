@@ -1,390 +1,1899 @@
 {
   "uid": "bigfleet-scaletest",
-  "title": "BigFleet — Scale Test",
-  "tags": ["bigfleet", "scaletest"],
+  "title": "BigFleet \u2014 Scale Test",
+  "tags": [
+    "bigfleet",
+    "scaletest"
+  ],
   "schemaVersion": 39,
   "version": 2,
   "editable": true,
   "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "timezone": "",
   "panels": [
     {
-      "id": 99, "type": "stat", "title": "Overall SLO verdict",
-      "description": "Sums the number of pass() gates currently failing. -1 = WAIT (test isn't yet in steady-state soak — SLOs would be fired on cold-start tail data, which is meaningless). 0 = green PASS, ≥1 = red FAIL. The WAIT gate uses the same two-step phase signal as the Test phase panel: drivers at target AND ≥99 % of CRs Bootstrap-succeeded. Mirrors the runner's pass() — same thresholds, same metrics. The internal-binding-latency gate uses the steady-state-only histogram (M44.4) so it's not skewed by the cold-start fill. Profile-level SLO overrides aren't reflected here; the panel uses in-process tier defaults: cycle ≤ 5 s, rollup ≤ 1 s, ack ≤ 12 s, internal binding ≤ 15 s (ADR-0020), sustained load ≥ 99.9 %, outbox drops = 0, coordinator FSM error rate ≤ 0.1 %.",
-      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) * (((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket)) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))) - (1 - (((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "green", "value": 0}, {"color": "red", "value": 1}]}, "mappings": [{"type": "value", "options": {"-1": {"text": "WAIT", "color": "yellow", "index": 0}, "0": {"text": "PASS", "color": "green", "index": 1}}}, {"type": "range", "options": {"from": 0.5, "to": 999, "result": {"text": "FAIL", "color": "red", "index": 2}}}]}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
-    },
-    {
-      "id": 98, "type": "stat", "title": "Test phase",
-      "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded ≥ 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog — gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 99,
+      "type": "stat",
+      "title": "Overall SLO verdict",
+      "description": "Sums the number of pass() gates currently failing. -1 = WAIT (test isn't yet in steady-state soak \u2014 SLOs would be fired on cold-start tail data, which is meaningless). 0 = green PASS, \u22651 = red FAIL. The WAIT gate uses the same two-step phase signal as the Test phase panel: drivers at target AND \u226599 % of CRs Bootstrap-succeeded. Mirrors the runner's pass() \u2014 same thresholds, same metrics. The internal-binding-latency gate uses the steady-state-only histogram (M44.4) so it's not skewed by the cold-start fill. Profile-level SLO overrides aren't reflected here; the panel uses in-process tier defaults: cycle \u2264 5 s, rollup \u2264 1 s, ack \u2264 12 s, internal binding \u2264 15 s (ADR-0020), sustained load \u2265 99.9 %, outbox drops = 0, coordinator FSM error rate \u2264 0.1 %.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2", "refId": "A"}
+        {
+          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) * (((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket)) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))) - (1 - (((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)))",
+          "refId": "A"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "short", "noValue": "Initialising", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "blue", "value": 0.4}, {"color": "green", "value": 0.99}]}, "mappings": [{"type": "value", "options": {"0": {"text": "Ramp (load-driver filling)", "color": "yellow", "index": 0}, "0.5": {"text": "Filling (chain draining backlog)", "color": "blue", "index": 1}, "1": {"text": "Steady-state soak", "color": "green", "index": 2}}}]}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "WAIT",
+                  "color": "yellow",
+                  "index": 0
+                },
+                "0": {
+                  "text": "PASS",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0.5,
+                "to": 999,
+                "result": {
+                  "text": "FAIL",
+                  "color": "red",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 97, "type": "stat", "title": "Bootstraps / target",
-      "description": "Cumulative Bootstrap-success count vs total CR target (kwok.clusterCount × loadProfile.target). The runner's gate transitions to steady-state soak once this hits ≥ 99 %. Same numerator the Test phase panel reads internally — exposed here so you can watch the chain drain the cold-start backlog. Yellow until 99 %, green at 99 %.",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "yellow", "value": null}, {"color": "green", "value": 0.99}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 98,
+      "type": "stat",
+      "title": "Test phase",
+      "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded \u2265 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog \u2014 gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "Initialising",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "blue",
+                "value": 0.4
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Ramp (load-driver filling)",
+                  "color": "yellow",
+                  "index": 0
+                },
+                "0.5": {
+                  "text": "Filling (chain draining backlog)",
+                  "color": "blue",
+                  "index": 1
+                },
+                "1": {
+                  "text": "Steady-state soak",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 100, "type": "row", "title": "SLO live verdict (ADR-0014 / 0017 / 0018)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 4},
+      "id": 97,
+      "type": "stat",
+      "title": "Bootstraps / target",
+      "description": "Cumulative Bootstrap-success count vs total CR target (kwok.clusterCount \u00d7 loadProfile.target). The runner's gate transitions to steady-state soak once this hits \u2265 99 %. Same numerator the Test phase panel reads internally \u2014 exposed here so you can watch the chain drain the cold-start backlog. Yellow until 99 %, green at 99 %.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 100,
+      "type": "row",
+      "title": "SLO live verdict (ADR-0014 / 0017 / 0018)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
       "collapsed": false
     },
     {
-      "id": 101, "type": "stat", "title": "Internal binding latency p99 (per-Pod, ADR-0018) — SLO ≤ 15 s (ADR-0020)",
-      "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. CR-mode opt-out profiles have no shim → metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "s", "noValue": "CR-mode (no shim)", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 12}, {"color": "red", "value": 15}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 101,
+      "type": "stat",
+      "title": "Internal binding latency p99 (per-Pod, ADR-0018) \u2014 SLO \u2264 15 s (ADR-0020)",
+      "description": "BigFleet-internal binding latency (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. CR-mode opt-out profiles have no shim \u2192 metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "CR-mode (no shim)",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 12
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 102, "type": "stat", "title": "Cycle duration p99 — envelope ≤ 5 s",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 5}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 102,
+      "type": "stat",
+      "title": "Cycle duration p99 \u2014 envelope \u2264 5 s",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 4
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 103, "type": "stat", "title": "Operator rollup p99 — SLO ≤ 1 s",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.8}, {"color": "red", "value": 1}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 103,
+      "type": "stat",
+      "title": "Operator rollup p99 \u2014 SLO \u2264 1 s",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 104, "type": "stat", "title": "Operator ack p99 — SLO ≤ 12 s",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 5},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "s", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 10}, {"color": "red", "value": 12}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 104,
+      "type": "stat",
+      "title": "Operator ack p99 \u2014 SLO \u2264 12 s",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 105, "type": "stat", "title": "Sustained load — SLO ≥ 99.9 %",
+      "id": 105,
+      "type": "stat",
+      "title": "Sustained load \u2014 SLO \u2265 99.9 %",
       "description": "loadgenCRsActive divided by the load-driver's target. The runner gates on min_over_time of this over the last 5 min of soak; this panel shows the live ratio. Anything < 99.9 % means the load fell off mid-soak and the SLOs are measured against an under-loaded shard.",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 9},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(scaletest_loadgen_cr_active) / scalar(sum(scaletest_loadgen_cr_target))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 0.99}, {"color": "green", "value": 0.999}]}, "noValue": "load-driver target metric not exposed (older builds: see panel 1)"}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(scaletest_loadgen_cr_active) / scalar(sum(scaletest_loadgen_cr_target))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.99
+              },
+              {
+                "color": "green",
+                "value": 0.999
+              }
+            ]
+          },
+          "noValue": "load-driver target metric not exposed (older builds: see panel 1)"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 106, "type": "stat", "title": "Shards reporting cycle — SLO = replicas",
+      "id": 106,
+      "type": "stat",
+      "title": "Shards reporting cycle \u2014 SLO = replicas",
       "description": "Counts shard pods publishing bigfleet_shard_cycle_duration_seconds. Less than shard.replicas means at least one shard is crash-looping or wedged; the per-pod max(by pod) aggregation in cycle p99 silently excludes missing pods so this gate catches them.",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 9},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "count(rate(bigfleet_shard_cycle_duration_seconds_count[2m]) > 0)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count(rate(bigfleet_shard_cycle_duration_seconds_count[2m]) > 0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 107, "type": "stat", "title": "Coordinator FSM error rate — SLO ≤ 0.1 %",
-      "description": "FSM Apply error rate on the coordinator leader. > 0.001 means Raft is rejecting commands or the FSM is returning errors — coordinator-side correctness violation.",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 9},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "(sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.0005}, {"color": "red", "value": 0.001}]}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 107,
+      "type": "stat",
+      "title": "Coordinator FSM error rate \u2014 SLO \u2264 0.1 %",
+      "description": "FSM Apply error rate on the coordinator leader. > 0.001 means Raft is rejecting commands or the FSM is returning errors \u2014 coordinator-side correctness violation.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "(sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.0005
+              },
+              {
+                "color": "red",
+                "value": 0.001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 108, "type": "stat", "title": "Operator outbox drops / sec — SLO 0",
-      "description": "Operator session-outbox drops. > 0 means the operator stream lost frames silently. Different from rollup/ack timeout — these are dropped messages, full stop.",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 9},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(rate(bigfleet_operator_outbox_dropped_total[1m]))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.001}]}, "color": {"mode": "thresholds"}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 108,
+      "type": "stat",
+      "title": "Operator outbox drops / sec \u2014 SLO 0",
+      "description": "Operator session-outbox drops. > 0 means the operator stream lost frames silently. Different from rollup/ack timeout \u2014 these are dropped messages, full stop.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(bigfleet_operator_outbox_dropped_total[1m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.001
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 1, "type": "stat", "title": "Active CRs",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 13},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(scaletest_loadgen_cr_active)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "thresholds"}}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 1,
+      "type": "stat",
+      "title": "Active CRs",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(scaletest_loadgen_cr_active)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 2, "type": "timeseries", "title": "CR creates / sec",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 13},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))", "refId": "A", "legendFormat": "creates/s"}],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "id": 2,
+      "type": "timeseries",
+      "title": "CR creates / sec",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))",
+          "refId": "A",
+          "legendFormat": "creates/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 3, "type": "stat", "title": "Shortfalls",
-      "description": "bigfleet_shard_shortfalls — unsatisfied demand the shard couldn't resolve this cycle. Reported, not gated by pass() — shortfalls are a bigfleet_shard_shortfalls_aged escalation signal, not a binary fail.",
-      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 13},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(bigfleet_shard_shortfalls)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 3,
+      "type": "stat",
+      "title": "Shortfalls",
+      "description": "bigfleet_shard_shortfalls \u2014 unsatisfied demand the shard couldn't resolve this cycle. Reported, not gated by pass() \u2014 shortfalls are a bigfleet_shard_shortfalls_aged escalation signal, not a binary fail.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(bigfleet_shard_shortfalls)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 109, "type": "stat", "title": "Failed machines",
+      "id": 109,
+      "type": "stat",
+      "title": "Failed machines",
       "description": "bigfleet_shard_inventory_machines{state=\"Failed\"}. Includes M38 spot/hardware-fault simulator + execute-path Bootstrap timeouts (ADR-0019 followup). Reported, not gated.",
-      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 13},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum(bigfleet_shard_inventory_machines{state=\"Failed\"}) or vector(0)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 50}]}, "color": {"mode": "thresholds"}}, "overrides": []},
-      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(bigfleet_shard_inventory_machines{state=\"Failed\"}) or vector(0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     },
     {
-      "id": 200, "type": "row", "title": "Latency timeseries (with SLO threshold lines)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "id": 96,
+      "type": "timeseries",
+      "title": "Bootstraps cumulative vs target \u2014 runner gate at 99 %",
+      "description": "Cumulative count of successful Bootstrap actions (sum across shards) plotted against the runner's gate threshold. Same numerator the Test phase + Overall verdict panels read. The gate trips at 99 % (the dashed target line \u00d7 0.99) \u2014 once the curve crosses, the runner transitions ramp \u2192 steady-state soak. Lets you watch the chain drain the cold-start backlog visually instead of decoding the runner's stdout.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"})",
+          "refId": "A",
+          "legendFormat": "bootstraps cumulative"
+        },
+        {
+          "expr": "sum(scaletest_loadgen_cr_target)",
+          "refId": "B",
+          "legendFormat": "target (100 %)"
+        },
+        {
+          "expr": "0.99 * sum(scaletest_loadgen_cr_target)",
+          "refId": "C",
+          "legendFormat": "gate (99 %)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 2
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "target (100 %)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "gray"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gate (99 %)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Latency timeseries (with SLO threshold lines)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
       "collapsed": false
     },
     {
-      "id": 201, "type": "timeseries", "title": "Internal binding latency p99 — SLO line at 15 s (ADR-0020)",
-      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). ADR-0020: 15 s = ~10 s rollupInterval ceiling + ~5 s chain headroom. Two curves: (A) per-Pod from the pod-shim — empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out — diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 201,
+      "type": "timeseries",
+      "title": "Internal binding latency p99 \u2014 SLO line at 15 s (ADR-0020)",
+      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). ADR-0020: 15 s = ~10 s rollupInterval ceiling + ~5 s chain headroom. Two curves: (A) per-Pod from the pod-shim \u2014 empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out \u2014 diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))", "refId": "A", "legendFormat": "per-Pod (ADR-0017)"},
-        {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "fingerprint fan-out (worst shard, diagnostic)"}
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "per-Pod (ADR-0017)"
+        },
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))",
+          "refId": "B",
+          "legendFormat": "fingerprint fan-out (worst shard, diagnostic)"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}, "drawStyle": "line"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 15}]}, "color": {"mode": "palette-classic"}}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "drawStyle": "line"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 5, "type": "timeseries", "title": "Shard cycle p99 (worst shard) — envelope line at 5 s",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "cycle p99"}],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}, "color": {"mode": "thresholds"}}, "overrides": []}
-    },
-    {
-      "id": 6, "type": "timeseries", "title": "Cycle p99 by phase",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 26},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max by (phase) (histogram_quantile(0.99, sum by (le, pod, phase) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "{{phase}}"}],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
-    },
-    {
-      "id": 7, "type": "timeseries", "title": "Operator rollup p99 — SLO line at 1 s",
-      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 26},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "rollup p99"}],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}, "overrides": []}
-    },
-    {
-      "id": 8, "type": "timeseries", "title": "Operator acknowledge p99 — SLO line at 12 s",
-      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 26},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "ack p99"}],
-      "fieldConfig": {"defaults": {"unit": "s", "custom": {"thresholdsStyle": {"mode": "line"}}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 12}]}, "color": {"mode": "thresholds"}}, "overrides": []}
-    },
-    {
-      "id": 9, "type": "timeseries", "title": "Provisioning latency (fingerprint fan-out — diagnostic)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 5,
+      "type": "timeseries",
+      "title": "Shard cycle p99 (worst shard) \u2014 envelope line at 5 s",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "A", "legendFormat": "p50"},
-        {"expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))", "refId": "B", "legendFormat": "p99"}
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))",
+          "refId": "A",
+          "legendFormat": "cycle p99"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 10, "type": "timeseries", "title": "Coordinator apply ops/sec by outcome",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum by (outcome) (rate(bigfleet_coordinator_apply_total[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}],
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cycle p99 by phase",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (phase) (histogram_quantile(0.99, sum by (le, pod, phase) (rate(bigfleet_shard_cycle_phase_duration_seconds_bucket[5m]))))",
+          "refId": "A",
+          "legendFormat": "{{phase}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 11, "type": "stat", "title": "Coordinator pending instructions",
-      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 42},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max(bigfleet_coordinator_pending_instructions)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 7,
+      "type": "timeseries",
+      "title": "Operator rollup p99 \u2014 SLO line at 1 s",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "rollup p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 12, "type": "stat", "title": "Shards reporting cycle",
-      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 42},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "count(count by (pod) (bigfleet_shard_cycle_duration_seconds_count{component=\"shard\"}))", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 8,
+      "type": "timeseries",
+      "title": "Operator acknowledge p99 \u2014 SLO line at 12 s",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))",
+          "refId": "A",
+          "legendFormat": "ack p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 12
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 13, "type": "stat", "title": "Coordinator Raft term",
-      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 42},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "max(bigfleet_coordinator_raft_term)", "refId": "A"}],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "options": {"colorMode": "value", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+      "id": 9,
+      "type": "timeseries",
+      "title": "Provisioning latency (fingerprint fan-out \u2014 diagnostic)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))",
+          "refId": "A",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))",
+          "refId": "B",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 14, "type": "timeseries", "title": "Per-shard inventory",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
-      "targets": [{"expr": "sum by (pod) (bigfleet_shard_inventory_machines)", "refId": "A", "legendFormat": "{{pod}}"}],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "id": 10,
+      "type": "timeseries",
+      "title": "Coordinator apply ops/sec by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome) (rate(bigfleet_coordinator_apply_total[1m]))",
+          "refId": "A",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 300, "type": "row", "title": "Phase 1 sub-paths (ADR-0019 / M44.4)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
+      "id": 11,
+      "type": "stat",
+      "title": "Coordinator pending instructions",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(bigfleet_coordinator_pending_instructions)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Shards reporting cycle",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "count(count by (pod) (bigfleet_shard_cycle_duration_seconds_count{component=\"shard\"}))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Coordinator Raft term",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(bigfleet_coordinator_raft_term)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Per-shard inventory",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (pod) (bigfleet_shard_inventory_machines)",
+          "refId": "A",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "Phase 1 sub-paths (ADR-0019 / M44.4)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
       "collapsed": false
     },
     {
-      "id": 301, "type": "timeseries", "title": "Phase 1 sub-path mean duration",
+      "id": 301,
+      "type": "timeseries",
+      "title": "Phase 1 sub-path mean duration",
       "description": "ADR-0019: per-sub-path attribution of Phase 1 wall-clock. take is the head-cursor walk; takeCoLocated is the Same-rack bucket pick (the cloud-only hot path the operator's owner-grouping forces every Pod-derived Need through); takeSpread is the strict-spread bucket pick. After M44.4's optimisation, the cached bucketing + per-bucket head cursors should drop takeCoLocated mean to sub-millisecond.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 51},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_take_duration_seconds_count[2m])", "refId": "A", "legendFormat": "{{path}} mean"}
+        {
+          "expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m]) / rate(bigfleet_shard_phase1_take_duration_seconds_count[2m])",
+          "refId": "A",
+          "legendFormat": "{{path}} mean"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 302, "type": "timeseries", "title": "Phase 1 sub-path call rate",
-      "description": "Calls per second by sub-path. takeCoLocated dominating reflects the Pod → CR → Same(rack) translation at scale; take dominating reflects single-archetype profiles without sameRack.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 51},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 302,
+      "type": "timeseries",
+      "title": "Phase 1 sub-path call rate",
+      "description": "Calls per second by sub-path. takeCoLocated dominating reflects the Pod \u2192 CR \u2192 Same(rack) translation at scale; take dominating reflects single-archetype profiles without sameRack.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "rate(bigfleet_shard_phase1_calls_total[2m])", "refId": "A", "legendFormat": "{{path}} /s"}
+        {
+          "expr": "rate(bigfleet_shard_phase1_calls_total[2m])",
+          "refId": "A",
+          "legendFormat": "{{path}} /s"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 303, "type": "timeseries", "title": "Phase 1 sub-path CPU share (sum/sec)",
-      "description": "How much wall-clock per second of soak each sub-path consumes. ≈1.0 means the sub-path is fully saturating one shard CPU; ≪1 means it's fine. Pre-M44.4 takeCoLocated landed near 1.0 at scaleway-50k.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 59},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 303,
+      "type": "timeseries",
+      "title": "Phase 1 sub-path CPU share (sum/sec)",
+      "description": "How much wall-clock per second of soak each sub-path consumes. \u22481.0 means the sub-path is fully saturating one shard CPU; \u226a1 means it's fine. Pre-M44.4 takeCoLocated landed near 1.0 at scaleway-50k.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m])", "refId": "A", "legendFormat": "{{path}} s/s"}
+        {
+          "expr": "rate(bigfleet_shard_phase1_take_duration_seconds_sum[2m])",
+          "refId": "A",
+          "legendFormat": "{{path}} s/s"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "percentunit", "max": 1}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 304, "type": "timeseries", "title": "Phase 1 pool build duration (cache miss cost)",
+      "id": 304,
+      "type": "timeseries",
+      "title": "Phase 1 pool build duration (cache miss cost)",
       "description": "buildPoolSource time per (state, fingerprint). Cached after first build per cycle; high values here mean pool merging+sorting (multi-instance-type profiles) is dominating, not the take path.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 59},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 65
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))", "refId": "A", "legendFormat": "p99"},
-        {"expr": "sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m])) / sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m]))", "refId": "B", "legendFormat": "mean"}
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_phase1_pool_build_duration_seconds_bucket[2m])))",
+          "refId": "A",
+          "legendFormat": "p99"
+        },
+        {
+          "expr": "sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_sum[2m])) / sum(rate(bigfleet_shard_phase1_pool_build_duration_seconds_count[2m]))",
+          "refId": "B",
+          "legendFormat": "mean"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 400, "type": "row", "title": "Pipeline drop-off (M44.4)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 67},
+      "id": 400,
+      "type": "row",
+      "title": "Pipeline drop-off (M44.4)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
       "collapsed": false
     },
     {
-      "id": 401, "type": "timeseries", "title": "Pod-mode chain stage cumulative — per stage",
-      "description": "From load-driver Pod creates down to fake-Node bindings. Watch the gap between consecutive stages — that's where the chain throttles. Right after gate-cleared the curves should track each other; if they diverge, identify the rate-limited stage by which curve flattens first.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 68},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 401,
+      "type": "timeseries",
+      "title": "Pod-mode chain stage cumulative \u2014 per stage",
+      "description": "From load-driver Pod creates down to fake-Node bindings. Watch the gap between consecutive stages \u2014 that's where the chain throttles. Right after gate-cleared the curves should track each other; if they diverge, identify the rate-limited stage by which curve flattens first.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(scaletest_loadgen_cr_created_total) - sum(scaletest_loadgen_cr_deleted_total)", "refId": "A", "legendFormat": "1) Pods alive (created - deleted)"},
-        {"expr": "sum(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"})", "refId": "B", "legendFormat": "2) marked Unschedulable by pod-shim"},
-        {"expr": "sum(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"})", "refId": "C", "legendFormat": "3) CRs created by UPC"},
-        {"expr": "sum(bigfleet_shard_actions_total{kind=\"Bootstrap\"})", "refId": "D", "legendFormat": "4) Bootstrap actions emitted (shard)"},
-        {"expr": "sum(bigfleet_shard_inventory_machines{state=\"Configured\"})", "refId": "E", "legendFormat": "5) Configured machines"},
-        {"expr": "sum(bigfleet_scaletest_pod_shim_fake_nodes_created_total)", "refId": "F", "legendFormat": "6) fake Nodes created"},
-        {"expr": "sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"})", "refId": "G", "legendFormat": "7) Pod binds (success)"}
+        {
+          "expr": "sum(scaletest_loadgen_cr_created_total) - sum(scaletest_loadgen_cr_deleted_total)",
+          "refId": "A",
+          "legendFormat": "1) Pods alive (created - deleted)"
+        },
+        {
+          "expr": "sum(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"})",
+          "refId": "B",
+          "legendFormat": "2) marked Unschedulable by pod-shim"
+        },
+        {
+          "expr": "sum(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"})",
+          "refId": "C",
+          "legendFormat": "3) CRs created by UPC"
+        },
+        {
+          "expr": "sum(bigfleet_shard_actions_total{kind=\"Bootstrap\"})",
+          "refId": "D",
+          "legendFormat": "4) Bootstrap actions emitted (shard)"
+        },
+        {
+          "expr": "sum(bigfleet_shard_inventory_machines{state=\"Configured\"})",
+          "refId": "E",
+          "legendFormat": "5) Configured machines"
+        },
+        {
+          "expr": "sum(bigfleet_scaletest_pod_shim_fake_nodes_created_total)",
+          "refId": "F",
+          "legendFormat": "6) fake Nodes created"
+        },
+        {
+          "expr": "sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"})",
+          "refId": "G",
+          "legendFormat": "7) Pod binds (success)"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 402, "type": "timeseries", "title": "Pipeline stage rate (events / sec)",
+      "id": 402,
+      "type": "timeseries",
+      "title": "Pipeline stage rate (events / sec)",
       "description": "Per-stage events per second. Equal rates = chain in steady-state; the slowest curve here is the throttling stage.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 68},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))", "refId": "A", "legendFormat": "1) Pod creates/s"},
-        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"}[1m]))", "refId": "B", "legendFormat": "2) Unschedulable patches/s"},
-        {"expr": "sum(rate(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"}[1m]))", "refId": "C", "legendFormat": "3) CRs created/s"},
-        {"expr": "sum(rate(bigfleet_shard_actions_total{kind=\"Bootstrap\"}[1m]))", "refId": "D", "legendFormat": "4) Bootstraps emitted/s"},
-        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_fake_nodes_created_total[1m]))", "refId": "F", "legendFormat": "6) fake Nodes/s"},
-        {"expr": "sum(rate(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"}[1m]))", "refId": "G", "legendFormat": "7) Pod binds/s"}
+        {
+          "expr": "sum(rate(scaletest_loadgen_cr_created_total[1m]))",
+          "refId": "A",
+          "legendFormat": "1) Pod creates/s"
+        },
+        {
+          "expr": "sum(rate(bigfleet_scaletest_pod_shim_pods_marked_unschedulable_total{outcome=\"patched\"}[1m]))",
+          "refId": "B",
+          "legendFormat": "2) Unschedulable patches/s"
+        },
+        {
+          "expr": "sum(rate(bigfleet_unschedulable_pod_controller_reconciles_total{outcome=\"cr_created\"}[1m]))",
+          "refId": "C",
+          "legendFormat": "3) CRs created/s"
+        },
+        {
+          "expr": "sum(rate(bigfleet_shard_actions_total{kind=\"Bootstrap\"}[1m]))",
+          "refId": "D",
+          "legendFormat": "4) Bootstraps emitted/s"
+        },
+        {
+          "expr": "sum(rate(bigfleet_scaletest_pod_shim_fake_nodes_created_total[1m]))",
+          "refId": "F",
+          "legendFormat": "6) fake Nodes/s"
+        },
+        {
+          "expr": "sum(rate(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=\"success\"}[1m]))",
+          "refId": "G",
+          "legendFormat": "7) Pod binds/s"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 403, "type": "timeseries", "title": "Action execute outcomes by reason",
+      "id": 403,
+      "type": "timeseries",
+      "title": "Action execute outcomes by reason",
       "description": "Drop A diagnostic: which return path silently dropped Bootstraps. no_session = operator stream gone for that cluster (the M44.4 hypothesis); transition_error = state-machine refused; blob_error = bootstrap-blob fetch failed; provider_error = fake provider rejected; ctx_canceled = cycleCtx timeout.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 76},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 82
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum by (outcome) (rate(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\"}[1m]))", "refId": "A", "legendFormat": "{{outcome}}"}
+        {
+          "expr": "sum by (outcome) (rate(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "{{outcome}}"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 404, "type": "timeseries", "title": "Operator sessions: active count + lifecycle rate",
+      "id": 404,
+      "type": "timeseries",
+      "title": "Operator sessions: active count + lifecycle rate",
       "description": "active = current count of installed sessions; should equal cluster.replicas for the shard. installed/removed/replaced = lifecycle event rate; high replaced rate = grpc keepalive churn under load.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 76},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 82
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "max(bigfleet_shard_active_sessions)", "refId": "A", "legendFormat": "active sessions"},
-        {"expr": "sum by (event) (rate(bigfleet_shard_session_lifecycle_total[1m]))", "refId": "B", "legendFormat": "{{event}}/s"}
+        {
+          "expr": "max(bigfleet_shard_active_sessions)",
+          "refId": "A",
+          "legendFormat": "active sessions"
+        },
+        {
+          "expr": "sum by (event) (rate(bigfleet_shard_session_lifecycle_total[1m]))",
+          "refId": "B",
+          "legendFormat": "{{event}}/s"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 500, "type": "row", "title": "Operator → UpcomingNode bottleneck (M44.4 Drop B)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 84},
+      "id": 500,
+      "type": "row",
+      "title": "Operator \u2192 UpcomingNode bottleneck (M44.4 Drop B)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 90
+      },
       "collapsed": false
     },
     {
-      "id": 501, "type": "timeseries", "title": "handleNodeStateUpdate p99 by phase",
+      "id": 501,
+      "type": "timeseries",
+      "title": "handleNodeStateUpdate p99 by phase",
       "description": "End-to-end wall-clock for the operator's NodeStateUpdate handler. Each call does a Get (cache), a Create-or-Update for spec, and a Status().Update. p99 above ~100 ms means apiserver writes are queued behind the per-op QPS limiter or there's controller-runtime cache lag forcing extra round-trips.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 85},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 91
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le, phase) (rate(bigfleet_operator_node_state_update_duration_seconds_bucket[1m])))", "refId": "A", "legendFormat": "{{phase}}"}
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, phase) (rate(bigfleet_operator_node_state_update_duration_seconds_bucket[1m])))",
+          "refId": "A",
+          "legendFormat": "{{phase}}"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 502, "type": "timeseries", "title": "UpcomingNode write rate by op + outcome",
-      "description": "Rate of UpcomingNode CRD apiserver writes from the operator, split by op (create/spec_update/status_update) and outcome (success/conflict/error). Sum / NodeStateUpdate-rate ≈ apiserver round-trips per binding (expected ~2 for fresh, 1 for status-only updates). High conflict rate = controller-runtime cache disagreeing with apiserver under burst.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 85},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 502,
+      "type": "timeseries",
+      "title": "UpcomingNode write rate by op + outcome",
+      "description": "Rate of UpcomingNode CRD apiserver writes from the operator, split by op (create/spec_update/status_update) and outcome (success/conflict/error). Sum / NodeStateUpdate-rate \u2248 apiserver round-trips per binding (expected ~2 for fresh, 1 for status-only updates). High conflict rate = controller-runtime cache disagreeing with apiserver under burst.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 91
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "sum by (op, outcome) (rate(bigfleet_operator_upcoming_node_writes_total[1m]))", "refId": "A", "legendFormat": "{{op}} / {{outcome}}"}
+        {
+          "expr": "sum by (op, outcome) (rate(bigfleet_operator_upcoming_node_writes_total[1m]))",
+          "refId": "A",
+          "legendFormat": "{{op}} / {{outcome}}"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 503, "type": "timeseries", "title": "Operator dispatch goroutines in flight",
-      "description": "Currently-running stream-dispatch goroutines per operator. recvLoop spawns one goroutine per inbound frame with no semaphore — sustained high values mean apiserver-write back-pressure (per-cluster QPS limiter draining slower than the inbound stream). Pair with handleNodeStateUpdate p99 to confirm.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 93},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "id": 503,
+      "type": "timeseries",
+      "title": "Operator dispatch goroutines in flight",
+      "description": "Currently-running stream-dispatch goroutines per operator. recvLoop spawns one goroutine per inbound frame with no semaphore \u2014 sustained high values mean apiserver-write back-pressure (per-cluster QPS limiter draining slower than the inbound stream). Pair with handleNodeStateUpdate p99 to confirm.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 99
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "max(bigfleet_operator_dispatch_inflight)", "refId": "A", "legendFormat": "max"},
-        {"expr": "avg(bigfleet_operator_dispatch_inflight)", "refId": "B", "legendFormat": "avg across operators"}
+        {
+          "expr": "max(bigfleet_operator_dispatch_inflight)",
+          "refId": "A",
+          "legendFormat": "max"
+        },
+        {
+          "expr": "avg(bigfleet_operator_dispatch_inflight)",
+          "refId": "B",
+          "legendFormat": "avg across operators"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     },
     {
-      "id": 504, "type": "timeseries", "title": "Shard execute() goroutines in flight",
+      "id": 504,
+      "type": "timeseries",
+      "title": "Shard execute() goroutines in flight",
       "description": "Currently-running execute() goroutines on the shard (configured cap = executeConcurrency, default 128). Sustained at the cap = parallelism-bound; well below the cap with low chain throughput = downstream bottleneck (operator stream RTT or blob fetch).",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 93},
-      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 99
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        {"expr": "max(bigfleet_shard_execute_inflight)", "refId": "A", "legendFormat": "in-flight"}
+        {
+          "expr": "max(bigfleet_shard_execute_inflight)",
+          "refId": "A",
+          "legendFormat": "in-flight"
+        }
       ],
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []}
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
     }
   ]
 }
