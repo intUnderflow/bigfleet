@@ -79,7 +79,8 @@ func classifyExecuteError(ctx context.Context, err error) string {
 		strings.Contains(msg, "→ Creating"),
 		strings.Contains(msg, "→ Draining"),
 		strings.Contains(msg, "post-Create transition"),
-		strings.Contains(msg, "post-Configure transition"):
+		strings.Contains(msg, "post-Configure transition"),
+		strings.Contains(msg, "post-Drain transition"):
 		return "transition_error"
 	case strings.Contains(msg, "LocalBootstrap"),
 		strings.Contains(msg, "requestBootstrap"):
@@ -89,6 +90,22 @@ func classifyExecuteError(ctx context.Context, err error) string {
 		strings.Contains(msg, "provider.Drain"),
 		strings.Contains(msg, "provider.Delete"):
 		return "provider_error"
+	// Drop I diagnostics: split the catch-all "other" bucket so the
+	// scaleway-50k 22/sec residual is attributed. The dominant
+	// suspect is "expected Idle" — a machine the worker picked up
+	// has already moved out of Idle by the time the worker reads
+	// inventory (reconcileIncremental between snap and execute, or
+	// a parallel worker on a Reclaim → Idle path that re-emitted
+	// before the previous Bootstrap cleared pendingActions). Once
+	// it's labelled separately we can attack the right thing.
+	case strings.Contains(msg, "expected Idle"),
+		strings.Contains(msg, "expected Speculative"),
+		strings.Contains(msg, "expected Configured"):
+		return "stale_state"
+	case strings.Contains(msg, "inventory get"):
+		return "inventory_miss"
+	case strings.Contains(msg, "missing source profile"):
+		return "missing_profile"
 	}
 	return "other"
 }
