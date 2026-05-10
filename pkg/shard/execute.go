@@ -168,6 +168,29 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	if err != nil {
 		return formatErr("bootstrap: inventory get", err)
 	}
+	// Drop J: idempotent re-application. If the machine is already
+	// Configured for the same cluster + fingerprint that this action
+	// would set, the desired end state already holds — return success
+	// without doing anything. Drop I diagnostics found 39/sec
+	// "expected Idle" errors at 50 K-Pod cloud scale (29 % of all
+	// Bootstrap dispatches); the machines are uniformly already-
+	// Configured for the same cluster the action targets, meaning a
+	// previous Bootstrap completed before this duplicate dispatch.
+	// The duplicates leak through the pendingActions dedup gate via
+	// snapshot-vs-live race windows: cycle N takes a snapshot just
+	// before worker A finishes a Bootstrap on M; cycle N then emits
+	// a fresh Bootstrap(M) under a different fingerprint demand;
+	// worker B runs it and finds M Configured. The action is a no-op
+	// because worker A's transition is the desired end state.
+	//
+	// Errors only when the existing Configured state is for a
+	// *different* cluster/fingerprint — that's a real conflict the
+	// state machine should refuse.
+	if cur.State == machine.StateConfigured &&
+		cur.Cluster == a.Cluster &&
+		cur.AssignedNeedFingerprint == a.SourceProfile.Fingerprint() {
+		return nil
+	}
 	if cur.State != machine.StateIdle {
 		return fmt.Errorf("bootstrap: machine %s in state %s; expected Idle", a.MachineID, cur.State)
 	}
