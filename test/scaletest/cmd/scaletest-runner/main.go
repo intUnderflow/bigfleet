@@ -270,7 +270,36 @@ func run(args []string) error {
 	// soak; the assertion side runs after teardown using prom queries
 	// from the snapshot.
 	actionResults := scheduleRunnerActions(soakCtx, *kubeconfig, namespace, soakStart, prof.RunnerActions)
-	<-soakCtx.Done()
+	// Drop M: fail-fast at 5 min into soak. The feedback cycle is long
+	// (30 min soak × Scaleway round-trip), so a soak whose release-gating
+	// numbers are already off-budget at the 5 min mark is cut short —
+	// it isn't going to recover by minute 30, and waiting it out just
+	// burns iteration time. Only the two ADR-0014 / ADR-0018 release
+	// gates are inspected (binding latency p99, cycle envelope); the
+	// informational metrics still ride the full soak so the final
+	// summary remains complete.
+	failFastDelay := 5 * time.Minute
+	failFastTimer := time.NewTimer(failFastDelay)
+	failFastFired := false
+loop:
+	for {
+		select {
+		case <-soakCtx.Done():
+			if !failFastFired && !failFastTimer.Stop() {
+				<-failFastTimer.C
+			}
+			break loop
+		case <-failFastTimer.C:
+			failFastFired = true
+			ok, reason := soakFailFastCheck(ctx, *kubeconfig, namespace, prof.SLO)
+			if !ok {
+				fmt.Fprintln(os.Stderr, "soak 5min fail-fast: aborting —", reason)
+				cancelSoak()
+				break loop
+			}
+			fmt.Fprintln(os.Stderr, "soak 5min fail-fast: passing —", reason)
+		}
+	}
 	cancelSoak()
 	if err := ctx.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err
@@ -785,6 +814,38 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 		return 0, fmt.Errorf("query returned non-finite (%s): %s", s, query)
 	}
 	return v, nil
+}
+
+// soakFailFastCheck reads the two release-gating SLOs 5 min into the
+// soak and returns ok=false if either is already off-budget. The 5 min
+// sample lines up with the rate(...[5m]) windows used in the final
+// summary, so a violation at this point genuinely predicts the soak's
+// verdict — there's no warm-up effect waiting to drain. If both prom
+// queries fail (Prometheus pod gone, exec hung, etc.) the soak is
+// allowed to continue so a transient infra blip doesn't abort the run.
+func soakFailFastCheck(ctx context.Context, kubeconfig, ns string, slo sloOverrides) (bool, string) {
+	qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	target := 15.0
+	if slo.InternalBindingLatencyP99Seconds > 0 {
+		target = slo.InternalBindingLatencyP99Seconds
+	}
+	cycleTarget := 5.0
+	if slo.ShardCycleDurationP99Seconds > 0 {
+		cycleTarget = slo.ShardCycleDurationP99Seconds
+	}
+	bind, errB := promQuery(qctx, kubeconfig, ns, `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`)
+	cycle, errC := promQuery(qctx, kubeconfig, ns, `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))`)
+	if errB != nil && errC != nil {
+		return true, fmt.Sprintf("queries unavailable (bind=%v cycle=%v) — continuing", errB, errC)
+	}
+	if errB == nil && bind > target {
+		return false, fmt.Sprintf("internalBindingLatencyP99Seconds %.3fs > %.1fs SLO", bind, target)
+	}
+	if errC == nil && cycle > cycleTarget {
+		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > %.1fs envelope", cycle, cycleTarget)
+	}
+	return true, fmt.Sprintf("bind=%.3fs cycle=%.3fs", bind, cycle)
 }
 
 // urlEncode percent-encodes a PromQL query for use as the value of
