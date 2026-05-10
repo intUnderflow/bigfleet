@@ -656,11 +656,26 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// occasional small bursts, not 50 K cold-start Pods). The
 		// load-driver tags Pods scaletest.bigfleet/state="steady"
 		// after the cluster has reached its target Pod count;
-		// pod-shim observes those into the steady histogram. Cumulative
-		// is correct here — only steady Pods contribute, so even
-		// pre-soak observations (post-fill churn during the gate's
-		// stabilisation period) are SLO-relevant.
-		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket))`,
+		// pod-shim observes those into the steady histogram.
+		//
+		// Drop L: rate window instead of cumulative read. The
+		// cumulative histogram includes every steady-tagged Pod
+		// since the shard started — including post-target Pods
+		// that were created during the ramp's tail and bound late
+		// because the chain hadn't reached steady throughput yet.
+		// Those observations dominate the cumulative p99 forever:
+		// even at the end of a clean soak, the run's verdict is
+		// pegged at 102.4 s (+Inf bucket boundary) because those
+		// stale observations remain.
+		//
+		// Using rate(...[5m]) captures only the last 5 min of binds.
+		// Soak duration is 30 min, so the window sits comfortably
+		// inside steady state. Pre-soak observations from the
+		// ramp's drain are no longer counted — which matches what
+		// the SLO is actually trying to measure: "if the chain is
+		// healthy, what's the user-facing latency of an arriving
+		// Pod?"
+		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`,
 		"operatorRollupP99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
 		"operatorAckP99Seconds":            `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":        `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
