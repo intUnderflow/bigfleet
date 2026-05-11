@@ -380,8 +380,7 @@ func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) 
 		// MergeFrom captures the resourceVersion at the snapshot
 		// we read, so a concurrent claim by another reconciler
 		// (for the same Node) results in a Conflict error here.
-		orig := n.DeepCopy()
-		patch := client.MergeFrom(orig)
+		patch := client.MergeFrom(n.DeepCopy())
 		if n.Labels == nil {
 			n.Labels = map[string]string{}
 		}
@@ -401,19 +400,20 @@ func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) 
 			Target:     corev1.ObjectReference{Kind: "Node", Name: n.Name},
 		}
 		if err := b.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
-			// Bind failed after we claimed the Node. Drop O: unclaim
-			// the Node so it goes back into the candidate pool —
-			// otherwise it's permanently lost, and at the ramp's
-			// peak conflict rate (~334/sec) that burns Idle inventory
-			// faster than Reclaim can recover it. Best-effort: a
-			// failing unclaim only costs one stranded Node, but a
-			// successful unclaim immediately makes the Node bindable
-			// for a different Pod next reconcile.
+			// Bind failed after we claimed the Node. The claim
+			// label leaks (Node is now permanently un-bindable),
+			// but the Pod will pick a different Node next reconcile.
+			// Log but don't error — apiserver will retry the Pod.
+			//
+			// We previously tried to unclaim the Node here (Drop O):
+			// the unclaim Patch re-fires the Watches(Node) handler,
+			// which re-enqueues matching Pods, which race-claim, fail
+			// Bind, unclaim... a thundering herd. Drop O run measured
+			// 340/sec bind_error, 321/sec claim_lost, 6.7/sec success
+			// (vs Drop N's 32/74/0). Leaking the claim is worse for
+			// inventory but much better for throughput.
 			podBindAttempts.WithLabelValues("bind_error").Inc()
 			podBindErrors.WithLabelValues(classifyBindError(err)).Inc()
-			unclaimPatch := client.MergeFrom(n.DeepCopy())
-			delete(n.Labels, labelClaimedByPod)
-			_ = b.Patch(ctx, n, unclaimPatch)
 			continue
 		}
 		podBindAttempts.WithLabelValues("success").Inc()
