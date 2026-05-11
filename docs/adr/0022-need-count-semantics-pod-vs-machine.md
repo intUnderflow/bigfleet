@@ -110,20 +110,23 @@ message CapacityNeed {
 ```
 
 Shard's Phase 1, on each Need:
-1. Pick an instance type from the provider's catalogue that matches the Profile's class + has enough headroom to fit `Profile.MinPerUnit` (= the per-replica floor)
-2. Compute `machines_needed = ceil(Need.Aggregate / instance.Allocatable)` — multi-dimensional ceil over each resource dimension (CPU / memory / GPU), take the max
-3. Compare to existing Configured supply (sum of instance.Allocatable for matching machines), emit Bootstraps for the deficit
+1. Compute existing supply = sum of `machine.Allocatable` across Configured machines with matching Profile
+2. If supply ≥ demand on every resource dimension, no provisioning — Phase 3 may even reclaim slack
+3. Otherwise call `provider.Provision(profile, demand - supply)` — provider returns N machines with their actual Allocatable shapes; shard tracks them through the normal Idle/Configuring/Configured state machine
 
-Reclaim: same calculus reversed. Configured supply > demand → release machines, reverse-priority, until supply ≥ demand.
+Reclaim: same calculus reversed. Supply exceeds demand by more than `reclamation_slack` for long enough → pick reclaim victims by `reclamation_penalty`, release until supply ≈ demand.
+
+Provider contract: **the provider owns instance-type selection.** It is the only thing that knows its catalogue, its pricing, its cross-resource constraints. BigFleet's RPC becomes "make sure I have at least this much aggregate of this class"; the provider answers with whatever shapes it produces.
+
+This is a strict subset of today's contract — instead of `Create(profile)` (today, one machine per call), it's `Provision(profile, aggregate)` (provider decides shape + count). The existing six-RPC surface (`Create, Configure, Drain, Delete, Get, List`) stays the same; only `Create`'s shape grows an aggregate parameter and a list-of-machines return. No `Catalog()` RPC needed — BigFleet never needs to *enumerate* instance types, only to *consume* the machines the provider returned.
 
 Implications, distinct from B/C:
 
 - **No Pod-count concept anywhere in BigFleet.** Aligns with the user's framing exactly: "BigFleet shouldn't care about underlying objects, just the total it must satisfy."
-- **Heterogeneous Profile resources are fine.** With aggregates, a Profile that includes a mix of "2 CPU 4 GiB" pods and "1 CPU 8 GiB" pods just sums to "3 CPU 12 GiB" demand — the shard packs that. With B/C's `Count`, you'd have to either split into two Profiles or pick a representative per-replica shape.
-- **Multi-dimensional packing.** Today's `Count` math is scalar. Aggregate math is vector (CPU, memory, GPU, ephemeral storage). Bin-packing across N dimensions is harder; the simplest reasonable answer is first-fit-by-bottleneck-resource and refine later.
-- **Provider contract grows.** The shard needs to know each instance type's `Allocatable` shape. Today `CapacityProvider.List` returns existing machines; we'd need a `Catalog()` or `Capabilities()` RPC (or an inline field in `Create/Configure` requests) that exposes "what shapes can I provision?" Out-of-tree providers grow this responsibility.
-- **AvailableCapacity hint becomes aggregate-shaped.** Hint says "I can give you up to N CPUs / M GiB of class X with confidence H" instead of "AvailableCount: K machines of Profile P."
-- **Cleanest paper alignment.** §3 ("Capacity is decoupled from cluster identity") and §6.1 ("One CR per pod. Roll-up aggregates") both feel less strained: the rollup *actually* aggregates into something the shard can use directly, instead of just summing identical CRs.
+- **Heterogeneous Profile resources are fine.** With aggregates, a Profile that includes a mix of "2 CPU 4 GiB" pods and "1 CPU 8 GiB" pods just sums to "3 CPU 12 GiB" demand — the shard hands the aggregate to the provider. With B/C's `Count`, you'd have to either split into two Profiles or pick a representative per-replica shape.
+- **Multi-dimensional supply/demand math.** Today's `Count` math is scalar. Aggregate math is vector (CPU, memory, GPU, ephemeral storage). The shard does the *comparison* across resource dimensions ("is supply ≥ demand on every axis?"). The *packing* (which instance types, how many) is the provider's concern — vector bin-packing belongs in the layer that knows the instance catalogue, not in BigFleet.
+- **AvailableCapacity hint becomes aggregate-shaped.** Hint says "I can give you up to N CPUs / M GiB of class X with confidence H" instead of "AvailableCount: K machines of Profile P." The provider produces this without committing to a specific instance type.
+- **Cleanest paper alignment.** §3 ("Capacity is decoupled from cluster identity") and §6.1 ("One CR per pod. Roll-up aggregates") both feel less strained: the rollup *actually* aggregates into something the shard can use directly, and the provider boundary is "BigFleet doesn't know about instance types" — out-of-tree providers stay genuinely out of tree, with strictly more autonomy than they have today.
 
 ### Recommendation
 
@@ -136,9 +139,9 @@ Options A / B / C are documented above as alternatives the author considered bef
 Whichever direction is chosen, the following must be addressed. Option D's column is what the recommendation calls for:
 
 1. **Wire-proto `count` field.** A: stays as machine count. B/C: stays, semantics shift to Pods. D: **removed; replaced by an aggregate `ResourceTotal`**. The CRD's `CapacityRequestSpec.Resources` stays as the per-replica request.
-2. **NeedsTable + Phase 1 / Phase 3 ripple.** A: no shard changes. B/C: scalar `ceil(Count / density)`. D: **multi-dimensional packing — `machines_needed = ceil(Aggregate / Allocatable)` across CPU / memory / GPU / ephemeral**, take the resource-bottleneck dimension's count. Phase 3 reverses with the same math.
-3. **Instance-type selection.** A: controller. B/C: shard, scalar density. D: **shard, vector fit + cost ranking**. Provider's `CapacityProvider` contract grows a `Catalog()` (or `Capabilities()`) RPC that reports the instance-type shapes the provider can produce. Out-of-tree providers ship this.
-4. **AvailableCapacity hint semantics.** A: unchanged. B/C: per-Profile capacity in Pods. D: **per-Profile capacity in aggregate resources** ("I can do up to 5 K CPU / 20 TiB of class X at confidence High"), no count.
+2. **NeedsTable + Phase 1 / Phase 3 ripple.** A: no shard changes. B/C: scalar `ceil(Count / density)`. D: **vector supply-vs-demand comparison** ("is sum of Allocatable across matching machines ≥ aggregate demand on every axis?"). Provisioning gap → call provider; reclaim slack → drain victims. Shard never multiplies.
+3. **Instance-type selection.** A: controller. B/C: shard, scalar density. D: **provider does it.** Existing `Create` RPC's request grows an aggregate-demand parameter and its response grows to a list of machines (each with their actual Allocatable). No `Catalog()` RPC — BigFleet never enumerates instance types, only consumes the machines the provider returned.
+4. **AvailableCapacity hint semantics.** A: unchanged. B/C: per-Profile capacity in Pods. D: **per-Profile capacity in aggregate resources** ("I can do up to 5 K CPU / 20 TiB of class X at confidence High"), no count, no instance-type breakdown.
 5. **Scaletest harness shape.** Whichever option lands, the harness produces a workload realistic for that model. For D: 50 K nodes / 5 M Pods is the demand shape, expressed as aggregate `ResourceList` per Profile (e.g. 500 Profiles × 10 K CPU each across 50 clusters). The current M35 label-axis multiplier turns into a Profile-cardinality knob; the Pod-count knob exists separately and feeds the rollup's aggregate.
 6. **Existing measurements pre-this-ADR are not directly comparable.** The Drop M–AA bind-latency numbers were taken under the implicit 1 Pod = 1 machine model. Once packing density is introduced, the equivalent metric is bind-latency *per Pod*, but the chain's work is per-machine — so we should expect both p99 to drop (fewer Bootstraps per Pod cycle) and absolute bind throughput to climb (chain not bottlenecked on 50 K Bootstraps but on ~500 if density = 100 and Profiles = 500).
 
