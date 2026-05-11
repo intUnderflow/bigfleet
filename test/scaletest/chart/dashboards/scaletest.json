@@ -1009,8 +1009,8 @@
     {
       "id": 201,
       "type": "timeseries",
-      "title": "Internal binding latency p99 \u2014 SLO line at 15 s (ADR-0020)",
-      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). ADR-0020: 15 s = ~10 s rollupInterval ceiling + ~5 s chain headroom. Two curves: (A) per-Pod from the pod-shim \u2014 empty in CR-mode profiles by design (see ADR-0017); (B) fingerprint fan-out \u2014 diagnostic only, p99 is a histogram_quantile-on-stale-data artefact (327.68 s = +Inf bucket boundary) once the ramp ends, not a real latency. Neither curve gates the run in CR-mode.",
+      "title": "Internal binding latency p99 \u2014 chain decomposition (Drop Q + R, SLO line 15 s)",
+      "description": "ADR-0018: BigFleet's internal contribution only (fake provider returns instantly). ADR-0020 SLO: 15 s = ~10 s rollupInterval ceiling + ~5 s chain headroom. (A) e2e per-Pod from the pod-shim \u2014 the SLO-bearing line. (B-E) the four measured hops between Pod creation and Pod bound, ordered upstream-to-downstream so the line carrying the tail is visible at a glance. configurePhase is the shard's Configuring\u2192Configured wall-clock (Drop R); requestBootstrap is its inner stream-RPC subset; upcomingToNode is pod-shim's fake-Node reconciler from UpcomingNode creation to Node Create (Drop Q); nodeToBound is pod-shim's binder from fake-Node creation to Bind success. Stages don't simply sum to e2e \u2014 slow Pods can stack one bad hop on otherwise-fast hops \u2014 but whichever line tracks e2e owns the tail.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1023,14 +1023,29 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))",
           "refId": "A",
-          "legendFormat": "per-Pod (ADR-0017)"
+          "legendFormat": "e2e bind p99 (SLO \u2264 15 s)"
         },
         {
-          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_provisioning_latency_seconds_bucket[5m]))))",
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[5m]))))",
           "refId": "B",
-          "legendFormat": "fingerprint fan-out (worst shard, diagnostic)"
+          "legendFormat": "shard: configurePhase p99"
+        },
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))",
+          "refId": "C",
+          "legendFormat": "shard: requestBootstrap p99"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))",
+          "refId": "D",
+          "legendFormat": "pod-shim: upcomingToNode p99"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))",
+          "refId": "E",
+          "legendFormat": "pod-shim: nodeToBound p99"
         }
       ],
       "fieldConfig": {
@@ -1891,55 +1906,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short"
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 505,
-      "type": "timeseries",
-      "title": "Bind chain p99 decomposition (Drop Q + R)",
-      "description": "Overlays the four measured hops of the steady-state bind chain so you can see which one owns the tail in real time. e2e bind = SLO line. Reading order from upstream to downstream: configurePhase (Drop R: shard Configuring→Configured gap) → requestBootstrap (subset of configurePhase — the stream RPC) → upcomingToNode (Drop Q: pod-shim fake-Node reconciler) → nodeToBound (Drop Q: pod-shim binder). The sum is bounded above by e2e, but stages don't simply add (slow Pods may stack one bad hop on otherwise-fast hops).",
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 107
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))",
-          "refId": "A",
-          "legendFormat": "e2e bind p99 (SLO ≤ 15s)"
-        },
-        {
-          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[5m]))))",
-          "refId": "B",
-          "legendFormat": "shard: configurePhase p99"
-        },
-        {
-          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))",
-          "refId": "C",
-          "legendFormat": "shard: requestBootstrap p99"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))",
-          "refId": "D",
-          "legendFormat": "pod-shim: upcomingToNode p99"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))",
-          "refId": "E",
-          "legendFormat": "pod-shim: nodeToBound p99"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
         },
         "overrides": []
       }
