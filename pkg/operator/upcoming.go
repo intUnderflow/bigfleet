@@ -128,6 +128,27 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		phase = bfv1alpha1.UpcomingNodeDrained
 	}
 
+	// Drop AA: delete the UpcomingNode at the Drained terminus instead
+	// of leaving it in apiserver as a stale-Phase record. The scaleway-50k
+	// run showed bind p99 growing linearly through soak (5 s → 28 s) while
+	// the chain's internal stages stayed flat — the slowdown lived in the
+	// apiserver-side working-set growth. At 30 churns/sec × 30 min × 50
+	// clusters that's ~54 K stale Drained UpcomingNodes per cluster.
+	// Every pod-shim List/watch of UpcomingNodes (or Nodes — fake-Nodes
+	// follow the same per-cluster accumulation pattern) scales linearly
+	// with this count, so reconcile work-duration grows with run length
+	// even when no individual stage is slow. Deleting on Drained also
+	// closes the loop with pod-shim's new fake-Node cleanup path —
+	// the informer DELETE event triggers the fake-Node delete.
+	if phase == bfv1alpha1.UpcomingNodeDrained {
+		delErr := o.cfg.KubeClient.Delete(ctx, &existing)
+		metrics.OperatorUpcomingNodeWrites.WithLabelValues("delete", classifyWriteErr(delErr)).Inc()
+		if delErr != nil && !apierrors.IsNotFound(delErr) {
+			return fmt.Errorf("delete UpcomingNode at Drained: %w", delErr)
+		}
+		return nil
+	}
+
 	// M44.4 Drop B: skip the Status().Update apiserver round-trip if
 	// nothing observable changed. With the recvLoop coalescer
 	// collapsing rapid state transitions per machine, most handler

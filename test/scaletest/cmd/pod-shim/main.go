@@ -468,7 +468,26 @@ type upcomingNodeFakeNodeReconciler struct {
 func (r *upcomingNodeFakeNodeReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	var upn bfv1alpha1.UpcomingNode
 	if err := r.Get(ctx, req.NamespacedName, &upn); err != nil {
-		return reconcile.Result{}, client.IgnoreNotFound(err)
+		// Drop AA: NotFound = UpcomingNode was deleted (operator deletes
+		// on Drained terminus). Cascade-delete the fake-Node we created
+		// from it. Without this path fake-Nodes accumulate across the
+		// soak: the previous Reconcile bailed on NotFound via
+		// IgnoreNotFound, leaving the Node permanent. At 30/sec churn
+		// over 30 min × 50 clusters that's ~54 K stale fake-Nodes per
+		// cluster, every one of which pod-binder's tryBind List/iterate
+		// has to consider. Every claim Patch ages the cache further;
+		// every Bind RPC scales with the apiserver's working set.
+		if apierrors.IsNotFound(err) {
+			nodeName := nodeNameFromUpcoming(req.Name)
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+			if dErr := r.Delete(ctx, node); dErr != nil && !apierrors.IsNotFound(dErr) {
+				upcomingNodesObserved.WithLabelValues("cleanup_error").Inc()
+				return reconcile.Result{}, fmt.Errorf("delete fake-Node on cascade: %w", dErr)
+			}
+			upcomingNodesObserved.WithLabelValues("cleanup_deleted").Inc()
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, err
 	}
 	if upn.Status.Phase != bfv1alpha1.UpcomingNodeReady {
 		upcomingNodesObserved.WithLabelValues("not_ready").Inc()
