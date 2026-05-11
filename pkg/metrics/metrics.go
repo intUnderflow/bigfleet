@@ -66,6 +66,19 @@ var (
 		Help:    "Wall-clock per machine of sess.requestBootstrap (the synchronous BootstrapRequest → BootstrapBlobResponse round-trip over the operator stream). Subtracted from configure_phase, the remainder is local work (Provider.Configure + applyTransition).",
 		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
 	})
+	// Drop W: symmetric instrumentation for the Reclaim/Preempt path.
+	// Drop V's run showed the Configured machine pool growing 33K → 46K
+	// over 30 min while Idle drained 26K → 14K — i.e. Bootstrap throughput
+	// was ~7/sec ahead of Reclaim throughput, and the imbalance correlates
+	// directly with the e2e bind p99 growing 6 s → 25 s. drain_phase times
+	// the Configured → Idle wall-clock, the symmetric counterpart of
+	// configure_phase. If drain_phase p99 is high, Reclaim is the bottleneck;
+	// if it's low, Reclaim's just under-saturated (not enough Phase 3 emits).
+	ShardDrainPhase = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_drain_phase_seconds",
+		Help:    "Wall-clock per machine inside executeDrain, measured from after the Configured→Draining transition to after the Draining→Idle transition. Symmetric to configure_phase. A high p99 here means Reclaim is slow per action; a low p99 with low Reclaim throughput means Phase 3 isn't emitting enough Reclaims.",
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
+	})
 
 	// ShardCyclePhaseDuration decomposes the cycle into its constituent
 	// phases so we can identify which one dominates p99 without

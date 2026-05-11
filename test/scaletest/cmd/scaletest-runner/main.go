@@ -750,10 +750,13 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		"shardConfigurePhaseP50Seconds":   `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[5m]))))`,
 		"shardRequestBootstrapP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))`,
 		"shardRequestBootstrapP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))`,
-		"operatorRollupP99Seconds":        `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec":       `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":                 `sum(bigfleet_shard_shortfalls)`,
+		// Drop W: symmetric Reclaim-side timing.
+		"shardDrainPhaseP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))`,
+		"shardDrainPhaseP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))`,
+		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last

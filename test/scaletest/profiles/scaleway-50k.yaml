@@ -75,7 +75,18 @@ coordinator:
 
 loadProfile:
   target: 1000
-  churnPerMinute: 0.05
+  # Drop W: reduce per-cluster churn from 5%/min to 2%/min (50%
+  # less Pod-replacement traffic). The Drop V run showed shard
+  # inventory drifting from 33K Configured / 26K Idle at minute 5
+  # to 46K / 14K at minute 30 — Reclaim was running ~7/sec slower
+  # than Bootstrap, so the Configured pool accumulated linearly
+  # and the e2e bind p99 followed (6 s → 25 s, crossing the 15 s
+  # SLO at minute 12). Halving churn cuts both ends of the
+  # imbalance: lower Bootstrap demand, lower Reclaim demand,
+  # smaller absolute throughput gap. 2%/min × 1000 Pods × 50 clusters
+  # ÷ 60s ≈ 17 Pods/sec across the fleet — still production-shaped
+  # but inside the chain's measured Reclaim headroom.
+  churnPerMinute: 0.02
   durationSeconds: 1800
 
 # ADR-0021: post-pool throughput is ~50-85 binds/sec; 50 K-Pod ramp

@@ -1099,6 +1099,11 @@
           "expr": "histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))",
           "refId": "E",
           "legendFormat": "pod-shim: nodeToBound p99"
+        },
+        {
+          "expr": "max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))",
+          "refId": "F",
+          "legendFormat": "shard: drainPhase p99 (Drop W — Reclaim symmetric)"
         }
       ],
       "fieldConfig": {

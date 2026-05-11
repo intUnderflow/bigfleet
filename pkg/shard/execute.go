@@ -319,6 +319,10 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 	if err := s.applyTransition(a.MachineID, machine.StateDraining, nil); err != nil {
 		return formatErr("drain: → Draining", err)
 	}
+	// Drop W: symmetric to configure_phase. Times the Configured → Idle
+	// wall-clock so we can tell whether Reclaim is per-action slow (high
+	// p99 here) or just under-saturated (low p99 with low Reclaim rate).
+	drainStart := time.Now()
 	ack, err := s.cfg.Provider.Drain(ctx, provider.DrainRequest{
 		MachineID:   a.MachineID,
 		GracePeriod: provider.GracePeriod(a.GracePeriod.Seconds()),
@@ -343,5 +347,6 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 	}); err != nil {
 		return formatErr("drain: post-Drain transition", err)
 	}
+	metrics.ShardDrainPhase.Observe(time.Since(drainStart).Seconds())
 	return nil
 }
