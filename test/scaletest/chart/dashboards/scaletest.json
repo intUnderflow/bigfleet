@@ -19,7 +19,7 @@
       "id": 99,
       "type": "stat",
       "title": "Overall SLO verdict",
-      "description": "Sums the number of pass() gates currently failing. -1 = WAIT (test isn't yet in steady-state soak \u2014 SLOs would be fired on cold-start tail data, which is meaningless). 0 = green PASS, \u22651 = red FAIL. The WAIT gate uses the same two-step phase signal as the Test phase panel: drivers at target AND \u226599 % of CRs Bootstrap-succeeded. Mirrors the runner's pass() \u2014 same thresholds, same metrics. The internal-binding-latency gate uses the steady-state-only histogram (M44.4) so it's not skewed by the cold-start fill. Profile-level SLO overrides aren't reflected here; the panel uses in-process tier defaults: cycle \u2264 5 s, rollup \u2264 1 s, ack \u2264 12 s, internal binding \u2264 15 s (ADR-0020), sustained load \u2265 99.9 %, outbox drops = 0, coordinator FSM error rate \u2264 0.1 %.",
+      "description": "Sums the number of pass() gates currently failing. -1 = WAIT (test isn't yet in steady-state soak \u2014 SLOs would be fired on cold-start tail data, which is meaningless). 0 = green PASS, \u22651 = red FAIL. The WAIT gate uses the same two-step phase signal as the Test phase panel: drivers at target AND \u226599 % of Pods bound. Mirrors the runner's pass() \u2014 same thresholds, same metrics. ADR-0022 / M45.4: the second clause is Pod bind success (success + bound_by_other) rather than Bootstrap success so the gate clears at seedDensityMultiplier > 1. The internal-binding-latency gate uses the steady-state-only histogram (M44.4) so it's not skewed by the cold-start fill. Profile-level SLO overrides aren't reflected here; the panel uses in-process tier defaults: cycle \u2264 5 s, rollup \u2264 1 s, ack \u2264 12 s, internal binding \u2264 15 s (ADR-0020), sustained load \u2265 99.9 %, outbox drops = 0, coordinator FSM error rate \u2264 0.1 %.",
       "gridPos": {
         "h": 4,
         "w": 12,
@@ -32,7 +32,7 @@
       },
       "targets": [
         {
-          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) * (((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m]))) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))) - (1 - (((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)))",
+          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~\"success|bound_by_other\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) * (((max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))) > bool 5) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m]))) > bool 1) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m]))) > bool 12) or vector(0)) + ((sum(rate(bigfleet_operator_outbox_dropped_total[1m])) > bool 0.001) or vector(0)) + ((((sum(rate(bigfleet_coordinator_apply_total{outcome=\"error\"}[5m])) or vector(0)) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1e-9)) > bool 0.001) or vector(0)) + ((histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m]))) > bool 15) or vector(0)) + (((sum(scaletest_loadgen_cr_active) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) < bool 0.999) or vector(0))) - (1 - (((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) * ((sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~\"success|bound_by_other\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)))",
           "refId": "A"
         }
       ],
@@ -108,7 +108,7 @@
       "id": 98,
       "type": "stat",
       "title": "Test phase",
-      "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded \u2265 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog \u2014 gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
+      "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the pod-shim has Pod-bound \u2265 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog \u2014 gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (ADR-0022 / M45.4) waits for both signals before transitioning to soak \u2014 the second clause is Pod bind success rather than Bootstrap success so it works at seedDensityMultiplier > 1.",
       "gridPos": {
         "h": 4,
         "w": 3,
@@ -121,7 +121,7 @@
       },
       "targets": [
         {
-          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2",
+          "expr": "(((sum(scaletest_loadgen_steady_state) / clamp_min(count(scaletest_loadgen_steady_state), 1)) >= bool 0.999) + ((sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~\"success|bound_by_other\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)) >= bool 0.99)) / 2",
           "refId": "A"
         }
       ],
@@ -243,8 +243,8 @@
     {
       "id": 97,
       "type": "stat",
-      "title": "Bootstraps / target",
-      "description": "Cumulative Bootstrap-success count vs total CR target (kwok.clusterCount \u00d7 loadProfile.target). The runner's gate transitions to steady-state soak once this hits \u2265 99 %. Same numerator the Test phase panel reads internally \u2014 exposed here so you can watch the chain drain the cold-start backlog. Yellow until 99 %, green at 99 %.",
+      "title": "Pod binds / target",
+      "description": "Cumulative Pod-bind-success count (success + bound_by_other from the pod-shim) vs total Pod target (kwok.clusterCount \u00d7 loadProfile.target). The runner's gate transitions to steady-state soak once this hits \u2265 99 %. ADR-0022 / M45.4: replaced Bootstrap-success here because Bootstrap counts machines, which under seedDensityMultiplier > 1 saturates at totalPods/density and never reaches a totalPods-shaped threshold. Pod bind success is one-per-Pod regardless of density \u2014 the right end-of-chain signal. Yellow until 99 %, green at 99 %.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -257,7 +257,7 @@
       },
       "targets": [
         {
-          "expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)",
+          "expr": "sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~\"success|bound_by_other\"}) / clamp_min(sum(scaletest_loadgen_cr_target), 1)",
           "refId": "A"
         }
       ],
@@ -957,8 +957,8 @@
     {
       "id": 96,
       "type": "timeseries",
-      "title": "Bootstraps cumulative vs target \u2014 runner gate at 99 %",
-      "description": "Cumulative count of successful Bootstrap actions (sum across shards) plotted against the runner's gate threshold. Same numerator the Test phase + Overall verdict panels read. The gate trips at 99 % (the dashed target line \u00d7 0.99) \u2014 once the curve crosses, the runner transitions ramp \u2192 steady-state soak. Lets you watch the chain drain the cold-start backlog visually instead of decoding the runner's stdout.",
+      "title": "Pod binds cumulative vs target \u2014 runner gate at 99 %",
+      "description": "Cumulative count of Pods the pod-shim has bound (success + bound_by_other) plotted against the runner's gate threshold. Same numerator the Test phase + Overall verdict panels read. The gate trips at 99 % (the dashed target line \u00d7 0.99) \u2014 once the curve crosses, the runner transitions ramp \u2192 steady-state soak. ADR-0022 / M45.4: replaced Bootstrap success here because Bootstrap counts machines, which under seedDensityMultiplier > 1 saturates at totalPods/density and never reaches the totalPods-shaped threshold. Lets you watch the chain drain the cold-start backlog visually instead of decoding the runner's stdout.",
       "gridPos": {
         "h": 6,
         "w": 24,
@@ -971,9 +971,9 @@
       },
       "targets": [
         {
-          "expr": "sum(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"})",
+          "expr": "sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~\"success|bound_by_other\"})",
           "refId": "A",
-          "legendFormat": "bootstraps cumulative"
+          "legendFormat": "pod binds cumulative"
         },
         {
           "expr": "sum(scaletest_loadgen_cr_target)",

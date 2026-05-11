@@ -571,18 +571,28 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 		}
 		ready, err := countReadyKWOKPods(ctx, kubeconfig, ns)
 		active := -1
+		binds := -1
 		bootstraps := -1
 		if err == nil && ready >= clusterCount {
 			active = readActiveCRs(ctx, kubeconfig, ns)
+			// ADR-0022 / M45.4: pod bind success is the canonical
+			// end-of-chain signal under Pod-mode (1 bind per Pod,
+			// regardless of seedDensityMultiplier). The previous gate
+			// was Bootstrap success, which under density>1 caps at
+			// totalPods/density and never reaches the threshold —
+			// dev-5k at density=10 with 5000 Pods only ever runs ~500
+			// Bootstraps. Keep reading Bootstraps for the log line so
+			// the chain's machine-emit rate stays visible.
+			binds = readPodBindsSucceeded(ctx, kubeconfig, ns)
 			bootstraps = readBootstrapsExecuted(ctx, kubeconfig, ns)
-			if active >= target && bootstraps >= chainAliveThreshold {
-				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (≥ %d, gate cleared)\n",
-					ready, clusterCount, active, target, bootstraps, target, chainAliveThreshold)
+			if active >= target && binds >= chainAliveThreshold {
+				fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, binds %d/%d, bootstraps %d (≥ %d, gate cleared)\n",
+					ready, clusterCount, active, target, binds, target, bootstraps, chainAliveThreshold)
 				return nil
 			}
 		}
-		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, bootstraps %d/%d (need ≥ %d)\n",
-			ready, clusterCount, active, target, bootstraps, target, chainAliveThreshold)
+		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, binds %d/%d, bootstraps %d (need binds ≥ %d)\n",
+			ready, clusterCount, active, target, binds, target, bootstraps, chainAliveThreshold)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -648,6 +658,26 @@ func readBootstrapsExecuted(ctx context.Context, kubeconfig, ns string) int {
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap",outcome="success"})`)
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readPodBindsSucceeded returns the cumulative count of Pods the
+// scaletest pod-shim has successfully bound to a fake-Node (either via
+// our own /binding subresource call or via a concurrent reconcile that
+// got there first). Equal to the Pod-mode chain's "Pods placed" count.
+//
+// ADR-0022 / M45.4: this replaces Bootstrap success as the steady-state
+// gate, because Bootstrap counts machines and a density>1 seed serves
+// `density` Pods per machine — so the Bootstrap count saturates at
+// totalPods/density and never reaches the totalPods-shaped threshold.
+// Pod bind success is one-per-Pod regardless of density.
+func readPodBindsSucceeded(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~"success|bound_by_other"})`)
 	if err != nil {
 		return -1
 	}
