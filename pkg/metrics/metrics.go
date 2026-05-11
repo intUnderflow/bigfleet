@@ -44,6 +44,29 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
 	})
 
+	// Drop R: instrument the gap between Idle→Configuring and
+	// Configuring→Configured inside executeBootstrap, per machine. Drop Q
+	// surfaced that pod-shim's `upcoming_to_node` p99 sits at +Inf
+	// (≥102 s) in pure post-ramp steady state, but the reconciler's own
+	// work_duration is 0.76 s and queue_duration is 5.3 s — the tail is
+	// not in pod-shim. The chain of custody points back here: the
+	// operator only updates UpcomingNode phase from Configuring → Ready
+	// after the shard signals Configured. Per-machine, the configure
+	// phase covers `sess.requestBootstrap` (stream RPC) + `Provider.Configure`
+	// + the Configuring → Configured `applyTransition`. ShardConfigurePhase
+	// times the total; ShardRequestBootstrap times the stream-RPC piece
+	// alone, so we can split "stream waited N s" from "local work waited M s".
+	ShardConfigurePhase = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_configure_phase_seconds",
+		Help:    "Wall-clock per machine inside executeBootstrap, measured from after the Idle→Configuring transition to after the Configuring→Configured transition. Excludes pre-transition idempotency checks. Localises where the host-binding gap lives: a high p99 here is what makes pod-shim's upcoming_to_node observation old.",
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
+	})
+	ShardRequestBootstrap = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_request_bootstrap_seconds",
+		Help:    "Wall-clock per machine of sess.requestBootstrap (the synchronous BootstrapRequest → BootstrapBlobResponse round-trip over the operator stream). Subtracted from configure_phase, the remainder is local work (Provider.Configure + applyTransition).",
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
+	})
+
 	// ShardCyclePhaseDuration decomposes the cycle into its constituent
 	// phases so we can identify which one dominates p99 without
 	// re-running. Labelled phase ∈ {reconcile, phase1, phase2, phase3,

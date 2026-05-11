@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/decision"
@@ -210,6 +211,11 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	}); err != nil {
 		return formatErr("bootstrap: → Configuring", err)
 	}
+	// Drop R: per-machine configure-phase timer starts here. Observed
+	// only on the success path (after the Configuring→Configured
+	// transition); error paths bypass the observation so failures
+	// don't pollute the latency histogram.
+	configureStart := time.Now()
 
 	// Pull a kubelet bootstrap blob. Either via the operator's
 	// Shard.Session stream (production) or via the LocalBootstrap
@@ -234,7 +240,9 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 			return fmt.Errorf("bootstrap: no active operator session for cluster %s", a.Cluster)
 		}
 		var err error
+		bootstrapStart := time.Now()
 		blob, err = sess.requestBootstrap(blobCtx, a.Cluster, a.SourceProfile.Requirements())
+		metrics.ShardRequestBootstrap.Observe(time.Since(bootstrapStart).Seconds())
 		if err != nil {
 			s.handleBootstrapBlobErr(a.MachineID, err, "bootstrap: ")
 			return formatErr("bootstrap: requestBootstrap", err)
@@ -270,6 +278,11 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	}); err != nil {
 		return formatErr("bootstrap: post-Configure transition", err)
 	}
+	// Drop R: configure-phase timer ends at the post-Configure
+	// transition. This is the gap that pod-shim observes as
+	// "UpcomingNode created in Configuring, updated to Ready later"
+	// — the wall-clock between the two NodeStateUpdate frames.
+	metrics.ShardConfigurePhase.Observe(time.Since(configureStart).Seconds())
 	// Paper §10.7: end-to-end provisioning latency from first
 	// rolled-up demand observation to Configured. Best-effort —
 	// silently skipped if the fingerprint isn't in demandObservedAt

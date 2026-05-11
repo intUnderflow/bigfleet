@@ -712,14 +712,23 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// is the podBinder + Watches handler. If both are low and
 		// shardProvisioning* is high, the chain bottleneck is upstream of
 		// pod-shim entirely.
-		"upcomingToNodeP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
-		"nodeToBoundP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
-		"upcomingToNodeP50Seconds":  `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
-		"nodeToBoundP50Seconds":     `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
-		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
+		"upcomingToNodeP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
+		"nodeToBoundP99Seconds":    `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
+		"upcomingToNodeP50Seconds": `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
+		"nodeToBoundP50Seconds":    `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
+		// Drop R: shard-side configure-phase. configurePhase is the gap
+		// pod-shim observes as UpcomingNode age between phase=Configuring
+		// and phase=Ready. requestBootstrap is the synchronous stream RPC
+		// inside that gap; subtracting it leaves Provider.Configure +
+		// applyTransition (local work).
+		"shardConfigurePhaseP99Seconds":   `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[5m]))))`,
+		"shardConfigurePhaseP50Seconds":   `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[5m]))))`,
+		"shardRequestBootstrapP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))`,
+		"shardRequestBootstrapP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_request_bootstrap_seconds_bucket[5m]))))`,
+		"operatorRollupP99Seconds":        `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec":       `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":                 `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last
