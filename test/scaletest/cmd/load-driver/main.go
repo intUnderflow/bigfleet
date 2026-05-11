@@ -468,12 +468,18 @@ func (d *driver) run(ctx context.Context) error {
 	// by the runner for the soak budget.
 
 	// Churn tick fires once per second. Replace a fraction of CRs sized
-	// to hit churnPerMinute averaged over each minute.
-	perTick := int(float64(d.prof.Target) * d.prof.ChurnPerMinute / 60.0)
-	if perTick < 1 && d.prof.ChurnPerMinute > 0 {
-		perTick = 1
-	}
-	d.log.Info("steady state", "churn_per_tick", perTick)
+	// to hit churnPerMinute averaged over each minute. Drop X: keep
+	// perTick as a float so churnPerMinute below 0.06 still represents
+	// faithfully. The previous int(target*churn/60) with a `<1 → 1`
+	// floor pinned per-cluster churn to 1 Pod/sec for any churn ≤ 1/min,
+	// so e.g. churnPerMinute=0.02 produced the same 50/sec fleet churn
+	// as 0.05 — a constant 50 Pods/sec across 50 clusters. The
+	// accumulator below emits 1 churn when the running fractional
+	// remainder crosses 1, so the tick rate matches the configured
+	// per-minute target down to arbitrarily small rates.
+	perTickFloat := float64(d.prof.Target) * d.prof.ChurnPerMinute / 60.0
+	churnAccum := 0.0
+	d.log.Info("steady state", "churn_per_tick", perTickFloat)
 
 	// ADR-0015 §3: schedule burst events that this pod participates in.
 	// shouldBurst is deterministic so a pod restart re-arms the same
@@ -506,13 +512,19 @@ func (d *driver) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case now := <-tick.C:
-			thisTick := perTick
+			// Drop X: accumulator carries the fractional remainder so
+			// e.g. perTickFloat=0.33 emits one churn every ~3 ticks
+			// instead of being floored to zero (or, previously, ceiled
+			// to one).
+			churnAccum += perTickFloat
+			thisTick := int(churnAccum)
+			churnAccum -= float64(thisTick)
 			// M41: Poisson jitter on per-tick churn count, plus
 			// optional minute-scale micro-bursts. Without jitter,
 			// every tick produces identical write rate and the p99.9
 			// tail is invisible.
-			if d.prof.JitteredChurn && perTick > 0 {
-				thisTick = poissonInt(d.rng, float64(perTick))
+			if d.prof.JitteredChurn && perTickFloat > 0 {
+				thisTick = poissonInt(d.rng, perTickFloat)
 			}
 			if d.prof.MicroBurstRatePerMinute > 0 && d.prof.MicroBurstFactor > 1 {
 				if d.rng.Float64() < d.prof.MicroBurstRatePerMinute/60.0 {
