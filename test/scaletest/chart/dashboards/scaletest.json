@@ -191,7 +191,7 @@
       "id": 110,
       "type": "stat",
       "title": "Time in current phase",
-      "description": "Wall-clock elapsed since the load-driver entered its current phase. Sourced from scaletest_loadgen_phase_started_at_seconds — stamped at process start (ramp) and the moment a cluster hits its target Pod count (steady). The query uses max() over the steady stamps so the value tracks the LAST cluster to reach steady (which is when the Test phase panel flips to 'Steady-state soak'); using min() would jump forward when the first-to-reach cluster transitions, while the fleet was still half in ramp. Useful for reading the dashboard alongside the SLO panel: 'we're 12 min into soak, p99 looks stable' vs 'we're still in ramp, the bind tail is expected'. Limitation: the runner's post-soak phases (Prom-snapshot, helm-uninstall) aren't represented — the load-driver stays in steady until the chart is uninstalled.",
+      "description": "Wall-clock elapsed since the load-driver entered its current phase. Sourced from scaletest_loadgen_phase_started_at_seconds — stamped at process start (ramp) and the moment a cluster hits its target Pod count (steady). The query is gated: it only shows the max(steady) timestamp when EVERY cluster is steady (matches the Test phase panel's two-step gate); otherwise it falls back to min(ramp). Without this gate, the panel would jump to '2 s in steady' the moment the first of 50 clusters transitioned, even though most were still in ramp. Useful for reading the dashboard alongside the SLO panel: 'we're 12 min into soak, p99 looks stable' vs 'we're still in ramp, the bind tail is expected'. Limitation: the runner's post-soak phases (Prom-snapshot, helm-uninstall) aren't represented — the load-driver stays in steady until the chart is uninstalled.",
       "gridPos": {
         "h": 4,
         "w": 3,
@@ -204,7 +204,7 @@
       },
       "targets": [
         {
-          "expr": "time() - (max(scaletest_loadgen_phase_started_at_seconds{phase=\"steady\"} > 0) or on() min(scaletest_loadgen_phase_started_at_seconds{phase=\"ramp\"} > 0))",
+          "expr": "time() - ((max(scaletest_loadgen_phase_started_at_seconds{phase=\"steady\"}) and (sum(scaletest_loadgen_steady_state) == count(scaletest_loadgen_steady_state))) or on() min(scaletest_loadgen_phase_started_at_seconds{phase=\"ramp\"} > 0))",
           "refId": "A"
         }
       ],
