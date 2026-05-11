@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
@@ -51,7 +52,26 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 	defer func() {
 		metrics.OperatorNodeStateUpdateDuration.WithLabelValues(string(phase)).Observe(time.Since(start).Seconds())
 	}()
+	// Drop S: retry on apiserver Conflict. The previous behaviour
+	// returned the Conflict error from Status().Update (and Update on
+	// the spec path), which silently dropped that NodeStateUpdate's
+	// phase / spec write. The shard does not spontaneously re-emit
+	// NodeStateUpdates — the coalescer only loops when a *new* update
+	// arrives — so a Conflict at the Configured-phase write left the
+	// UpcomingNode stuck on phase=Configuring for tens of seconds until
+	// some unrelated downstream event refreshed it. Pod-shim's
+	// fake-Node reconciler skips not-Ready UpcomingNodes, so the
+	// dropped write directly produced the upcoming_to_node ≥102 s p99
+	// tail we measured in Drops M/N/Q/R. Wrap the whole handler body
+	// in RetryOnConflict: each iteration re-Gets, so the next Update
+	// uses the fresh resourceVersion. retry.DefaultRetry is 5 attempts
+	// with capped exponential backoff (~1.1 s worst-case).
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return o.handleNodeStateUpdateOnce(ctx, name, phase, u)
+	})
+}
 
+func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, phase bfv1alpha1.UpcomingNodePhase, u *pb.NodeStateUpdate) error {
 	var existing bfv1alpha1.UpcomingNode
 	getErr := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
 	switch {
