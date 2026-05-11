@@ -865,12 +865,20 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 }
 
 // soakFailFastCheck reads the two release-gating SLOs 5 min into the
-// soak and returns ok=false if either is already off-budget. The 5 min
-// sample lines up with the rate(...[5m]) windows used in the final
-// summary, so a violation at this point genuinely predicts the soak's
-// verdict — there's no warm-up effect waiting to drain. If both prom
-// queries fail (Prometheus pod gone, exec hung, etc.) the soak is
-// allowed to continue so a transient infra blip doesn't abort the run.
+// soak and returns ok=false if either is already off-budget. Uses a
+// rate(...[2m]) window — narrower than the [5m] used in the final
+// summary — so the sample comes from the last two minutes (i.e. the
+// +3..+5 min slice of soak, all post-gate, all steady-state binds).
+// The [5m] window at this point would straddle the ramp tail (gate
+// clears at soak_start, so [5m] includes -2..0 ramp + 0..+5 soak)
+// and false-positive on transient catch-up latency that recovers
+// within 10 min — Drop X's run measured 15.6 s at +5 with [5m] but
+// 8.9 s at +14 mid-soak under the same conditions. The narrower
+// window costs sample count (~17 binds/sec × 2 min = 2 K obs, plenty
+// for p99) and gains rejection of legitimate steady-state runs.
+// If both prom queries fail (Prometheus pod gone, exec hung, etc.)
+// the soak is allowed to continue so a transient infra blip doesn't
+// abort the run.
 func soakFailFastCheck(ctx context.Context, kubeconfig, ns string, slo sloOverrides) (bool, string) {
 	qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -882,8 +890,8 @@ func soakFailFastCheck(ctx context.Context, kubeconfig, ns string, slo sloOverri
 	if slo.ShardCycleDurationP99Seconds > 0 {
 		cycleTarget = slo.ShardCycleDurationP99Seconds
 	}
-	bind, errB := promQuery(qctx, kubeconfig, ns, `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`)
-	cycle, errC := promQuery(qctx, kubeconfig, ns, `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))))`)
+	bind, errB := promQuery(qctx, kubeconfig, ns, `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[2m])))`)
+	cycle, errC := promQuery(qctx, kubeconfig, ns, `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[2m]))))`)
 	if errB != nil && errC != nil {
 		return true, fmt.Sprintf("queries unavailable (bind=%v cycle=%v) — continuing", errB, errC)
 	}
