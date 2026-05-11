@@ -1,6 +1,6 @@
 # ADR-0022: `Need.Count` is Pod count, not machine count — align implementation with the paper
 
-**Status**: Proposed
+**Status**: Accepted
 
 **Date**: 2026-05-11
 
