@@ -723,6 +723,55 @@ The wall is **algorithmic at high demand-to-inventory ratio**. M11's 500K-invent
 - ⏳ M22: ramp budget that scales with totalCRs, not hard-coded 15 min.
 - ⏳ Passing 1M run on the M22 budget (cheap re-validation of the de-risk).
 
+### M45. ADR-0022 alignment: `Need.Count` is Pod count, BigFleet diffs aggregates
+
+**Driven by** [ADR-0022](adr/0022-need-count-semantics-pod-vs-machine.md). The M44.4 Drop M–AA iteration loop closed every per-stage chain bug we could find and still landed scaleway-50k bind p99 at ~23 s after a 30 min soak. The remaining gap is architectural, not a chain bug: `pkg/decision/phase1_assign.go:103-114` treats `Need.Count` as machine count and emits one Bootstrap per unit, so a Profile that aggregates 100 CRs becomes 100 machines provisioned — when the paper-correct answer is "however many machines fit 100 Pods' worth of `Profile.Resources`." The harness's M35 unique-per-Pod label-axis multiplier has been hiding this drift by keeping `Count = 1` everywhere.
+
+**Out of scope here:** speculative-quota allocation refactor (coordinator-side), Path B Profile split (separate `WorkloadClass` / `MachineShape` types), provider-contract changes. All deferred to future milestones if they turn out to be needed.
+
+**M45.0 — types + proto: `Machine.Allocatable`, doc-comments**
+- Add `Allocatable corev1.ResourceList` to `pkg/machine/machine.Machine` and to the `Machine` message in `api/proto/.../shard.proto` + `provider.proto`.
+- Every code path that constructs a `Machine` defaults `Allocatable = Profile.Resources` (preserves all current 1:1 behaviour).
+- Doc-comment `Need.Count` in `pkg/needs/needs.go` and `CapacityNeed.count` in the proto as "post-aggregation Pod count for this Profile, not machine count."
+- Doc-comment `Profile` to spell out "Resources is the per-replica request shape."
+- Commit observable change: none. Tests still all pass. Sets the table.
+
+**M45.1 — Phase 1 vector math**
+- New helper `decision.MachinesForAggregate(profileResources, count, machineAllocatable) int`: bottleneck-dimension `ceil(N × per-replica / per-machine)` math, fully unit-testable.
+- Replace `fromSupply := n.Count` / `deficit := n.Count - fromSupply` at `pkg/decision/phase1_assign.go:103-114` with: aggregate demand = `Profile.Resources × Count`, supply = `Σ machine.Allocatable for matching machines`, deficit = `max(0, demand − supply)` per dimension, emit `MachinesForAggregate(...)` Bootstraps.
+- Existing 1 Pod = 1 machine tests (Count=1, homogeneous shapes) keep passing trivially.
+- New tests: density > 1, memory-bottleneck, CPU-bottleneck, GPU dimension, mixed.
+
+**M45.2 — Phase 3 vector math (reclaim)**
+- Mirror M45.1's changes on `pkg/decision/phase3_reclaim.go:144-148`: slack budget in aggregate space, reclaim candidates picked by the same vector-comparison logic, sign flipped.
+- Symmetric tests.
+
+**M45.3 — Operator rollup audit + doc**
+- Audit the operator's rollup path (`pkg/operator/rollup.go` or wherever the aggregation lives) to confirm same-Profile CRs sum into one `CapacityNeed{count = N}`.
+- I'm fairly sure this already works; this milestone is mostly a verification + doc-comment update on the rollup function.
+- No behaviour change expected; if behaviour changes, file the bug here.
+
+**M45.4 — Harness re-shape: bounded Profile cardinality**
+- Update M35 label-axis multipliers in `test/scaletest/profiles/archetypes/realistic.yaml` so axes multiply to ~10 distinct Profiles per cluster (target across the fleet: ~500 Profiles × ~100 CRs each at scaleway-50k).
+- Update seed catalog correspondingly — seed Configured machines must still match demand-side Profiles.
+- Set seed `Allocatable` to be a multiple of the per-replica `Profile.Resources` (e.g. 100× — one machine fits 100 replicas of its Profile).
+- Kind regression: `dev-5k` still passes.
+
+**M45.5 — Scaleway-50k cloud validation**
+- One full scaleway-50k run on the new shape.
+- Expected: bind p99 lands cleanly under the 15 s SLO (no more linear climb through soak — chain isn't over-provisioning).
+- Lock the run as the new baseline reference.
+
+**M45.6 — Larger-scale regression**
+- `scaleway-1m` and `scaleway-500k` runs on the new shape.
+- Confirm aggregation behaviour holds at higher scale.
+- Update profile docs / SLO notes with the new baselines.
+
+**Risks worth surfacing:**
+- Existing unit tests in `pkg/decision/` may have hand-built Needs assuming the 1-Pod = 1-machine math. They keep passing under M45.0's default migration, but the M45.1 behaviour change needs new test coverage.
+- The seed code (`pkg/scaletest/archetype/`) puts the per-machine shape into `Profile.Resources` today. After M45.0, seed-time inventory needs `Allocatable = density × Profile.Resources`.
+- Run-to-run variance in the soak window was real even before this change. M45.5 may need 2–3 runs to nail down the new baseline rather than 1.
+
 ---
 
 ## 10. Scalability concerns
