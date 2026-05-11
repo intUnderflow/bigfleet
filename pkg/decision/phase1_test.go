@@ -269,3 +269,73 @@ func TestPhase1_ManyNeedsSharingFingerprint_DistributesAcrossNeeds(t *testing.T)
 		t.Errorf("unsatisfied = %d, want 0 (Idle pool covers everything)", len(r.Unsatisfied))
 	}
 }
+
+// TestPhase1_DenseMachine_OneAbsorbsManyPods exercises the M45.1 vector
+// math: a single Configured machine with Allocatable > Profile.Resources
+// absorbs `density` Pods of demand. The shard emits fewer Bootstraps
+// than Need.Count when matching machines pack multiple replicas.
+func TestPhase1_DenseMachine_OneAbsorbsManyPods(t *testing.T) {
+	t.Parallel()
+
+	// Per-replica profile: each Pod wants 1 CPU + 4 GiB.
+	profile := needs.NewProfile(
+		[]needs.Requirement{{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: needs.OperatorIn,
+			Values:   []string{"c6a.4xlarge"},
+		}},
+		[]needs.ResourceQty{
+			{Name: "cpu", Quantity: "1"},
+			{Name: "memory", Quantity: "4Gi"},
+		},
+		nil,
+		1000,
+		needs.PenaltyBucket64,
+		needs.PenaltyBucketPinned,
+	)
+
+	// One Configured machine, already-bound to a Need with this profile's
+	// fingerprint. Allocatable is c6a.4xlarge-shaped: 16 CPU / 32 GiB,
+	// density = 8 (memory bottleneck).
+	configuredID := machine.ID("dense-1")
+	m := machine.Machine{
+		ID:    configuredID,
+		State: machine.StateConfigured,
+		Host:  machine.HostRef{Provider: "fake", Ref: "dense-1"},
+		Profile: machine.Profile{
+			InstanceType: "c6a.4xlarge",
+			Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
+		},
+		Cluster:                 "cluster-A",
+		AssignedNeedFingerprint: profile.Fingerprint(),
+		Allocatable:             map[string]string{"cpu": "16", "memory": "32Gi"},
+	}
+	inv := inventory.New()
+	if err := inv.Insert(m); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	snap := inv.Snapshot()
+
+	// Demand: 10 Pods. The existing dense machine covers 8; we should
+	// see Phase 1 emit Bootstraps only for the remaining 2 Pods.
+	need := needs.Need{
+		ClusterID: "cluster-A",
+		Profile:   profile,
+		Count:     10,
+	}
+	res := decision.Phase1(snap, []needs.Need{need})
+
+	// With no Idle/Speculative inventory in the snap, Phase 1 can't fill
+	// the remaining 2 Pods — they become Unsatisfied. The point of the
+	// test is to confirm the deficit is computed as 10 - 8 = 2, not
+	// 10 - 1 = 9 (the pre-ADR-0022 machine-count math).
+	if len(res.Actions) != 0 {
+		t.Errorf("no Idle/Spec in inventory; expected 0 actions, got %d", len(res.Actions))
+	}
+	if len(res.Unsatisfied) != 1 {
+		t.Fatalf("expected 1 unsatisfied Need, got %d", len(res.Unsatisfied))
+	}
+	if got := res.Unsatisfied[0].Deficit; got != 2 {
+		t.Errorf("Unsatisfied.Deficit = %d, want 2 (10 Pods - density 8 absorbed)", got)
+	}
+}

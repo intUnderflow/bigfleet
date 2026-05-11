@@ -78,6 +78,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	for _, n := range sorted {
 		profile := n.Profile
 		fp := profile.Fingerprint()
+		profResources := profileResourcesToMap(profile.ResourcesRO())
 		k := fpKey{n.ClusterID, fp}
 		s, ok := state[k]
 		if !ok {
@@ -91,15 +92,33 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			// Bootstrap emits to be deduped silently — the cycle's
 			// emit cap (maxActionsPerCycle) was burned on duplicates
 			// instead of new demand.
-			matcher := func(m machine.Machine) bool {
-				return m.AssignedNeedFingerprint == fp
+			//
+			// ADR-0022 / M45.1: supply is now in Pod-units (sum of each
+			// matching machine's density), not machine count. For
+			// pre-ADR-0022 inventory where machine.EffectiveAllocatable()
+			// equals profile.Resources, density = 1 per machine and
+			// supply equals the old machine-count value — behaviour
+			// preserved. M45.4 introduces seeded inventory with density
+			// > 1 and the same code path keeps working without change.
+			supply := 0
+			matchPodSupply := func(state machine.State) {
+				for _, m := range snap.ListByClusterState(n.ClusterID, state) {
+					if m.AssignedNeedFingerprint != fp {
+						continue
+					}
+					d := PodsPerMachine(profResources, m.EffectiveAllocatable())
+					if d <= 0 {
+						d = 1
+					}
+					supply += d
+				}
 			}
-			supply := snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfigured, matcher) +
-				snap.CountByClusterStateMatching(n.ClusterID, machine.StateConfiguring, matcher)
+			matchPodSupply(machine.StateConfigured)
+			matchPodSupply(machine.StateConfiguring)
 			s = &fpState{supplyRemaining: supply}
 			state[k] = s
 		}
-		// Claim from existing supply first.
+		// Claim from existing supply (Pod-units) first.
 		fromSupply := n.Count
 		if fromSupply > s.supplyRemaining {
 			fromSupply = s.supplyRemaining
@@ -108,13 +127,23 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			fromSupply = 0
 		}
 		s.supplyRemaining -= fromSupply
-		deficit := n.Count - fromSupply
-		if deficit <= 0 {
+		deficitPods := n.Count - fromSupply
+		if deficitPods <= 0 {
 			continue
 		}
 
+		// ADR-0022 / M45.1: translate Pod deficit to machine count using
+		// MachinesForAggregate. For pre-M45 inventory where matching
+		// machines have Allocatable == profile.Resources, density = 1
+		// and machinesNeeded == deficitPods (preserves the historical
+		// 1 Pod = 1 machine math). M45.4 will introduce seeded inventory
+		// with density > 1; this same call returns a smaller machine
+		// count there, and the take loop below tracks actual absorption
+		// per machine.
+		machinesNeeded := MachinesForAggregate(profResources, profResources, deficitPods)
+
 		// Idle first: cheapest path (one Configure call, no Create).
-		idle := alloc.take(machine.StateIdle, profile, deficit)
+		idle := alloc.take(machine.StateIdle, profile, machinesNeeded)
 		for _, m := range idle {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindBootstrap,
@@ -123,14 +152,19 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				SourceProfile: &profile,
 				Reason:        "phase1.idle",
 			})
+			d := PodsPerMachine(profResources, m.EffectiveAllocatable())
+			if d <= 0 {
+				d = 1
+			}
+			deficitPods -= d
 		}
-		deficit -= len(idle)
-		if deficit == 0 {
+		if deficitPods <= 0 {
 			continue
 		}
 
 		// Fall back to speculative: pick by lowest effective_cost.
-		spec := alloc.take(machine.StateSpeculative, profile, deficit)
+		machinesNeeded = MachinesForAggregate(profResources, profResources, deficitPods)
+		spec := alloc.take(machine.StateSpeculative, profile, machinesNeeded)
 		for _, m := range spec {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindProvision,
@@ -139,13 +173,20 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				SourceProfile: &profile,
 				Reason:        "phase1.speculative",
 			})
+			d := PodsPerMachine(profResources, m.EffectiveAllocatable())
+			if d <= 0 {
+				d = 1
+			}
+			deficitPods -= d
 		}
-		deficit -= len(spec)
 
-		if deficit > 0 {
+		if deficitPods > 0 {
 			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
-				Need:    n,
-				Deficit: deficit,
+				Need: n,
+				// Phase 2 / shortfall protocol still operates in Pod
+				// units here. Translating to machine units for the
+				// downstream coordinator interaction is M45.2+ work.
+				Deficit: deficitPods,
 			})
 		}
 	}
