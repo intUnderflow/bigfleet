@@ -49,6 +49,13 @@ shard:
   # (e.g. scaleway-500k) to populate the inventory without a real
   # provider; 0 = no seeding.
   seedMachines: 0
+  # ADR-0022 / M45.4: each seeded machine carries
+  # Allocatable = N × Profile.Resources. N=1 (or unset) keeps the
+  # pre-ADR-0022 1 Pod = 1 machine math. N>1 models real-fleet density —
+  # e.g. CPU services packing ~10/machine, GPU inference ~8/machine —
+  # so Phase 1 emits one Bootstrap per N aggregated Pods instead of one
+  # per Pod. Per-profile knob; larger profiles set higher density.
+  seedDensityMultiplier: 0
   # M29: pre-seed N Configured machines per kwok cluster owned by this
   # shard. Models the production-realistic shape where most fleet
   # inventory is workloads-already-bound, not Idle headroom. Profile

@@ -193,6 +193,32 @@ func (p *Provider) AddConfigured(
 	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 }
 
+// SetAllocatable overrides the named machine's Allocatable map. Used by
+// the scaletest seed (ADR-0022 / M45.4) to make a single machine cover
+// N replicas of its Profile.Resources — modelling the production-realistic
+// per-machine Pod density. No-op when the machine doesn't exist or
+// allocatable is empty (the consumer falls back to Profile.Resources
+// via Machine.EffectiveAllocatable()).
+func (p *Provider) SetAllocatable(id machine.ID, allocatable map[string]string) {
+	if len(allocatable) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, ok := p.machines[id]
+	if !ok {
+		return
+	}
+	out := make(map[string]string, len(allocatable))
+	for k, v := range allocatable {
+		out[k] = v
+	}
+	m.Allocatable = out
+	p.rev++
+	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
+}
+
 // FailNext queues a single error to be returned the next time the
 // matching (machine_id, target_state) RPC is called. Useful for testing
 // the shard's retry / Failed-state handling.

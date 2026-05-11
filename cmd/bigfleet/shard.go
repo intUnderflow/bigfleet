@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"math"
 	"math/rand"
@@ -147,7 +148,43 @@ func parseStatefulSetOrdinal(podName string) (int, error) {
 // shardReplicas). Setting any of {nConfiguredPerCluster, clusterStride,
 // totalClusters, shardOrdinal} to its zero value disables the
 // Configured seed.
-func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal int, archetypes []archetype.Archetype, logger *slog.Logger) {
+// scaleResourceMap multiplies each quantity in `in` by `factor` using
+// k8s resource.Quantity arithmetic so the canonical-string format the
+// rest of the system expects is preserved. factor <= 1 returns a
+// shallow copy unchanged (preserves the pre-ADR-0022 1:1 behaviour).
+func scaleResourceMap(in map[string]string, factor int) map[string]string {
+	if len(in) == 0 || factor <= 1 {
+		return cloneResourceMap(in)
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		q, err := resource.ParseQuantity(v)
+		if err != nil {
+			// Unparseable: leave the original — Phase 1's PodsPerMachine
+			// will return 0 for that machine and the seed effectively
+			// can't host the workload, which is the conservative answer.
+			out[k] = v
+			continue
+		}
+		scaled := q.DeepCopy()
+		scaled.Mul(int64(factor))
+		out[k] = scaled.String()
+	}
+	return out
+}
+
+func cloneResourceMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes []archetype.Archetype, logger *slog.Logger) {
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
 	zones := []string{"zone-a", "zone-b", "zone-c"}
 	resources := map[string]map[string]string{
@@ -222,10 +259,17 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 		}
 		id := machine.ID("idle-" + strconv.Itoa(i))
 		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
+		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
+		// Profile.Resources. EffectiveAllocatable() falls back to
+		// Profile.Resources when this is nil, so densityMultiplier ≤ 1
+		// is a no-op (preserves pre-ADR-0022 1 Pod = 1 machine math).
+		allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+		prov.SetAllocatable(id, allocatable)
 		_ = sh.SeedInventory(machine.Machine{
-			ID:      id,
-			State:   machine.StateIdle,
-			Profile: profile,
+			ID:          id,
+			State:       machine.StateIdle,
+			Profile:     profile,
+			Allocatable: allocatable,
 		})
 	}
 
@@ -312,11 +356,15 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 				}
 				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, i))
 				prov.AddConfigured(id, profile, machine.CapacityTypeBareMetal, 0, 0, cluster, assignedPriority, interruptionPenalty, reclamationPenalty)
+				// ADR-0022 / M45.4: see Idle seed comment above.
+				allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+				prov.SetAllocatable(id, allocatable)
 				_ = sh.SeedInventory(machine.Machine{
 					ID:                                 id,
 					State:                              machine.StateConfigured,
 					Cluster:                            cluster,
 					Profile:                            profile,
+					Allocatable:                        allocatable,
 					AssignedPriority:                   assignedPriority,
 					AssignedInterruptionPenaltyDollars: interruptionPenalty,
 					AssignedReclamationPenaltyDollars:  reclamationPenalty,
@@ -346,6 +394,7 @@ func runShard(args []string) error {
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
 	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to a single a3-highgpu-8g GPU shape (the legacy M29 behaviour). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
 	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
+	seedDensityMultiplier := fs.Int("seed-density-multiplier", 1, "ADR-0022 / M45.4: seed each fake-inventory machine with Allocatable = N × Profile.Resources. N=1 (default) keeps the pre-ADR-0022 1 Pod = 1 machine behaviour. N>1 makes one machine cover N replicas of its Profile, modelling realistic per-machine Pod density (e.g. CPU services packing ~10/machine, GPU inference ~8/machine).")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
@@ -422,7 +471,7 @@ func runShard(args []string) error {
 			arches = cat.ForSeed()
 			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches))
 		}
-		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, arches, logger)
+		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, logger)
 	}
 
 	srv := grpc.NewServer()

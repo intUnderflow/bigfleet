@@ -10,6 +10,16 @@
 # the seed every cycle and the test measures reprovisioning, not
 # steady-state.
 #
+# ADR-0022 / M45.4: per-archetype fingerprint cardinality is now
+# deliberately bounded — most archetypes carry a single sizeBucket and
+# a single priorityClass, so each archetype contributes 1-2 distinct
+# Profile fingerprints per cluster. Total fleet target is ~8-10 fp
+# per cluster; with 1000 Pods/cluster (scaleway-50k) that's ~100 Pods
+# per Profile, which is what makes the aggregate-demand model actually
+# aggregate. Earlier revisions ran with 4-bucket × 2-prio expansions
+# (~30 fp/cluster) which collapsed Need.Count to ~1 everywhere and
+# hid the M45 vector-math bug.
+#
 # Schema (per-archetype):
 #   name                : human-readable label
 #   weight              : relative fleet frequency (any int > 0)
@@ -18,8 +28,6 @@
 #   sizeBuckets         : ADR-0015 §1 — per-CR resources picked
 #                         weighted-random from this list. When set,
 #                         the flat `resources:` field is ignored.
-#                         Multiplies fingerprint cardinality to the
-#                         100-500 per cluster range real fleets carry.
 #   resources           : flat fallback when sizeBuckets is empty
 #   priorityClasses     : driver picks one uniformly per CR
 #   interruptionPenalty : float64 dollars
@@ -46,8 +54,7 @@ archetypes:
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 70, resources: { nvidia.com/gpu: "8" } }
-      - { weight: 30, resources: { nvidia.com/gpu: "16" } }
+      - { weight: 100, resources: { nvidia.com/gpu: "8" } }
     priorityClasses: [1000]
     interruptionPenalty: 65536
     reclamationPenalty: 65536
@@ -62,24 +69,24 @@ archetypes:
     instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 60, resources: { nvidia.com/gpu: "1" } }
-      - { weight: 40, resources: { nvidia.com/gpu: "2" } }
-    priorityClasses: [100, 1000]
+      - { weight: 100, resources: { nvidia.com/gpu: "1" } }
+    priorityClasses: [1000]
     interruptionPenalty: 4096
     reclamationPenalty: 8192
     meanLifetimeSeconds: 0
 
   - name: cpu-batch
     # Resumable batch jobs. Biggest population by churn rate;
-    # shortest lifetime; cheapest to interrupt.
+    # shortest lifetime; cheapest to interrupt. Two size buckets
+    # preserve a small amount of fingerprint variety so the test
+    # exercises mixed-Profile aggregation rather than collapsing to
+    # one global fingerprint.
     weight: 35
     instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 30, resources: { cpu: "4",  memory: "8Gi"  } }
-      - { weight: 35, resources: { cpu: "8",  memory: "16Gi" } }
-      - { weight: 25, resources: { cpu: "16", memory: "32Gi" } }
-      - { weight: 10, resources: { cpu: "32", memory: "64Gi" } }
+      - { weight: 60, resources: { cpu: "4",  memory: "8Gi"  } }
+      - { weight: 40, resources: { cpu: "8",  memory: "16Gi" } }
     priorityClasses: [100]
     interruptionPenalty: 64
     reclamationPenalty: 256
@@ -88,15 +95,13 @@ archetypes:
   - name: cpu-service
     # User-facing services with HPAs / fixed-replica deployments.
     # Mid priority, long-lived, biggest steady-state population by
-    # count. Resource sizes span 1c-16c.
+    # count. Two size buckets — same rationale as cpu-batch.
     weight: 30
     instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 40, resources: { cpu: "2",  memory: "8Gi"  } }
+      - { weight: 65, resources: { cpu: "2",  memory: "8Gi"  } }
       - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
-      - { weight: 20, resources: { cpu: "8",  memory: "32Gi" } }
-      - { weight: 5,  resources: { cpu: "16", memory: "64Gi" } }
     priorityClasses: [1000]
     interruptionPenalty: 1024
     reclamationPenalty: 8192
@@ -109,9 +114,7 @@ archetypes:
     instanceTypes: [r6i.xlarge, r6i.2xlarge]
     zones: [zone-a, zone-b]
     sizeBuckets:
-      - { weight: 50, resources: { cpu: "4", memory: "32Gi"  } }
-      - { weight: 30, resources: { cpu: "4", memory: "64Gi"  } }
-      - { weight: 20, resources: { cpu: "8", memory: "128Gi" } }
+      - { weight: 100, resources: { cpu: "4", memory: "32Gi" } }
     priorityClasses: [1000]
     interruptionPenalty: 4096
     reclamationPenalty: 32768
@@ -127,8 +130,7 @@ archetypes:
     instanceTypes: [c6i.4xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 70, resources: { cpu: "8",  memory: "16Gi" } }
-      - { weight: 30, resources: { cpu: "16", memory: "32Gi" } }
+      - { weight: 100, resources: { cpu: "8",  memory: "16Gi" } }
     priorityClasses: [1000000]
     interruptionPenalty: 65536
     reclamationPenalty: 65536
