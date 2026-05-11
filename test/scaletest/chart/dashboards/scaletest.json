@@ -111,7 +111,7 @@
       "description": "Where the test currently is in its lifecycle. Two-step indicator: (1) all load-drivers have hit their target Pod count, (2) the shard has Bootstrap-succeeded \u2265 99 % of total target (so the cold-start backlog is drained and post-fill steady-tagged Pods bind cleanly). 0 = ramp (load-drivers still filling); 0.5 = filling (load-drivers done but chain still draining the backlog \u2014 gate hasn't cleared yet); 1 = steady-state soak (gate cleared, runner is measuring). The runner's gate (M44.4) waits for both signals before transitioning to soak.",
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 3,
         "x": 12,
         "y": 0
       },
@@ -176,6 +176,59 @@
       },
       "options": {
         "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 110,
+      "type": "stat",
+      "title": "Time in current phase",
+      "description": "Wall-clock elapsed since the load-driver entered its current phase. Picks 'steady' if every cluster has reached its target Pod count, otherwise 'ramp'. Sourced from scaletest_loadgen_phase_started_at_seconds — stamped at process start (ramp) and the moment the first cluster hits its target (steady). Useful for reading the dashboard alongside the SLO panel: 'we're 12 min into soak, p99 looks stable' vs 'we're still in ramp, the bind tail is expected'.",
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "time() - (min(scaletest_loadgen_phase_started_at_seconds{phase=\"steady\"} > 0) or on() min(scaletest_loadgen_phase_started_at_seconds{phase=\"ramp\"} > 0))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "Initialising",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
         "graphMode": "none",
         "textMode": "value",
         "reduceOptions": {

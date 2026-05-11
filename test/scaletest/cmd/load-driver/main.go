@@ -189,6 +189,21 @@ var (
 		Name: "scaletest_loadgen_steady_state",
 		Help: "1 if this cluster's load-driver has reached its target Pod count (so subsequent Pod creations are churn replacements tagged scaletest.bigfleet/state=\"steady\"); 0 during initial fill. Aggregate sum across clusters drives the dashboard's test-phase indicator.",
 	})
+
+	// Drop U: per-phase wall-clock start time. Combined with time() in
+	// PromQL this yields "time in current phase" without the dashboard
+	// having to guess from the abstract steady-state indicator. ramp is
+	// stamped at load-driver startup; steady is stamped at the moment
+	// the cluster first reaches its target Pod count. Aggregated across
+	// clusters: min(... phase="ramp") = first cluster to start;
+	// min(... phase="steady") = first cluster to reach target; max =
+	// last. A run-wide "soak began at" is min(... phase="steady") since
+	// the runner waits for every cluster to be steady before declaring
+	// steady state.
+	phaseStartedAt = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "scaletest_loadgen_phase_started_at_seconds",
+		Help: "Unix-time when this load-driver entered each phase. phase=ramp is set at process start; phase=steady is set when the cluster first reaches its target Pod count. Unset/zero means the phase has not been entered.",
+	}, []string{"phase"})
 )
 
 func main() {
@@ -274,6 +289,10 @@ func run(args []string) error {
 	srv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.ListenAndServe() }()
 	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	// Drop U: stamp ramp-phase start so the dashboard can compute
+	// time-in-phase without guessing from steady_state alone.
+	phaseStartedAt.WithLabelValues("ramp").Set(float64(time.Now().Unix()))
 
 	d := &driver{
 		clusterID:  *clusterID,
@@ -578,6 +597,7 @@ func (d *driver) rampTo(ctx context.Context, want int) error {
 	}
 	if !d.steadyState.Swap(true) {
 		steadyStateMetric.Set(1)
+		phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
 	}
 	return nil
 }
@@ -665,6 +685,7 @@ func (d *driver) createOnePod(ctx context.Context) error {
 	// the count below target.
 	if d.prof.Target > 0 && now >= d.prof.Target && !d.steadyState.Swap(true) {
 		steadyStateMetric.Set(1)
+		phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
 	}
 	return nil
 }
