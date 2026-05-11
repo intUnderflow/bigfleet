@@ -270,6 +270,31 @@ func run(args []string) error {
 	// soak; the assertion side runs after teardown using prom queries
 	// from the snapshot.
 	actionResults := scheduleRunnerActions(soakCtx, *kubeconfig, namespace, soakStart, prof.RunnerActions)
+	// Drop V: soak-progress heartbeat. The Drop T run hung 10 min past
+	// the 30 min soak deadline with the main goroutine pinned in select
+	// — most likely macOS app-nap suspending the process after its
+	// stdio went quiet at the +5 min fail-fast print. A per-minute
+	// heartbeat both keeps stdio warm (anti-nap) and gives the watcher
+	// a "still alive, N min into soak" signal so a future hang becomes
+	// obvious instead of looking like a slow snapshot.
+	heartbeatTicker := time.NewTicker(60 * time.Second)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		for {
+			select {
+			case <-soakCtx.Done():
+				return
+			case t := <-heartbeatTicker.C:
+				fmt.Fprintf(os.Stderr, "soak heartbeat: %s into %s\n",
+					t.Sub(soakStart).Round(time.Second), *duration)
+			}
+		}
+	}()
+	defer func() {
+		heartbeatTicker.Stop()
+		<-heartbeatDone
+	}()
 	// Drop M: fail-fast at 5 min into soak. The feedback cycle is long
 	// (30 min soak × Scaleway round-trip), so a soak whose release-gating
 	// numbers are already off-budget at the 5 min mark is cut short —
