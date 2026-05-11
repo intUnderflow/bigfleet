@@ -705,10 +705,21 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// healthy, what's the user-facing latency of an arriving
 		// Pod?"
 		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`,
-		"operatorRollupP99Seconds":         `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":            `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec":        `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":                  `sum(bigfleet_shard_shortfalls)`,
+		// Drop Q: pod-shim chain breakdown. Together with shardProvisioning*
+		// (Phase 1 emit → Bootstrap complete) these localise where the
+		// internalBindingLatencyP99Seconds tail lives. UpcomingNode-to-Node
+		// is the fake-Node controller's reconcile queueing; Node-to-Bound
+		// is the podBinder + Watches handler. If both are low and
+		// shardProvisioning* is high, the chain bottleneck is upstream of
+		// pod-shim entirely.
+		"upcomingToNodeP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
+		"nodeToBoundP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
+		"upcomingToNodeP50Seconds":  `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds_bucket[5m])))`,
+		"nodeToBoundP50Seconds":     `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds_bucket[5m])))`,
+		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
+		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last

@@ -117,6 +117,24 @@ var (
 		Name: "bigfleet_scaletest_pod_shim_pod_bind_errors_total",
 		Help: "Per-reason breakdown of Pod /binding subresource failures (outcome=bind_error). reason classifies the apierror class: not_found, conflict, forbidden, throttled, timeout, server, other.",
 	}, []string{"reason"})
+	// Drop Q: per-stage residence histograms to localise the chain's
+	// 50 s+ steady-state p99 tail. The runner already measures end-to-end
+	// (pod creation → pod bound) and shardProvisioningLatency (Phase 1
+	// emit → Bootstrap complete). These two close the remaining gap:
+	// from when the operator surfaces an UpcomingNode through when the
+	// Pod is bound to the fake-Node we built from it. Buckets match the
+	// pod_bind_latency_steady_seconds histogram so the cumulative
+	// distribution lines up visually in Grafana.
+	upcomingToNodeLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds",
+		Help:    "Wall-clock from UpcomingNode CR creation to fake-Node Create succeeding in this pod-shim. Captures the reconciler's queue + per-event handler time; a flat distribution here means the fake-Node controller is keeping up, a long tail means controller-runtime queueing.",
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+	})
+	nodeToBoundLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds",
+		Help:    "Wall-clock from fake-Node creation to successful Bind for the Pod that ends up on it. Includes Watches(Node) re-enqueue, podBinder Reconcile queueing, candidate-Node scan, claim Patch, and the /binding RPC. The 'how long does pod-shim sit on a Ready Node before getting a Pod onto it?' question.",
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+	})
 )
 
 // classifyBindError maps an apiserver error returned from the /binding
@@ -157,6 +175,8 @@ func init() {
 		fakeNodesCreated,
 		podBindAttempts,
 		podBindErrors,
+		upcomingToNodeLatency,
+		nodeToBoundLatency,
 	)
 }
 
@@ -424,6 +444,9 @@ func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) 
 				podBindLatencySteadySeconds.Observe(latency)
 			}
 		}
+		if !n.CreationTimestamp.IsZero() {
+			nodeToBoundLatency.Observe(time.Since(n.CreationTimestamp.Time).Seconds())
+		}
 		return true, nil
 	}
 	return false, nil
@@ -492,6 +515,9 @@ func (r *upcomingNodeFakeNodeReconciler) Reconcile(ctx context.Context, req reco
 			}},
 		}
 		_ = r.Status().Update(ctx, statusPatch)
+	}
+	if !upn.CreationTimestamp.IsZero() {
+		upcomingToNodeLatency.Observe(time.Since(upn.CreationTimestamp.Time).Seconds())
 	}
 	upcomingNodesObserved.WithLabelValues("created").Inc()
 	return reconcile.Result{}, nil
