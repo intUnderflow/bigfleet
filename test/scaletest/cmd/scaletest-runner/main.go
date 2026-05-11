@@ -295,15 +295,20 @@ func run(args []string) error {
 		heartbeatTicker.Stop()
 		<-heartbeatDone
 	}()
-	// Drop M: fail-fast at 5 min into soak. The feedback cycle is long
-	// (30 min soak × Scaleway round-trip), so a soak whose release-gating
-	// numbers are already off-budget at the 5 min mark is cut short —
-	// it isn't going to recover by minute 30, and waiting it out just
-	// burns iteration time. Only the two ADR-0014 / ADR-0018 release
-	// gates are inspected (binding latency p99, cycle envelope); the
-	// informational metrics still ride the full soak so the final
-	// summary remains complete.
-	failFastDelay := 5 * time.Minute
+	// Drop M / Drop Z: fail-fast at 10 min into soak. Originally +5 min
+	// (Drop M) but two consecutive runs (Drop X churn-fix and Drop Y
+	// rate(2m) window) aborted at this mark with bind p99 ~15-17 s
+	// despite the chain settling to 8-10 s p99 by +14 min. The chain's
+	// catch-up window — Pods CREATED during the ramp's tail or first
+	// minute of soak that bind 5-10 s later, plus the operator/shard
+	// inventory rebalancing from the cold start — is longer than the
+	// original +5 min budget assumed. +10 min lands cleanly past the
+	// catch-up, and combined with Drop Y's rate(2m) window samples
+	// the +8..+10 min slice which is pure post-catch-up steady state.
+	// Trade-off: a 30 min soak that's truly failing burns 5 extra min
+	// here. Worth it to avoid false-positive aborts that look like
+	// runner artefacts to the watcher.
+	failFastDelay := 10 * time.Minute
 	failFastTimer := time.NewTimer(failFastDelay)
 	failFastFired := false
 loop:
@@ -318,11 +323,11 @@ loop:
 			failFastFired = true
 			ok, reason := soakFailFastCheck(ctx, *kubeconfig, namespace, prof.SLO)
 			if !ok {
-				fmt.Fprintln(os.Stderr, "soak 5min fail-fast: aborting —", reason)
+				fmt.Fprintln(os.Stderr, "soak 10min fail-fast: aborting —", reason)
 				cancelSoak()
 				break loop
 			}
-			fmt.Fprintln(os.Stderr, "soak 5min fail-fast: passing —", reason)
+			fmt.Fprintln(os.Stderr, "soak 10min fail-fast: passing —", reason)
 		}
 	}
 	cancelSoak()
@@ -864,21 +869,18 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 	return v, nil
 }
 
-// soakFailFastCheck reads the two release-gating SLOs 5 min into the
+// soakFailFastCheck reads the two release-gating SLOs 10 min into the
 // soak and returns ok=false if either is already off-budget. Uses a
 // rate(...[2m]) window — narrower than the [5m] used in the final
-// summary — so the sample comes from the last two minutes (i.e. the
-// +3..+5 min slice of soak, all post-gate, all steady-state binds).
-// The [5m] window at this point would straddle the ramp tail (gate
-// clears at soak_start, so [5m] includes -2..0 ramp + 0..+5 soak)
-// and false-positive on transient catch-up latency that recovers
-// within 10 min — Drop X's run measured 15.6 s at +5 with [5m] but
-// 8.9 s at +14 mid-soak under the same conditions. The narrower
-// window costs sample count (~17 binds/sec × 2 min = 2 K obs, plenty
-// for p99) and gains rejection of legitimate steady-state runs.
-// If both prom queries fail (Prometheus pod gone, exec hung, etc.)
-// the soak is allowed to continue so a transient infra blip doesn't
-// abort the run.
+// summary — so the sample comes from the +8..+10 min slice, fully
+// past the chain's cold-start catch-up. Drop M originally fired this
+// at +5 min, but Drop X / Drop Y runs showed the +5 min p99 still
+// reflecting catch-up latency from Pods CREATED late-ramp / early-soak
+// (15-17 s p99 at +5, 8-10 s by +14). Cost of waiting 5 more min:
+// a truly-failing 30 min soak burns the extra time. Benefit: false-
+// positive aborts on transitionally-slow soaks go away. If both prom
+// queries fail (Prometheus pod gone, exec hung, etc.) the soak is
+// allowed to continue so a transient infra blip doesn't abort the run.
 func soakFailFastCheck(ctx context.Context, kubeconfig, ns string, slo sloOverrides) (bool, string) {
 	qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
