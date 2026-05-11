@@ -339,3 +339,73 @@ func TestPhase1_DenseMachine_OneAbsorbsManyPods(t *testing.T) {
 		t.Errorf("Unsatisfied.Deficit = %d, want 2 (10 Pods - density 8 absorbed)", got)
 	}
 }
+
+// TestPhase1_PerPodCRs_DensitySurplusCredit guards the M45.4 surplus
+// credit. Under Pod-mode each Pod has its own CR with its own ownerRef
+// UID, so the operator's rollup keeps every Need with Count=1 (Aggregate
+// keys by (cluster, fp, group) and Group differs per CR). For 100 Pods
+// sharing one Profile at density=10 the correct emit is ~10 Bootstraps,
+// not 100 — each newly-bootstrapped machine's spare 9 Pods of capacity
+// should satisfy 9 peer Needs of the same fingerprint before another
+// machine is taken. Without the credit Phase 1 emits one Bootstrap per
+// Need (Count=1), which on dev-5k at 5000 Pods × density 10 exhausted
+// the Idle pool and stalled the chain.
+func TestPhase1_PerPodCRs_DensitySurplusCredit(t *testing.T) {
+	t.Parallel()
+
+	profile := needs.NewProfile(
+		[]needs.Requirement{{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: needs.OperatorIn,
+			Values:   []string{"c6a.4xlarge"},
+		}},
+		[]needs.ResourceQty{
+			{Name: "cpu", Quantity: "1"},
+			{Name: "memory", Quantity: "4Gi"},
+		},
+		nil,
+		1000,
+		needs.PenaltyBucket64,
+		needs.PenaltyBucketPinned,
+	)
+
+	// 50 Idle machines, each density 10 — far more capacity than we need.
+	inv := inventory.New()
+	for i := 0; i < 50; i++ {
+		m := machine.Machine{
+			ID:    machine.ID("idle-" + string(rune('A'+i%26)) + string(rune('a'+i/26))),
+			State: machine.StateIdle,
+			Host:  machine.HostRef{Provider: "fake", Ref: "idle"},
+			Profile: machine.Profile{
+				InstanceType: "c6a.4xlarge",
+				Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
+			},
+			Allocatable: map[string]string{"cpu": "10", "memory": "40Gi"},
+		}
+		if err := inv.Insert(m); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	snap := inv.Snapshot()
+
+	// 100 separate Needs sharing the fingerprint (the Pod-mode load
+	// shape: 100 distinct CR/Pod groups, each Count=1).
+	nl := make([]needs.Need, 0, 100)
+	for i := 0; i < 100; i++ {
+		nl = append(nl, needs.Need{
+			ClusterID: "cluster-A",
+			Profile:   profile,
+			Count:     1,
+			Group:     "pod-" + string(rune('A'+i%26)) + string(rune('a'+i/26)),
+		})
+	}
+	res := decision.Phase1(snap, nl)
+
+	// ceil(100 / 10) = 10 Bootstraps expected.
+	if len(res.Actions) != 10 {
+		t.Errorf("Phase 1 emitted %d Bootstraps, want 10 (100 Pods / density 10)", len(res.Actions))
+	}
+	if len(res.Unsatisfied) != 0 {
+		t.Errorf("expected 0 unsatisfied Needs (inventory has headroom), got %d", len(res.Unsatisfied))
+	}
+}

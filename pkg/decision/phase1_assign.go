@@ -159,6 +159,17 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			deficitPods -= d
 		}
 		if deficitPods <= 0 {
+			// ADR-0022 / M45.4: the machine(s) we just took absorbed
+			// more Pods than this single Need wanted (density > 1 +
+			// Count=1 Needs from per-Pod CR fan-out). Credit the
+			// surplus back to the per-fp supply pool so peer Needs of
+			// the same (cluster, fp) consume it before allocating
+			// fresh machines. Without this, dev-5k at density=10 with
+			// 5000 single-Pod Needs emits ~5000 Bootstraps instead of
+			// the ~520 the math wants — Phase 1 stalls because Idle
+			// inventory runs out and 4400+ Needs go Unsatisfied each
+			// cycle.
+			s.supplyRemaining += -deficitPods
 			continue
 		}
 
@@ -180,15 +191,19 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			deficitPods -= d
 		}
 
-		if deficitPods > 0 {
-			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
-				Need: n,
-				// Phase 2 / shortfall protocol still operates in Pod
-				// units here. Translating to machine units for the
-				// downstream coordinator interaction is M45.2+ work.
-				Deficit: deficitPods,
-			})
+		if deficitPods <= 0 {
+			// Same surplus-credit story as the Idle branch above.
+			s.supplyRemaining += -deficitPods
+			continue
 		}
+
+		result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
+			Need: n,
+			// Phase 2 / shortfall protocol still operates in Pod
+			// units here. Translating to machine units for the
+			// downstream coordinator interaction is M45.2+ work.
+			Deficit: deficitPods,
+		})
 	}
 
 	return result
