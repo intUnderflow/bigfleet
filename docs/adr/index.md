@@ -27,3 +27,4 @@
 | [19](/adr/0019-phase1-cloud-vs-bench-discrepancy/) | Phase 1 cloud vs bench discrepancy |
 | [20](/adr/0020-internal-binding-latency-slo-respects-rollup-interval/) | Internal binding latency SLO respects rollup interval |
 | [21](/adr/0021-persistent-execute-pool/) | Persistent execute pool |
+| [22](/adr/0022-need-count-semantics-pod-vs-machine/) | `Need.Count` semantics — Pod count vs machine count, and where packing lives |
