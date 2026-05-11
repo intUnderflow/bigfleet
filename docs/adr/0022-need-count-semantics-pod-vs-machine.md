@@ -88,21 +88,58 @@ Implications:
 - Mildly more disruptive at the CRD layer: a `Count` field needs to be added to `CapacityRequestSpec`, defaulted to 1 for the existing per-Pod controller
 - Smooth migration: existing controllers keep producing `Count=1` CRs; new controllers can batch
 
-### Recommendation if forced to choose
+### Option D — drop `Count` entirely; demand is expressed as aggregate resources by class
 
-Option C is the cleanest articulation of what the user said upstream — "count should be how much to multiply the request by, BigFleet decides the rest." It is a strict superset of today's behaviour (default `Count=1` is the current 1 CR = 1 Pod model). It moves packing into BigFleet, which is consistent with the paper's "decoupled from cluster identity" stance: kube-scheduler places Pods within a cluster, BigFleet decides what *nodes* to spend money on. Packing is a node-sizing decision, not a Pod-placement decision.
+A clarification of B/C the author proposed in discussion. The previous three options all keep `Count` in some form. Option D removes it.
 
-But this is the author's call.
+The clean re-framing: **BigFleet only cares that "Cluster A wants 5000 CPUs of class X, 400 GiB of memory of class Y, N GPUs of class Z"**. The class is the Profile (architecture, memory type, GPU type, locality). The amount is an aggregate `ResourceList`, summed across all CRs of that Profile at rollup time. Pod count, replica count, "how many CRs" — none of these are visible to the shard. The shard only sees totals.
+
+CR contract:
+- `Spec.Resources` is the **per-replica** resource request (used at rollup time + as the floor when the shard picks an instance type — every machine must fit at least one of these)
+- No `Count` field. One CR is one Pod's worth of resources at this point in time. (Or in a future Kueue-shaped batch controller, one CR carries one batch's worth, summed into the rollup the same way.)
+- Pod creation, churn, lifecycle — all stays in the cluster operator's world
+
+Operator rollup contract:
+```
+message CapacityNeed {
+  Profile profile          = 1;  // class: arch, memory-class, GPU-class, locality
+  ResourceTotal aggregate  = 2;  // sum of Spec.Resources across all matching CRs
+  int32 priority           = 3;
+  // penalties, topology, etc.
+}
+```
+
+Shard's Phase 1, on each Need:
+1. Pick an instance type from the provider's catalogue that matches the Profile's class + has enough headroom to fit `Profile.MinPerUnit` (= the per-replica floor)
+2. Compute `machines_needed = ceil(Need.Aggregate / instance.Allocatable)` — multi-dimensional ceil over each resource dimension (CPU / memory / GPU), take the max
+3. Compare to existing Configured supply (sum of instance.Allocatable for matching machines), emit Bootstraps for the deficit
+
+Reclaim: same calculus reversed. Configured supply > demand → release machines, reverse-priority, until supply ≥ demand.
+
+Implications, distinct from B/C:
+
+- **No Pod-count concept anywhere in BigFleet.** Aligns with the user's framing exactly: "BigFleet shouldn't care about underlying objects, just the total it must satisfy."
+- **Heterogeneous Profile resources are fine.** With aggregates, a Profile that includes a mix of "2 CPU 4 GiB" pods and "1 CPU 8 GiB" pods just sums to "3 CPU 12 GiB" demand — the shard packs that. With B/C's `Count`, you'd have to either split into two Profiles or pick a representative per-replica shape.
+- **Multi-dimensional packing.** Today's `Count` math is scalar. Aggregate math is vector (CPU, memory, GPU, ephemeral storage). Bin-packing across N dimensions is harder; the simplest reasonable answer is first-fit-by-bottleneck-resource and refine later.
+- **Provider contract grows.** The shard needs to know each instance type's `Allocatable` shape. Today `CapacityProvider.List` returns existing machines; we'd need a `Catalog()` or `Capabilities()` RPC (or an inline field in `Create/Configure` requests) that exposes "what shapes can I provision?" Out-of-tree providers grow this responsibility.
+- **AvailableCapacity hint becomes aggregate-shaped.** Hint says "I can give you up to N CPUs / M GiB of class X with confidence H" instead of "AvailableCount: K machines of Profile P."
+- **Cleanest paper alignment.** §3 ("Capacity is decoupled from cluster identity") and §6.1 ("One CR per pod. Roll-up aggregates") both feel less strained: the rollup *actually* aggregates into something the shard can use directly, instead of just summing identical CRs.
+
+### Recommendation
+
+Option D. It's the cleanest match for "BigFleet shouldn't care about Pods or CRs, only the resources to provision," and it makes B/C feel like halfway houses — both still leak Pod-count into the shard's worldview, just at different layers. The cost is bigger (vector packing + provider-catalogue RPC) but the resulting model is closer to what real cloud autoscalers do under the hood and admits cleaner extensions (cost optimization, heterogeneous fleets, mixed-instance-types per Profile).
+
+Options A / B / C are documented above as alternatives the author considered before D was articulated. They are not deleted because the discussion that produced D is in them.
 
 ## Consequences
 
-Whichever direction is chosen, the following must be addressed:
+Whichever direction is chosen, the following must be addressed. Option D's column is what the recommendation calls for:
 
-1. **Wire-proto `count` semantics get a Doc-comment update.** Today the proto comment is silent on Pod vs machine; this ADR's chosen reading needs to be the source of truth.
-2. **NeedsTable + Phase 1 / Phase 3 ripple.** Option A: no shard changes. Option B/C: Phase 1's emit math becomes `ceil(Count / density)`, Phase 3's reclaim math the inverse, and the tests around them need to flex.
-3. **Instance-type selection.** Option A: no change (controller picks). Option B/C: shard needs to know what instance types are candidates for a Profile and how to compute density. The `CapacityProvider` contract may need an extension (e.g. a `Capabilities()` RPC that reports instance shapes).
-4. **AvailableCapacity hint semantics.** Today the hint is one `AvailableCount` per Profile (capacity-side). If Profiles map to multiple machine choices with different densities, the hint needs to either pick a canonical density or expose the per-instance-type breakdown.
-5. **Scaletest harness shape.** Whichever option lands, the harness becomes responsible for producing a workload that is *realistic for that model*. For Option C: 50 K nodes / 5 M Pods / N CRs (where N depends on how many distinct Profile classes the workload has) becomes the target shape. The existing M35 label-axis multiplier should be retuned so each Profile has ~100 Pods aggregating into it.
+1. **Wire-proto `count` field.** A: stays as machine count. B/C: stays, semantics shift to Pods. D: **removed; replaced by an aggregate `ResourceTotal`**. The CRD's `CapacityRequestSpec.Resources` stays as the per-replica request.
+2. **NeedsTable + Phase 1 / Phase 3 ripple.** A: no shard changes. B/C: scalar `ceil(Count / density)`. D: **multi-dimensional packing — `machines_needed = ceil(Aggregate / Allocatable)` across CPU / memory / GPU / ephemeral**, take the resource-bottleneck dimension's count. Phase 3 reverses with the same math.
+3. **Instance-type selection.** A: controller. B/C: shard, scalar density. D: **shard, vector fit + cost ranking**. Provider's `CapacityProvider` contract grows a `Catalog()` (or `Capabilities()`) RPC that reports the instance-type shapes the provider can produce. Out-of-tree providers ship this.
+4. **AvailableCapacity hint semantics.** A: unchanged. B/C: per-Profile capacity in Pods. D: **per-Profile capacity in aggregate resources** ("I can do up to 5 K CPU / 20 TiB of class X at confidence High"), no count.
+5. **Scaletest harness shape.** Whichever option lands, the harness produces a workload realistic for that model. For D: 50 K nodes / 5 M Pods is the demand shape, expressed as aggregate `ResourceList` per Profile (e.g. 500 Profiles × 10 K CPU each across 50 clusters). The current M35 label-axis multiplier turns into a Profile-cardinality knob; the Pod-count knob exists separately and feeds the rollup's aggregate.
 6. **Existing measurements pre-this-ADR are not directly comparable.** The Drop M–AA bind-latency numbers were taken under the implicit 1 Pod = 1 machine model. Once packing density is introduced, the equivalent metric is bind-latency *per Pod*, but the chain's work is per-machine — so we should expect both p99 to drop (fewer Bootstraps per Pod cycle) and absolute bind throughput to climb (chain not bottlenecked on 50 K Bootstraps but on ~500 if density = 100 and Profiles = 500).
 
 ## Out of scope for this ADR
