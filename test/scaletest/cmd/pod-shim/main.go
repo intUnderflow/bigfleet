@@ -108,9 +108,43 @@ var (
 	})
 	podBindAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_scaletest_pod_shim_pod_bind_attempts_total",
-		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count. claim_lost = another binder beat us to the Node label patch (apiserver-side lock); bind_error = Bind subresource itself failed (Pod gone or apiserver issue).",
+		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count. claim_lost = another binder beat us to the Node label patch (apiserver-side lock); bind_error = Bind subresource itself failed (Pod gone or apiserver issue) — see pod_bind_errors_total for the reason breakdown.",
 	}, []string{"outcome"}) // outcome: success, claim_lost, bind_error
+	// Drop N: classify bind_error by apiserver status so the long-tail
+	// p99 has a named cause. Ramp-phase runs at ~50% error rate; this
+	// counter tells us which apiserver response codes drive that.
+	podBindErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_scaletest_pod_shim_pod_bind_errors_total",
+		Help: "Per-reason breakdown of Pod /binding subresource failures (outcome=bind_error). reason classifies the apierror class: not_found, conflict, forbidden, throttled, timeout, server, other.",
+	}, []string{"reason"})
 )
+
+// classifyBindError maps an apiserver error returned from the /binding
+// subresource to a short, low-cardinality reason. The /binding subresource
+// is the canonical scheduler path; failures here are interesting in
+// proportion to how often they appear, so the labels stay coarse on
+// purpose. Anything we can't recognise lands in "other" — we'd rather
+// see a small "other" bucket and add a case than blow up cardinality.
+func classifyBindError(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case apierrors.IsNotFound(err):
+		return "not_found"
+	case apierrors.IsConflict(err):
+		return "conflict"
+	case apierrors.IsForbidden(err):
+		return "forbidden"
+	case apierrors.IsTooManyRequests(err):
+		return "throttled"
+	case apierrors.IsServerTimeout(err), apierrors.IsTimeout(err):
+		return "timeout"
+	case apierrors.IsInternalError(err), apierrors.IsServiceUnavailable(err):
+		return "server"
+	default:
+		return "other"
+	}
+}
 
 func init() {
 	// Register on controller-runtime's metrics registry so all
@@ -122,6 +156,7 @@ func init() {
 		upcomingNodesObserved,
 		fakeNodesCreated,
 		podBindAttempts,
+		podBindErrors,
 	)
 }
 
@@ -370,6 +405,7 @@ func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) 
 			// but the Pod will pick a different Node next reconcile.
 			// Log but don't error — apiserver will retry the Pod.
 			podBindAttempts.WithLabelValues("bind_error").Inc()
+			podBindErrors.WithLabelValues(classifyBindError(err)).Inc()
 			continue
 		}
 		podBindAttempts.WithLabelValues("success").Inc()
