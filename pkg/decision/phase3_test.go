@@ -175,3 +175,74 @@ func TestPhase3_Conservation(t *testing.T) {
 		t.Errorf("keep = %d, want 4 (need.count); reclaim = %d", keep, reclaim)
 	}
 }
+
+// TestPhase3_DenseMachine_OneCoversManyPodsOfDemand: ADR-0022 / M45.2.
+// One Configured machine with density=8 (c6a.4xlarge shape, 4Gi per-
+// replica Pods) covers up to 8 Pods of demand without being reclaimed.
+// If demand is 8 the machine is fully utilised and kept; if demand is 0
+// the machine is reclaimed. The pre-ADR-0022 budget math would have
+// only "consumed" 1 Pod of budget per kept machine, so a Need.Count of
+// 8 with one dense machine would have reclaimed 7 phantom machines.
+func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
+	t.Parallel()
+
+	profile := needs.NewProfile(
+		[]needs.Requirement{{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: needs.OperatorIn,
+			Values:   []string{"c6a.4xlarge"},
+		}},
+		[]needs.ResourceQty{
+			{Name: "cpu", Quantity: "1"},
+			{Name: "memory", Quantity: "4Gi"},
+		},
+		nil,
+		1000,
+		needs.PenaltyBucket64,
+		needs.PenaltyBucketPinned,
+	)
+
+	denseMachine := func(id machine.ID) machine.Machine {
+		return machine.Machine{
+			ID:    id,
+			State: machine.StateConfigured,
+			Host:  machine.HostRef{Provider: "fake", Ref: string(id)},
+			Profile: machine.Profile{
+				InstanceType: "c6a.4xlarge",
+				Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
+			},
+			Cluster:                 "cluster-A",
+			AssignedNeedFingerprint: profile.Fingerprint(),
+			Allocatable:             map[string]string{"cpu": "16", "memory": "32Gi"},
+		}
+	}
+
+	// Two dense machines (16 Pods total capacity) vs Need.Count=8.
+	// Pre-ADR-0022: budget=8, kept-2-decremented-to-6, no reclaim because
+	// both kept. Same result either way, but the test confirms the new
+	// budget tracks density.
+	inv := inventory.New()
+	if err := inv.Insert(denseMachine("dense-1")); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := inv.Insert(denseMachine("dense-2")); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	snap := inv.Snapshot()
+
+	// Demand = 8 Pods. First dense machine absorbs 8 (density). Second
+	// has no remaining budget → Reclaim.
+	need := needs.Need{
+		ClusterID: "cluster-A",
+		Profile:   profile,
+		Count:     8,
+	}
+	res := decision.Phase3(snap, []needs.Need{need})
+
+	if len(res.Actions) != 1 {
+		t.Fatalf("expected 1 Reclaim (second dense machine has no Pod budget left after first absorbs 8), got %d actions: %#v", len(res.Actions), res.Actions)
+	}
+	if res.Actions[0].Kind != decision.ActionKindReclaim {
+		t.Errorf("action kind = %v, want Reclaim", res.Actions[0].Kind)
+	}
+}

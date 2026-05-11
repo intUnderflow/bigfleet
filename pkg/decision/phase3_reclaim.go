@@ -101,7 +101,19 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 			i, ok := fpIdx[m.AssignedNeedFingerprint]
 			kept := ok && groups[i].remaining > 0
 			if kept {
-				groups[i].remaining--
+				// ADR-0022 / M45.2: budget is now in Pod-units (M45.1
+				// changed Phase 1 the same way). The kept machine
+				// satisfies `density` Pods of demand based on its actual
+				// per-machine allocatable. For pre-ADR-0022 inventory
+				// where EffectiveAllocatable() falls back to
+				// Profile.Resources, density = 1 and this decrement is
+				// the same as the old machine-count math.
+				profResources := profileResourcesToMap(groups[i].profile.ResourcesRO())
+				d := PodsPerMachine(profResources, m.EffectiveAllocatable())
+				if d <= 0 {
+					d = 1
+				}
+				groups[i].remaining -= d
 				continue
 			}
 			out.Actions = append(out.Actions, Action{
@@ -119,7 +131,13 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 
 // profileBudget is one row per distinct Profile fingerprint within a
 // cluster's needs: which Profile to MatchProfile against, and how many
-// machines that fingerprint can collectively claim.
+// Pods that fingerprint can collectively claim.
+//
+// ADR-0022 / M45.2: remaining is in Pod-units (sum of Need.Count across
+// all Needs sharing this Profile). When iterating Configured machines,
+// each kept machine decrements remaining by its actual density (Pods
+// per machine), not by 1. For pre-ADR-0022 inventory where density = 1
+// this is identical to the old machine-count math.
 type profileBudget struct {
 	profile   needs.Profile
 	remaining int
