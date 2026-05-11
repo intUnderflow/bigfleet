@@ -108,8 +108,8 @@ var (
 	})
 	podBindAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_scaletest_pod_shim_pod_bind_attempts_total",
-		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count. claim_lost = another binder beat us to the Node label patch (apiserver-side lock); bind_error = Bind subresource itself failed (Pod gone or apiserver issue) — see pod_bind_errors_total for the reason breakdown.",
-	}, []string{"outcome"}) // outcome: success, claim_lost, bind_error
+		Help: "Count of Pod-binding subresource attempts by outcome. The success count should match podBindLatencySeconds_count. claim_lost = another binder beat us to the Node label patch (apiserver-side lock on the Node). bound_by_other = Bind returned IsConflict, i.e. apiserver-side lock on the Pod fired — another reconcile already bound it, so the chain's goal is met (Drop T treats this as success). bind_error = Bind subresource failed for any other reason — see pod_bind_errors_total for the apierror class.",
+	}, []string{"outcome"}) // outcome: success, bound_by_other, claim_lost, bind_error
 	// Drop N: classify bind_error by apiserver status so the long-tail
 	// p99 has a named cause. Ramp-phase runs at ~50% error rate; this
 	// counter tells us which apiserver response codes drive that.
@@ -420,18 +420,22 @@ func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) 
 			Target:     corev1.ObjectReference{Kind: "Node", Name: n.Name},
 		}
 		if err := b.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{}); err != nil {
-			// Bind failed after we claimed the Node. The claim
-			// label leaks (Node is now permanently un-bindable),
-			// but the Pod will pick a different Node next reconcile.
-			// Log but don't error — apiserver will retry the Pod.
-			//
-			// We previously tried to unclaim the Node here (Drop O):
-			// the unclaim Patch re-fires the Watches(Node) handler,
-			// which re-enqueues matching Pods, which race-claim, fail
-			// Bind, unclaim... a thundering herd. Drop O run measured
-			// 340/sec bind_error, 321/sec claim_lost, 6.7/sec success
-			// (vs Drop N's 32/74/0). Leaking the claim is worse for
-			// inventory but much better for throughput.
+			// Drop T: the /binding subresource is the apiserver's own
+			// concurrency check — it returns Conflict if pod.spec.nodeName
+			// is already set. That means another reconcile (typically of
+			// the same Pod, fired by a stale-cache Watches(Node) event)
+			// won the race and bound it. From the chain's perspective the
+			// Pod IS bound; the only "loss" is the claim label we just
+			// patched onto this fake-Node, which Reclaim will recycle.
+			// Treat Conflict as success-by-other and return true so the
+			// reconcile completes cleanly instead of iterating through
+			// other candidates uselessly. Non-Conflict errors are real
+			// failures: log them, leak the claim (see Drop O lesson —
+			// unclaim-on-error is a thundering herd), continue.
+			if apierrors.IsConflict(err) {
+				podBindAttempts.WithLabelValues("bound_by_other").Inc()
+				return true, nil
+			}
 			podBindAttempts.WithLabelValues("bind_error").Inc()
 			podBindErrors.WithLabelValues(classifyBindError(err)).Inc()
 			continue
