@@ -122,6 +122,13 @@ func (o *Operator) listCapacityRequests(ctx context.Context) ([]bfv1alpha1.Capac
 // group, then builds the proto message. Returns the rollup plus the
 // list of CRs that were Pending at observation time.
 //
+// ADR-0022: each CR contributes Count=1 (one Pod's worth of demand);
+// aggregation sums Count across same-(Profile, Group) Needs, so the
+// resulting CapacityNeed.count is the post-aggregation **Pod count**
+// (not machine count). The shard's Phase 1 / Phase 3 (M45.1 / M45.2)
+// translate Pod count to machine count by fitting against the
+// matching machine inventory's per-machine Allocatable.
+//
 // Co-location (paper §8): a CR's first OwnerReference UID is used as
 // its co-location group. CRs sharing an owner are co-located by the
 // shard via a Same(CoLocationKey) requirement appended to the
