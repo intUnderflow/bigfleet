@@ -114,10 +114,18 @@ type Profile struct {
 	InstanceType string
 	Zone         string
 	CapacityType CapacityType
-	// Resources are stored as canonical strings (e.g., "96", "768Gi") to
-	// match the proto wire format. Comparison is exact-string for now;
-	// quantity-aware comparison happens at the operator boundary when CRs
-	// are aggregated into needs.
+	// Resources is the *per-replica* request shape that this Profile is
+	// provisioned to satisfy. It matches the originating CR.Spec.Resources
+	// (one Pod's worth of capacity). Stored as canonical strings (e.g.,
+	// "96", "768Gi") to match the proto wire format. Comparison is exact-
+	// string for now; quantity-aware comparison happens at the operator
+	// boundary when CRs are aggregated into needs.
+	//
+	// ADR-0022: this is *not* the per-machine allocatable shape. Per-machine
+	// capacity lives on Machine.Allocatable. For homogeneous fleets where
+	// one Pod fills one machine (the pre-ADR-0022 behaviour) Resources and
+	// Allocatable happen to be equal — Phase 1's deficit math still works,
+	// but no longer assumes the equivalence.
 	Resources map[string]string
 	// Labels surfaces provider-supplied labels needed for matching against
 	// node-selector requirements (e.g., accelerator-type).
@@ -180,6 +188,20 @@ type Machine struct {
 	// math needs exact 1:1 attribution: how many machines are *currently
 	// assigned to this Need*, not how many *could match* it.
 	AssignedNeedFingerprint string
+
+	// Allocatable is the per-machine capacity this hardware actually
+	// provides. Phase 1's aggregate-demand-vs-aggregate-supply math
+	// (ADR-0022) compares Σ Allocatable across matching machines to the
+	// Need's `Profile.Resources × Count` (per-replica × Pod-count) and
+	// provisions whatever's missing.
+	//
+	// Migration: when Allocatable is empty, the shard treats it as equal
+	// to Profile.Resources (the pre-ADR-0022 behaviour, one Pod per
+	// machine). Providers populating this field describe a machine that
+	// can host multiple replicas of its Profile — the density is
+	// floor(Allocatable / Profile.Resources) per resource dimension, with
+	// the bottleneck dimension setting the per-machine replica capacity.
+	Allocatable map[string]string
 }
 
 // validTransitions encodes the legal state machine. The decision engine
@@ -232,6 +254,20 @@ func CheckTransition(from, to State) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s → %s", ErrInvalidTransition, from, to)
+}
+
+// EffectiveAllocatable returns the per-machine allocatable resource map
+// callers should use for Phase 1's aggregate-supply math. Returns
+// m.Allocatable when set; otherwise falls back to m.Profile.Resources —
+// the pre-ADR-0022 "one Pod = one machine" assumption. Tests and existing
+// construction sites don't need to populate Allocatable explicitly to
+// keep working; only Profiles where the per-machine shape differs from
+// the per-replica shape need the field set.
+func (m *Machine) EffectiveAllocatable() map[string]string {
+	if len(m.Allocatable) > 0 {
+		return m.Allocatable
+	}
+	return m.Profile.Resources
 }
 
 // Invariant validates the structural invariants of a Machine. Returns the

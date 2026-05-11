@@ -200,6 +200,15 @@ type ResourceQty struct {
 // equal collapse into one Need with Count = 2. Profiles are immutable
 // once constructed via NewProfile; the fingerprint is computed once and
 // cached so map-keyed lookups don't re-walk the slices.
+//
+// ADR-0022: Profile.Resources is the *per-replica* request shape — what
+// one Pod of this Profile asks for. It's *not* the per-machine
+// allocatable. The Pod-to-machine relationship is derived at Phase 1
+// time by dividing the aggregate `Resources × Need.Count` demand by the
+// matching machine inventory's `Machine.Allocatable`. For homogeneous
+// 1 Pod = 1 machine fleets (the pre-ADR-0022 default), Resources and
+// Allocatable happen to be equal and Count maps 1:1 to machine count;
+// the math works either way.
 type Profile struct {
 	requirements              []Requirement
 	resources                 []ResourceQty
@@ -341,8 +350,14 @@ func (p Profile) computeFingerprint() string {
 	return b.String()
 }
 
-// Need is one row of the NeedsTable: a count of identically-shaped
-// machines that one cluster currently wants.
+// Need is one row of the NeedsTable: a post-aggregation count of Pods
+// that one cluster currently wants of one identically-shaped Profile.
+//
+// ADR-0022: Count is *Pod count*, not machine count. The shard's Phase 1
+// derives machine count from the aggregate (`Profile.Resources × Count`)
+// fitted against the matching machine inventory's `Machine.Allocatable`.
+// For the homogeneous pre-ADR-0022 fleet where one Pod fills one machine
+// the math collapses to 1:1, but the field's semantics are Pod-count.
 //
 // Group is an opaque per-Need co-location bucket. Two Needs with the
 // same (Cluster, Profile.Fingerprint) but different Group are kept

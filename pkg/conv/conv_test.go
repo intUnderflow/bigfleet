@@ -124,6 +124,62 @@ func TestMachineRoundTrip_AllStates(t *testing.T) {
 	}
 }
 
+func TestMachineRoundTrip_AllocatableEmpty_DoesNotSerialize(t *testing.T) {
+	// ADR-0022 / M45.0: an empty Allocatable means "consumer should fall
+	// back to Profile.Resources." MachineToProto must NOT emit a redundant
+	// Allocatable on the wire in that case.
+	t.Parallel()
+	m := machine.Machine{
+		ID:    "m-1",
+		State: machine.StateConfigured,
+		Host:  machine.HostRef{Provider: "aws", Ref: "i-1"},
+		Profile: machine.Profile{
+			InstanceType: "c6a.4xlarge",
+			Resources:    map[string]string{"cpu": "16"},
+		},
+	}
+	pbMachine := conv.MachineToProto(m)
+	if pbMachine.GetAllocatable() != nil {
+		t.Fatalf("MachineToProto should not emit Allocatable when empty, got %v", pbMachine.GetAllocatable())
+	}
+	back, err := conv.MachineFromProto(pbMachine)
+	if err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if len(back.Allocatable) != 0 {
+		t.Errorf("round-tripped Allocatable should be empty, got %v", back.Allocatable)
+	}
+	// EffectiveAllocatable() must fall back to Profile.Resources.
+	if back.EffectiveAllocatable()["cpu"] != "16" {
+		t.Errorf("EffectiveAllocatable fallback failed: %v", back.EffectiveAllocatable())
+	}
+}
+
+func TestMachineRoundTrip_AllocatableSet_PreservesField(t *testing.T) {
+	t.Parallel()
+	m := machine.Machine{
+		ID:    "m-1",
+		State: machine.StateConfigured,
+		Host:  machine.HostRef{Provider: "aws", Ref: "i-1"},
+		Profile: machine.Profile{
+			InstanceType: "c6a.4xlarge",
+			Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
+		},
+		Allocatable: map[string]string{"cpu": "16", "memory": "32Gi"},
+	}
+	pbMachine := conv.MachineToProto(m)
+	if pbMachine.GetAllocatable() == nil {
+		t.Fatalf("MachineToProto should emit Allocatable when set")
+	}
+	back, err := conv.MachineFromProto(pbMachine)
+	if err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if back.Allocatable["cpu"] != "16" || back.Allocatable["memory"] != "32Gi" {
+		t.Errorf("round-tripped Allocatable mismatch: %v", back.Allocatable)
+	}
+}
+
 func TestRequirementsToProto_PreservesValues(t *testing.T) {
 	t.Parallel()
 	in := []needs.Requirement{

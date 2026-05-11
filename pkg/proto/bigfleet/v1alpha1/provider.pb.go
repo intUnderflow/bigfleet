@@ -280,8 +280,19 @@ type Machine struct {
 	// Hourly interruption probability, [0.0, 1.0]. Provider-declared only:
 	// forecast for SPECULATIVE machines, observed for real ones. No
 	// cluster-side override (per design memory).
-	InterruptionProbability float64    `protobuf:"fixed64,8,opt,name=interruption_probability,json=interruptionProbability,proto3" json:"interruption_probability,omitempty"`
-	Resources               *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
+	InterruptionProbability float64 `protobuf:"fixed64,8,opt,name=interruption_probability,json=interruptionProbability,proto3" json:"interruption_probability,omitempty"`
+	// Resources is the per-replica request shape this machine is provisioned
+	// to satisfy. Equal to the Pod-side CR.Spec.Resources that the rollup
+	// aggregated into the Profile this machine is bound to. Read by Phase 1's
+	// demand-vs-supply matching to decide whether this machine can host a
+	// unit of demand from this Profile.
+	//
+	// ADR-0022: distinct from `allocatable`. A `c6a.4xlarge` machine bound to
+	// a "{cpu: 1, memory: 4Gi}" per-replica Profile has Resources={cpu:1,
+	// memory:4Gi} (what one Pod needs) and Allocatable={cpu:16, memory:32Gi}
+	// (what the hardware actually provides). Density = floor(Allocatable /
+	// Resources).
+	Resources *Resources `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	// Provider-supplied labels. Used by the autoscaler to satisfy node-selector
 	// requirements without re-deriving them from instance_type/zone.
 	Labels map[string]string `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
@@ -289,7 +300,17 @@ type Machine struct {
 	// stable. Used to detect stuck transitions.
 	TransitionStartedUnixNanos int64 `protobuf:"varint,11,opt,name=transition_started_unix_nanos,json=transitionStartedUnixNanos,proto3" json:"transition_started_unix_nanos,omitempty"`
 	// Populated when state == FAILED.
-	LastError     string `protobuf:"bytes,12,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	LastError string `protobuf:"bytes,12,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	// ADR-0022: the per-machine allocatable capacity this hardware actually
+	// provides. Phase 1's deficit math compares the *aggregate* of Allocatable
+	// across matching machines against the *aggregate* demand
+	// (Profile.Resources × Need.Count) and provisions the gap.
+	//
+	// Migration: when this field is unset, callers treat Allocatable as equal
+	// to Resources (preserves the pre-ADR-0022 1 CR = 1 machine math). Providers
+	// SHOULD populate this field; the shard's fake provider does so during
+	// M45.0+ inventory seeding, and out-of-tree providers should follow.
+	Allocatable   *Resources `protobuf:"bytes,13,opt,name=allocatable,proto3" json:"allocatable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -406,6 +427,13 @@ func (x *Machine) GetLastError() string {
 		return x.LastError
 	}
 	return ""
+}
+
+func (x *Machine) GetAllocatable() *Resources {
+	if x != nil {
+		return x.Allocatable
+	}
+	return nil
 }
 
 type MachineRef struct {
@@ -843,7 +871,7 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\tresources\x18\x01 \x03(\v2+.bigfleet.v1alpha1.Resources.ResourcesEntryR\tresources\x1a<\n" +
 	"\x0eResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf9\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb9\x05\n" +
 	"\aMachine\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x125\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x05state\x12.\n" +
@@ -858,7 +886,8 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	" \x03(\v2&.bigfleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12A\n" +
 	"\x1dtransition_started_unix_nanos\x18\v \x01(\x03R\x1atransitionStartedUnixNanos\x12\x1d\n" +
 	"\n" +
-	"last_error\x18\f \x01(\tR\tlastError\x1a9\n" +
+	"last_error\x18\f \x01(\tR\tlastError\x12>\n" +
+	"\vallocatable\x18\r \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\vallocatable\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1c\n" +
@@ -959,27 +988,28 @@ var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
 	1,  // 3: bigfleet.v1alpha1.Machine.capacity_type:type_name -> bigfleet.v1alpha1.CapacityType
 	3,  // 4: bigfleet.v1alpha1.Machine.resources:type_name -> bigfleet.v1alpha1.Resources
 	13, // 5: bigfleet.v1alpha1.Machine.labels:type_name -> bigfleet.v1alpha1.Machine.LabelsEntry
-	4,  // 6: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
-	0,  // 7: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
-	14, // 8: bigfleet.v1alpha1.CreateRequest.labels:type_name -> bigfleet.v1alpha1.CreateRequest.LabelsEntry
-	4,  // 9: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
-	8,  // 10: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
-	9,  // 11: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
-	10, // 12: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
-	5,  // 13: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.MachineRef
-	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
-	7,  // 15: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
-	11, // 16: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 17: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 18: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 19: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
-	4,  // 20: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
-	6,  // 21: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	3,  // 6: bigfleet.v1alpha1.Machine.allocatable:type_name -> bigfleet.v1alpha1.Resources
+	4,  // 7: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
+	0,  // 8: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
+	14, // 9: bigfleet.v1alpha1.CreateRequest.labels:type_name -> bigfleet.v1alpha1.CreateRequest.LabelsEntry
+	4,  // 10: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
+	8,  // 11: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
+	9,  // 12: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
+	10, // 13: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
+	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.MachineRef
+	5,  // 15: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
+	7,  // 16: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
+	11, // 17: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 18: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 19: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 20: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
+	4,  // 21: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
+	6,  // 22: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_provider_proto_init() }

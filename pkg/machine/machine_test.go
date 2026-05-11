@@ -175,3 +175,34 @@ func TestInvariant_StableStates(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveAllocatable_FallsBackToProfileResources(t *testing.T) {
+	t.Parallel()
+	m := machine.Machine{
+		ID:    "m1",
+		State: machine.StateConfigured,
+		Profile: machine.Profile{
+			Resources: map[string]string{"cpu": "2", "memory": "4Gi"},
+		},
+	}
+	got := m.EffectiveAllocatable()
+	if got["cpu"] != "2" || got["memory"] != "4Gi" {
+		t.Fatalf("EffectiveAllocatable() should fall back to Profile.Resources, got %#v", got)
+	}
+}
+
+func TestEffectiveAllocatable_UsesAllocatableWhenSet(t *testing.T) {
+	t.Parallel()
+	m := machine.Machine{
+		ID:    "m1",
+		State: machine.StateConfigured,
+		Profile: machine.Profile{
+			Resources: map[string]string{"cpu": "1", "memory": "2Gi"},
+		},
+		Allocatable: map[string]string{"cpu": "16", "memory": "32Gi"},
+	}
+	got := m.EffectiveAllocatable()
+	if got["cpu"] != "16" || got["memory"] != "32Gi" {
+		t.Fatalf("EffectiveAllocatable() should use Allocatable when set, got %#v", got)
+	}
+}

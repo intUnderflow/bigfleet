@@ -86,6 +86,17 @@ message Machine {
   // cluster-side override (per design memory).
   double interruption_probability = 8;
 
+  // Resources is the per-replica request shape this machine is provisioned
+  // to satisfy. Equal to the Pod-side CR.Spec.Resources that the rollup
+  // aggregated into the Profile this machine is bound to. Read by Phase 1's
+  // demand-vs-supply matching to decide whether this machine can host a
+  // unit of demand from this Profile.
+  //
+  // ADR-0022: distinct from `allocatable`. A `c6a.4xlarge` machine bound to
+  // a "{cpu: 1, memory: 4Gi}" per-replica Profile has Resources={cpu:1,
+  // memory:4Gi} (what one Pod needs) and Allocatable={cpu:16, memory:32Gi}
+  // (what the hardware actually provides). Density = floor(Allocatable /
+  // Resources).
   Resources resources = 9;
 
   // Provider-supplied labels. Used by the autoscaler to satisfy node-selector
@@ -98,6 +109,17 @@ message Machine {
 
   // Populated when state == FAILED.
   string last_error = 12;
+
+  // ADR-0022: the per-machine allocatable capacity this hardware actually
+  // provides. Phase 1's deficit math compares the *aggregate* of Allocatable
+  // across matching machines against the *aggregate* demand
+  // (Profile.Resources × Need.Count) and provisions the gap.
+  //
+  // Migration: when this field is unset, callers treat Allocatable as equal
+  // to Resources (preserves the pre-ADR-0022 1 CR = 1 machine math). Providers
+  // SHOULD populate this field; the shard's fake provider does so during
+  // M45.0+ inventory seeding, and out-of-tree providers should follow.
+  Resources allocatable = 13;
 }
 
 message MachineRef {

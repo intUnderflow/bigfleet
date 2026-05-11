@@ -351,15 +351,28 @@ type CapacityNeed struct {
 	// is responsible for honouring all standard operators (In, NotIn, Exists,
 	// DoesNotExist) plus the protobuf-only Same operator (see below).
 	Requirements []*NodeSelectorRequirement `protobuf:"bytes,1,rep,name=requirements,proto3" json:"requirements,omitempty"`
-	// Per-machine resource requests. Map keys are Kubernetes resource names
-	// (e.g., "cpu", "memory", "nvidia.com/gpu"); values are quantity strings
-	// ("96", "768Gi", "8"). The autoscaler does not parse these; it forwards
-	// them to the provider, which is responsible for matching offerings.
+	// Per-replica resource request — what one Pod of this Profile asks for.
+	// Map keys are Kubernetes resource names ("cpu", "memory",
+	// "nvidia.com/gpu"); values are quantity strings ("96", "768Gi", "8").
+	//
+	// ADR-0022: this is the per-replica shape, *not* a machine shape. The
+	// autoscaler aggregates `count × resources` across all CRs in this
+	// CapacityNeed and provisions however many machines are needed to host
+	// that aggregate at the provider's instance-shape granularity.
 	Resources map[string]string `protobuf:"bytes,2,rep,name=resources,proto3" json:"resources,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// The pod's PriorityClass value. Higher = served first. The autoscaler
 	// walks needs top-down by priority.
 	Priority int32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
-	// Number of identically-shaped machines required.
+	// Number of Pods aggregated into this CapacityNeed. ADR-0022: this is
+	// the post-aggregation Pod count, *not* the number of machines the
+	// autoscaler should provision. The autoscaler derives machine count
+	// from `count × resources` against the matching machine inventory's
+	// per-machine Allocatable.
+	//
+	// Example: count=100, resources={cpu:1,memory:4Gi}, matching machines
+	// are c6a.4xlarge ({cpu:16,memory:32Gi}) → autoscaler provisions
+	// ceil(100 / min(16, 8)) = ceil(100/8) = 13 machines (memory is the
+	// bottleneck dimension at 32Gi / 4Gi = 8 replicas per machine).
 	Count int32 `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
 	// Topology-spread constraints copied from the source pod(s). Pass-through
 	// to the autoscaler so it can spread provisioning across domains.

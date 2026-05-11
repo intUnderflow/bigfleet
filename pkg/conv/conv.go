@@ -174,6 +174,14 @@ func MachineFromProto(m *pb.Machine) (machine.Machine, error) {
 	if r := m.GetResources(); r != nil {
 		out.Profile.Resources = cloneStringMap(r.GetResources())
 	}
+	// ADR-0022 / M45.0: Allocatable populated only when the wire carries
+	// it. Callers needing per-machine capacity use
+	// machine.Machine.EffectiveAllocatable(), which falls back to
+	// Profile.Resources when this field is empty. Round-tripping a Machine
+	// that lacked Allocatable on read won't manufacture one on write.
+	if a := m.GetAllocatable(); a != nil {
+		out.Allocatable = cloneStringMap(a.GetResources())
+	}
 	return out, nil
 }
 
@@ -197,6 +205,13 @@ func MachineToProto(m machine.Machine) *pb.Machine {
 	}
 	if len(m.Profile.Resources) > 0 {
 		out.Resources = &pb.Resources{Resources: cloneStringMap(m.Profile.Resources)}
+	}
+	// ADR-0022 / M45.0: emit Allocatable only when it was explicitly set.
+	// Empty Allocatable means the consumer should fall back to Resources
+	// (1 Pod = 1 machine); we don't manufacture a redundant value on the
+	// wire.
+	if len(m.Allocatable) > 0 {
+		out.Allocatable = &pb.Resources{Resources: cloneStringMap(m.Allocatable)}
 	}
 	return out
 }
