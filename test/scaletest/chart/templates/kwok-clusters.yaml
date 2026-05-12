@@ -138,6 +138,10 @@ spec:
             - name: PODSHIM_UPCOMING_NODE_CONCURRENCY
               value: "{{ .Values.podShim.upcomingNodeConcurrency }}"
             {{- end }}
+            {{- if .Values.podShim.pprofAddr }}
+            - name: PODSHIM_PPROF_ADDR
+              value: "{{ .Values.podShim.pprofAddr }}"
+            {{- end }}
           ports:
             - { name: operator-met, containerPort: 8770 }
             - { name: loadgen-met,  containerPort: 8771 }

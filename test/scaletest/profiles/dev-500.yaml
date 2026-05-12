@@ -39,6 +39,11 @@ kwok:
 # kine on laptop sqlite is the limiting factor, raising pod-shim
 # concurrency above what kine can ingest just amplifies contention.
 # Cloud profiles override these knobs.
+podShim:
+  # M45.5: pprof on for laptop debugging — port 8774 on each kwok pod.
+  # `kubectl -n bigfleet-scaletest port-forward kwok-cluster-0 8774`
+  # then `go tool pprof http://localhost:8774/debug/pprof/profile?seconds=15`.
+  pprofAddr: ":8774"
 
 shard:
   replicas: 1
@@ -74,8 +79,16 @@ loadProfile:
 rampBudget: 30m
 
 operator:
-  qps: 50
-  burst: 100
+  # M45.5: bumped from 50/100 to 200/400. The 50-QPS M44 default starves
+  # the chain — pod-shim must do both "mark Unschedulable" patches AND
+  # /binding RPCs out of the same client-go budget, and at 50/sec/cluster
+  # the per-Pod end-to-end pipeline (5 cluster-apiserver writes) takes
+  # tens of minutes to clear 50K Pods. CPU on M5 Max native-arm64 sits
+  # at ~37 % at the M44 floor; the headroom is what justifies the bump.
+  # Observed instantaneous bind rate jumped from ~3 binds/sec fleet to
+  # ~47/sec when the new QPS landed via helm upgrade during a run.
+  qps: 200
+  burst: 400
   ackConcurrency: 16
   rollupInterval: 1s
   # M37: realistic archetype catalog uses sameRack on gpu-training /

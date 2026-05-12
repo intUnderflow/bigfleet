@@ -107,6 +107,7 @@ if [[ "${POD_MODE:-pods}" == "pods" ]]; then
   # chain throughput.
   [[ -n "${PODSHIM_BINDER_CONCURRENCY:-}"        ]] && podshim_args+=(--binder-concurrency="$PODSHIM_BINDER_CONCURRENCY")
   [[ -n "${PODSHIM_UPCOMING_NODE_CONCURRENCY:-}" ]] && podshim_args+=(--upcoming-node-concurrency="$PODSHIM_UPCOMING_NODE_CONCURRENCY")
+  [[ -n "${PODSHIM_PPROF_ADDR:-}"                ]] && podshim_args+=(--pprof-addr="$PODSHIM_PPROF_ADDR")
 
   log podshim "starting (qps=${OPERATOR_QPS:-default})"
   bigfleet-scaletest-pod-shim "${podshim_args[@]}" >"$WORK/logs/podshim.log" 2>&1 &

@@ -160,6 +160,11 @@ operator:
 podShim:
   binderConcurrency: 0
   upcomingNodeConcurrency: 0
+  # M45.5: enable net/http/pprof on the pod-shim. Empty disables;
+  # set to e.g. ":8774" to expose CPU/heap/goroutine profiles on
+  # each kwok pod's workload container, then port-forward 8774
+  # and use `go tool pprof http://localhost:8774/debug/pprof/profile`.
+  pprofAddr: ""
 
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.

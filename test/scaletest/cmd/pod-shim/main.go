@@ -29,6 +29,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -191,6 +193,7 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig (default: in-cluster or $KUBECONFIG)")
 	metricsAddr := fs.String("metrics-addr", ":8772", "Prometheus metrics listen address (\"0\" disables)")
+	pprofAddr := fs.String("pprof-addr", "", "net/http/pprof listen address (e.g. \":8774\"). Empty disables. Used to drill into pod-shim CPU hotspots — M45.5 showed pod-shim at 605% CPU fleet-wide on dev-500, second only to kine, with the chain bottlenecked on per-Reconcile work. /debug/pprof/{profile,heap,goroutine} all available.")
 	qps := fs.Float64("qps", 50, "client-go QPS budget for apiserver requests; raise for scale-test profiles whose apiserver can absorb more")
 	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
 	binderConcurrency := fs.Int("binder-concurrency", 64, "MaxConcurrentReconciles for the Pod-binder controller. Each reconcile does at most one apiserver List (cached) and one /binding RPC, so wall-clock per reconcile is dominated by apiserver write latency. 64 was the default before M45.5; higher numbers parallelise the bind path at scale (e.g. 100K Pods/cluster). Limited above by the apiserver QPS budget — burst must comfortably cover binder-concurrency × ~2 RPCs.")
@@ -200,6 +203,21 @@ func run(args []string) error {
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
+
+	// M45.5: pprof on a separate listener so we can profile CPU/heap
+	// without interfering with the controller-runtime metrics server.
+	// /debug/pprof/profile?seconds=15 gives the standard 15-sec CPU
+	// trace. Disabled by default; enabled via --pprof-addr=:8774.
+	if *pprofAddr != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		srv := &http.Server{Addr: *pprofAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() { _ = srv.ListenAndServe() }()
+	}
 
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if *kubeconfig != "" {
@@ -412,8 +430,11 @@ func (b *podBinder) Reconcile(ctx context.Context, req reconcile.Request) (recon
 // scheduler accepts (it does its own bookkeeping in-process — we use
 // the controller-runtime cache as the equivalent).
 func (b *podBinder) tryBind(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	// M45.5: same UnsafeDisableDeepCopy rationale as nodeFits. We only
+	// read Node.Status.Allocatable, Node.Name, Node.Labels — never mutate.
+	disableCopy := true
 	var nodes corev1.NodeList
-	if err := b.List(ctx, &nodes); err != nil {
+	if err := b.List(ctx, &nodes, &client.ListOptions{UnsafeDisableDeepCopy: &disableCopy}); err != nil {
 		return false, fmt.Errorf("list nodes: %w", err)
 	}
 	podReq := sumPodRequests(pod)
@@ -493,8 +514,15 @@ func nodeFits(ctx context.Context, c client.Client, node *corev1.Node, podReq co
 		// upcomingNodeFakeNodeReconciler. Treat as not-yet-fittable.
 		return false
 	}
+	// M45.5: UnsafeDisableDeepCopy on the cache List. We only read
+	// Spec.Containers[].Resources.Requests and never mutate the
+	// returned Pods, so the default per-Pod DeepCopyObject was pure
+	// overhead. Pprof on dev-500 attributed ~62 % of pod-shim CPU
+	// to Pod DeepCopy inside nodeFits; this flag removes it entirely.
+	// Caller MUST treat the slice items as read-only.
+	disableCopy := true
 	var bound corev1.PodList
-	if err := c.List(ctx, &bound, client.MatchingFields{fieldIndexPodNodeName: node.Name}); err != nil {
+	if err := c.List(ctx, &bound, client.MatchingFields{fieldIndexPodNodeName: node.Name}, &client.ListOptions{UnsafeDisableDeepCopy: &disableCopy}); err != nil {
 		return false
 	}
 	used := corev1.ResourceList{}
