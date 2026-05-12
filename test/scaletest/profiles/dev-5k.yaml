@@ -12,12 +12,13 @@
 # a seed every Pod becomes a shortfall and the chain isn't exercised.
 #
 # ADR-0022 / M45.4: seedDensityMultiplier=10 — each seeded machine
-# carries Allocatable = 10 × Profile.Resources, so one machine covers
-# ten Pods of its profile. With ~8 distinct profiles per cluster and
-# 1000 Pods/cluster (~125 Pods per profile), this means each profile's
-# 125 Pods aggregate into ~13 machines instead of 125 — exercising the
-# M45 vector-math path under kind. seedMachines is reduced
-# proportionally (600 vs the legacy 6000) to keep total Pod-capacity
+# carries Allocatable = 10 × Profile.Resources, so one fake-Node hosts
+# up to 10 Pods of its profile (the realistic multi-Pod-per-Node shape
+# real Kubernetes uses). With ~8 distinct profiles per cluster and 1000
+# Pods/cluster, this means each profile's ~125 Pods aggregate into ~13
+# machines instead of 125 — exercising both the M45.1 shard-side vector
+# math AND the pod-shim's bin-packing path. seedMachines is reduced
+# proportionally (600 vs the pre-M45 6000) so total Pod-capacity stays
 # at ~6000 (a hair above the 5000 demand for Phase 1 headroom).
 
 kwok:
