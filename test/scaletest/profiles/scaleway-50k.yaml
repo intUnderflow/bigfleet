@@ -1,37 +1,40 @@
-# scaleway-50k — 50K-CR run on a Scaleway Kapsule cluster.
+# scaleway-50k — 50K-machine fleet, 5M aggregated Pods coalescing at
+# density=100. The original §0.1 framing: in a real production cluster
+# with ~100 Pods per Node, 50K Nodes carry ~5M Pods. M45.5 reshapes the
+# profile to honour that — 50 kwok clusters × 100K Pods each = 5M
+# Pods, density=100 → shard emits ~50K Bootstraps → operator publishes
+# 50K UpcomingNodes → pod-shim creates 50K fake-Nodes → multi-Pod-per-
+# Node bin-packing places ~100 Pods per fake-Node. internalBindingLatency
+# p99 ≤ 15 s SLO active (ADR-0020). 100 Pods-per-Node is the realistic
+# upper end for CPU-service workloads; together with the M45.4 cardinality
+# reduction (~8 Profile fingerprints per cluster) this gives ~12500 CRs
+# per Profile-fingerprint per cluster — the aggregate-demand model
+# actually aggregating.
 #
-# M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
-# 50K Pods exercised through the full Pod → CR → Configured →
-# fake-Node → Pod-bound chain. bindingLatency p99 ≤ 15 s SLO is
-# active. Pool sized for the M44 Pod-mode kwok floor (1 vCPU req
-# per cluster); 2× PRO2-M no longer fits — bumped to 2× PRO2-L.
-#
-# M45.4: density=10 baseline. Shard emits ceil(50000/10) ≈ 5000
-# Bootstraps; the operator publishes 5000 UpcomingNodes; the
-# pod-shim creates 5000 fake-Nodes and bin-packs 10 Pods each
-# (real K8s shape). 10× fewer chain events for the same Pod load.
-#
-# Sizing math:
-#   shard:        1 × 1 vCPU / 2 GiB                = 1 vCPU / 2 GiB
+# Sizing math (M45.5 reshape):
+#   shard:        1 × 2 vCPU / 8 GiB                = 2 vCPU / 8 GiB
 #   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
-#   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
-#   kwok pods:   50 × 1 vCPU / 2 GiB combined req   = 50 vCPU / 100 GiB
-#                  (apiserver 500m/1Gi + workload 500m/1Gi, M44 floor)
-#   total:       ~53 vCPU req / ~107 GiB req         → fits 2× PRO2-L
-#                                                       (64 vCPU / 256 GiB)
-#                                                       ~83 % CPU, ~42 % memory reservation
+#   prometheus:   1 × 2 vCPU / 8 GiB                = 2 vCPU / 8 GiB
+#   kwok pods:   50 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
+#                                                   = 200 vCPU / 400 GiB
+#   total:       ~205 vCPU req / ~417 GiB req       → fits 8 × PRO2-L
+#                                                       (256 vCPU / 1024 GiB)
+#                                                       ~80 % CPU, ~41 % memory
 #
 # Provisioning:
 #   scw k8s cluster create name=bigfleet-scaletest \
 #     project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6 \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2
+#     pools.0.size=8 pools.0.min-size=8 pools.0.max-size=8
 #
-# Cost (Scaleway, May 2026): 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr. A
-# 30-min run + ~5min ramp + teardown ≈ 40 min ≈ €0.56 / ~$0.60.
-# About 2× the CR-mode cost ($0.30) — buys the user-facing
-# binding-latency gate at scale.
+# Cost (Scaleway, May 2026): 8× PRO2-L × ~€0.42/hr ≈ €3.36/hr. Expected
+# wall-clock: ~50 min ramp + 30 min soak + ~5 min teardown ≈ 90 min ≈
+# €5 / ~$5.50. The 5M Pods + 50K machines exercise is what the
+# "scaleway-50k" name originally meant; pre-M45 1-Pod-per-machine
+# math made 50K mean "50K Pods AND 50K machines simultaneously",
+# which is the same wire shape but a completely unrealistic Pod-per-
+# Node density.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -46,102 +49,102 @@ bigfleet:
 
 kwok:
   clusterCount: 50
-  # Per-pod budgets inherited from the chart's M44 Pod-mode floor
-  # (500m/1Gi req, 2/2Gi lim, 1Gi tmpfs).
+  # M45.5: 100K Pods per kwok-apiserver. kwok is in-memory; each Pod
+  # is ~5 KB JSON + watch/index overhead → conservatively 6-8 GiB per
+  # apiserver pod. CPU mostly serves list/watch + Pod create rate
+  # (~100K / 3000s ramp ≈ 33/sec/cluster) — modest CPU need but
+  # generous to absorb spikes.
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  # 2Gi tmpfs (vs M44 floor 1Gi) — kine's sqlite WAL fsyncs at 100K
+  # Pods need more headroom; 1Gi was sized for 1K-Pod clusters.
+  sharedVolumeSizeLimit: "2Gi"
+
+# M45.5: bump the pod-shim's reconcile fan-out for the 100K-Pods-per-
+# cluster shape. Default 64/8 was sized for 1K-Pod clusters where 64
+# parallel binds clear a ramp in ~15 sec. At 100K Pods/cluster the
+# bind queue is 100× larger; matching that with 256 parallel binders
+# keeps per-cluster bind rate near the apiserver's QPS ceiling (200).
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
 
 shard:
   replicas: 1
-  # 60K Idle headroom over the 50K Pod demand so Phase 1 actually
-  # binds, the pod-shim closes the loop, and internalBindingLatency
-  # is measured. Without a seed every Pod is a shortfall, the chain
-  # stays open at the unsatisfied-burst step, and the test only
-  # validates rollup + Phase 1 attempt — not the M44 user-facing
-  # default we want.
-  #
-  # ADR-0022 / M45.4: 6000 Idle × density-10 = 60000 Pod capacity,
-  # matching the legacy 60000-machines-at-density-1 model with 10×
-  # fewer Bootstraps / UpcomingNodes / fake-Nodes for the chain to
-  # process. Pod-shim's multi-Pod-per-Node bin-packing places ~10
-  # Pods per fake-Node — the real K8s shape this profile is supposed
-  # to model.
-  seedMachines: 6000
-  # ADR-0022 / M45.4: each seeded machine carries
-  # Allocatable = 10 × Profile.Resources. Phase 1 emits
-  # ceil(podDemand / 10) Bootstraps; pod-shim bin-packs Pods onto
-  # the resulting fake-Nodes by Allocatable arithmetic. Combined,
-  # the chain processes ~10× less per-Bootstrap work for the same
-  # Pod load.
-  seedDensityMultiplier: 10
-  # M44.4 Drop H: bumped from 256 → 4096. At 50 K demand × M35 unique
-  # fingerprints = ~50 K Needs, Phase 1's per-cycle emit ceiling
-  # caps how fast the chain processes new churn. Drop G snapshot
-  # showed 5,359 actions deferred per cycle — Phase 1 wanted ~5,600
-  # but only 256 fit. Cap at 4096 covers the steady-state demand
-  # comfortably (churn 67/sec × cycle 0.4 s ≈ 27 new Needs/cycle,
-  # plus accumulated backlog) without making any single cycle
-  # arbitrarily expensive. executeConcurrency stays at 256 — workers
-  # run async and the queue absorbs bursts above their drain rate.
+  # ADR-0022 / M45.5: density=100, 50K-machine target. Seed slightly
+  # above demand for Phase 1 headroom — 60K Idle × density-100 = 6M
+  # Pod capacity vs 5M Pod demand (20 % headroom).
+  seedMachines: 60000
+  seedDensityMultiplier: 100
+  # M44.4 Drop H sized maxActionsPerCycle for 50K Needs. M45.5 has
+  # the same fingerprint cardinality (~8 fp/cluster × 50 clusters =
+  # 400 fp) and the same Bootstrap-per-fingerprint shape; 4096 still
+  # comfortably covers per-cycle emits.
   maxActionsPerCycle: 4096
   executeConcurrency: 256
   incrementalReconcile: true
   metricsWarmupCycles: 5
   resources:
-    requests: { cpu: 1, memory: 2Gi }
-    limits:   { cpu: 4, memory: 8Gi }
+    requests: { cpu: 2, memory: 8Gi }
+    limits:   { cpu: 4, memory: 16Gi }
 
 coordinator:
   replicas: 1
 
 loadProfile:
-  target: 1000
-  # Drop W: reduce per-cluster churn from 5%/min to 2%/min (50%
-  # less Pod-replacement traffic). The Drop V run showed shard
-  # inventory drifting from 33K Configured / 26K Idle at minute 5
-  # to 46K / 14K at minute 30 — Reclaim was running ~7/sec slower
-  # than Bootstrap, so the Configured pool accumulated linearly
-  # and the e2e bind p99 followed (6 s → 25 s, crossing the 15 s
-  # SLO at minute 12). Halving churn cuts both ends of the
-  # imbalance: lower Bootstrap demand, lower Reclaim demand,
-  # smaller absolute throughput gap. 2%/min × 1000 Pods × 50 clusters
-  # ÷ 60s ≈ 17 Pods/sec across the fleet — still production-shaped
-  # but inside the chain's measured Reclaim headroom.
+  # M45.5: 100K Pods/cluster × 50 clusters = 5M Pods total.
+  target: 100000
+  # M44.4 Drop W rationale carried over: 2 %/min × 100K Pods × 50
+  # clusters ÷ 60s ≈ 1667 Pod replacements/sec fleet-wide. That's
+  # the realistic-shape churn rate for a 5M-Pod production fleet;
+  # the chain's Reclaim throughput on Scaleway etcd is expected to
+  # cover it (vs kine's 50/sec ceiling on kind).
   churnPerMinute: 0.02
-  durationSeconds: 1800
+  # M45.5: extended ramp + soak windows.  100K Pods/cluster at
+  # 200/sec/cluster (cap below) ramps in ~500 sec; soak length stays
+  # at 30 min equivalent.
+  durationSeconds: 3600
+  # M45.5: per-tick reconcile cap raised so the load-driver can sustain
+  # the 33/sec create rate each cluster needs to fill 100K Pods in
+  # the ramp window. Default 20/sec/cluster would cap fleet creation
+  # at 1000/sec and starve the test for 100+ min just at the
+  # apiserver-write step. 200/sec/cluster comfortably absorbs the
+  # demand inside the operator's qps=200 budget.
+  reconcilePerTickCap: 200
 
-# ADR-0021: post-pool throughput is ~50-85 binds/sec; 50 K-Pod ramp
-# drains in ~10-17 min depending on operator-handler tail. 25 min
-# floor leaves plenty of headroom and ensures the gate's 99 %
-# bootstraps requirement clears before soak starts (so steady-state
-# Pods aren't queued behind unfinished ramp).
-rampBudget: 25m
+# ADR-0021 + M45.5: 100K Pods/cluster at ~33 binds/sec/cluster ramps in
+# ~50 min; add headroom for the operator-handler tail and steady-state
+# warmup before soak.
+rampBudget: 60m
 
 # Push the operator harder than its production-safe defaults — Scaleway
 # Kapsule's apiserver can absorb significantly more than kine+sqlite
 # can. Combined with the M11.14 patch-based ack writes (1 RPC per CR
-# instead of 2), this should drop ack p99 well below 12 s.
+# instead of 2), this should drop ack p99 well below 12 s. M45.5: 5M
+# Pods × 0.02 churn/min ÷ 60s ≈ 1667 Pod creates/sec fleet-wide;
+# operator qps=200 per cluster × 50 = 10000/sec — comfortable.
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
-  # 1s rollup tick — at 50 K demand × 0.05 churn/min/Pod ≈ 41 churns/sec
-  # in steady state, the binary's 10 s default would alone burn half the
-  # 15 s SLO. Kapsule's apiserver QPS budget easily absorbs 50× listed
-  # CRs every second; the rollup itself is ~10 ms p99 in this profile.
   rollupInterval: 1s
 
-# ADR-0014 + ADR-0017 / M44: internalBindingLatency gate active (ADR-0018). In-process
-# tier targets at cloud scale.
+# ADR-0014 + ADR-0017 / M44: internalBindingLatency gate active (ADR-0018).
 slo:
   internalBindingLatencyP99Seconds: 15
   shardCycleDurationP99Seconds: 5
 
 prometheus:
   resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 2, memory: 8Gi }
+    requests: { cpu: 2, memory: 8Gi }
+    limits:   { cpu: 4, memory: 16Gi }
 
 costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each) at ~€0.42/hr. ~$0.60 for a 40-min run end-to-end. Pod-mode (M44 default) — internalBindingLatency gate active (ADR-0018)."
+  vCPU: 256
+  memoryGB: 1024
+  awsSpotUsdPerHour: 3.36
+  notes: "8× Scaleway PRO2-L (32 vCPU / 128 GiB each) at ~€0.42/hr each → ~€3.36/hr cluster. ~$5.50 for a 90-min end-to-end run (50 min ramp + 30 min soak + 5 min install/teardown). M45.5: density=100, 5M aggregated Pods → 50K machines — the architecturally-correct shape of the test."

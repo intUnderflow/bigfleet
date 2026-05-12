@@ -193,6 +193,8 @@ func run(args []string) error {
 	metricsAddr := fs.String("metrics-addr", ":8772", "Prometheus metrics listen address (\"0\" disables)")
 	qps := fs.Float64("qps", 50, "client-go QPS budget for apiserver requests; raise for scale-test profiles whose apiserver can absorb more")
 	burst := fs.Int("burst", 100, "client-go burst budget for apiserver requests")
+	binderConcurrency := fs.Int("binder-concurrency", 64, "MaxConcurrentReconciles for the Pod-binder controller. Each reconcile does at most one apiserver List (cached) and one /binding RPC, so wall-clock per reconcile is dominated by apiserver write latency. 64 was the default before M45.5; higher numbers parallelise the bind path at scale (e.g. 100K Pods/cluster). Limited above by the apiserver QPS budget — burst must comfortably cover binder-concurrency × ~2 RPCs.")
+	upcomingNodeConcurrency := fs.Int("upcoming-node-concurrency", 8, "MaxConcurrentReconciles for the UpcomingNode→fake-Node controller. Each reconcile is O(1) (one Get + one Create). 8 was the M44.4 Drop G default; raise for profiles emitting machines faster than ~50/sec/cluster.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -278,7 +280,7 @@ func run(args []string) error {
 			}),
 		).
 		Named("bigfleet-scaletest-pod-binder").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 64}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: *binderConcurrency}).
 		Complete(pb); err != nil {
 		return fmt.Errorf("pod-binder controller: %w", err)
 	}
@@ -292,7 +294,7 @@ func run(args []string) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&bfv1alpha1.UpcomingNode{}).
 		Named("bigfleet-scaletest-upcoming-node-fake-node").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 8}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: *upcomingNodeConcurrency}).
 		Complete(fn); err != nil {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}

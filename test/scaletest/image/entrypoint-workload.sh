@@ -102,6 +102,11 @@ if [[ "${POD_MODE:-pods}" == "pods" ]]; then
   upc_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8773")
   [[ -n "${OPERATOR_QPS:-}"   ]] && { podshim_args+=(--qps="$OPERATOR_QPS");   upc_args+=(--qps="$OPERATOR_QPS"); }
   [[ -n "${OPERATOR_BURST:-}" ]] && { podshim_args+=(--burst="$OPERATOR_BURST"); upc_args+=(--burst="$OPERATOR_BURST"); }
+  # M45.5: bind / upcoming-node reconcile concurrency overrides for
+  # high-Pod-count profiles where the default 64 / 8 fan-out throttles
+  # chain throughput.
+  [[ -n "${PODSHIM_BINDER_CONCURRENCY:-}"        ]] && podshim_args+=(--binder-concurrency="$PODSHIM_BINDER_CONCURRENCY")
+  [[ -n "${PODSHIM_UPCOMING_NODE_CONCURRENCY:-}" ]] && podshim_args+=(--upcoming-node-concurrency="$PODSHIM_UPCOMING_NODE_CONCURRENCY")
 
   log podshim "starting (qps=${OPERATOR_QPS:-default})"
   bigfleet-scaletest-pod-shim "${podshim_args[@]}" >"$WORK/logs/podshim.log" 2>&1 &

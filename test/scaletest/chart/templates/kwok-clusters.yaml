@@ -130,6 +130,14 @@ spec:
             - name: POD_MODE
               value: "{{ .Values.loadProfile.mode }}"
             {{- end }}
+            {{- if .Values.podShim.binderConcurrency }}
+            - name: PODSHIM_BINDER_CONCURRENCY
+              value: "{{ .Values.podShim.binderConcurrency }}"
+            {{- end }}
+            {{- if .Values.podShim.upcomingNodeConcurrency }}
+            - name: PODSHIM_UPCOMING_NODE_CONCURRENCY
+              value: "{{ .Values.podShim.upcomingNodeConcurrency }}"
+            {{- end }}
           ports:
             - { name: operator-met, containerPort: 8770 }
             - { name: loadgen-met,  containerPort: 8771 }

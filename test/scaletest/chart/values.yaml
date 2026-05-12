@@ -153,6 +153,14 @@ operator:
   # carry as Profile.Labels.
   coLocationKey: ""
 
+# M45.5: per-pod-shim reconcile concurrency overrides. Empty/0 keeps
+# the pod-shim binary's defaults (binder=64, upcomingNode=8). High-Pod
+# profiles (e.g. 100K Pods/cluster) bump these so the chain isn't
+# throttled by reconciler fan-out.
+podShim:
+  binderConcurrency: 0
+  upcomingNodeConcurrency: 0
+
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.
 loadProfile:

@@ -135,6 +135,24 @@ type profile struct {
 	// facing binding-latency path; bindingLatencyP99 gate skipped
 	// via -1 sentinel per ADR-0017).
 	Mode string `yaml:"mode"`
+
+	// ReconcilePerTickCap (M45.5): per-tick limit on creates/deletes
+	// applied by `reconcileTarget`. The 20/tick default was sized
+	// for ~1000-Pod-per-cluster targets where a 50-Pod drift catches
+	// up in 2-3 sec. At 100K-Pod-per-cluster targets (density=100 →
+	// 50K machines fleet-wide), 33 Pods/sec is the minimum ramp-rate
+	// per cluster to fill in under an hour — the cap has to scale or
+	// `loadgenCRsActive` plateaus arbitrarily far below target.
+	// 0 falls back to the historical default of 20. Profiles bumping
+	// per-cluster Pod targets should bump this proportionally.
+	ReconcilePerTickCap int `yaml:"reconcilePerTickCap"`
+}
+
+func (p *profile) reconcilePerTickCap() int {
+	if p.ReconcilePerTickCap > 0 {
+		return p.ReconcilePerTickCap
+	}
+	return 20
 }
 
 type burstSpec struct {
@@ -635,14 +653,15 @@ func (d *driver) churn(ctx context.Context, n int) {
 // (which passes Target + extra burst capacity).
 func (d *driver) reconcileTarget(ctx context.Context, target int) {
 	got := d.activeCount()
+	cap := d.prof.reconcilePerTickCap()
 	switch {
 	case got < target:
-		for i := 0; i < target-got && i < 20; i++ {
+		for i := 0; i < target-got && i < cap; i++ {
 			_ = d.createOne(ctx)
 		}
 	case got > target:
 		extra := got - target
-		for i := 0; i < extra && i < 20; i++ {
+		for i := 0; i < extra && i < cap; i++ {
 			if name, ok := d.popRandom(); ok {
 				_ = d.deleteOne(ctx, name)
 			}
