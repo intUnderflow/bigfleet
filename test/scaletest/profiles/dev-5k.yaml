@@ -26,15 +26,27 @@ kwok:
 
 shard:
   replicas: 1
-  # 600 Idle machines × density-10 = 6000 Pod capacity, slightly above
-  # 5000 Pod demand. Distributed across the realistic archetypes by
+  # 300 Idle machines × density-10 = 3000 Pod capacity, slightly above
+  # the 2500 Pod demand. Distributed across the realistic archetypes by
   # weight (M34).
-  seedMachines: 600
+  seedMachines: 300
   # ADR-0022 / M45.4: see header comment.
   seedDensityMultiplier: 10
 
 loadProfile:
-  target: 1000
+  # ADR-0022 / M45.4: target halved to 500 Pods/cluster (2500 total)
+  # because kind's kine sqlite apiserver writes at ~50/sec, and the
+  # realistic archetype mix at 1000 Pods/cluster layers churn +
+  # lifetime-aging at >25 deletes/sec by end of ramp. The load-driver's
+  # replacement creates compete for the same write budget and
+  # `loadgenCRsActive` falls below the 99.9 % sustain threshold during
+  # soak. The chain itself is healthy at the larger target (v6 ran at
+  # 17.5× density ratio with 263 s p99 provisioning), so this is
+  # purely the apiserver budget on laptop kind. Cloud profiles
+  # (scaleway-50k+) keep target=1000 since production-grade etcd
+  # handles the load fine. churnPerMinute stays at 0.05 — the
+  # archetype-lifetime aging is the real churn signal anyway.
+  target: 500
   churnPerMinute: 0.05
   durationSeconds: 600
   # archetypes inherits the chart's realistic catalog default.
@@ -61,4 +73,4 @@ costEstimate:
   vCPU: 10
   memoryGB: 10
   awsSpotUsdPerHour: 0.20
-  notes: "Free on M5 Max kind. ~10 min run. 5 clusters × ~1 vCPU req each = ~5 vCPU at the M44 Pod-mode floor; full Pod → bound loopback exercised against a 6000-machine seed across 6 realistic archetypes."
+  notes: "Free on M5 Max kind. ~10 min run. M45.4: 5 clusters × 500 Pods (target halved from 1000 to fit kind kine-apiserver write budget under realistic churn). Density=10 means 300 seed machines × 10 fake-Pod capacity covers the 2500-Pod demand; the multi-Pod-per-Node pod-shim bin-packs replacements onto existing fake-Nodes during soak."
