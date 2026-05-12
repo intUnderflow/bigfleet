@@ -123,10 +123,17 @@ helm-render: ## Render all Helm charts to /dev/null as a smoke check.
 	@echo "all charts rendered"
 
 .PHONY: scaletest-images
-scaletest-images: ## Build the two images the scaletest harness needs (bigfleet, bigfleet-scaletest).
+scaletest-images: ## Build the two images the scaletest harness needs (bigfleet, bigfleet-scaletest). PLATFORM= overrides host detection (e.g. PLATFORM=linux/amd64 for cloud-arch validation).
 	@command -v docker >/dev/null || { echo "docker not on PATH"; exit 1; }
-	docker build -t bigfleet:dev -f cmd/bigfleet/Dockerfile .
-	docker build -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
+	@# Detect host arch so kind on Apple Silicon doesn't end up running x86_64
+	@# binaries through Rosetta emulation (~2× slowdown). The Dockerfile defaults
+	@# GOARCH to amd64 when TARGETARCH is unset; passing --platform sets TARGETARCH
+	@# so the Go build matches the host. CI sets PLATFORM=linux/amd64 explicitly
+	@# for cloud-portable images.
+	@ARCH=$$(echo "$(or $(PLATFORM),linux/$$(uname -m))" | sed -e 's|linux/||' -e 's/x86_64/amd64/' -e 's/aarch64/arm64/'); \
+	echo "Building bigfleet images for $$ARCH (--platform alone doesn't set TARGETARCH; --build-arg does)"; \
+	docker build --platform=linux/$$ARCH --build-arg TARGETARCH=$$ARCH -t bigfleet:dev -f cmd/bigfleet/Dockerfile . && \
+	docker build --platform=linux/$$ARCH --build-arg TARGETARCH=$$ARCH -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
 
 .PHONY: scaletest
 scaletest: ## Run the dev-500 profile end-to-end. Override with PROFILE=scaleway-500k etc. DURATION=Xm overrides the profile's soak window (default: loadProfile.durationSeconds).
