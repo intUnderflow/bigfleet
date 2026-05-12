@@ -1967,6 +1967,42 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 600,
+      "type": "timeseries",
+      "title": "Inventory machines by state",
+      "description": "Shard-side machine state machine over time: Speculative → Creating → Idle → Configuring → Configured → Draining (→ Deleting); Failed terminal. Sustained pile-up in any transitional state (Creating/Configuring/Draining) = backend slowness. Idle is steady-state spare; Configured is bound to a cluster.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (state) (bigfleet_shard_inventory_machines)",
+          "refId": "A",
+          "legendFormat": "{{state}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "fillOpacity": 30
+          }
+        },
+        "overrides": []
+      }
     }
   ]
 }
