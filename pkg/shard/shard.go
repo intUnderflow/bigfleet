@@ -828,8 +828,18 @@ func (s *Shard) notifyNodeState(m machine.Machine) {
 		}
 		upd.Labels = labels
 	}
-	if len(m.Profile.Resources) > 0 {
-		upd.Resources = &pb.Resources{Resources: m.Profile.Resources}
+	// ADR-0022 / M45.5: send the machine's *Allocatable* (per-machine
+	// capacity), not Profile.Resources (per-replica request shape).
+	// EffectiveAllocatable falls back to Profile.Resources when
+	// Allocatable is unset, so pre-M45.0 inventory keeps the historical
+	// 1 Pod = 1 machine math. With density>1 the operator now
+	// publishes UpcomingNode.Spec.Resources at the actual fake-Node
+	// Allocatable (e.g. 100 × {cpu:4, memory:8Gi} = {cpu:400, memory:800Gi})
+	// so pod-shim's nodeFits bin-packing fills each fake-Node up to
+	// its real capacity instead of capping at one Pod per Node.
+	alloc := m.EffectiveAllocatable()
+	if len(alloc) > 0 {
+		upd.Resources = &pb.Resources{Resources: alloc}
 	}
 	if err := sess.SendNodeStateUpdate(upd); err != nil {
 		s.log.Debug("notifyNodeState send failed", "machine", m.ID, "err", err)
