@@ -47,6 +47,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -242,9 +243,18 @@ func run(args []string) error {
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
 
+	// CacheSyncTimeout defaults to 2 min; under cloud scaletest load
+	// (~100K Pods + Nodes per kwok apiserver) the initial List/Watch
+	// pagination can run past that. Manager exits on timeout, the
+	// entrypoint supervisor cycles the container, and the apiserver
+	// is even hotter on the retry — restart loop. 10 min is generous
+	// for the largest profiles and harmless when sync finishes fast.
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: *metricsAddr},
+		Controller: config.Controller{
+			CacheSyncTimeout: 10 * time.Minute,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("manager: %w", err)
@@ -317,7 +327,10 @@ func run(args []string) error {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil && !errors.Is(err, ctrl.SetupSignalHandler().Err()) {
+	// ctrl.SetupSignalHandler installs a process-wide handler and panics
+	// with "close of closed channel" if invoked twice. Cache the context.
+	ctx := ctrl.SetupSignalHandler()
+	if err := mgr.Start(ctx); err != nil && !errors.Is(err, ctx.Err()) {
 		return err
 	}
 	return nil

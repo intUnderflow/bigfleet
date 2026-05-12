@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,6 +21,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -77,9 +79,18 @@ func run(args []string) error {
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
 
+	// Default cache-sync timeout (2 min) is too tight for scale-test
+	// kwok apiservers under heavy ramp load — initial List/Watch
+	// pagination over ~100K Pods can run past it. Manager exits, the
+	// entrypoint supervisor cycles the container, the apiserver gets
+	// hotter on retry: restart loop. 10 min covers the biggest profiles
+	// and costs nothing when sync finishes fast.
 	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: *metricsAddr},
+		Controller: config.Controller{
+			CacheSyncTimeout: 10 * time.Minute,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("manager: %w", err)
