@@ -88,7 +88,12 @@ func run(args []string) error {
 		return fmt.Errorf("add controller: %w", err)
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil && !errors.Is(err, ctrl.SetupSignalHandler().Err()) {
+	// ctrl.SetupSignalHandler installs a process-wide signal handler and
+	// must only be called once — a second call closes the already-closed
+	// stop channel and panics. Cache the context so the error-path
+	// errors.Is comparison reuses it instead of re-invoking the helper.
+	ctx := ctrl.SetupSignalHandler()
+	if err := mgr.Start(ctx); err != nil && !errors.Is(err, ctx.Err()) {
 		return err
 	}
 	return nil
