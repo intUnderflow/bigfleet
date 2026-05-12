@@ -758,9 +758,19 @@ The wall is **algorithmic at high demand-to-inventory ratio**. M11's 500K-invent
 - Kind regression: `dev-5k` still passes.
 
 **M45.5 — Scaleway-50k cloud validation**
-- One full scaleway-50k run on the new shape.
-- Expected: bind p99 lands cleanly under the 15 s SLO (no more linear climb through soak — chain isn't over-provisioning).
-- Lock the run as the new baseline reference.
+
+Original framing: "50K" is the *machine* count, with ~5M aggregated Pods coalescing onto them at density ≈ 100 — the real production shape Lucy described in the §0.1 alignment discussion. The first attempt at this milestone re-shaped the profile at density=10 (50K Pods → 5K machines), which validated the algorithm cloud-side cleanly (gate cleared at 17.6× density ratio, 100% sustained load, all chain p99s under SLO) but doesn't honor the original sizing intent.
+
+Prep work needed before the real 5M-Pod run:
+
+- **Load-driver `reconcilePerTickCap`**: `reconcileTarget` in `test/scaletest/cmd/load-driver/main.go:640-649` caps creates+deletes at 20 per tick (1s tick → 20/sec/cluster). For 100K Pods/cluster over ~50 min ramp = 33/sec/cluster, which exceeds the cap. Add a profile knob (default 20, profile override e.g. 200).
+- **Pod-shim throughput**: bind success ran at ~80/sec fleet-wide peak ramp + ~35/sec steady in the v2 run. For 5M Pods in any reasonable wall-clock, bind rate needs to scale ~30×. `MaxConcurrentReconciles=64` per pod-shim is a likely lever; per-cluster apiserver QPS another. Measure on a smaller density=100 dry-run first.
+- **kwok pod resources**: 100K Pods per kwok-apiserver pod (1 vCPU req / 2 GiB lim today) won't fit in memory. Plan ~8 GiB lim / 4 vCPU per kwok pod. Profile-level override.
+- **Node pool sizing**: 50 kwok pods × ~8 GiB ≈ 400 GiB just for kwok memory; plus shard + coordinator + prometheus. PRO2-L (the largest size in fr-par) is 128 GiB, so ≥8× PRO2-L (vs current 2×). Cost ~€3.36/hr.
+- **scaleway-50k profile**: target=100000, seedDensityMultiplier=100, seedMachines=60000, rampBudget=60m, durationSeconds=3600 or longer, kwok+shard resource bumps, reconcilePerTickCap=200.
+- **Run plan**: 1-2 dry runs at smaller-but-density=100 scale (e.g. 50 clusters × 10K = 500K Pods → 5K machines at density=100) first, to flush out the bottlenecks without burning a full 8-PRO2-L hour. Then the full 5M run as the lockable baseline.
+
+Expected outcome: bind p99 lands cleanly under the 15 s SLO with 50K machines under load — the architecturally-correct shape of the test that scaleway-50k was originally meant to be.
 
 **M45.6 — Larger-scale regression**
 - `scaleway-1m` and `scaleway-500k` runs on the new shape.
