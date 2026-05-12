@@ -22,11 +22,24 @@ hero:
       variant: minimal
 ---
 
-BigFleet is the piece of software the cluster autoscaler stops being when you outgrow one cluster.
+<div style="margin: 2rem 0;">
+  <p style="font-size: 0.85rem; opacity: 0.7; margin: 0 0 0.5rem;">Scale testing supported by</p>
+  <a href="https://uber.com" target="_blank" rel="noopener">
+    <img
+      class="supported-by-logo"
+      src="/uber-logo.svg"
+      alt="Uber"
+      style="height: 32px; width: auto; max-width: none; opacity: 0.85; display: inline-block;"
+    />
+  </a>
+</div>
+<style>
+  :root[data-theme='dark'] .supported-by-logo { filter: invert(1); }
+</style>
 
 ## What it is
 
-BigFleet runs once for an entire Kubernetes fleet. Each cluster reports the capacity it needs in a small standard contract — three CRDs and one protobuf message. BigFleet decides which physical or virtual machines should serve which cluster, and provisions, reclaims, and rebalances them across the fleet.
+BigFleet is the piece of software the cluster autoscaler stops being when you outgrow one cluster. It runs once for an entire Kubernetes fleet. Each cluster reports the capacity it needs in a small standard contract — three CRDs and one protobuf message. BigFleet decides which physical or virtual machines should serve which cluster, and provisions, reclaims, and rebalances them across the fleet.
 
 Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch that. It's the tier above: it makes sure the right machines exist to be scheduled on, anywhere they're needed.
 
@@ -74,3 +87,11 @@ If your fleet is one cluster, you don't need BigFleet. If it's a hundred, you st
 ## Status
 
 v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh). Coverage: race-detector unit tests, deterministic simulator with golden traces, long-running soak, multi-cluster end-to-end on kind, [provider conformance suite](/provider-author-guide/), and the [scale-test results](/scaletest-results/) on a real cloud cluster. Real provider implementations live in separate repositories by design — see the [provider author guide](/provider-author-guide/).
+
+<hr style="margin-top: 3rem; opacity: 0.3;" />
+
+<p style="font-size: 0.75rem; opacity: 0.6; margin-top: 1rem;">
+  Uber's support is limited to providing compute for scale-test runs.
+  BigFleet is otherwise independent of Uber and is not sponsored, endorsed, or
+  maintained by Uber. All trademarks belong to their respective owners.
+</p>
