@@ -24,7 +24,13 @@
 
 kwok:
   clusterCount: 5
-  # M45.5: 10K Pods per kwok-apiserver fits kine sqlite comfortably on
+  # M45.5: storage knob exists (etcd or kine), but etcd integration
+  # needs more debugging — kwok apiserver wedges with controller-runtime
+  # cache.sync timeouts. Sticking with kine + _sync=OFF (default) for
+  # the kind validation; cloud profiles use real K8s apiservers so the
+  # backend is etcd by default there.
+  # storage: etcd
+  # M45.5: 10K Pods per kwok-apiserver fits etcd comfortably on
   # laptop kind. Requests match the M44 floor that historically schedules
   # cleanly. Limits stay generous so per-Pod ramp bursts don't OOM.
   apiserverResources:

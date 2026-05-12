@@ -90,6 +90,10 @@ spec:
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            {{- if .Values.kwok.storage }}
+            - name: KWOK_STORAGE
+              value: "{{ .Values.kwok.storage }}"
+            {{- end }}
           volumeMounts:
             - { name: shared, mountPath: /var/scaletest }
           resources:

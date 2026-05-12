@@ -12,6 +12,7 @@ ARG GO_VERSION=1.26
 ARG K8S_VERSION=v1.30.0
 ARG KWOK_VERSION=v0.7.0
 ARG KINE_VERSION=v0.14.16
+ARG ETCD_VERSION=v3.5.16
 ARG TARGETARCH
 
 # ---------------- Stage 1: build the Go components ----------------
@@ -89,6 +90,19 @@ RUN ARCH="${TARGETARCH:-amd64}" && \
     curl -fsSL "https://github.com/k3s-io/kine/releases/download/${KINE_VERSION}/kine-${ARCH}" \
       -o /usr/local/bin/kine && \
     chmod +x /usr/local/bin/kine
+
+# etcd — M45.5: optional storage backend for kwok apiserver, swapped in
+# via KINE_BACKEND=etcd in the entrypoint. kine-sqlite serialises writes
+# through one WAL fsync stream; etcd writes in parallel with a smaller
+# tail. Worth the ~15 MB image bump for laptop scale tests where the
+# kine WAL was the dominant CPU consumer.
+ARG ETCD_VERSION
+RUN ARCH="${TARGETARCH:-amd64}" && \
+    curl -fsSL "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz" \
+      | tar -xzC /tmp && \
+    mv "/tmp/etcd-${ETCD_VERSION}-linux-${ARCH}/etcd" /usr/local/bin/etcd && \
+    chmod +x /usr/local/bin/etcd && \
+    rm -rf "/tmp/etcd-${ETCD_VERSION}-linux-${ARCH}"
 
 # kwok controller.
 RUN ARCH="${TARGETARCH:-amd64}" && \

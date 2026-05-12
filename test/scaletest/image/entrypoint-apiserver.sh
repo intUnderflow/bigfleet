@@ -98,12 +98,44 @@ current-context: local
 EOF
 export KUBECONFIG="$KCFG"
 
-# ---- 3. start kine ----
-log kine "starting"
-kine --listen-address=tcp://127.0.0.1:2379 \
-     --endpoint="sqlite://$WORK/kine/state.db?_journal=WAL&cache=shared" \
-     >"$WORK/logs/kine.log" 2>&1 &
-KINE_PID=$!
+# ---- 3. start storage backend (kine sqlite or etcd) ----
+# M45.5: KWOK_STORAGE selects the apiserver's backing store.
+# - kine (default): kine + sqlite. Lightweight, no separate process to
+#   lifecycle, but sqlite WAL fsyncs serialise writes inside one
+#   connection. Under the 5-cluster-apiserver-writes-per-Pod chain
+#   load, this was the dominant CPU consumer (kine at 729 % fleet on
+#   dev-500) and the bind-tail latency cause.
+# - etcd: real etcd. Parallel writes via BoltDB MVCC. ~15 MB binary
+#   added to the image; kwok apiserver already speaks etcd v3.
+#   Recommended for throughput-heavy laptop scaletests.
+: "${KWOK_STORAGE:=kine}"
+if [[ "$KWOK_STORAGE" == "etcd" ]]; then
+  mkdir -p "$WORK/etcd"
+  log etcd "starting"
+  etcd --name=node \
+       --data-dir="$WORK/etcd" \
+       --listen-client-urls=http://127.0.0.1:2379 \
+       --advertise-client-urls=http://127.0.0.1:2379 \
+       --listen-peer-urls=http://127.0.0.1:2380 \
+       --initial-cluster=node=http://127.0.0.1:2380 \
+       --initial-advertise-peer-urls=http://127.0.0.1:2380 \
+       --initial-cluster-state=new \
+       --logger=zap --log-level=warn \
+       --unsafe-no-fsync=true \
+       >"$WORK/logs/etcd.log" 2>&1 &
+  KINE_PID=$!
+else
+  # KINE_SQLITE_PARAMS is overridable for kine perf tuning.
+  # Default _sync=OFF skips the per-WAL-commit fsync.
+  # Override to KINE_SQLITE_PARAMS='_journal=WAL&cache=shared' to
+  # restore default fsync behaviour for crash-safety testing.
+  : "${KINE_SQLITE_PARAMS:=_journal=WAL&cache=shared&_sync=OFF}"
+  log kine "starting (params=$KINE_SQLITE_PARAMS)"
+  kine --listen-address=tcp://127.0.0.1:2379 \
+       --endpoint="sqlite://$WORK/kine/state.db?$KINE_SQLITE_PARAMS" \
+       >"$WORK/logs/kine.log" 2>&1 &
+  KINE_PID=$!
+fi
 
 for i in {1..30}; do
   if (echo > /dev/tcp/127.0.0.1/2379) 2>/dev/null; then break; fi

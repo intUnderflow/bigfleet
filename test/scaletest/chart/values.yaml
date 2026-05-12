@@ -114,6 +114,15 @@ provider:
 # The defining knobs: how many simulated clusters and how big each.
 kwok:
   clusterCount: 5
+  # M45.5: storage backend for the kwok apiserver. "" or "kine" uses
+  # the legacy kine + sqlite path (lightweight, no separate process,
+  # but sqlite WAL fsyncs serialise writes inside one connection).
+  # "etcd" launches real etcd — parallel writes via BoltDB MVCC,
+  # removes the kine-side write tail on throughput-heavy laptop
+  # scaletests. Cloud profiles can leave this unset since etcd is
+  # already the default backend in Kubernetes (kwok-on-cloud doesn't
+  # use kine).
+  storage: ""
   # The shared emptyDir between the apiserver and workload containers
   # is tmpfs-backed so kine sqlite WAL fsyncs go to RAM instead of the
   # node's local disk. 1Gi is the M44 Pod-mode floor — at 5K Pods on
