@@ -42,12 +42,17 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
+  # M45.5 round 2: kine sqlite WAL serialises writes through one fsync
+  # stream and pinned the apiserver container at its 4-vCPU limit
+  # (3848m / 4000m on the first run), starving the 5-write-per-Pod chain
+  # at ~30 binds/sec fleet. etcd writes in parallel via BoltDB MVCC and
+  # is the established cloud-cluster backend. CPU limit lifted in lockstep
+  # (4 → 8) so headroom exists even after the storage swap.
+  storage: etcd
   clusterCount: 5
-  # M45.5: 100K Pods per kwok-apiserver. Same per-cluster shape as
-  # scaleway-50k; only the cluster count differs.
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
-    limits:   { cpu: 4, memory: 8Gi }
+    limits:   { cpu: 8, memory: 8Gi }
   workloadResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 4, memory: 8Gi }
