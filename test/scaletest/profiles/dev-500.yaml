@@ -1,40 +1,37 @@
-# dev-5k — smallest profile under the M45.5 naming convention.
-# "5k" is the machine count; ~500K aggregated Pods coalesce onto them at
-# density=100 (the real K8s shape). 5 kwok clusters × 100K Pods each =
-# 500K total Pods, density=100 → 5K fake-Nodes / machines.
+# dev-500 — smallest profile under the M45.5 naming convention.
+# "500" is the machine count; ~50K aggregated Pods coalesce onto them at
+# density=100 (the real K8s shape). 5 kwok clusters × 10K Pods each =
+# 50K total Pods, density=100 → 500 fake-Nodes / machines.
 #
-# Targets a Mac M5 Max running kind. Memory fits comfortably (~50 GiB
-# total kwok footprint, M5 Max has 64-128 GiB available). The bottleneck
-# is kine sqlite WAL throughput inside each kwok apiserver — roughly
-# 50 writes/sec/cluster on M1/M2-era hardware, faster on M5 Max but not
-# measured. At ~50/sec/cluster and 3 writes per Pod-bind, 5 clusters
-# stream the chain at ~83 binds/sec fleet-wide; 500K Pods then ramps in
-# roughly 60-100 min. Long for iteration, but honest scale for kind.
+# Targets a Mac M5 Max running kind. An earlier dev-5k (500K Pods) tried
+# to honour the convention literally but hit kine sqlite throughput
+# ceilings on the laptop (observed ~2 binds/sec fleet vs theoretical
+# 250/sec ceiling) and would have taken hours to ramp. dev-500 is the
+# kind-runnable cousin: same density=100 model, 10× smaller, exercises
+# the M45 chain on laptop hardware in minutes.
 #
-# For fast iteration on chain code, override per run:
-#   make scaletest PROFILE=dev-5k DURATION=10m   # short soak
-#   # or run a one-off helm install with target lowered manually.
-#
-# Sizing math (M5 Max kind):
+# Sizing math (M5 Max kind, Docker Desktop 18 vCPU / 48 GiB cap):
 #   shard:        1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
 #   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
 #   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
-#   kwok pods:    5 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
-#                                                   = 20 vCPU / 40 GiB
-#   total:       ~22 vCPU / ~49 GiB                  → fits an M5 Max
-#                                                       Docker Desktop VM
-#                                                       sized to ≥ 16 vCPU
-#                                                       / 64 GiB.
+#   kwok pods:    5 × (500m + 500m) / (1 GiB + 1 GiB) reqs
+#                                                   = 5 vCPU / 10 GiB
+#   total:       ~8 vCPU req / ~19 GiB req           → fits the laptop VM
+#                                                       with room to spare;
+#                                                       limits stay generous
+#                                                       so ramp burst can
+#                                                       grow into spare CPU.
 
 kwok:
   clusterCount: 5
-  # M45.5: 100K Pods per kwok-apiserver. kine in-memory plus list/
-  # watch caches need ~6-8 GiB per apiserver pod.
+  # M45.5: 10K Pods per kwok-apiserver fits kine sqlite comfortably on
+  # laptop kind. Requests match the M44 floor that historically schedules
+  # cleanly. Limits stay generous so per-Pod ramp bursts don't OOM.
   apiserverResources:
-    requests: { cpu: 2, memory: 4Gi }
+    requests: { cpu: 500m, memory: 1Gi }
     limits:   { cpu: 4, memory: 8Gi }
   workloadResources:
-    requests: { cpu: 2, memory: 4Gi }
+    requests: { cpu: 500m, memory: 1Gi }
     limits:   { cpu: 4, memory: 8Gi }
   sharedVolumeSizeLimit: "2Gi"
 
@@ -45,9 +42,9 @@ kwok:
 
 shard:
   replicas: 1
-  # 6000 Idle × density-100 = 600K Pod capacity vs 500K demand (20 %
-  # headroom). Same density math as scaleway-50k, 10× fewer machines.
-  seedMachines: 6000
+  # 600 Idle × density-100 = 60K Pod capacity vs 50K demand (20 %
+  # headroom). Same density math as scaleway-50k, 100× fewer machines.
+  seedMachines: 600
   seedDensityMultiplier: 100
   maxActionsPerCycle: 4096
   executeConcurrency: 256
@@ -61,23 +58,20 @@ coordinator:
   replicas: 1
 
 loadProfile:
-  target: 100000
+  target: 10000
   churnPerMinute: 0.02
-  # 100-min ramp + 30-min soak window. Aggressive: kine on M5 Max may
-  # let us do better, but the conservative budget avoids fail-fast on
-  # first contact. Drop DURATION=Nm at the make-line to shorten soak
-  # for iterative debug.
   durationSeconds: 1800
-  # 50 creates/sec/cluster sits right at the historical M1/M2 kine
-  # ceiling; M5 Max plausibly absorbs more. Bumping this is the
-  # first thing to try if a run finishes too slowly.
+  # 50 creates/sec/cluster sits near the M1/M2 kine ceiling; M5 Max
+  # plausibly absorbs more. Bumping this is the first thing to try
+  # if a run finishes too slowly.
   reconcilePerTickCap: 50
 
-# Generous ramp budget: at 50 binds/sec/cluster × 5 = 250 binds/sec,
-# 500K Pods ramps in ~33 min in the best case; kine-throttled 50 % of
-# that case gives ~60-100 min. 120 min budget keeps fail-fast off the
-# critical path while we measure where the real ceiling lands.
-rampBudget: 120m
+# Generous ramp budget: at 50 binds/sec/cluster × 5 = 250 binds/sec
+# fleet (theoretical), 50K Pods ramps in ~3 min. Observed in practice
+# closer to 10-30/sec due to chain serialization (~5 cluster-apiserver
+# writes per Pod through the mark→CR→Bootstrap→fake-Node→bind
+# pipeline) so 30 min budget gives plenty of headroom.
+rampBudget: 30m
 
 operator:
   qps: 50
@@ -98,7 +92,7 @@ slo:
   operatorRollupP99Seconds: 2
 
 costEstimate:
-  vCPU: 22
-  memoryGB: 49
+  vCPU: 8
+  memoryGB: 19
   awsSpotUsdPerHour: 0
-  notes: "Free on M5 Max kind (Docker Desktop VM sized ≥16 vCPU / 64 GiB). M45.5: 5K machines, 500K aggregated Pods at density=100 — honest cloud-shape scale on a laptop. Ramp ~60-100 min depending on kine throughput; total run 90-150 min. Use cloud profiles (scaleway-50k+) for iteration; this profile validates the convention end-to-end without paying for cluster time."
+  notes: "Free on M5 Max kind. M45.5: 500 machines, 50K aggregated Pods at density=100 — kind-runnable validation of the new convention. Expected wall-clock: ~5-10 min ramp + 30 min soak ≈ 40-min total run."
