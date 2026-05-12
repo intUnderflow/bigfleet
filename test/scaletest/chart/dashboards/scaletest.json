@@ -314,7 +314,7 @@
       "id": 101,
       "type": "stat",
       "title": "Internal binding latency p99 (per-Pod, ADR-0018) \u2014 SLO \u2264 15 s (ADR-0020)",
-      "description": "BigFleet-internal binding latency for steady-state Pods only (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. Reads the `_steady_seconds_bucket` histogram (Drop M / M44.4) which only records Pods tagged `scaletest.bigfleet/state: steady` \u2014 the cold-start ramp herd is excluded at the metric source, so this panel's value is what the runner's pass() gate sees. CR-mode opt-out profiles have no shim \u2192 metric is empty by design; runner skips the gate via -1 sentinel (ADR-0017).",
+      "description": "BigFleet-internal binding latency for steady-state Pods only (the harness fake provider returns instantly; ADR-0018: this is *not* user-facing latency, just BigFleet's contribution). Per-Pod histogram emitted by the bigfleet-scaletest-pod-shim. ADR-0020: 15 s budget = ~10 s rollupInterval ceiling + ~5 s chain headroom. Reads the `_steady_seconds_bucket` histogram (Drop M / M44.4) which only records Pods tagged `scaletest.bigfleet/state: steady` \u2014 the cold-start ramp herd is excluded at the metric source, so this panel's value is what the runner's pass() gate sees. The 'no steady samples yet' fallback fires when the histogram is empty: the load-driver only tags Pods steady after rampTo finishes, so during ramp the metric is blank by design (this is normal, not a misconfiguration).",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -334,7 +334,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "noValue": "CR-mode (no shim)",
+          "noValue": "no steady samples yet",
           "color": {
             "mode": "thresholds"
           },
