@@ -1,44 +1,47 @@
-# scaleway-5m — fleet-scale realism test, ten shards, Pod-mode.
+# scaleway-5m — 5,000,000-machine fleet, 500M aggregated Pods at density=100.
 #
-# Aggregate-named: 10 shards × 500K under management each = 5M total.
-# Demand: 500 kwok clusters × 1K Pods/cluster = 500K Pods through the
-# full M43 chain. Inherits Pod-mode + the realistic 6-archetype
-# catalog from the chart defaults.
+# M45.5 convention: "5m" is the machine count; ~500M aggregated Pods
+# coalesce onto them at production-realistic density. 5000 kwok clusters
+# × 100K Pods each = 500M total Pods. 10 shards × 500K under management
+# (per-shard ceiling from M11.x). The largest M45-suite profile; reserve
+# for once-per-release validation.
 #
-# Per-shard shape mirrors scaleway-500k: 450K Configured (M29 seed)
-# + 50K Idle headroom + 50K demand from 50 owned clusters. Each shard
-# runs at its M11-validated 500K burst-regime ceiling while the fleet
-# aggregates 5M. ADR-0013 1:10 burst regime; cycle p99 ≤ 5s gated.
+# Sizing math (M45.5 reshape):
+#   shards:       10 × 4 vCPU / 16 GiB             = 40 vCPU / 160 GiB
+#   coordinator:   1 × 500m / 1 GiB                = 0.5 vCPU / 1 GiB
+#   prometheus:    1 × 8 vCPU / 32 GiB             =  8 vCPU / 32 GiB
+#                   (500M Pod-bind histograms + 5M UpcomingNode series)
+#   kwok pods: 5000 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
+#                                                  = 20000 vCPU / 40000 GiB
+#   total:      ~20049 vCPU req / ~40193 GiB        → fits ~640 × PRO2-L
+#                                                       (20480 vCPU / 81920 GiB)
 #
-# Sized for 16× PRO2-L Kapsule (32 vCPU / 128 GiB each):
-#   shards:       10 × 2 vCPU / 3 GiB              =  20 vCPU / 30 GiB
-#   coordinator:   1 × default                      =  ~1 vCPU / 1 GiB
-#   prometheus:    1 × 4 vCPU / 16 GiB              =   4 vCPU / 16 GiB
-#                  (5M demand → big histogram fan-out)
-#   kwok pods:   500 × 1 vCPU / 2 GiB combined req  = 500 vCPU / 1 TiB
-#                   (M44 Pod-mode floor)
-#   total:        ~525 vCPU req / ~1050 GiB          → fits 16× PRO2-L
-#                                                        (512 vCPU / 2048 GiB)
-#                                                        ~quota: PRO2-L 10/zone
-#                                                        default — needs quota
-#                                                        bump or split across
-#                                                        2 zones (8 + 8).
-#
-# Pre-flight: confirm PRO2-L quota in chosen zones is ≥16 (or split
-# 8+8 across two zones). M12 multi-shard merged. Coordinator scrape
-# gap (task #146) means coordinatorApplyOpsPerSec stays -1 in summary
-# — algorithmic SLOs gate the run.
-#
-# Provisioning (single zone if quota allows):
+# Provisioning realities:
+#   - 640 PRO2-L nodes is far above Scaleway Kapsule's per-pool default
+#     limit (~100 nodes) and well above the default PRO2-L quota in a
+#     single zone. Spread across multiple pools / multiple zones, or
+#     coordinate a custom quota with Scaleway support.
+#   - 5000 kwok pods spread across 640 nodes ≈ 8 pods/node — at the
+#     PRO2-L 32-vCPU ceiling (8 × 4 vCPU req). No spare CPU for system
+#     daemons; expect node-pressure evictions unless you over-provision
+#     the pool by ~20 %. Practical pool size: 750 × PRO2-L.
 #
 #   scw k8s cluster create name=bigfleet-5m \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=16 pools.0.min-size=16 pools.0.max-size=16 \
-#     pools.0.zone=fr-par-1 \
+#     pools.0.size=750 pools.0.min-size=750 pools.0.max-size=750 \
 #     region=fr-par project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
 #
-# Cost: 16× PRO2-L × ~€0.42/hr ≈ €6.72/hr. ~50 min run ≈ €5.60/$6.
+# Cost (Scaleway, May 2026): 750× PRO2-L × ~€0.42/hr ≈ €315/hr.
+# Expected wall-clock: ~90 min ramp + 30 min soak + ~30 min teardown
+# ≈ 2.5 h ≈ €790 / ~$850. Once-per-release exercise — verifies the
+# full M45 model holds at 100M-node-equivalent demand.
+#
+# Sizing history (pre-M45.5):
+#   - Original 500K Pod demand × 4.5M Configured-pre-seed for the 1:10
+#     burst regime at the per-shard ceiling. M45.5 inverts the framing —
+#     500M honest demand at density=100 — and scales the node pool
+#     accordingly.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -52,34 +55,50 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  clusterCount: 500
+  clusterCount: 5000
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
 
 shard:
   replicas: 10
-  seedMachines: 50000        # 50K Idle per shard, 500K aggregate
-  seedConfiguredPerCluster: 9000   # M29: 450K Configured per shard, 4.5M aggregate
-  maxActionsPerCycle: 1000
-  executeConcurrency: 128
+  # 600K Idle per shard × 10 shards × density-100 = 600M Pod capacity
+  # vs 500M Pod demand (20 % headroom).
+  seedMachines: 600000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
   incrementalReconcile: true
   metricsWarmupCycles: 5
   resources:
-    requests: { cpu: 2, memory: 3Gi }
-    limits:   { cpu: 6, memory: 12Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 coordinator:
   enabled: true
   replicas: 1
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 1800
+  target: 100000
+  churnPerMinute: 0.02
+  durationSeconds: 3600
+  reconcilePerTickCap: 200
+
+rampBudget: 90m
 
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
-  rollupInterval: 0s
+  rollupInterval: 1s
   coLocationKey: topology.bigfleet/rack
 
 slo:
@@ -87,15 +106,13 @@ slo:
   shardCycleDurationP99Seconds: 5
 
 prometheus:
-  # 5M-CR / 500K-Pod fan-out: histogram bucket cardinality scales
-  # with kwok pod count × bucket count. 16 GiB request gives the
-  # head block room.
+  # 500M Pod-bind histograms scale prometheus's head block aggressively.
   resources:
-    requests: { cpu: 4, memory: 16Gi }
-    limits:   { cpu: 8, memory: 32Gi }
+    requests: { cpu: 8, memory: 32Gi }
+    limits:   { cpu: 16, memory: 64Gi }
 
 costEstimate:
-  vCPU: 512
-  memoryGB: 2048
-  awsSpotUsdPerHour: 6.72
-  notes: "16× Scaleway PRO2-L (32 vCPU / 128 GB each). 10 shards × 500K under management (450K Configured + 50K Idle) = 5M aggregate; 500K Pod-mode demand through the full M43 chain. internalBindingLatency p99 ≤ 5s (ADR-0018) gated per shard. ~$6 for a 50-min run end-to-end. Watch PRO2-L zone quota."
+  vCPU: 20480
+  memoryGB: 81920
+  awsSpotUsdPerHour: 315
+  notes: "750× Scaleway PRO2-L (32 vCPU / 128 GiB each), ~20 % over-provisioned to give system daemons headroom. M45.5: 5M machines under management (10 shards × 500K), 500M aggregated Pods at density=100. ~$850 for a ~2.5 h end-to-end run. Quota bump + multi-pool split likely required; reserve for once-per-release milestone validation."

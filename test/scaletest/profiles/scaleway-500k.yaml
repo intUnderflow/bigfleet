@@ -1,52 +1,47 @@
-# scaleway-500k — production-shape 500K-machine scale test on Scaleway.
+# scaleway-500k — 500K-machine fleet, 50M aggregated Pods at density=100.
 #
-# M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
-# 50K Pods exercised through the full Pod → CR → Configured →
-# fake-Node → Pod-bound chain, against a 500K Idle inventory pool.
-# internalBindingLatency p99 ≤ 5 s (ADR-0018) gate active per ADR-0014 / ADR-0017.
+# M45.5 convention: "500k" is the machine count; ~50M aggregated Pods
+# coalesce onto them at production-realistic density. 500 kwok clusters
+# × 100K Pods each = 50M total. Same per-cluster shape as scaleway-50k,
+# 10× more clusters. Single shard — 500K machines is the documented
+# per-shard ceiling (M11.x). For 1M+ machines see scaleway-1m / -5m,
+# which scale out shard.replicas in proportion.
 #
-# Sized for a 2-node PRO2-L Kapsule pool. The CR-mode 2× PRO2-M
-# sizing no longer fits the M44 kwok floor (1 vCPU req per cluster
-# × 50 = 50 vCPU on a 32-vCPU pool).
-#
-# Sizing math:
-#   shard:        1 × 2 vCPU / 3 GiB                = 2 vCPU / 3 GiB
+# Sizing math (M45.5 reshape):
+#   shard:        1 × 4 vCPU / 16 GiB               = 4 vCPU / 16 GiB
 #   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
-#   prometheus:   1 × 2 vCPU / 8 GiB                = 2 vCPU / 8 GiB
-#                  (Pod-mode adds per-Pod histogram + Node objects)
-#   kwok pods:   50 × 1 vCPU / 2 GiB combined req   = 50 vCPU / 100 GiB
-#                  (apiserver 500m/1Gi + workload 500m/1Gi, M44 floor)
-#   total:       ~55 vCPU req / ~112 GiB req         → fits 2× PRO2-L
-#                                                       (64 vCPU / 256 GiB)
-#                                                       ~86 % CPU, ~44 % memory reservation
+#   prometheus:   1 × 4 vCPU / 16 GiB               = 4 vCPU / 16 GiB
+#                  (50M Pod-bind histograms + 500K UpcomingNode series)
+#   kwok pods:  500 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
+#                                                   = 2000 vCPU / 4000 GiB
+#   total:      ~2009 vCPU req / ~4033 GiB req      → fits ~70 × PRO2-L
+#                                                       (2240 vCPU / 8960 GiB)
+#                                                       headroom for spikes
 #
-# Sizing history:
-#   - Original 5× PRO2-M, then 3× PRO2-M, then 2× PRO2-M (all CR-mode)
-#     by trimming kwok requests below what Pod-mode needs.
-#   - M44 Pod-mode default: floor is 1 vCPU / 2 GiB combined per kwok
-#     pod (matches dev-5k-pods-loopback). 2× PRO2-M no longer fits;
-#     2× PRO2-L is the cleanest match. PRO2-L is a separate quota
-#     counter from PRO2-M (default 10/zone), so the 2/zone PRO2-M
-#     limit doesn't apply.
-#
-# Provisioning:
+# Provisioning (note: 70 PRO2-L exceeds the default quota in fr-par;
+# request a quota bump before running, or fall back to a smaller dry-run):
 #
 #   scw k8s cluster create name=bigfleet-scaletest \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=2 pools.0.min-size=2 pools.0.max-size=2 \
+#     pools.0.size=70 pools.0.min-size=70 pools.0.max-size=70 \
 #     region=nl-ams project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
 #
-# Expected cost: 2× PRO2-L × ~€0.42/hr ≈ €0.84/hr.
-# A 30-min run + setup + teardown ≈ 50 min ≈ €0.70 (~$0.74). About
-# 2× the CR-mode cost — buys the *internal* binding-latency gate at
-# 50K-Pod scale (ADR-0018: real-provider time is not measured here).
+# Cost (Scaleway, May 2026): 70× PRO2-L × ~€0.42/hr ≈ €29/hr.
+# Expected wall-clock: ~60 min ramp + 30 min soak + ~10 min teardown ≈
+# 100 min ≈ €48 / ~$52. Single most-expensive M45-suite run; reserve
+# for milestone gate validation, not iteration.
+#
+# Sizing history (pre-M45.5):
+#   - Original 50K Pods × 500K seedMachines as a "low-demand against
+#     giant inventory pool" stress for Phase 1 / Phase 3 algorithmic
+#     scaling. M45.5 inverts that — "500K" now means honest demand
+#     for 500K machines, not a 500K-machine static pool with 50K
+#     workload.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
   tag: main
-  # Always pull so iterative scaletest changes pick up the freshly-
-  # pushed `:dev` image. Production uses immutable tags + IfNotPresent.
   pullPolicy: Always
 
 bigfleet:
@@ -56,80 +51,61 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  clusterCount: 50
-  # Per-pod budgets inherited from the chart's M44 Pod-mode floor
-  # (apiserver 500m/1Gi req, 2/2Gi lim; workload same; sharedVolume
-  # 1Gi). dev-5k-pods-loopback proved that's the minimum where kine
-  # sqlite stops warning under combined CR + Pod + UpcomingNode +
-  # Node write load.
+  clusterCount: 500
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
 
 shard:
-  # Single-shard 500K. Multi-shard configurations are aggregate-named
-  # — see scaleway-1m.yaml for 2 shards × 500K, scaleway-5m.yaml for
-  # 10 shards × 500K. The paper sets 500K as the per-shard ceiling
-  # (project_lessons_learned: M11.x), so the file's name reflects
-  # the scale tested, not how many shards were used to test it.
   replicas: 1
-  # 500K idle machines pre-seeded so Phase 1 has a real population to
-  # match against. Without this the harness measures rollup latency
-  # only, not the algorithmic ceiling we actually want to test.
-  seedMachines: 500000
-  # Cap per-cycle work so a 50K-Need demand burst spreads across
-  # cycles instead of blowing the 5s SLO with 50K Configure RPCs
-  # in one cycle. 1000/cycle × ~50 cycles = full ramp in <1 min.
-  maxActionsPerCycle: 1000
-  # M11.18: parallel execute through operator streams. With 1000
-  # actions/cycle and per-cluster stream RTTs of ~5-20ms, serial
-  # execute would still take ~10s. 128 parallel workers brings the
-  # bottleneck back to actual local compute + apiserver concurrency.
-  executeConcurrency: 128
-  # M11.22: delta-only reconcile. The phase-dump diagnostic at 500K
-  # showed reconcile was 87 % of the cycle on the full-List path; the
-  # in-process fake provider honours since_revision so the harness
-  # can opt in. Real-provider deployments validate per-provider.
+  # ADR-0022 / M45.5: 600K Idle × density-100 = 60M Pod capacity vs
+  # 50M Pod demand (20 % headroom).
+  seedMachines: 600000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
   incrementalReconcile: true
-  # Cycle 1 of any shard does a one-time full provider.List that's
-  # ~700 ms on M5 and ~1.5 s on PRO2 at 500K — not representative of
-  # steady-state cycle work. Skip the first 5 cycles' histogram
-  # observations so cycle p99 reflects the SLO-relevant work.
   metricsWarmupCycles: 5
   resources:
-    requests: { cpu: 2, memory: 3Gi }
-    limits:   { cpu: 6, memory: 12Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 coordinator:
   replicas: 1
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 1800
+  target: 100000
+  churnPerMinute: 0.02
+  durationSeconds: 3600
+  reconcilePerTickCap: 200
+
+rampBudget: 60m
 
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
-  rollupInterval: 0s
+  rollupInterval: 1s
 
-# ADR-0014 + ADR-0017 + ADR-0018 / M44: internal binding-latency
-# gate is active because Pod-mode is the default. In-process tier:
-# ≤ 5 s for both the cycle envelope and BigFleet's contribution to
-# binding latency. User-facing latency = this + provider time
-# (not measured here, see ADR-0018).
 slo:
   internalBindingLatencyP99Seconds: 15
   shardCycleDurationP99Seconds: 5
 
 prometheus:
-  # Bumped from CR-mode's 1/4 GiB: per-Pod bind-latency histogram
-  # (12 buckets) + fake Node objects + UpcomingNode series add
-  # cardinality. 8 GiB request gives the head block room.
   resources:
-    requests: { cpu: 2, memory: 8Gi }
-    limits:   { cpu: 4, memory: 16Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each). 500K seeded inventory + 50K Pod-mode demand through the full M43 chain. internalBindingLatency p99 ≤ 5s (ADR-0018) gate active per ADR-0014/0017. ~$0.74 for a 50-min run end-to-end (~2× the CR-mode cost; the M44 Pod-mode floor needs PRO2-L)."
+  vCPU: 2240
+  memoryGB: 8960
+  awsSpotUsdPerHour: 29.4
+  notes: "70× Scaleway PRO2-L (32 vCPU / 128 GiB each). M45.5: 500K machines, 50M aggregated Pods at density=100 — single-shard ceiling test. ~$52 for a ~100-min end-to-end run. Quota bump may be needed (PRO2-L default ~10/zone). Reserve for milestone gate validation, not day-to-day iteration."

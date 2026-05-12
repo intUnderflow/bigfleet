@@ -1,43 +1,40 @@
-# scaleway-1m — 1,000,000-machine fleet test, two shards, Pod-mode.
+# scaleway-1m — 1,000,000-machine fleet, 100M aggregated Pods at density=100.
 #
-# Aggregate-named: 2 shards × 500K under management each = 1M total.
-# Demand: 100 kwok clusters × 1K Pods/cluster = 100K Pods through the
-# full M43 chain. Inherits Pod-mode + the realistic 6-archetype
-# catalog from the chart defaults.
+# M45.5 convention: "1m" is the machine count; ~100M aggregated Pods
+# coalesce onto them at production-realistic density. 1000 kwok clusters
+# × 100K Pods each = 100M total Pods. 2 shards × 500K under management
+# (the per-shard ceiling from M11.x). Aggregate-named: shards.replicas
+# = 2 reflects how we test, not what the name reports.
 #
-# **M29 production-realistic seed shape.** Each shard owns 50 owned
-# clusters with seedConfiguredPerCluster=9000 (from realistic
-# archetype catalog, weighted) — 450K Configured per shard, 900K
-# fleet-wide already-bound workloads. 100K demand at any moment is
-# the unsatisfied burst Phase 1 binds from Idle (50K per shard,
-# 100K total). 1:10 burst regime against the 1M aggregate (ADR-0013).
+# Sizing math (M45.5 reshape):
+#   shards:       2 × 4 vCPU / 16 GiB              =   8 vCPU / 32 GiB
+#   coordinator:  1 × 500m / 1 GiB                 = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 4 vCPU / 16 GiB              =   4 vCPU / 16 GiB
+#                  (100M Pod-bind histograms + 1M UpcomingNode series)
+#   kwok pods: 1000 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
+#                                                  = 4000 vCPU / 8000 GiB
+#   total:      ~4013 vCPU req / ~8049 GiB         → fits ~135 × PRO2-L
+#                                                      (4320 vCPU / 17280 GiB)
+#                                                      headroom for spikes
 #
-# Why 1:10 and not 1:1: ADR-0013 codifies BigFleet's cycle-p99 SLO
-# at burst density (≤10% pending demand). 1:1 reprovisioning is its
-# own regime gated on convergence rate, not cycle p99 — that lived
-# in scaleway-{1m,5m}-reprovision before M44 and is reachable by
-# scaling demand up if needed (changes the gate semantics, not the
-# binary).
-#
-# Sized for 4× PRO2-L Kapsule (32 vCPU / 128 GiB each):
-#   shards:       2 × 2 vCPU / 3 GiB                =  4 vCPU / 6 GiB
-#   coordinator:  1 × default                       = ~0.5 vCPU / 1 GiB
-#   prometheus:   1 × 2 vCPU / 8 GiB                =  2 vCPU / 8 GiB
-#   kwok pods:  100 × 1 vCPU / 2 GiB combined req   = 100 vCPU / 200 GiB
-#                  (M44 Pod-mode floor)
-#   total:       ~107 vCPU req / ~215 GiB            → fits 4× PRO2-L
-#                                                       (128 vCPU / 512 GiB)
-#                                                       ~84 % CPU, ~42 % memory reservation
-#
-# Provisioning:
+# Provisioning (quota bump near-certainly required — Scaleway PRO2-L
+# default quota in fr-par is ~10; 135 nodes needs explicit approval):
 #
 #   scw k8s cluster create name=bigfleet-1m \
 #     version=1.35.3 cni=cilium type=kapsule \
 #     pools.0.name=default pools.0.node-type=PRO2-L \
-#     pools.0.size=4 pools.0.min-size=4 pools.0.max-size=4 \
+#     pools.0.size=135 pools.0.min-size=135 pools.0.max-size=135 \
 #     region=fr-par project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
 #
-# Cost: 4× PRO2-L × ~€0.42/hr ≈ €1.68/hr. ~50 min run ≈ €1.40/$1.50.
+# Cost (Scaleway, May 2026): 135× PRO2-L × ~€0.42/hr ≈ €57/hr.
+# Expected wall-clock: ~75 min ramp + 30 min soak + ~15 min teardown ≈
+# 2 h ≈ €113 / ~$120. Reserve for milestone gate validation.
+#
+# Sizing history (pre-M45.5):
+#   - Original 100K Pod demand × 900K Configured-pre-seed for the 1:10
+#     burst regime (ADR-0013). M45.5 inverts the framing — the test now
+#     runs 100M honest demand at density=100, not a 1M-machine static
+#     pool with 10× burst headroom.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet-scaletest
@@ -51,34 +48,50 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  clusterCount: 100
+  clusterCount: 1000
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
 
 shard:
   replicas: 2
-  seedMachines: 50000        # 50K Idle per shard, 100K aggregate
-  seedConfiguredPerCluster: 9000   # M29: 450K Configured per shard, 900K aggregate
-  maxActionsPerCycle: 1000
-  executeConcurrency: 128
+  # 600K Idle per shard × 2 shards × density-100 = 120M Pod capacity vs
+  # 100M Pod demand (20 % headroom).
+  seedMachines: 600000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
   incrementalReconcile: true
   metricsWarmupCycles: 5
   resources:
-    requests: { cpu: 2, memory: 3Gi }
-    limits:   { cpu: 6, memory: 12Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 coordinator:
   enabled: true
   replicas: 1
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 1800
+  target: 100000
+  churnPerMinute: 0.02
+  durationSeconds: 3600
+  reconcilePerTickCap: 200
+
+rampBudget: 75m
 
 operator:
   qps: 200
   burst: 400
   ackConcurrency: 64
-  rollupInterval: 0s
+  rollupInterval: 1s
   coLocationKey: topology.bigfleet/rack
 
 slo:
@@ -87,11 +100,11 @@ slo:
 
 prometheus:
   resources:
-    requests: { cpu: 2, memory: 8Gi }
-    limits:   { cpu: 4, memory: 16Gi }
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
 
 costEstimate:
-  vCPU: 128
-  memoryGB: 512
-  awsSpotUsdPerHour: 1.68
-  notes: "4× Scaleway PRO2-L (32 vCPU / 128 GB each). 2 shards × 500K under management (450K Configured + 50K Idle) = 1M aggregate; 100K Pod-mode demand through the full M43 chain. internalBindingLatency p99 ≤ 5s (ADR-0018) gated. ~$1.50 for a 50-min run end-to-end."
+  vCPU: 4320
+  memoryGB: 17280
+  awsSpotUsdPerHour: 56.7
+  notes: "135× Scaleway PRO2-L (32 vCPU / 128 GiB each). M45.5: 1M machines under management (2 shards × 500K), 100M aggregated Pods at density=100. ~$120 for a ~2 h end-to-end run. Quota bump required for the 135-node pool. Reserve for milestone gate validation, not iteration."

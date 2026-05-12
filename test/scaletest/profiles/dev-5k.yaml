@@ -1,76 +1,104 @@
-# dev-5k — smallest sensible profile, runs free on a laptop.
-# 5 simulated clusters × 1K Pods each = 5K total demand.
+# dev-5k — smallest profile under the M45.5 naming convention.
+# "5k" is the machine count; ~500K aggregated Pods coalesce onto them at
+# density=100 (the real K8s shape). 5 kwok clusters × 100K Pods each =
+# 500K total Pods, density=100 → 5K fake-Nodes / machines.
 #
-# M44: Pod-mode + realistic archetype catalog are the chart defaults.
-# This profile inherits both — kwok floor (500m/1Gi req, 2/2Gi lim,
-# 1Gi tmpfs) and the 6-archetype realistic catalog (GPU training,
-# GPU inference, CPU batch, CPU service, memory-DB, critical-realtime).
-# The shard's seed reads the same catalog (M34) so seed and demand
-# match by archetype.
+# Targets a Mac M5 Max running kind. Memory fits comfortably (~50 GiB
+# total kwok footprint, M5 Max has 64-128 GiB available). The bottleneck
+# is kine sqlite WAL throughput inside each kwok apiserver — roughly
+# 50 writes/sec/cluster on M1/M2-era hardware, faster on M5 Max but not
+# measured. At ~50/sec/cluster and 3 writes per Pod-bind, 5 clusters
+# stream the chain at ~83 binds/sec fleet-wide; 500K Pods then ramps in
+# roughly 60-100 min. Long for iteration, but honest scale for kind.
 #
-# Pod-mode requires inventory for binding to actually happen; without
-# a seed every Pod becomes a shortfall and the chain isn't exercised.
+# For fast iteration on chain code, override per run:
+#   make scaletest PROFILE=dev-5k DURATION=10m   # short soak
+#   # or run a one-off helm install with target lowered manually.
 #
-# ADR-0022 / M45.4: seedDensityMultiplier=10 — each seeded machine
-# carries Allocatable = 10 × Profile.Resources, so one fake-Node hosts
-# up to 10 Pods of its profile (the realistic multi-Pod-per-Node shape
-# real Kubernetes uses). With ~8 distinct profiles per cluster and 1000
-# Pods/cluster, this means each profile's ~125 Pods aggregate into ~13
-# machines instead of 125 — exercising both the M45.1 shard-side vector
-# math AND the pod-shim's bin-packing path. seedMachines is reduced
-# proportionally (600 vs the pre-M45 6000) so total Pod-capacity stays
-# at ~6000 (a hair above the 5000 demand for Phase 1 headroom).
+# Sizing math (M5 Max kind):
+#   shard:        1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
+#   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
+#   kwok pods:    5 × (2 vCPU + 2 vCPU) / (4 GiB + 4 GiB) reqs
+#                                                   = 20 vCPU / 40 GiB
+#   total:       ~22 vCPU / ~49 GiB                  → fits an M5 Max
+#                                                       Docker Desktop VM
+#                                                       sized to ≥ 16 vCPU
+#                                                       / 64 GiB.
 
 kwok:
   clusterCount: 5
+  # M45.5: 100K Pods per kwok-apiserver. kine in-memory plus list/
+  # watch caches need ~6-8 GiB per apiserver pod.
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+# Pod-shim reconcile fan-out unchanged from binary defaults (64 / 8) —
+# kine on laptop sqlite is the limiting factor, raising pod-shim
+# concurrency above what kine can ingest just amplifies contention.
+# Cloud profiles override these knobs.
 
 shard:
   replicas: 1
-  # 300 Idle machines × density-10 = 3000 Pod capacity, slightly above
-  # the 2500 Pod demand. Distributed across the realistic archetypes by
-  # weight (M34).
-  seedMachines: 300
-  # ADR-0022 / M45.4: see header comment.
-  seedDensityMultiplier: 10
+  # 6000 Idle × density-100 = 600K Pod capacity vs 500K demand (20 %
+  # headroom). Same density math as scaleway-50k, 10× fewer machines.
+  seedMachines: 6000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 2, memory: 8Gi }
+
+coordinator:
+  replicas: 1
 
 loadProfile:
-  # ADR-0022 / M45.4: target halved to 500 Pods/cluster (2500 total)
-  # because kind's kine sqlite apiserver writes at ~50/sec, and the
-  # realistic archetype mix at 1000 Pods/cluster layers churn +
-  # lifetime-aging at >25 deletes/sec by end of ramp. The load-driver's
-  # replacement creates compete for the same write budget and
-  # `loadgenCRsActive` falls below the 99.9 % sustain threshold during
-  # soak. The chain itself is healthy at the larger target (v6 ran at
-  # 17.5× density ratio with 263 s p99 provisioning), so this is
-  # purely the apiserver budget on laptop kind. Cloud profiles
-  # (scaleway-50k+) keep target=1000 since production-grade etcd
-  # handles the load fine. churnPerMinute stays at 0.05 — the
-  # archetype-lifetime aging is the real churn signal anyway.
-  target: 500
-  churnPerMinute: 0.05
-  durationSeconds: 600
-  # archetypes inherits the chart's realistic catalog default.
+  target: 100000
+  churnPerMinute: 0.02
+  # 100-min ramp + 30-min soak window. Aggressive: kine on M5 Max may
+  # let us do better, but the conservative budget avoids fail-fast on
+  # first contact. Drop DURATION=Nm at the make-line to shorten soak
+  # for iterative debug.
+  durationSeconds: 1800
+  # 50 creates/sec/cluster sits right at the historical M1/M2 kine
+  # ceiling; M5 Max plausibly absorbs more. Bumping this is the
+  # first thing to try if a run finishes too slowly.
+  reconcilePerTickCap: 50
+
+# Generous ramp budget: at 50 binds/sec/cluster × 5 = 250 binds/sec,
+# 500K Pods ramps in ~33 min in the best case; kine-throttled 50 % of
+# that case gives ~60-100 min. 120 min budget keeps fail-fast off the
+# critical path while we measure where the real ceiling lands.
+rampBudget: 120m
 
 operator:
   qps: 50
   burst: 100
   ackConcurrency: 16
-  rollupInterval: 10s
-  # M37: route owner-grouped CRs through Same(rack) — required by
-  # the realistic catalog's gpu-training and memory-db archetypes
-  # which set sameRack: true.
+  rollupInterval: 1s
+  # M37: realistic archetype catalog uses sameRack on gpu-training /
+  # memory-db, so the operator translates owner-grouped CRs to
+  # Same(topology.bigfleet/rack).
   coLocationKey: topology.bigfleet/rack
 
-# ADR-0014 in-process tier on kind: binding-latency p99 ≤ 10 s. The
-# realistic archetype mix has more fingerprint diversity than a
-# single-archetype run, so rollup carries more variation; raise to 2 s.
 slo:
-  internalBindingLatencyP99Seconds: 10
+  # Loosened from cloud's 15 s: kine on laptop adds ~5-15 s of write
+  # tail compared to Scaleway etcd. 30 s leaves room for kine without
+  # silencing real chain regressions.
+  internalBindingLatencyP99Seconds: 30
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
 
 costEstimate:
-  vCPU: 10
-  memoryGB: 10
-  awsSpotUsdPerHour: 0.20
-  notes: "Free on M5 Max kind. ~10 min run. M45.4: 5 clusters × 500 Pods (target halved from 1000 to fit kind kine-apiserver write budget under realistic churn). Density=10 means 300 seed machines × 10 fake-Pod capacity covers the 2500-Pod demand; the multi-Pod-per-Node pod-shim bin-packs replacements onto existing fake-Nodes during soak."
+  vCPU: 22
+  memoryGB: 49
+  awsSpotUsdPerHour: 0
+  notes: "Free on M5 Max kind (Docker Desktop VM sized ≥16 vCPU / 64 GiB). M45.5: 5K machines, 500K aggregated Pods at density=100 — honest cloud-shape scale on a laptop. Ramp ~60-100 min depending on kine throughput; total run 90-150 min. Use cloud profiles (scaleway-50k+) for iteration; this profile validates the convention end-to-end without paying for cluster time."
