@@ -2,9 +2,14 @@
 #
 # M44 (Pod-mode by default): 50 kwok clusters × 1000 Pods each =
 # 50K Pods exercised through the full Pod → CR → Configured →
-# fake-Node → Pod-bound chain. bindingLatency p99 ≤ 5 s SLO is
+# fake-Node → Pod-bound chain. bindingLatency p99 ≤ 15 s SLO is
 # active. Pool sized for the M44 Pod-mode kwok floor (1 vCPU req
 # per cluster); 2× PRO2-M no longer fits — bumped to 2× PRO2-L.
+#
+# M45.4: density=10 baseline. Shard emits ceil(50000/10) ≈ 5000
+# Bootstraps; the operator publishes 5000 UpcomingNodes; the
+# pod-shim creates 5000 fake-Nodes and bin-packs 10 Pods each
+# (real K8s shape). 10× fewer chain events for the same Pod load.
 #
 # Sizing math:
 #   shard:        1 × 1 vCPU / 2 GiB                = 1 vCPU / 2 GiB
@@ -52,7 +57,21 @@ shard:
   # stays open at the unsatisfied-burst step, and the test only
   # validates rollup + Phase 1 attempt — not the M44 user-facing
   # default we want.
-  seedMachines: 60000
+  #
+  # ADR-0022 / M45.4: 6000 Idle × density-10 = 60000 Pod capacity,
+  # matching the legacy 60000-machines-at-density-1 model with 10×
+  # fewer Bootstraps / UpcomingNodes / fake-Nodes for the chain to
+  # process. Pod-shim's multi-Pod-per-Node bin-packing places ~10
+  # Pods per fake-Node — the real K8s shape this profile is supposed
+  # to model.
+  seedMachines: 6000
+  # ADR-0022 / M45.4: each seeded machine carries
+  # Allocatable = 10 × Profile.Resources. Phase 1 emits
+  # ceil(podDemand / 10) Bootstraps; pod-shim bin-packs Pods onto
+  # the resulting fake-Nodes by Allocatable arithmetic. Combined,
+  # the chain processes ~10× less per-Bootstrap work for the same
+  # Pod load.
+  seedDensityMultiplier: 10
   # M44.4 Drop H: bumped from 256 → 4096. At 50 K demand × M35 unique
   # fingerprints = ~50 K Needs, Phase 1's per-cycle emit ceiling
   # caps how fast the chain processes new churn. Drop G snapshot
