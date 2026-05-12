@@ -118,6 +118,36 @@ if [[ "${POD_MODE:-pods}" == "pods" ]]; then
   UPC_PID=$!
 fi
 
+# ---- 3.5. wait for pod-shim + UPC cache sync ----
+# Pod-shim's controller-runtime cache must complete initial LIST/WATCH
+# sync against an empty apiserver before load-driver starts pumping
+# Pods. With kine (throttled writes) the race was harmless because the
+# apiserver couldn't accept Pods faster than the cache could process
+# deltas. With etcd the apiserver writes outrun the cache: the sync
+# wait condition (resourceVersion caught up) never completes while
+# load-driver pumps. Manager exits at CacheSyncTimeout → workload
+# container restart loop, binds metric never even gets exported.
+#
+# Probe each metrics endpoint. The metrics server starts before
+# anything else, but is only useful here as a liveness signal that the
+# process is far enough along to have invoked NewManager. Add a fixed
+# 15s buffer after the endpoint responds so initial LIST/WATCH against
+# (Pods, Nodes, UpcomingNodes) — empty at this point — completes
+# before load-driver opens the floodgates.
+if [[ "${POD_MODE:-pods}" == "pods" ]]; then
+  log entrypoint "waiting for pod-shim + UPC managers to be reachable"
+  for endpoint in "http://127.0.0.1:8772/metrics" "http://127.0.0.1:8773/metrics"; do
+    for i in {1..60}; do
+      if curl -sf --max-time 1 "$endpoint" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 0.5
+    done
+  done
+  log entrypoint "pod-shim + UPC reachable; sleeping 15s for empty-apiserver cache sync"
+  sleep 15
+fi
+
 # ---- 4. start the load-driver ----
 log loadgen "starting (profile=$LOAD_PROFILE mode=${POD_MODE:-cr})"
 load-driver \
