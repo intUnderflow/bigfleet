@@ -118,34 +118,34 @@ if [[ "${POD_MODE:-pods}" == "pods" ]]; then
   UPC_PID=$!
 fi
 
-# ---- 3.5. wait for pod-shim + UPC cache sync ----
-# Pod-shim's controller-runtime cache must complete initial LIST/WATCH
-# sync against an empty apiserver before load-driver starts pumping
-# Pods. With kine (throttled writes) the race was harmless because the
-# apiserver couldn't accept Pods faster than the cache could process
-# deltas. With etcd the apiserver writes outrun the cache: the sync
-# wait condition (resourceVersion caught up) never completes while
-# load-driver pumps. Manager exits at CacheSyncTimeout → workload
-# container restart loop, binds metric never even gets exported.
+# ---- 3.5. wait for pod-shim + UPC controller-runtime cache sync ----
+# Both managers must complete initial LIST/WATCH sync against an empty
+# apiserver before load-driver starts pumping Pods. With kine (writes
+# throttled by sqlite WAL) the race was harmless. With etcd the
+# apiserver writes outrun the controller-runtime cache: the sync wait
+# condition (cache resourceVersion caught up to current rv) never
+# holds while load-driver pumps. Manager exits at CacheSyncTimeout →
+# workload container restart loop → binds metric never published.
 #
-# Probe each metrics endpoint. The metrics server starts before
-# anything else, but is only useful here as a liveness signal that the
-# process is far enough along to have invoked NewManager. Add a fixed
-# 15s buffer after the endpoint responds so initial LIST/WATCH against
-# (Pods, Nodes, UpcomingNodes) — empty at this point — completes
-# before load-driver opens the floodgates.
+# Right signal: controller-runtime logs "Starting Controller" exactly
+# when WaitForCacheSync returns. Watching the per-process log file is
+# precise (metrics-endpoint up is too early — the metrics server is
+# a runnable that races with the cache informers).
 if [[ "${POD_MODE:-pods}" == "pods" ]]; then
-  log entrypoint "waiting for pod-shim + UPC managers to be reachable"
-  for endpoint in "http://127.0.0.1:8772/metrics" "http://127.0.0.1:8773/metrics"; do
-    for i in {1..60}; do
-      if curl -sf --max-time 1 "$endpoint" >/dev/null 2>&1; then
+  log entrypoint "waiting for pod-shim + UPC cache sync"
+  for who in podshim upc; do
+    deadline=$((SECONDS + 300))
+    while (( SECONDS < deadline )); do
+      if [[ -f "$WORK/logs/$who.log" ]] && grep -q '"msg":"Starting Controller"' "$WORK/logs/$who.log"; then
+        log entrypoint "$who cache synced"
         break
       fi
       sleep 0.5
     done
+    if (( SECONDS >= deadline )); then
+      log entrypoint "$who did not signal Starting Controller within 5m; continuing anyway"
+    fi
   done
-  log entrypoint "pod-shim + UPC reachable; sleeping 15s for empty-apiserver cache sync"
-  sleep 15
 fi
 
 # ---- 4. start the load-driver ----
