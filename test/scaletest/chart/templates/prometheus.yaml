@@ -25,7 +25,7 @@ data:
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
           - source_labels: [__address__, __meta_kubernetes_pod_container_port_number]
-            regex: (.+);(8770|8771|8772|8773|8780|8790)
+            regex: (.+);(8770|8771|8772|8773|8775|8780|8790)
             action: keep
           - source_labels: [__meta_kubernetes_pod_container_port_name]
             target_label: metrics_port

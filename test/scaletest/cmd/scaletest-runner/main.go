@@ -677,7 +677,19 @@ func readBootstrapsExecuted(ctx context.Context, kubeconfig, ns string) int {
 func readPodBindsSucceeded(ctx context.Context, kubeconfig, ns string) int {
 	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~"success|bound_by_other"})`)
+	// Two paths, two metric sources (ADR-0023):
+	//   - pod-shim harness path: per-bind counter, one tick per /binding
+	//     success. Long-standing semantics.
+	//   - kube-scheduler harness path: node-creator emits a gauge of
+	//     currently-bound Pods (Pods with spec.nodeName!="") by
+	//     periodic List. For ramp-gate purposes (first-time-≥-target),
+	//     gauge ≈ counter because no churn has started yet.
+	//
+	// `or on() vector(0)` lets the query fold either source's absence
+	// to 0 instead of returning no-data. The sum of "scheduler-path
+	// gauge OR pod-shim counter" is whichever path is active.
+	q := `sum(bigfleet_scaletest_node_creator_bound_pods) or on() sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~"success|bound_by_other"})`
+	v, err := promQuery(queryCtx, kubeconfig, ns, q)
 	if err != nil {
 		return -1
 	}

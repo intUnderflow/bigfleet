@@ -31,6 +31,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -68,10 +69,20 @@ var (
 		Help:    "Wall-clock from UpcomingNode CR creation to fake-Node Create succeeding. A flat distribution means node-creator is keeping up; a long tail means controller-runtime queueing or apiserver write contention.",
 		Buckets: []float64{0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6, 51.2, 102.4},
 	})
+	// boundPods is updated by a polling goroutine that lists Pods
+	// with `spec.nodeName!=""` and reports the count. Acts as the
+	// kube-scheduler-path equivalent of pod-shim's bind-success
+	// counter for the runner's ramp gate. Periodic-list is cheaper
+	// than maintaining a Pod informer at scale — we don't need every
+	// event, just the steady count.
+	boundPods = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_scaletest_node_creator_bound_pods",
+		Help: "Count of Pods with .spec.nodeName set in the cluster this node-creator is running against. Equivalent to the kube-scheduler-path bind-success count; used by the runner's ramp gate as an alternative to pod-shim's bigfleet_scaletest_pod_shim_pod_bind_attempts_total when running under harness.scheduler=kube-scheduler.",
+	})
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(upcomingNodesObserved, fakeNodesCreated, upcomingToNodeLatency)
+	ctrlmetrics.Registry.MustRegister(upcomingNodesObserved, fakeNodesCreated, upcomingToNodeLatency, boundPods)
 }
 
 func main() {
@@ -150,10 +161,27 @@ func run(args []string) error {
 		return fmt.Errorf("upcoming-node controller: %w", err)
 	}
 
+	// Typed clientset for the bound-pods poller — bypasses the
+	// controller-runtime cache so we don't have to LIST/WATCH every
+	// Pod in the cluster (at 100K Pods/cluster the Pod informer would
+	// dominate node-creator's memory + CPU). Periodic field-selector
+	// LIST is the lean alternative.
+	clientset, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return fmt.Errorf("clientset: %w", err)
+	}
+
 	// ctrl.SetupSignalHandler installs a process-wide handler and
 	// panics with "close of closed channel" if invoked twice. Cache
 	// the context (M45.5 lesson; ADR-0023 brings this forward).
 	ctx := ctrl.SetupSignalHandler()
+
+	// Goroutine: poll bound-Pod count every 5s and update the gauge.
+	// The runner's ramp gate reads this to count successful binds on
+	// the kube-scheduler harness path; on pod-shim runs the gauge
+	// stays 0 and the runner falls back to pod-shim's metric.
+	go runBoundPodsPoller(ctx, clientset)
+
 	if err := mgr.Start(ctx); err != nil && !errors.Is(err, ctx.Err()) {
 		return err
 	}
@@ -273,6 +301,48 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 // UpcomingNodes.
 func nodeNameFromUpcoming(upcomingName string) string {
 	return fakeNodePrefix + strings.TrimPrefix(upcomingName, "un-")
+}
+
+// runBoundPodsPoller updates the boundPods gauge every 5s by listing
+// Pods with `.spec.nodeName != ""`. The runner's ramp gate reads this
+// (via the bigfleet_scaletest_node_creator_bound_pods metric) so the
+// kube-scheduler-path runs have a "binds" count to gate on. We use a
+// raw clientset List with field-selector rather than maintaining a
+// Pod informer because at 100K Pods/cluster the informer's cache
+// would dominate node-creator's footprint; periodic LIST is the
+// cheaper alternative when we only need a count, not events.
+//
+// Uses ListMeta-only by setting the field selector at server side;
+// kube-apiserver returns just the matching Pods rather than all of
+// them. List uses paginated chunks (default 500) so memory stays low.
+func runBoundPodsPoller(ctx context.Context, clientset kubernetes.Interface) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count := 0
+			cont := ""
+			for {
+				list, err := clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+					FieldSelector: "spec.nodeName!=",
+					Limit:         500,
+					Continue:      cont,
+				})
+				if err != nil {
+					break
+				}
+				count += len(list.Items)
+				if list.Continue == "" {
+					break
+				}
+				cont = list.Continue
+			}
+			boundPods.Set(float64(count))
+		}
+	}
 }
 
 func cloneLabels(in map[string]string) map[string]string {

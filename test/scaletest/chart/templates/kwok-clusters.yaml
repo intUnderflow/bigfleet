@@ -162,6 +162,7 @@ spec:
             - { name: loadgen-met,  containerPort: 8771 }
             - { name: podshim-met,  containerPort: 8772 }
             - { name: upc-met,      containerPort: 8773 }
+            - { name: nodecrt-met,  containerPort: 8775 }
           volumeMounts:
             - { name: profile, mountPath: /etc/loadgen, readOnly: true }
             - { name: shared,  mountPath: /var/scaletest }
