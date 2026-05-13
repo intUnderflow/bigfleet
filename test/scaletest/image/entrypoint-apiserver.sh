@@ -158,7 +158,7 @@ kube-apiserver \
   --authorization-mode=AlwaysAllow \
   --service-cluster-ip-range=10.0.0.0/24 \
   --allow-privileged=true \
-  --disable-admission-plugins=ServiceAccount,Priority \
+  --disable-admission-plugins=ServiceAccount,Priority,TaintNodesByCondition \
   --feature-gates=WatchList=false \
   --max-requests-inflight=2000 \
   --max-mutating-requests-inflight=1000 \
