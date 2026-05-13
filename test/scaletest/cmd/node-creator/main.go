@@ -27,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -204,6 +205,26 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
+	// Inject `pods` capacity. UpcomingNode.Spec.Resources carries
+	// cpu+memory+gpu but does not include the `pods` resource (that's
+	// a kubelet-set field, not a provisioning concept). Real
+	// kube-scheduler's NodeResourcesFit plugin treats absent
+	// `allocatable.pods` as zero, which means 100% of fits fail with
+	// "Too many pods". Pod-shim's old /binding path bypassed the
+	// fit check; the new real-scheduler path doesn't, so we must
+	// surface a pods capacity here.
+	//
+	// 1100 chosen to leave headroom over ADR-0022's density-100 model
+	// (10× slack) without going absurdly high. Production-realistic
+	// Nodes usually carry `pods: "110"`; the bigger value here is
+	// purely so the harness doesn't gate before BigFleet does.
+	resources := corev1.ResourceList{}
+	for k, v := range upn.Spec.Resources {
+		resources[k] = v
+	}
+	if _, ok := resources[corev1.ResourcePods]; !ok {
+		resources[corev1.ResourcePods] = resource.MustParse("1100")
+	}
 	fakeNodesCreated.Inc()
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
@@ -211,8 +232,8 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 			Taints: append([]corev1.Taint(nil), upn.Spec.Taints...),
 		},
 		Status: corev1.NodeStatus{
-			Capacity:    upn.Spec.Resources,
-			Allocatable: upn.Spec.Resources,
+			Capacity:    resources,
+			Allocatable: resources,
 			Conditions: []corev1.NodeCondition{{
 				Type:    corev1.NodeReady,
 				Status:  corev1.ConditionTrue,
@@ -227,8 +248,8 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	if node.ResourceVersion != "" {
 		statusPatch := node.DeepCopy()
 		statusPatch.Status = corev1.NodeStatus{
-			Capacity:    upn.Spec.Resources,
-			Allocatable: upn.Spec.Resources,
+			Capacity:    resources,
+			Allocatable: resources,
 			Conditions: []corev1.NodeCondition{{
 				Type:    corev1.NodeReady,
 				Status:  corev1.ConditionTrue,
