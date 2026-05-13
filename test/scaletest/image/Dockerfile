@@ -81,6 +81,15 @@ RUN ARCH="${TARGETARCH:-amd64}" && \
       -o /usr/local/bin/kube-controller-manager && \
     chmod +x /usr/local/bin/kube-controller-manager
 
+# kube-scheduler — ADR-0023: optional, gated by KWOK_SCHEDULER=kube-scheduler
+# in the entrypoint. When enabled, replaces pod-shim's Pod-binding role
+# with the real Kubernetes scheduler so the binding-latency numbers we
+# publish reflect what a production fleet would see.
+RUN ARCH="${TARGETARCH:-amd64}" && \
+    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-scheduler" \
+      -o /usr/local/bin/kube-scheduler && \
+    chmod +x /usr/local/bin/kube-scheduler
+
 # kubectl, used by entrypoint to apply CRDs and probe readiness.
 RUN ARCH="${TARGETARCH:-amd64}" && \
     curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kubectl" \

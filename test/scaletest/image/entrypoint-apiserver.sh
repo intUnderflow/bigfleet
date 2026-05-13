@@ -214,13 +214,66 @@ kube-controller-manager \
   >"$WORK/logs/kcm.log" 2>&1 &
 KCM_PID=$!
 
+# ---- 7.5. start kube-scheduler (ADR-0023, gated) ----
+#
+# When KWOK_SCHEDULER=kube-scheduler is set (via the chart's
+# .Values.harness.scheduler), launch the real Kubernetes scheduler
+# against this apiserver. The scheduler:
+#   - watches Pods that have no Node assigned
+#   - watches Nodes (real and the kwok-faked ones bigfleet-scaletest-
+#     node-creator creates from UpcomingNodes)
+#   - calls /binding when a Pod fits a Node
+#   - marks PodScheduled=False reason=Unschedulable when none fit
+#     (which the unschedulable-pod-controller observes to drive CR
+#     creation back into BigFleet)
+#
+# Scoring is configured for bin-packing (NodeResourcesFit +
+# MostAllocated) so the density-100 model in ADR-0022 is preserved:
+# the scheduler prefers Nodes that are already more allocated, packing
+# Pods onto fake-Nodes up to the Allocatable BigFleet declared.
+#
+# Default scheduler value (KWOK_SCHEDULER unset OR == "pod-shim")
+# leaves the scheduler off and assumes pod-shim is doing the work.
+SCHEDULER_PID=""
+if [[ "${KWOK_SCHEDULER:-pod-shim}" == "kube-scheduler" ]]; then
+  cat > "$WORK/scheduler-config.yaml" <<EOF
+apiVersion: kubescheduler.config.k8s.io/v1
+kind: KubeSchedulerConfiguration
+clientConnection:
+  kubeconfig: $KCFG
+  qps: 200
+  burst: 400
+leaderElection:
+  leaderElect: false
+profiles:
+  - schedulerName: default-scheduler
+    pluginConfig:
+      - name: NodeResourcesFit
+        args:
+          scoringStrategy:
+            type: MostAllocated
+            resources:
+              - name: cpu
+                weight: 1
+              - name: memory
+                weight: 1
+EOF
+  log scheduler "starting (MostAllocated scoring for ADR-0022 density)"
+  kube-scheduler \
+    --config="$WORK/scheduler-config.yaml" \
+    --bind-address=127.0.0.1 \
+    --secure-port=10259 \
+    >"$WORK/logs/scheduler.log" 2>&1 &
+  SCHEDULER_PID=$!
+fi
+
 # Signal the workload container that the apiserver is ready and the
 # kubeconfig is written. The workload script waits on this file.
 touch "$WORK/apiserver-ready"
 log entrypoint "apiserver-side ready; signalled workload container"
 
 # ---- 8. supervise: if any process dies, take the container down ----
-trap 'kill $KINE_PID $APISERVER_PID $KWOK_PID $KCM_PID 2>/dev/null || true' SIGTERM SIGINT
+trap 'kill $KINE_PID $APISERVER_PID $KWOK_PID $KCM_PID ${SCHEDULER_PID:-} 2>/dev/null || true' SIGTERM SIGINT
 
 while true; do
   for name in KINE APISERVER KWOK KCM; do
@@ -231,5 +284,10 @@ while true; do
       exit 1
     fi
   done
+  if [[ -n "$SCHEDULER_PID" ]] && ! kill -0 "$SCHEDULER_PID" 2>/dev/null; then
+    log entrypoint "kube-scheduler (pid $SCHEDULER_PID) exited; tailing scheduler.log and exiting"
+    tail -n 50 "$WORK/logs/scheduler.log" || true
+    exit 1
+  fi
   sleep 2
 done
