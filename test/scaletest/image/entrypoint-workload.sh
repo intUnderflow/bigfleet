@@ -84,34 +84,63 @@ log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPE
 bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
 OPERATOR_PID=$!
 
-# ---- 3. (M43b) start the pod-shim + unschedulable-pod-controller.
-# These run in Pod-mode (M44 default). The chart passes POD_MODE
-# through the entrypoint env from loadProfile.mode; unset → "pods"
-# (default), explicit "cr" opts into the legacy shape and skips the
-# shim + unschedulable-pod-controller.
+# ---- 3. (M43b / ADR-0023) start the scheduler-side daemons.
+# Two paths:
+#   - HARNESS_SCHEDULER=pod-shim (default, legacy): launch the
+#     bigfleet-scaletest-pod-shim binary, which does both
+#     UpcomingNode→fake-Node creation AND Pod marking-Unschedulable
+#     AND Pod binding.
+#   - HARNESS_SCHEDULER=kube-scheduler (ADR-0023, new): launch
+#     bigfleet-scaletest-node-creator (UpcomingNode→fake-Node only)
+#     and rely on the real kube-scheduler running in the apiserver
+#     container to mark Unschedulable + bind Pods.
+#
+# In both cases the unschedulable-pod-controller (UPC) runs — it
+# converts Unschedulable Pods into CapacityRequests, which is BigFleet's
+# input. UPC's source of Unschedulable Pods differs between paths:
+# pod-shim explicitly marks them; kube-scheduler emits them when no
+# Node fits (the normal Kubernetes path).
 PODSHIM_PID=""
+NODE_CREATOR_PID=""
 UPC_PID=""
 if [[ "${POD_MODE:-pods}" == "pods" ]]; then
-  # Pod-shim and unschedulable-pod-controller both hit the same
-  # per-cluster apiserver as the operator, so they share its QPS/Burst
-  # budget. M44.4: the pod-shim binder does 3 writes per UpcomingNode
-  # (Create Node + Status Update + Bind) — at 50 QPS / 1000 Pods that
-  # is ~60 s of queueing per cluster, which dominates user-facing
-  # binding latency.
-  podshim_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8772")
   upc_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8773")
-  [[ -n "${OPERATOR_QPS:-}"   ]] && { podshim_args+=(--qps="$OPERATOR_QPS");   upc_args+=(--qps="$OPERATOR_QPS"); }
-  [[ -n "${OPERATOR_BURST:-}" ]] && { podshim_args+=(--burst="$OPERATOR_BURST"); upc_args+=(--burst="$OPERATOR_BURST"); }
-  # M45.5: bind / upcoming-node reconcile concurrency overrides for
-  # high-Pod-count profiles where the default 64 / 8 fan-out throttles
-  # chain throughput.
-  [[ -n "${PODSHIM_BINDER_CONCURRENCY:-}"        ]] && podshim_args+=(--binder-concurrency="$PODSHIM_BINDER_CONCURRENCY")
-  [[ -n "${PODSHIM_UPCOMING_NODE_CONCURRENCY:-}" ]] && podshim_args+=(--upcoming-node-concurrency="$PODSHIM_UPCOMING_NODE_CONCURRENCY")
-  [[ -n "${PODSHIM_PPROF_ADDR:-}"                ]] && podshim_args+=(--pprof-addr="$PODSHIM_PPROF_ADDR")
+  [[ -n "${OPERATOR_QPS:-}"   ]] && upc_args+=(--qps="$OPERATOR_QPS")
+  [[ -n "${OPERATOR_BURST:-}" ]] && upc_args+=(--burst="$OPERATOR_BURST")
 
-  log podshim "starting (qps=${OPERATOR_QPS:-default})"
-  bigfleet-scaletest-pod-shim "${podshim_args[@]}" >"$WORK/logs/podshim.log" 2>&1 &
-  PODSHIM_PID=$!
+  case "${HARNESS_SCHEDULER:-pod-shim}" in
+    kube-scheduler)
+      # ADR-0023: node-creator owns just one job (UpcomingNode →
+      # fake-Node). Scheduling and binding move to the real
+      # kube-scheduler in the apiserver container.
+      node_creator_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8775")
+      [[ -n "${OPERATOR_QPS:-}"                      ]] && node_creator_args+=(--qps="$OPERATOR_QPS")
+      [[ -n "${OPERATOR_BURST:-}"                    ]] && node_creator_args+=(--burst="$OPERATOR_BURST")
+      [[ -n "${PODSHIM_UPCOMING_NODE_CONCURRENCY:-}" ]] && node_creator_args+=(--concurrency="$PODSHIM_UPCOMING_NODE_CONCURRENCY")
+      log node-creator "starting (kube-scheduler path)"
+      bigfleet-scaletest-node-creator "${node_creator_args[@]}" >"$WORK/logs/node-creator.log" 2>&1 &
+      NODE_CREATOR_PID=$!
+      ;;
+    pod-shim|"")
+      # Legacy path: pod-shim owns marking + binding.
+      podshim_args=(--kubeconfig="$KCFG" --metrics-addr="0.0.0.0:8772")
+      [[ -n "${OPERATOR_QPS:-}"   ]] && podshim_args+=(--qps="$OPERATOR_QPS")
+      [[ -n "${OPERATOR_BURST:-}" ]] && podshim_args+=(--burst="$OPERATOR_BURST")
+      # M45.5: bind / upcoming-node reconcile concurrency overrides for
+      # high-Pod-count profiles where the default 64 / 8 fan-out throttles
+      # chain throughput.
+      [[ -n "${PODSHIM_BINDER_CONCURRENCY:-}"        ]] && podshim_args+=(--binder-concurrency="$PODSHIM_BINDER_CONCURRENCY")
+      [[ -n "${PODSHIM_UPCOMING_NODE_CONCURRENCY:-}" ]] && podshim_args+=(--upcoming-node-concurrency="$PODSHIM_UPCOMING_NODE_CONCURRENCY")
+      [[ -n "${PODSHIM_PPROF_ADDR:-}"                ]] && podshim_args+=(--pprof-addr="$PODSHIM_PPROF_ADDR")
+      log podshim "starting (qps=${OPERATOR_QPS:-default})"
+      bigfleet-scaletest-pod-shim "${podshim_args[@]}" >"$WORK/logs/podshim.log" 2>&1 &
+      PODSHIM_PID=$!
+      ;;
+    *)
+      log entrypoint "HARNESS_SCHEDULER=$HARNESS_SCHEDULER is not a known value; expected 'pod-shim' or 'kube-scheduler'"
+      exit 1
+      ;;
+  esac
 
   log upc "starting (qps=${OPERATOR_QPS:-default})"
   bigfleet-unschedulable-pod-controller "${upc_args[@]}" >"$WORK/logs/upc.log" 2>&1 &
@@ -132,8 +161,12 @@ fi
 # precise (metrics-endpoint up is too early — the metrics server is
 # a runnable that races with the cache informers).
 if [[ "${POD_MODE:-pods}" == "pods" ]]; then
-  log entrypoint "waiting for pod-shim + UPC cache sync"
-  for who in podshim upc; do
+  case "${HARNESS_SCHEDULER:-pod-shim}" in
+    kube-scheduler) sync_targets=("node-creator" "upc") ;;
+    *)              sync_targets=("podshim" "upc") ;;
+  esac
+  log entrypoint "waiting for ${sync_targets[*]} cache sync"
+  for who in "${sync_targets[@]}"; do
     deadline=$((SECONDS + 300))
     while (( SECONDS < deadline )); do
       if [[ -f "$WORK/logs/$who.log" ]] && grep -q '"msg":"Starting Controller"' "$WORK/logs/$who.log"; then
@@ -160,7 +193,7 @@ LOADGEN_PID=$!
 
 log entrypoint "workload-side up"
 
-trap 'kill $OPERATOR_PID $LOADGEN_PID ${PODSHIM_PID:-} ${UPC_PID:-} 2>/dev/null || true' SIGTERM SIGINT
+trap 'kill $OPERATOR_PID $LOADGEN_PID ${PODSHIM_PID:-} ${NODE_CREATOR_PID:-} ${UPC_PID:-} 2>/dev/null || true' SIGTERM SIGINT
 
 while true; do
   for entry in "OPERATOR:operator" "LOADGEN:loadgen"; do
@@ -176,6 +209,11 @@ while true; do
   if [[ -n "$PODSHIM_PID" ]] && ! kill -0 "$PODSHIM_PID" 2>/dev/null; then
     log entrypoint "podshim (pid $PODSHIM_PID) exited; tailing podshim.log and exiting"
     tail -n 50 "$WORK/logs/podshim.log" || true
+    exit 1
+  fi
+  if [[ -n "$NODE_CREATOR_PID" ]] && ! kill -0 "$NODE_CREATOR_PID" 2>/dev/null; then
+    log entrypoint "node-creator (pid $NODE_CREATOR_PID) exited; tailing node-creator.log and exiting"
+    tail -n 50 "$WORK/logs/node-creator.log" || true
     exit 1
   fi
   if [[ -n "$UPC_PID" ]] && ! kill -0 "$UPC_PID" 2>/dev/null; then

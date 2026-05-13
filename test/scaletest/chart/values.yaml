@@ -175,6 +175,24 @@ podShim:
   # and use `go tool pprof http://localhost:8774/debug/pprof/profile`.
   pprofAddr: ""
 
+# ADR-0023: which binary performs the "scheduler" role inside each
+# kwok cluster.
+#   - "pod-shim" (default, legacy): the bigfleet-scaletest-pod-shim
+#     binary marks Pods Unschedulable, creates fake Nodes from
+#     UpcomingNodes, and binds Pods. One binary doing three jobs.
+#   - "kube-scheduler" (ADR-0023): a real kube-scheduler process runs
+#     inside the apiserver container with MostAllocated scoring (to
+#     preserve density-100 bin-packing). A small node-creator binary
+#     replaces the UpcomingNode→fake-Node half of pod-shim; the Pod-
+#     marking and Pod-binding halves are taken over by the real
+#     scheduler. Produces credible binding-latency numbers.
+#
+# Both paths are mutually exclusive: setting kube-scheduler implies
+# node-creator on the workload side and kube-scheduler on the
+# apiserver side; setting pod-shim leaves both off.
+harness:
+  scheduler: pod-shim
+
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.
 loadProfile:

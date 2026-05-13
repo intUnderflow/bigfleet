@@ -94,6 +94,11 @@ spec:
             - name: KWOK_STORAGE
               value: "{{ .Values.kwok.storage }}"
             {{- end }}
+            # ADR-0023: pod-shim (legacy) does scheduling itself; kube-
+            # scheduler (new) means the apiserver container launches a
+            # real Kubernetes scheduler with MostAllocated scoring.
+            - name: KWOK_SCHEDULER
+              value: "{{ .Values.harness.scheduler | default "pod-shim" }}"
           volumeMounts:
             - { name: shared, mountPath: /var/scaletest }
           resources:
@@ -134,6 +139,12 @@ spec:
             - name: POD_MODE
               value: "{{ .Values.loadProfile.mode }}"
             {{- end }}
+            # ADR-0023: tells the workload entrypoint whether to launch
+            # pod-shim (legacy, default) or node-creator (new). Must
+            # match the KWOK_SCHEDULER setting on the apiserver
+            # container; the chart wires both from the same value.
+            - name: HARNESS_SCHEDULER
+              value: "{{ .Values.harness.scheduler | default "pod-shim" }}"
             {{- if .Values.podShim.binderConcurrency }}
             - name: PODSHIM_BINDER_CONCURRENCY
               value: "{{ .Values.podShim.binderConcurrency }}"
