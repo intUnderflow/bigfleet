@@ -1,8 +1,8 @@
 # ADR-0023: Real kube-scheduler in the scaletest harness, retire pod-shim's binding role
 
-**Status**: Proposed
+**Status**: Accepted
 
-**Date**: 2026-05-13
+**Date**: 2026-05-13 (Proposed) — 2026-05-14 (Accepted after cloud validation)
 
 ## Context
 
