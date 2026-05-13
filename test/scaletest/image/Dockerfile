@@ -41,6 +41,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -o /out/bigfleet-scaletest-pod-shim ./test/scaletest/cmd/pod-shim && \
     GOOS=linux GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 \
     go build -trimpath -ldflags="-s -w" \
+      -o /out/bigfleet-scaletest-node-creator ./test/scaletest/cmd/node-creator && \
+    GOOS=linux GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 \
+    go build -trimpath -ldflags="-s -w" \
       -o /out/load-driver ./test/scaletest/cmd/load-driver
 
 # ---------------- Stage 2: assemble the runtime image ----------------
@@ -113,6 +116,7 @@ RUN ARCH="${TARGETARCH:-amd64}" && \
 COPY --from=builder /out/bigfleet-operator /usr/local/bin/
 COPY --from=builder /out/bigfleet-unschedulable-pod-controller /usr/local/bin/
 COPY --from=builder /out/bigfleet-scaletest-pod-shim /usr/local/bin/
+COPY --from=builder /out/bigfleet-scaletest-node-creator /usr/local/bin/
 COPY --from=builder /out/load-driver /usr/local/bin/
 
 # Bundle the CRDs the entrypoint applies into each KWOK cluster on startup.
