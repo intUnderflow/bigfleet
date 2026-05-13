@@ -28,3 +28,4 @@
 | [20](/adr/0020-internal-binding-latency-slo-respects-rollup-interval/) | Internal binding latency SLO respects rollup interval |
 | [21](/adr/0021-persistent-execute-pool/) | Persistent execute pool |
 | [22](/adr/0022-need-count-semantics-pod-vs-machine/) | `Need.Count` semantics — Pod count vs machine count, and where packing lives |
+| [23](/adr/0023-real-kube-scheduler-in-scaletest-harness/) | Real kube-scheduler in the scaletest harness, retire pod-shim's binding role |
