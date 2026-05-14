@@ -57,9 +57,18 @@ type phase1Allocator struct {
 // owner-grouped → Same translation routes every Need through, so the
 // optimization matters for every realistic Pod-mode profile.
 type phase1Pool struct {
-	src              []machine.Machine
-	profile          needs.Profile
-	head             int
+	src     []machine.Machine
+	profile needs.Profile
+	head    int
+	// density caches PodsPerMachine of a representative matching
+	// machine — how many Pods of this Need's shape fit on one machine
+	// of this pool. 0 = not yet computed. All machines that MatchProfile
+	// a given Need carry Resources == profile.Resources (MatchProfile
+	// enforces exact equality), so their EffectiveAllocatable —
+	// densityMultiplier × Resources — is uniform; the first match is
+	// representative. Used to size take() requests in machine units
+	// (ADR-0022 density model).
+	density          int
 	coLocatedBuilt   bool
 	coLocatedSameKey string
 	coLocatedBuckets []coLocatedBucket
@@ -77,6 +86,40 @@ func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 		pools:   make(map[string]*phase1Pool),
 		claimed: make(map[machine.ID]struct{}),
 	}
+}
+
+// densityFor returns how many Pods of profile's shape fit on one
+// matching machine in the (state, profile) pool. Phase 1 uses it to
+// translate a Pod deficit into a machine-count take() request — the
+// piece M45.1 intended but never wired (phase1_assign.go computed
+// MachinesForAggregate(profResources, profResources, ...), which is
+// always density 1, so take() was asked for ~density× too many
+// machines). Harmless for the large standard pool — surplus-credit
+// recovers it — but it burns the scarce co-located pool dry, so
+// takeCoLocated returned 0 and Same-requirement Needs went to
+// shortfall (ADR-0024 sameRack archetypes). Returns 1 when the pool
+// is empty or has no matching machine: the conservative pre-ADR-0022
+// fallback (1 Pod = 1 machine). Cached on the pool — one
+// find-first-match walk per (state, profile) per cycle.
+func (a *phase1Allocator) densityFor(state machine.State, profile needs.Profile) int {
+	pool := a.poolFor(state, profile)
+	if pool == nil {
+		return 1
+	}
+	if pool.density == 0 {
+		pool.density = 1
+		profRes := profileResourcesToMap(profile.ResourcesRO())
+		for _, m := range pool.src {
+			if !MatchProfile(pool.profile, m) {
+				continue
+			}
+			if d := PodsPerMachine(profRes, m.EffectiveAllocatable()); d >= 1 {
+				pool.density = d
+			}
+			break
+		}
+	}
+	return pool.density
 }
 
 // take returns up to n unclaimed, MatchProfile-passing machines from

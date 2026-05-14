@@ -146,6 +146,68 @@ func TestPhase1_Same_FallsBackToLargestBucketWithShortfall(t *testing.T) {
 	}
 }
 
+// gpuMachineDense returns an Idle GPU machine with density-`density`
+// Allocatable (densityMultiplier × the per-replica Resources). Profile
+// resources stay at the per-replica shape so MatchProfile's exact-
+// equality check passes against a Need asking for the same shape.
+func gpuMachineDense(id machine.ID, zone string, density int) machine.Machine {
+	return machine.Machine{
+		ID:    id,
+		State: machine.StateIdle,
+		Host:  machine.HostRef{Provider: "fake", Ref: string(id)},
+		Profile: machine.Profile{
+			InstanceType: "a3-highgpu-8g",
+			Zone:         zone,
+			CapacityType: machine.CapacityTypeBareMetal,
+			Resources:    map[string]string{"nvidia.com/gpu": "8"},
+		},
+		Allocatable:  map[string]string{"nvidia.com/gpu": strconv.Itoa(8 * density)},
+		PricePerHour: 1.0,
+	}
+}
+
+func gpuProfileSameWithRes(priority int32, sameKey string) needs.Profile {
+	return needs.NewProfile(
+		[]needs.Requirement{
+			{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{"a3-highgpu-8g"}},
+			{Key: sameKey, Operator: needs.OperatorSame},
+		},
+		[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
+		nil, priority,
+		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
+	)
+}
+
+// Regression for the M45.1 machinesNeeded density bug. A co-located
+// Need of Count=N against a density-D idle pool must take only
+// ceil(N/D) machines — not N. Pre-fix, phase1_assign computed
+// MachinesForAggregate(profResources, profResources, …), always
+// density 1, so takeCoLocated was asked for N machines and drained the
+// scarce co-located pool dry — the ADR-0024 sameRack-shortfall root
+// cause. Here: 8 density-100 machines, a group of 8 Pods → exactly one
+// machine covers it.
+func TestPhase1_Same_DensityAwareMachineCount(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 8; i++ {
+		_ = inv.Insert(gpuMachineDense(machine.ID("a-"+strconv.Itoa(i)), "zone-a", 100))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase1(snap, []needs.Need{{
+		ClusterID: "cluster-x",
+		Profile:   gpuProfileSameWithRes(1_000_000, "topology.kubernetes.io/zone"),
+		Count:     8,
+	}})
+
+	if got := len(r.Actions); got != 1 {
+		t.Fatalf("actions = %d, want 1 (density-100: one machine covers a group of 8). Pre-fix this took 8 — the over-consumption bug.", got)
+	}
+	if len(r.Unsatisfied) != 0 {
+		t.Errorf("unsatisfied = %d, want 0", len(r.Unsatisfied))
+	}
+}
+
 // Two Needs with Same in the same cluster; first claims one zone fully,
 // the second must pick another zone (cross-Need claim coordination).
 func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {

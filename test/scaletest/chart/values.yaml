@@ -49,6 +49,14 @@ shard:
   # (e.g. scaleway-500k) to populate the inventory without a real
   # provider; 0 = no seeding.
   seedMachines: 0
+  # ADR-0026: pre-seed N Speculative quota slots — the elastic-
+  # procurement tier Phase 1 falls back to (Create + bootstrap) when
+  # the owned Idle pool can't satisfy a Need. Drawn from the demand
+  # archetype catalog, CapacityType OnDemand with a non-zero price.
+  # Every profile that sets seedMachines should also set this — the
+  # paper's capacity model is two-tier; an Idle-only harness only
+  # exercises half of BigFleet. 0 = no Speculative tier (not advised).
+  seedSpeculative: 0
   # ADR-0022 / M45.4: each seeded machine carries
   # Allocatable = N × Profile.Resources. N=1 (or unset) keeps the
   # pre-ADR-0022 1 Pod = 1 machine math. N>1 models real-fleet density —

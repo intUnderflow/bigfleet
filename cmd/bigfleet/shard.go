@@ -128,8 +128,15 @@ func parseStatefulSetOrdinal(podName string) (int, error) {
 // capacity type. Profile fingerprints are stable so the per-fingerprint
 // pool cache (M11.16) sees real diversity instead of one giant bucket.
 //
-// nIdle is added as Speculative-then-Idle (the default Phase-1
-// candidate pool — fresh headroom).
+// Three tiers are seeded (ADR-0026 — the harness must model the whole
+// capacity model, not just the owned half):
+//   - nIdle Idle machines — real, owned hardware (CapacityType BareMetal,
+//     price 0). Phase 1's preferred, cheapest candidate pool.
+//   - nSpeculative Speculative slots — elastic procurement quota
+//     (CapacityType OnDemand, non-zero price). Phase 1's "Create +
+//     bootstrap" fallback when Idle can't satisfy a Need. Drawn from the
+//     demand catalog so the elastic pool spans what workloads ask for.
+//   - the Configured seed below — workloads already running.
 //
 // Configured seed (M28): if both clusterStride > 0 and
 // nConfiguredPerCluster > 0, the seed enumerates only the kwok
@@ -185,7 +192,7 @@ func cloneResourceMap(in map[string]string) map[string]string {
 	return out
 }
 
-func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes []archetype.Archetype, logger *slog.Logger) {
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
 	zones := []string{"zone-a", "zone-b", "zone-c"}
 	resources := map[string]map[string]string{
@@ -269,6 +276,81 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 			State:       machine.StateIdle,
 			Profile:     profile,
 			Allocatable: allocatable,
+		})
+	}
+
+	// ADR-0026: Speculative tier — elastic procurement quota. Without
+	// it, Phase 1's "fall back to Speculative (Create + bootstrap)"
+	// path is dead in the harness and any demand the fixed Idle seed
+	// can't directly satisfy becomes a permanent shortfall — which is
+	// not how the paper's BigFleet behaves. Drawn from the *demand*
+	// archetype catalog (a cloud's available capacity realistically
+	// spans what workloads ask for, not what's already running);
+	// CapacityType OnDemand with a non-zero price so effective_cost is
+	// meaningful and Phase 1 correctly prefers the cheaper owned Idle
+	// tier. Per-shape pricing is a future refinement; a flat price is
+	// enough to make the tier exist and be priced.
+	const (
+		specPricePerHour  = 1.0
+		specInterruptProb = 0.05
+		specRacksPerZone  = 10
+	)
+	specArches := demandArchetypes
+	if len(specArches) == 0 {
+		// No separate demand catalog (profile didn't split seed/demand):
+		// the seed catalog is also the demand catalog.
+		specArches = archetypes
+	}
+	specPicker := archetype.NewPicker(specArches)
+	specRng := rand.New(rand.NewSource(int64(shardOrdinal) + 31))
+	for i := 0; i < nSpeculative; i++ {
+		var profile machine.Profile
+		if a := specPicker.Pick(specRng); a != nil {
+			it := a.InstanceTypes[i%len(a.InstanceTypes)]
+			z := "zone-a"
+			if len(a.Zones) > 0 {
+				z = a.Zones[i%len(a.Zones)]
+			}
+			labels := map[string]string{
+				"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%specRacksPerZone),
+			}
+			for k, v := range a.PickLabels(specRng) {
+				labels[k] = v
+			}
+			profile = machine.Profile{
+				InstanceType: it,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeOnDemand,
+				Resources:    a.PickSize(specRng),
+				Labels:       labels,
+			}
+		} else {
+			t := types[i%len(types)]
+			z := zones[i%len(zones)]
+			profile = machine.Profile{
+				InstanceType: t,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeOnDemand,
+				Resources:    resources[t],
+				Labels: map[string]string{
+					"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%specRacksPerZone),
+				},
+			}
+		}
+		id := machine.ID("spec-" + strconv.Itoa(i))
+		prov.AddSpeculative(id, profile, machine.CapacityTypeOnDemand, specPricePerHour, specInterruptProb)
+		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
+		// Profile.Resources, same as the Idle seed — a realized
+		// Speculative slot becomes an Idle machine of this density.
+		allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+		prov.SetAllocatable(id, allocatable)
+		_ = sh.SeedInventory(machine.Machine{
+			ID:                      id,
+			State:                   machine.StateSpeculative,
+			Profile:                 profile,
+			Allocatable:             allocatable,
+			PricePerHour:            specPricePerHour,
+			InterruptionProbability: specInterruptProb,
 		})
 	}
 
@@ -373,7 +455,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 			}
 		}
 	}
-	logger.Info("seed complete", "idle", nIdle, "configured", configuredSeeded, "archetypes", len(archetypes))
+	logger.Info("seed complete", "idle", nIdle, "speculative", nSpeculative, "configured", configuredSeeded, "archetypes", len(archetypes))
 }
 
 // runShard runs the shard controller. The in-process fake provider
@@ -388,6 +470,7 @@ func runShard(args []string) error {
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
+	seedSpeculative := fs.Int("seed-speculative", 0, "scaletest ADR-0026: pre-seed N synthetic Speculative quota slots — the elastic-procurement tier Phase 1 falls back to (Create + bootstrap) when Idle can't satisfy a Need. Drawn from the demand archetype catalog, CapacityType OnDemand with a non-zero price. Every profile that seeds Idle should also set this; without it the harness models only the owned-capacity half of BigFleet's design. 0 disables.")
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
@@ -449,7 +532,7 @@ func runShard(args []string) error {
 	}
 
 	configuredEnabled := *seedConfiguredPerCluster > 0 && *seedClusterTotal > 0 && *seedClusterStride > 0
-	if *seedMachines > 0 || configuredEnabled {
+	if *seedMachines > 0 || *seedSpeculative > 0 || configuredEnabled {
 		shardOrdinal := 0
 		if configuredEnabled {
 			ord, err := parseStatefulSetOrdinal(*shardID)
@@ -458,7 +541,7 @@ func runShard(args []string) error {
 			}
 			shardOrdinal = ord
 		}
-		var arches []archetype.Archetype
+		var arches, demandArches []archetype.Archetype
 		if *archetypesPath != "" {
 			cat, err := archetype.LoadCatalog(*archetypesPath)
 			if err != nil {
@@ -466,11 +549,14 @@ func runShard(args []string) error {
 			}
 			// M34: prefer the seed-specific list when the catalog
 			// provides one; otherwise the legacy single Archetypes
-			// list is used for both seed and demand.
+			// list is used for both seed and demand. ADR-0026: the
+			// Speculative seed draws from the demand list — the
+			// provider's elastic capacity spans what workloads ask for.
 			arches = cat.ForSeed()
-			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches))
+			demandArches = cat.ForDemand()
+			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches), "demand_count", len(demandArches))
 		}
-		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, logger)
+		seedFakeInventory(prov, sh, *seedMachines, *seedSpeculative, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
 	}
 
 	srv := grpc.NewServer(grpcutil.ServerOptions()...)

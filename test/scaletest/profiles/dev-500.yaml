@@ -65,6 +65,14 @@ shard:
   # 600 Idle × density-100 = 60K Pod capacity vs 50K demand (20 %
   # headroom). Same density math as scaleway-50k, 100× fewer machines.
   seedMachines: 600
+  # ADR-0026: the elastic-procurement tier. 1800 Speculative slots
+  # (3× the Idle seed) is generous slack — Phase 1 prefers the cheaper
+  # owned Idle pool and only Creates from Speculative for demand that
+  # drifts/fragments off the fixed Idle shapes (co-location groups,
+  # rare sizeBuckets). Most of it stays as unused quota, which is the
+  # realistic shape: a cloud has far more available capacity than any
+  # one tenant's demand.
+  seedSpeculative: 1800
   seedDensityMultiplier: 100
   maxActionsPerCycle: 4096
   executeConcurrency: 256

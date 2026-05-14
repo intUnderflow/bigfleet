@@ -134,15 +134,21 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			continue
 		}
 
-		// ADR-0022 / M45.1: translate Pod deficit to machine count using
-		// MachinesForAggregate. For pre-M45 inventory where matching
-		// machines have Allocatable == profile.Resources, density = 1
-		// and machinesNeeded == deficitPods (preserves the historical
-		// 1 Pod = 1 machine math). M45.4 will introduce seeded inventory
-		// with density > 1; this same call returns a smaller machine
-		// count there, and the take loop below tracks actual absorption
-		// per machine.
-		machinesNeeded := MachinesForAggregate(profResources, profResources, deficitPods)
+		// ADR-0022 / M45.1: translate the Pod deficit into a machine-count
+		// take() request. machinesNeeded = ceil(deficitPods / density),
+		// where density is PodsPerMachine of a matching pool machine.
+		//
+		// M45.1 intended this but mis-wired it: it computed
+		// MachinesForAggregate(profResources, profResources, …), which
+		// passes the per-replica shape as BOTH args → density always 1 →
+		// machinesNeeded always == deficitPods. take() was then asked for
+		// ~density× too many machines. Harmless for the large standard
+		// pool (surplus-credit below recovers it), but it drained the
+		// scarce co-located pool dry — takeCoLocated returned 0 and every
+		// Same-requirement Need (ADR-0024 sameRack archetypes) went to
+		// shortfall. densityFor reads the pool's actual machine shape.
+		idleDensity := alloc.densityFor(machine.StateIdle, profile)
+		machinesNeeded := (deficitPods + idleDensity - 1) / idleDensity
 
 		// Idle first: cheapest path (one Configure call, no Create).
 		idle := alloc.take(machine.StateIdle, profile, machinesNeeded)
@@ -181,7 +187,8 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		}
 
 		// Fall back to speculative: pick by lowest effective_cost.
-		machinesNeeded = MachinesForAggregate(profResources, profResources, deficitPods)
+		specDensity := alloc.densityFor(machine.StateSpeculative, profile)
+		machinesNeeded = (deficitPods + specDensity - 1) / specDensity
 		spec := alloc.take(machine.StateSpeculative, profile, machinesNeeded)
 		if len(spec) > 0 {
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
