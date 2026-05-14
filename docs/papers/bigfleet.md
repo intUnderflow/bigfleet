@@ -87,6 +87,8 @@ Global coordinator: ~240 bytes per shard summary. 200 shards = 48KB (fits L1).
 
 Shortfall protocol: `Shortfall{Profile, Priority, Count, Age, InterruptionPenalty}`. Bounded to 100 per shard. Age >5 cycles → escalate.
 
+> **Affected by [ADR-0027](../adr/0027-rollup-demand-is-a-constrained-resource-request.md) (2026-05-14):** under the resource-shaped demand model a Shortfall's unmet demand is a resource deficit vector, not a pod `Count`, and `Profile` is the constraint-set. The Phase 2 / Phase 3 rework ADR-0027 entails carries this change; the struct shape is finalised at implementation.
+
 Coordinator response: (1) reassign idle from other shards, (2) reassign speculative quota, (3) cross-shard preemption (drain-first, expensive, rare).
 
 ## 11. Reliability

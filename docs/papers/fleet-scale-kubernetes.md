@@ -39,6 +39,8 @@ The contract is the minimum viable interface. Three CRDs and a protobuf message:
 
 ### 6.1 CapacityRequest
 
+> **Revised by [ADR-0027](../adr/0027-rollup-demand-is-a-constrained-resource-request.md) (2026-05-14):** the `CapacityRequest` CRD itself is unchanged and remains per-pod — but it is now explicitly the *operator's input*, not the wire format. The operator aggregates these into the constrained aggregate **resource** request in §7; it no longer rolls them up into per-pod-shaped `CapacityNeed`s. "One CR per pod" stays; what the roll-up aggregates *into* is what changed.
+
 A namespaced CRD that declares a resource need. Two phases, one transition: Pending → Acknowledged.
 
 ```yaml
@@ -82,6 +84,8 @@ A node matching this spec is being provisioned. Status phases: Provisioning | La
 
 ## 7. The roll-up protocol
 
+> **Revised by [ADR-0027](../adr/0027-rollup-demand-is-a-constrained-resource-request.md) (2026-05-14):** the `CapacityNeed` message changed from `(per-pod-shape, count)` to a **constrained aggregate resource request**. `resources` (per-pod) → `aggregate_resources` (the total resource vector for a constraint set); `count` is removed — machine count is the autoscaler's *output*, never the cluster's input; `min_unit` is added — the largest atomic schedulable unit, a per-machine floor that preserves indivisibility. The autoscaler diffs `aggregate_resources` against `Σ machine.Allocatable` in resource-vector space; there is no per-pod density reconstruction. The proto below reflects the revised message. See ADR-0027 for the full rationale.
+
 The operator runs anywhere that can reach the cluster's API server and the autoscaler. It does three things:
 
 1. Roll up and send (every cycle, full replacement).
@@ -104,11 +108,15 @@ message ClusterCapacityNeeds {
 }
 
 message CapacityNeed {
-  repeated NodeSelectorRequirement requirements = 1;
-  map<string, string> resources = 2;
+  // ADR-0027: a constrained aggregate resource request, not (per-pod-shape, count).
+  repeated NodeSelectorRequirement requirements = 1;  // per-machine constraints
+  map<string, string> aggregate_resources = 2;        // ADR-0027: total resource demand for this constraint set
   int32 priority = 3;
-  int32 count = 4;
+  reserved 4;                                         // ADR-0027: was per-pod `count`; machine count is the autoscaler's output
   repeated TopologySpread spread = 5;
+  map<string, string> min_unit = 6;                   // ADR-0027: largest atomic schedulable unit — per-machine floor
+  PenaltyBucket interruption_penalty = 7;             // powers-of-2 dollar bucket; carried per Need
+  PenaltyBucket reclamation_penalty = 8;              // powers-of-2 dollar bucket; carried per Need
 }
 
 message TopologySpread {
