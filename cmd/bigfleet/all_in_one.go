@@ -18,6 +18,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/coordinator"
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
@@ -76,7 +77,7 @@ func runAllInOne(args []string) error {
 		return fmt.Errorf("coordinator: %w", err)
 	}
 	coordSrv := coordinator.NewGRPCServer(c)
-	coordGRPC := grpc.NewServer()
+	coordGRPC := grpc.NewServer(grpcutil.ServerOptions()...)
 	pb.RegisterCoordinatorServer(coordGRPC, coordSrv)
 	coordLis, err := net.Listen("tcp", *coordListen)
 	if err != nil {
@@ -106,7 +107,7 @@ func runAllInOne(args []string) error {
 	if err != nil {
 		return fmt.Errorf("shard: %w", err)
 	}
-	shardGRPC := grpc.NewServer()
+	shardGRPC := grpc.NewServer(grpcutil.ServerOptions()...)
 	pb.RegisterShardServer(shardGRPC, sh)
 	shardLis, err := net.Listen("tcp", *shardListen)
 	if err != nil {

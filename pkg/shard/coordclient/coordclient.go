@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -146,7 +147,7 @@ func New(cfg Config) (*Client, error) {
 // whether this loop is making progress.
 func (c *Client) Run(ctx context.Context) error {
 	conn, err := grpc.NewClient(c.cfg.CoordinatorAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
 	if err != nil {
 		return err
 	}

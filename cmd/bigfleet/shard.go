@@ -22,6 +22,7 @@ import (
 	"math/rand"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
@@ -474,7 +475,7 @@ func runShard(args []string) error {
 		seedFakeInventory(prov, sh, *seedMachines, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, logger)
 	}
 
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(grpcutil.ServerOptions()...)
 	pb.RegisterShardServer(srv, sh)
 
 	lis, err := net.Listen("tcp", *listen)

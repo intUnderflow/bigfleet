@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
@@ -19,7 +20,8 @@ import (
 // returns when any one of them errors out. The caller (Run) handles the
 // reconnect backoff.
 func (o *Operator) runOnce(ctx context.Context) error {
-	conn, err := grpc.NewClient(o.cfg.ShardAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(o.cfg.ShardAddress,
+		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
 	if err != nil {
 		return fmt.Errorf("dial shard: %w", err)
 	}

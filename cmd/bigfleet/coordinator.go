@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/intUnderflow/bigfleet/pkg/coordinator"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -56,7 +57,7 @@ func runCoordinator(args []string) error {
 	}
 
 	srv := coordinator.NewGRPCServer(c)
-	gsrv := grpc.NewServer()
+	gsrv := grpc.NewServer(grpcutil.ServerOptions()...)
 	pb.RegisterCoordinatorServer(gsrv, srv)
 
 	lis, err := net.Listen("tcp", *listen)

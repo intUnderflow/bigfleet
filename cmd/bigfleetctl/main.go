@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -51,7 +52,8 @@ func run(args []string) error {
 		return fmt.Errorf("subcommand required: list-shards | list-domain-assignments | list-quotas | assign-domain | unassign-domain | remove-shard")
 	}
 
-	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(*addr,
+		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
 	if err != nil {
 		return fmt.Errorf("dial coordinator: %w", err)
 	}
