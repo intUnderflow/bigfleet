@@ -112,8 +112,12 @@ operator:
 slo:
   # Loosened from cloud's 15 s: kine on laptop adds ~5-15 s of write
   # tail compared to Scaleway etcd. 30 s leaves room for kine without
-  # silencing real chain regressions.
+  # silencing real chain regressions. operatorAckP99 is the same
+  # write-path class — markAcknowledged is a status Patch per CR, so
+  # kine's serial WAL fsync gives it the same tail; loosened to match
+  # (the runner default of 12 s is an etcd-shaped number).
   internalBindingLatencyP99Seconds: 30
+  operatorAckP99Seconds: 30
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
 

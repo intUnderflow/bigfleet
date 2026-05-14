@@ -50,6 +50,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -195,6 +196,16 @@ var (
 		Name: "scaletest_loadgen_errors_total",
 	}, []string{"kind"})
 
+	// anchorsBound counts sameRack co-location-group anchor pods the
+	// load-driver force-binds to break the podAffinity bootstrap
+	// deadlock (ADR-0025). One per group; real kube-scheduler places
+	// the rest of each group. BigFleet is unaffected — this only moves
+	// the user-facing bind metric for co-located workloads.
+	anchorsBound = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "scaletest_loadgen_anchors_bound_total",
+		Help: "Count of sameRack co-location-group anchor pods force-bound by the load-driver (ADR-0025 gang-scheduler stand-in).",
+	})
+
 	// steadyStateMetric is 1 once this load-driver has filled to its
 	// target Pod count (cluster has finished its initial fill); new
 	// Pods after that are churn replacements carrying the
@@ -285,7 +296,7 @@ func run(args []string) error {
 		"duration_s", prof.DurationSeconds,
 	)
 
-	kc, err := newKubeClient(*kubeconfig)
+	kc, cs, err := newKubeClient(*kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kube client: %w", err)
 	}
@@ -315,6 +326,7 @@ func run(args []string) error {
 		clusterID:  *clusterID,
 		log:        logger,
 		k:          kc,
+		cs:         cs,
 		prof:       prof,
 		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		known:      make(map[string]crMeta, prof.Target),
@@ -328,9 +340,13 @@ func run(args []string) error {
 }
 
 type driver struct {
-	clusterID  string
-	log        *slog.Logger
-	k          client.Client
+	clusterID string
+	log       *slog.Logger
+	k         client.Client
+	// cs is the typed clientset, used only for the Binding subresource
+	// in the ADR-0025 anchor path — controller-runtime's
+	// SubResource("binding") has known cache-layer issues.
+	cs         *kubernetes.Clientset
 	prof       profile
 	rng        *rand.Rand
 	picker     *archetype.Picker
@@ -462,6 +478,12 @@ func indexArchetypes(arches []archetype.Archetype) map[string]*archetype.Archety
 }
 
 func (d *driver) run(ctx context.Context) error {
+	// ADR-0025: stand in for a gang scheduler — force-bind one anchor
+	// per sameRack co-location group so the group's self-referential
+	// podAffinity can bootstrap. Runs for the whole driver lifetime,
+	// across ramp and steady-state churn.
+	go d.anchorSameRackGroups(ctx)
+
 	// Phase 1: ramp to target.
 	d.log.Info("ramping to target", "count", d.prof.Target)
 	if err := d.rampTo(ctx, d.prof.Target); err != nil {
@@ -1144,7 +1166,7 @@ func loadProfile(path string) (profile, error) {
 	return p, nil
 }
 
-func newKubeClient(explicit string) (client.Client, error) {
+func newKubeClient(explicit string) (client.Client, *kubernetes.Clientset, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if explicit != "" {
 		rules.ExplicitPath = explicit
@@ -1152,7 +1174,7 @@ func newKubeClient(explicit string) (client.Client, error) {
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{})
 	cfg, err := cc.ClientConfig()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cfg.QPS = 200
 	cfg.Burst = 400
@@ -1160,7 +1182,146 @@ func newKubeClient(explicit string) (client.Client, error) {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
-	return client.New(cfg, client.Options{Scheme: scheme})
+	k, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return nil, nil, err
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return k, cs, nil
+}
+
+// anchorSameRackGroups is the harness's gang-scheduler stand-in
+// (ADR-0025). A sameRack pod carries a self-referential required
+// podAffinity, which real kube-scheduler cannot bootstrap from an
+// empty cluster — the first pod of a group has no running peer to
+// co-locate with (a documented Kubernetes limitation; production
+// fleets delegate gang placement to Volcano / Kueue / coscheduling).
+// This loop force-binds one pod of each anchorless group onto a
+// fresh, rack-labelled, resource-fitting fake-Node; kwok marks it
+// Running, and real kube-scheduler then places the rest of the group
+// onto the same rack via podAffinity.
+//
+// BigFleet is untouched — it provisions capacity for the aggregated
+// Same Need regardless; this only moves the user-facing bind metric.
+func (d *driver) anchorSameRackGroups(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := d.reconcileAnchors(ctx); err != nil {
+				d.log.Warn("anchor reconcile failed", "err", err)
+			}
+		}
+	}
+}
+
+// reconcileAnchors force-binds one anchor per anchorless sameRack
+// group. Idempotent and stateless: groups that already have a bound
+// pod are skipped, and nodes already hosting a co-location-group pod
+// are not reused. Scoped to co-location-labelled pods via a label
+// selector — at the largest profiles this list is worth revisiting
+// with an informer (ADR-0025 consequences).
+func (d *driver) reconcileAnchors(ctx context.Context) error {
+	var pods corev1.PodList
+	if err := d.k.List(ctx, &pods,
+		client.InNamespace("default"),
+		client.HasLabels{labelCoLocationGroup},
+	); err != nil {
+		return fmt.Errorf("list co-location pods: %w", err)
+	}
+	type groupState struct {
+		anchored bool
+		pending  []*corev1.Pod
+	}
+	groups := map[string]*groupState{}
+	claimed := map[string]bool{} // nodes already hosting a co-location group
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		gid := p.Labels[labelCoLocationGroup]
+		gs := groups[gid]
+		if gs == nil {
+			gs = &groupState{}
+			groups[gid] = gs
+		}
+		if p.Spec.NodeName != "" {
+			gs.anchored = true
+			claimed[p.Spec.NodeName] = true
+			continue
+		}
+		gs.pending = append(gs.pending, p)
+	}
+	var needy []*groupState
+	for _, gs := range groups {
+		if !gs.anchored && len(gs.pending) > 0 {
+			needy = append(needy, gs)
+		}
+	}
+	if len(needy) == 0 {
+		return nil
+	}
+	var nodes corev1.NodeList
+	if err := d.k.List(ctx, &nodes); err != nil {
+		return fmt.Errorf("list nodes: %w", err)
+	}
+	for _, gs := range needy {
+		anchor := gs.pending[0]
+		for i := range nodes.Items {
+			n := &nodes.Items[i]
+			// The node must carry the rack topology key (else the
+			// rest of the group's podAffinity has no domain to attach
+			// to), be unclaimed, and fit the anchor's resources.
+			if claimed[n.Name] || n.Labels[topologyKeyRack] == "" || !nodeFitsPod(n, anchor) {
+				continue
+			}
+			if err := d.bindPod(ctx, anchor, n.Name); err != nil {
+				d.log.Warn("anchor bind failed", "pod", anchor.Name, "node", n.Name, "err", err)
+				break // retry this group next tick
+			}
+			anchorsBound.Inc()
+			claimed[n.Name] = true
+			break
+		}
+	}
+	return nil
+}
+
+// bindPod force-binds pod onto nodeName via the Binding subresource,
+// bypassing the scheduler (and its podAffinity predicate). Uses the
+// typed clientset — controller-runtime's SubResource("binding") has
+// known cache-layer issues (see test/scaletest/cmd/pod-shim).
+func (d *driver) bindPod(ctx context.Context, pod *corev1.Pod, nodeName string) error {
+	return d.cs.CoreV1().Pods(pod.Namespace).Bind(ctx, &corev1.Binding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name},
+		Target:     corev1.ObjectReference{Kind: "Node", Name: nodeName},
+	}, metav1.CreateOptions{})
+}
+
+// nodeFitsPod is a coarse resource-fit check: every resource the pod
+// requests must be ≤ the node's Allocatable. Sufficient for the
+// harness — fake-Nodes are provisioned per-archetype, so a node that
+// fits the anchor fits the identically-shaped rest of the group.
+func nodeFitsPod(node *corev1.Node, pod *corev1.Pod) bool {
+	req := corev1.ResourceList{}
+	for _, c := range pod.Spec.Containers {
+		for k, v := range c.Resources.Requests {
+			cur := req[k]
+			cur.Add(v)
+			req[k] = cur
+		}
+	}
+	for k, q := range req {
+		alloc, ok := node.Status.Allocatable[k]
+		if !ok || alloc.Cmp(q) < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // errIsNotFound checks for apiserver "not found" without pulling in the
