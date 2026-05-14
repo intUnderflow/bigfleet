@@ -101,39 +101,44 @@ func TestPhase3_TiebreakByReclamationPenalty(t *testing.T) {
 	}
 }
 
-// M44.4 Drop F regression: a machine bound to fingerprint A whose
-// Need's demand has dropped to 0 must reclaim, even when the cluster
-// still has Needs for other fingerprints (B, C, …) whose requirements
-// are subsets of A's. Pre-Drop-F, MatchProfile-based keep semantics
-// kept the stale machine against B's budget — the chain ended up
-// holding inventory for long-dead fingerprints, forcing all new binds
-// through Phase 2 preemption thrash.
-func TestPhase3_StaleAssignmentReclaims(t *testing.T) {
+// ADR-0027: Phase 3 keeps a Configured machine when it MatchProfiles a
+// live Need and helps cover that Need's demand — NOT by its (possibly
+// stale) AssignedNeedFingerprint. This mirrors Phase 1's MatchProfile-
+// based supply credit; keying the two phases differently (the
+// pre-ADR-0027 "Drop F" keep-by-fingerprint semantics) made Phase 1
+// provision a machine Phase 3 then reclaimed — a Bootstrap<->Reclaim
+// thrash. The Drop F failure mode (inventory bloating with machines
+// bound to dead fingerprints) is still prevented — see the second case:
+// a machine no live Need claims is reclaimed regardless of its stamp.
+func TestPhase3_KeepsByMatchProfileNotFingerprint(t *testing.T) {
 	t.Parallel()
 	inv := inventory.New()
 	pfA := gpuProfile(100)
-	pfB := needs.NewProfile(
-		// Subset of pfA's requirements (no instance-type pin).
-		nil, nil, 100,
-		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
-	)
+	// pfB is looser than pfA (no instance-type pin) — pfA's machine
+	// satisfies pfB's requirements.
+	pfB := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket8192, needs.PenaltyBucketPinned)
 
-	// Machine bound to fp_A.
+	// Machine still stamped with the now-stale fp_A.
 	m := configuredVictim("victim-stale", "cluster-a", 100, 0, 0)
 	m.AssignedNeedFingerprint = pfA.Fingerprint()
 	_ = inv.Insert(m)
 
-	// Cluster's only current Need is for fp_B (pfB ⊂ pfA via
-	// requirements subset). Pre-Drop-F: keep because pfB matches m;
-	// post: reclaim because m.AssignedNeedFingerprint != pfB.fingerprint.
-	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", pfB, 5)},
+	// The cluster's live Need is pfB and its demand needs this machine.
+	// Pre-ADR-0027 keep-by-fingerprint would have reclaimed it (stale
+	// stamp); the MatchProfile mirror keeps it — it genuinely serves pfB.
+	kept := decision.Phase3(inv.Snapshot(),
+		[]needs.Need{gpuNeed("cluster-a", pfB, 1)},
 	)
-	if got := len(r.Actions); got != 1 {
-		t.Fatalf("reclaim actions = %d, want 1 (stale machine should reclaim)", got)
+	if got := len(kept.Actions); got != 0 {
+		t.Fatalf("reclaim actions = %d, want 0 (machine MatchProfiles the live Need)", got)
 	}
-	if r.Actions[0].MachineID != "victim-stale" {
-		t.Errorf("reclaimed %s, want victim-stale", r.Actions[0].MachineID)
+
+	// With no live Need claiming it, the same machine is reclaimed —
+	// the Drop F inventory-bloat failure mode is still prevented, just
+	// by "claimed by a live Need" rather than fingerprint equality.
+	gone := decision.Phase3(inv.Snapshot(), nil)
+	if got := len(gone.Actions); got != 1 || gone.Actions[0].MachineID != "victim-stale" {
+		t.Fatalf("with no Needs: reclaim = %+v, want [victim-stale]", gone.Actions)
 	}
 }
 
