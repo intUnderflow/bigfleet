@@ -5,6 +5,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -129,6 +130,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		s.supplyRemaining -= fromSupply
 		deficitPods := n.Count - fromSupply
 		if deficitPods <= 0 {
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()
 			continue
 		}
 
@@ -144,6 +146,11 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 
 		// Idle first: cheapest path (one Configure call, no Create).
 		idle := alloc.take(machine.StateIdle, profile, machinesNeeded)
+		if len(idle) == 0 {
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("take_returned_zero").Inc()
+		} else {
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_idle").Inc()
+		}
 		for _, m := range idle {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindBootstrap,
@@ -176,6 +183,9 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		// Fall back to speculative: pick by lowest effective_cost.
 		machinesNeeded = MachinesForAggregate(profResources, profResources, deficitPods)
 		spec := alloc.take(machine.StateSpeculative, profile, machinesNeeded)
+		if len(spec) > 0 {
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
+		}
 		for _, m := range spec {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindProvision,
@@ -197,6 +207,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			continue
 		}
 
+		metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
 		result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
 			Need: n,
 			// Phase 2 / shortfall protocol still operates in Pod
@@ -205,6 +216,8 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			Deficit: deficitPods,
 		})
 	}
+
+	metrics.ShardPhase1EmitsPerCycle.Observe(float64(len(result.Actions)))
 
 	return result
 }

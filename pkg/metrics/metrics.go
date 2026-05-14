@@ -232,6 +232,36 @@ var (
 		Name: "bigfleet_shard_phase1_calls_total",
 		Help: "Counter of phase1Allocator sub-path invocations, so mean cost = sum(duration) / count emerges from the same data.",
 	}, []string{"path"})
+
+	// ShardPhase1NeedOutcomes attributes each Need processed in Phase 1
+	// to what happened to it. Together with ShardCyclePhaseDuration{phase=phase1}
+	// this answers "why did Phase 1 emit only N Bootstraps this cycle?"
+	// when N is suspiciously low against unmet demand.
+	//   - absorbed_by_supply: Need's count fully covered by existing
+	//     Configured/Configuring machines of matching fingerprint, plus
+	//     surplus credited from earlier Needs of the same (cluster, fp).
+	//   - emitted_idle:  Took at least one Idle machine and emitted a
+	//     Bootstrap.
+	//   - emitted_spec:  Took at least one Speculative machine and emitted
+	//     a Provision.
+	//   - unsatisfied:   Neither pool could fulfil; deficit becomes a
+	//     Phase 2 candidate.
+	//   - take_returned_zero: alloc.take returned 0 machines even though
+	//     deficit was positive — usually MatchProfile/co-location filter
+	//     mismatch with the available pool.
+	ShardPhase1NeedOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_phase1_need_outcomes_total",
+		Help: "Phase 1 per-Need outcomes. absorbed_by_supply = covered by existing Configured/Configuring + intra-cycle surplus; emitted_idle = Bootstrap emitted from Idle pool; emitted_spec = Provision emitted from Speculative; unsatisfied = neither pool could fulfil; take_returned_zero = alloc.take returned 0 machines despite positive deficit (typically MatchProfile/co-location mismatch).",
+	}, []string{"outcome"})
+
+	// ShardPhase1EmitsPerCycle is a histogram of how many Bootstrap/Provision
+	// actions Phase 1 produced in a single cycle. Pairs with
+	// ShardPhase1NeedOutcomes for the "per-Need" view.
+	ShardPhase1EmitsPerCycle = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_shard_phase1_emits_per_cycle",
+		Help:    "Number of Bootstrap+Provision actions Phase 1 emitted in a single cycle. A persistent low value with unmet demand indicates Phase 1 is supply-bound (existing Configured covers per-fp demand), allocator-bound (pool filter rejects available Idle), or input-bound (NeedsTable snapshot underflows).",
+		Buckets: []float64{0, 1, 4, 16, 64, 256, 1024, 4096, 16384},
+	})
 )
 
 // Coordinator metrics.
