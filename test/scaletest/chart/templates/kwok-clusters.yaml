@@ -131,10 +131,6 @@ spec:
               value: "{{ .Values.operator.ackConcurrency }}"
             - name: OPERATOR_ROLLUP_INTERVAL
               value: "{{ .Values.operator.rollupInterval }}"
-            {{- if .Values.operator.coLocationKey }}
-            - name: OPERATOR_CO_LOCATION_KEY
-              value: "{{ .Values.operator.coLocationKey }}"
-            {{- end }}
             {{- if .Values.loadProfile.mode }}
             - name: POD_MODE
               value: "{{ .Values.loadProfile.mode }}"

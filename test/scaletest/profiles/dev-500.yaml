@@ -22,6 +22,15 @@
 #                                                       so ramp burst can
 #                                                       grow into spare CPU.
 
+# ADR-0023: dev-500 is the canary for the kube-scheduler harness flow.
+# Replaces pod-shim's Pod-binding role with a real kube-scheduler
+# running inside each kwok apiserver container; pod-shim shrinks to a
+# node-creator. The 102 s pod-shim bind p99 we observed in
+# scaleway-5k iterations should disappear under this path because
+# kube-scheduler is the production-grade binder.
+harness:
+  scheduler: kube-scheduler
+
 kwok:
   clusterCount: 5
   # M45.5: storage knob exists (etcd or kine), but etcd integration
@@ -97,10 +106,8 @@ operator:
   burst: 400
   ackConcurrency: 16
   rollupInterval: 1s
-  # M37: realistic archetype catalog uses sameRack on gpu-training /
-  # memory-db, so the operator translates owner-grouped CRs to
-  # Same(topology.bigfleet/rack).
-  coLocationKey: topology.bigfleet/rack
+  # ADR-0024: co-location comes from each sameRack archetype's real
+  # podAffinity term, not an operator-wide key.
 
 slo:
   # Loosened from cloud's 15 s: kine on laptop adds ~5-15 s of write

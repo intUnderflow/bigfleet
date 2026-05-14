@@ -294,6 +294,7 @@ func (r *Reconciler) buildCRForPod(pod *corev1.Pod) *bfv1alpha1.CapacityRequest 
 			Resources:           resources,
 			Priority:            podPriority(pod),
 			TopologySpread:      topologySpreadFromPod(pod),
+			CoLocation:          coLocationFromPod(pod),
 			InterruptionPenalty: r.resolveInterruptionPenalty(pod),
 			ReclamationPenalty:  r.resolveReclamationPenalty(pod),
 		},
@@ -347,6 +348,29 @@ func requirementsFromPod(pod *corev1.Pod) []corev1.NodeSelectorRequirement {
 	out := make([]corev1.NodeSelectorRequirement, 0, len(terms[0].MatchExpressions))
 	out = append(out, terms[0].MatchExpressions...)
 	return out
+}
+
+// coLocationFromPod projects the source pod's required podAffinity into
+// a CoLocationTerm — the structured co-location signal the operator
+// translates to Same at roll-up (ADR-0024). v1 takes the first required
+// term only, matching requirementsFromPod's treatment of node affinity
+// (multiple terms / OR semantics are out of scope). preferred (soft)
+// podAffinity and podAntiAffinity are deliberately ignored. Returns nil
+// when the pod declares no required podAffinity; the CR then aggregates
+// freely at roll-up.
+func coLocationFromPod(pod *corev1.Pod) *bfv1alpha1.CoLocationTerm {
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.PodAffinity == nil {
+		return nil
+	}
+	terms := pod.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if len(terms) == 0 {
+		return nil
+	}
+	t := terms[0]
+	return &bfv1alpha1.CoLocationTerm{
+		LabelSelector: t.LabelSelector.DeepCopy(),
+		TopologyKey:   t.TopologyKey,
+	}
 }
 
 func resourcesFromPod(pod *corev1.Pod) corev1.ResourceList {

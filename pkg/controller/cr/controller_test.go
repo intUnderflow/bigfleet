@@ -115,6 +115,68 @@ func TestReconciler_CreatesCRForUnschedulablePod(t *testing.T) {
 	}
 }
 
+// TestReconciler_TranslatesPodAffinityToCoLocation locks in the
+// ADR-0024 contract: a pod's required podAffinity becomes the CR's
+// structured Spec.CoLocation, which the operator later turns into a
+// Same requirement at roll-up.
+func TestReconciler_TranslatesPodAffinityToCoLocation(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("trainer-0", true, 8)
+	pod.Spec.Affinity.PodAffinity = &corev1.PodAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"job": "trainer-7"},
+			},
+			TopologyKey: "topology.bigfleet/rack",
+		}},
+	}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	coloc := list.Items[0].Spec.CoLocation
+	if coloc == nil {
+		t.Fatalf("Spec.CoLocation not populated from podAffinity")
+	}
+	if coloc.TopologyKey != "topology.bigfleet/rack" {
+		t.Errorf("TopologyKey = %q, want topology.bigfleet/rack", coloc.TopologyKey)
+	}
+	if coloc.LabelSelector == nil || coloc.LabelSelector.MatchLabels["job"] != "trainer-7" {
+		t.Errorf("LabelSelector not propagated: %+v", coloc.LabelSelector)
+	}
+}
+
+// TestReconciler_NoCoLocationWithoutPodAffinity: a pod with no required
+// podAffinity produces a CR with nil Spec.CoLocation, so it aggregates
+// freely by profile fingerprint at roll-up.
+func TestReconciler_NoCoLocationWithoutPodAffinity(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("plain-0", true, 8)
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	if list.Items[0].Spec.CoLocation != nil {
+		t.Errorf("Spec.CoLocation should be nil for a pod without podAffinity, got %+v", list.Items[0].Spec.CoLocation)
+	}
+}
+
 // TestReconciler_StampsInitialPendingPhase locks in the M19 contract
 // that newly-created CRs land with status.phase=Pending so observers
 // running `kubectl get capacityrequest` see the lifecycle walk

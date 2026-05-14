@@ -154,13 +154,11 @@ operator:
   burst: 100
   ackConcurrency: 16
   rollupInterval: 0s    # 0 means use the operator binary's default (10s)
-  # M37: topology key the operator uses to translate owner-grouped
-  # CRs into Same() requirements during rollup. Empty → use the
-  # operator binary's default (topology.kubernetes.io/zone). Set to
-  # `topology.bigfleet/rack` for profiles whose archetypes use
-  # sameRack — that's the key the seeded Configured machines
-  # carry as Profile.Labels.
-  coLocationKey: ""
+  # ADR-0024: co-location is no longer an operator-wide key. The
+  # operator derives the Same topology key per-Need from each CR's
+  # Spec.CoLocation (the source pod's required podAffinity). sameRack
+  # archetypes set a real podAffinity term on their Pods; everything
+  # else aggregates freely by Profile fingerprint.
 
 # M45.5: per-pod-shim reconcile concurrency overrides. Empty/0 keeps
 # the pod-shim binary's defaults (binder=64, upcomingNode=8). High-Pod

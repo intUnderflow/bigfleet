@@ -9,7 +9,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -18,10 +17,12 @@ import (
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
-// Tests that buildRollup honours owner-grouping (paper §8 co-location):
-// CRs sharing an OwnerReference UID become a single CapacityNeed with
-// a Same(CoLocationKey) requirement; CRs from different owners stay in
-// separate Needs even when their profiles are otherwise identical.
+// Tests that buildRollup honours co-location (paper §8, ADR-0024): CRs
+// carrying an equal Spec.CoLocation term become a single CapacityNeed
+// with a Same requirement on the term's TopologyKey; CRs with
+// different terms — independent workloads — stay separate even when
+// their profiles are otherwise identical; CRs with no CoLocation
+// aggregate purely by profile fingerprint and carry no Same.
 
 func makeOperatorT(t *testing.T) *Operator {
 	t.Helper()
@@ -41,9 +42,22 @@ func makeOperatorT(t *testing.T) *Operator {
 	return op
 }
 
-func gpuCR(name string, ownerUID types.UID) bfv1alpha1.CapacityRequest {
+// coLocTerm builds a CoLocationTerm of the shape the UPC projects from
+// a pod's required podAffinity (and the load-driver sets directly in
+// Mode=cr): a label selector on a group-unique label, plus the
+// topology key the pods share.
+func coLocTerm(group, topologyKey string) *bfv1alpha1.CoLocationTerm {
+	return &bfv1alpha1.CoLocationTerm{
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"scaletest.bigfleet/co-location-group": group},
+		},
+		TopologyKey: topologyKey,
+	}
+}
+
+func gpuCR(name string, coloc *bfv1alpha1.CoLocationTerm) bfv1alpha1.CapacityRequest {
 	intr := resource.MustParse("8192")
-	cr := bfv1alpha1.CapacityRequest{
+	return bfv1alpha1.CapacityRequest{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: bfv1alpha1.CapacityRequestSpec{
 			Requirements: []corev1.NodeSelectorRequirement{{
@@ -55,22 +69,13 @@ func gpuCR(name string, ownerUID types.UID) bfv1alpha1.CapacityRequest {
 				"nvidia.com/gpu": resource.MustParse("8"),
 			},
 			Priority:            1_000_000,
+			CoLocation:          coloc,
 			InterruptionPenalty: &intr,
 		},
 	}
-	if ownerUID != "" {
-		cr.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: "apps/v1",
-			Kind:       "StatefulSet",
-			Name:       "trainer",
-			UID:        ownerUID,
-		}}
-	}
-	return cr
 }
 
-// hasSameRequirement returns the value of a Same requirement on key, if
-// any (Values list).
+// sameRequirementOnKey returns the Same requirement on key, if any.
 func sameRequirementOnKey(reqs []*pb.NodeSelectorRequirement, key string) (*pb.NodeSelectorRequirement, bool) {
 	for _, r := range reqs {
 		if r.GetKey() == key && r.GetOperator() == pb.NodeSelectorRequirement_OPERATOR_SAME {
@@ -80,144 +85,134 @@ func sameRequirementOnKey(reqs []*pb.NodeSelectorRequirement, key string) (*pb.N
 	return nil, false
 }
 
-func TestBuildRollup_AppendsSameWhenOwnerRefPresent(t *testing.T) {
+func TestBuildRollup_AppendsSameWhenCoLocationPresent(t *testing.T) {
 	t.Parallel()
 	op := makeOperatorT(t)
+	term := coLocTerm("group-A", "topology.bigfleet/rack")
 	crs := []bfv1alpha1.CapacityRequest{
-		gpuCR("cr-1", "owner-A"),
-		gpuCR("cr-2", "owner-A"),
-		gpuCR("cr-3", "owner-A"),
+		gpuCR("cr-1", term),
+		gpuCR("cr-2", term),
+		gpuCR("cr-3", term),
 	}
 	rollup, _ := op.buildRollup(crs)
 	if got := len(rollup.GetNeeds()); got != 1 {
-		t.Fatalf("needs len = %d, want 1 (single owner)", got)
+		t.Fatalf("needs len = %d, want 1 (single co-location group)", got)
 	}
 	n := rollup.GetNeeds()[0]
 	if n.GetCount() != 3 {
 		t.Errorf("count = %d, want 3", n.GetCount())
 	}
-	if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.kubernetes.io/zone"); !ok {
-		t.Errorf("Same requirement on zone missing; got requirements: %+v", n.GetRequirements())
+	if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
+		t.Errorf("Same requirement on the term's topology key missing; got: %+v", n.GetRequirements())
 	}
 }
 
-func TestBuildRollup_DifferentOwnersStaySeparate(t *testing.T) {
+func TestBuildRollup_DifferentCoLocationStaySeparate(t *testing.T) {
 	t.Parallel()
 	op := makeOperatorT(t)
+	// Two independent workloads, identical profile, different group
+	// selectors — each must keep its own Need and its own Same domain.
 	crs := []bfv1alpha1.CapacityRequest{
-		gpuCR("cr-a-1", "owner-A"),
-		gpuCR("cr-a-2", "owner-A"),
-		gpuCR("cr-b-1", "owner-B"),
-		gpuCR("cr-b-2", "owner-B"),
+		gpuCR("cr-a-1", coLocTerm("group-A", "topology.bigfleet/rack")),
+		gpuCR("cr-a-2", coLocTerm("group-A", "topology.bigfleet/rack")),
+		gpuCR("cr-b-1", coLocTerm("group-B", "topology.bigfleet/rack")),
+		gpuCR("cr-b-2", coLocTerm("group-B", "topology.bigfleet/rack")),
 	}
 	rollup, _ := op.buildRollup(crs)
 	if got := len(rollup.GetNeeds()); got != 2 {
-		t.Fatalf("needs len = %d, want 2 (two owners)", got)
+		t.Fatalf("needs len = %d, want 2 (two independent workloads)", got)
 	}
 	for _, n := range rollup.GetNeeds() {
 		if n.GetCount() != 2 {
-			t.Errorf("count = %d, want 2 per owner", n.GetCount())
+			t.Errorf("count = %d, want 2 per workload", n.GetCount())
 		}
-		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.kubernetes.io/zone"); !ok {
-			t.Errorf("Same requirement on zone missing on a per-owner Need")
+		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
+			t.Errorf("Same requirement missing on a per-workload Need")
 		}
 	}
 }
 
-func TestBuildRollup_OwnerlessCRsAggregateNormally(t *testing.T) {
+func TestBuildRollup_NoCoLocationAggregateNormally(t *testing.T) {
 	t.Parallel()
 	op := makeOperatorT(t)
 	crs := []bfv1alpha1.CapacityRequest{
-		gpuCR("cr-1", ""),
-		gpuCR("cr-2", ""),
-		gpuCR("cr-3", ""),
+		gpuCR("cr-1", nil),
+		gpuCR("cr-2", nil),
+		gpuCR("cr-3", nil),
 	}
 	rollup, _ := op.buildRollup(crs)
 	if got := len(rollup.GetNeeds()); got != 1 {
-		t.Fatalf("needs len = %d, want 1 (no owners → single aggregated need)", got)
+		t.Fatalf("needs len = %d, want 1 (no co-location → single aggregated need)", got)
 	}
 	n := rollup.GetNeeds()[0]
 	if n.GetCount() != 3 {
 		t.Errorf("count = %d, want 3", n.GetCount())
 	}
-	if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.kubernetes.io/zone"); ok {
-		t.Errorf("Same requirement should NOT be present on ownerless CRs")
+	for _, r := range n.GetRequirements() {
+		if r.GetOperator() == pb.NodeSelectorRequirement_OPERATOR_SAME {
+			t.Errorf("no Same requirement should be present on CRs without CoLocation; got: %v", r)
+		}
 	}
 }
 
-// TestBuildRollup_M37LoadDriverShape: end-to-end coverage for the
-// M37 fix. The scaletest load-driver attaches OwnerReferences to
-// sameRack CRs and the operator is configured with
-// CoLocationKey=topology.bigfleet/rack — together these must
-// produce a Need carrying Same(topology.bigfleet/rack).
-//
-// Pre-M37 the load-driver attached an Exists(rack) requirement
-// instead, which (correctly) does NOT trigger Same translation.
-// This test fails if anyone ever reverts to that mechanism.
-func TestBuildRollup_M37LoadDriverShape(t *testing.T) {
+// TestBuildRollup_CoLocatedAndPlainStaySeparate: a co-located CR and a
+// plain CR of the *same* profile shape must not merge — one carries a
+// Same requirement, the other must not.
+func TestBuildRollup_CoLocatedAndPlainStaySeparate(t *testing.T) {
 	t.Parallel()
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	op, err := New(Config{
-		ClusterID:     "test-cluster",
-		ShardAddress:  "127.0.0.1:7780",
-		KubeClient:    c,
-		CoLocationKey: "topology.bigfleet/rack",
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err != nil {
-		t.Fatalf("operator.New: %v", err)
-	}
-
-	// Three CRs in one group + two in another — the shape the load-
-	// driver emits for a sameRack archetype with PickGroupSize=3..5.
+	op := makeOperatorT(t)
 	crs := []bfv1alpha1.CapacityRequest{
-		gpuCR("g1-cr-1", "group-1"),
-		gpuCR("g1-cr-2", "group-1"),
-		gpuCR("g1-cr-3", "group-1"),
-		gpuCR("g2-cr-1", "group-2"),
-		gpuCR("g2-cr-2", "group-2"),
+		gpuCR("plain-1", nil),
+		gpuCR("plain-2", nil),
+		gpuCR("coloc-1", coLocTerm("group-A", "topology.bigfleet/rack")),
+		gpuCR("coloc-2", coLocTerm("group-A", "topology.bigfleet/rack")),
 	}
 	rollup, _ := op.buildRollup(crs)
 	if got := len(rollup.GetNeeds()); got != 2 {
-		t.Fatalf("needs len = %d, want 2 (one per group)", got)
+		t.Fatalf("needs len = %d, want 2 (plain vs co-located)", got)
 	}
+	var sawSame, sawPlain bool
 	for _, n := range rollup.GetNeeds() {
-		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
-			t.Errorf("Need missing Same(topology.bigfleet/rack) — M37 wiring is broken; got: %+v", n.GetRequirements())
+		if n.GetCount() != 2 {
+			t.Errorf("count = %d, want 2", n.GetCount())
 		}
-		// Spot-check: no stray Exists(rack) leaked from a prior
-		// implementation. Same is the only rack requirement.
-		for _, r := range n.GetRequirements() {
-			if r.GetKey() == "topology.bigfleet/rack" && r.GetOperator() != pb.NodeSelectorRequirement_OPERATOR_SAME {
-				t.Errorf("found non-Same requirement on rack key: %v", r)
-			}
+		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); ok {
+			sawSame = true
+		} else {
+			sawPlain = true
 		}
+	}
+	if !sawSame || !sawPlain {
+		t.Errorf("expected one Need with Same and one without; sawSame=%v sawPlain=%v", sawSame, sawPlain)
 	}
 }
 
-func TestBuildRollup_CoLocationKeyConfigurable(t *testing.T) {
+// TestBuildRollup_SameKeyFromTerm: the Same requirement's topology key
+// is the term's own TopologyKey — there is no operator-wide key
+// (ADR-0024 retired Config.CoLocationKey). Two CRs that share a
+// selector but declare different topology keys are different
+// workloads and must not merge.
+func TestBuildRollup_SameKeyFromTerm(t *testing.T) {
 	t.Parallel()
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	op, err := New(Config{
-		ClusterID:     "test-cluster",
-		ShardAddress:  "127.0.0.1:7780",
-		KubeClient:    c,
-		CoLocationKey: "topology.example.com/rack",
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err != nil {
-		t.Fatalf("operator.New: %v", err)
+	op := makeOperatorT(t)
+	crs := []bfv1alpha1.CapacityRequest{
+		gpuCR("rack-1", coLocTerm("group-A", "topology.bigfleet/rack")),
+		gpuCR("zone-1", coLocTerm("group-A", "topology.kubernetes.io/zone")),
 	}
-
-	rollup, _ := op.buildRollup([]bfv1alpha1.CapacityRequest{gpuCR("cr-1", "owner-X")})
-	n := rollup.GetNeeds()[0]
-	if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.example.com/rack"); !ok {
-		t.Errorf("Same requirement should be on configured CoLocationKey; got: %+v", n.GetRequirements())
+	rollup, _ := op.buildRollup(crs)
+	if got := len(rollup.GetNeeds()); got != 2 {
+		t.Fatalf("needs len = %d, want 2 (different topology keys → different workloads)", got)
+	}
+	var sawRack, sawZone bool
+	for _, n := range rollup.GetNeeds() {
+		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); ok {
+			sawRack = true
+		}
+		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.kubernetes.io/zone"); ok {
+			sawZone = true
+		}
+	}
+	if !sawRack || !sawZone {
+		t.Errorf("each Need's Same key should come from its own term; sawRack=%v sawZone=%v", sawRack, sawZone)
 	}
 }

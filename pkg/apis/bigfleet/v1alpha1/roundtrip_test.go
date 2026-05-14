@@ -142,6 +142,12 @@ func newCapacityRequest() *v1alpha1.CapacityRequest {
 					WhenUnsatisfiable: corev1.DoNotSchedule,
 				},
 			},
+			CoLocation: &v1alpha1.CoLocationTerm{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"job": "trainer-worker-42"},
+				},
+				TopologyKey: "topology.bigfleet/rack",
+			},
 			InterruptionPenalty: &pen,
 			ReclamationPenalty:  &rec,
 		},

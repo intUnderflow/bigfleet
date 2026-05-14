@@ -214,15 +214,13 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nConfiguredP
 	// archetype mix at fold time.
 	idlePicker := archetype.NewPicker(archetypes)
 	idleRng := rand.New(rand.NewSource(int64(shardOrdinal) + 17))
-	// M44.4 Drop E: Idle seed mirrors Configured seed's rack label so
-	// MatchProfile's `Same(topology.bigfleet/rack)` requirement (added
-	// by the operator's owner→Same translation when CoLocationKey is
-	// set to rack) finds candidates in the Idle pool. Without this,
-	// every Pod-mode CR carries Same(rack) — UPC sets ownerRef = Pod
-	// on every CR, so the operator's withSameRequirement triggers for
-	// all of them, not just sameRack archetypes — and zero Idle
-	// machines have a rack label, so no Bootstrap action ever emits.
-	// 10 racks per zone matches the Configured seed.
+	// M44.4 Drop E: Idle seed carries a topology.bigfleet/rack label so
+	// MatchProfile can satisfy the Same(rack) requirement the operator
+	// emits for sameRack-archetype Needs. ADR-0024: Same is now derived
+	// from the source pod's podAffinity, so only sameRack Pods carry it
+	// — but rack-labelled Idle machines are still needed as their
+	// candidates, else those Needs never emit a Bootstrap. 10 racks per
+	// zone matches the Configured seed.
 	const idleRacksPerZone = 10
 	for i := 0; i < nIdle; i++ {
 		var profile machine.Profile

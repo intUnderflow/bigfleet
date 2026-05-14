@@ -46,6 +46,15 @@ type CapacityRequestSpec struct {
 	// +optional
 	TopologySpread []TopologySpreadConstraint `json:"topologySpread,omitempty"`
 
+	// CoLocation is the autoscaler-relevant projection of the source pod's
+	// required podAffinity — the structured "co-location signal" the
+	// cluster operator translates into the protobuf-only Same requirement
+	// at roll-up (paper §8). Absent means the pod declared no co-location;
+	// the CR then aggregates freely with other same-shaped CRs. Symmetric
+	// to TopologySpread, which is co-location's dual.
+	// +optional
+	CoLocation *CoLocationTerm `json:"coLocation,omitempty"`
+
 	// InterruptionPenalty is the dollar cost of interrupting the workload
 	// once. Used in the autoscaler's effective_cost calculation:
 	//
@@ -72,6 +81,27 @@ type TopologySpreadConstraint struct {
 	TopologyKey       string                               `json:"topologyKey"`
 	MaxSkew           int32                                `json:"maxSkew"`
 	WhenUnsatisfiable corev1.UnsatisfiableConstraintAction `json:"whenUnsatisfiable"`
+}
+
+// CoLocationTerm is the autoscaler-relevant projection of one required
+// podAffinity term: the peer set this pod must be scheduled with, and
+// the topology domain they share. The cluster operator turns it into a
+// Same requirement on the term's TopologyKey at roll-up; CRs with an
+// equal CoLocationTerm aggregate into one Need, while CRs with
+// different terms stay separate so each workload is co-located onto its
+// own domain.
+type CoLocationTerm struct {
+	// LabelSelector selects the peer pods this pod co-locates with —
+	// the labelSelector of the source pod's podAffinity term. Nil
+	// selects nothing; in practice the source pod also carries the
+	// labels it selects on, so its own workload's pods share the term.
+	// +optional
+	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+
+	// TopologyKey is the node-label key defining the shared domain
+	// (e.g. topology.kubernetes.io/zone, or a rack key). It becomes the
+	// key of the Same requirement the operator emits.
+	TopologyKey string `json:"topologyKey"`
 }
 
 // CapacityRequestStatus is written exactly once by the cluster operator

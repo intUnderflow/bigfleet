@@ -79,7 +79,6 @@ op_args=(
 [[ -n "${OPERATOR_BURST:-}"           ]] && op_args+=(--burst="$OPERATOR_BURST")
 [[ -n "${OPERATOR_ACK_CONCURRENCY:-}" ]] && op_args+=(--ack-concurrency="$OPERATOR_ACK_CONCURRENCY")
 [[ -n "${OPERATOR_ROLLUP_INTERVAL:-}" && "$OPERATOR_ROLLUP_INTERVAL" != "0s" ]] && op_args+=(--rollup-interval="$OPERATOR_ROLLUP_INTERVAL")
-[[ -n "${OPERATOR_CO_LOCATION_KEY:-}" ]] && op_args+=(--co-location-key="$OPERATOR_CO_LOCATION_KEY")
 log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPERATOR_QPS:-default} ack=${OPERATOR_ACK_CONCURRENCY:-default})"
 bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
 OPERATOR_PID=$!

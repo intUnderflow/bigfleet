@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,14 +131,15 @@ func (o *Operator) listCapacityRequests(ctx context.Context) ([]bfv1alpha1.Capac
 // translate Pod count to machine count by fitting against the
 // matching machine inventory's per-machine Allocatable.
 //
-// Co-location (paper §8): a CR's first OwnerReference UID is used as
-// its co-location group. CRs sharing an owner are co-located by the
-// shard via a Same(CoLocationKey) requirement appended to the
-// resulting Need's profile. CRs from different owners stay in
-// separate Needs even when their profiles are identical, so each
-// workload's machines can be co-located independently. CRs with no
-// OwnerReference get an empty group and fall back to plain
-// fingerprint aggregation.
+// Co-location (paper §8, ADR-0024): a CR's co-location group is the
+// canonical form of its Spec.CoLocation term — the projection of the
+// source pod's required podAffinity. CRs with an equal term aggregate
+// into one Need, and the operator appends a Same requirement on the
+// term's TopologyKey; CRs with different terms (independent workloads)
+// stay separate even when their profiles are identical, so each is
+// co-located onto its own domain. CRs with no CoLocation get an empty
+// group and aggregate purely by Profile fingerprint — the common case,
+// which keeps the roll-up ~2KB regardless of fleet size (paper §11).
 func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCapacityNeeds, []bfv1alpha1.CapacityRequest) {
 	pending := make([]bfv1alpha1.CapacityRequest, 0)
 	rawNeeds := make([]needs.Need, 0, len(crs))
@@ -148,8 +151,8 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 			continue
 		}
 		group := coLocationGroup(cr)
-		if group != "" && o.cfg.CoLocationKey != "" {
-			profile = withSameRequirement(profile, o.cfg.CoLocationKey)
+		if group != "" {
+			profile = withSameRequirement(profile, cr.Spec.CoLocation.TopologyKey)
 		}
 		rawNeeds = append(rawNeeds, needs.Need{
 			ClusterID: o.cfg.ClusterID,
@@ -174,16 +177,67 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 	return out, pending
 }
 
-// coLocationGroup returns a stable per-workload identifier from a CR's
-// ownerReferences. Conventionally the first ownerRef is the workload
-// (Pod owner: Job, StatefulSet, ReplicaSet, …). Empty string means
-// "no co-location group" — the CR aggregates with other ungrouped CRs
-// of identical profile.
+// coLocationGroup returns the canonical aggregation key for a CR's
+// co-location term, or "" when the CR declared no co-location (or a
+// term with no topology key). CRs with an equal key aggregate into one
+// Need and carry a Same requirement; CRs with different keys —
+// independent workloads — stay separate. ADR-0024: derived from
+// Spec.CoLocation (the source pod's required podAffinity projection),
+// not from ownerReferences (which the UPC sets to the Pod, for GC).
 func coLocationGroup(cr *bfv1alpha1.CapacityRequest) string {
-	if len(cr.OwnerReferences) == 0 {
+	t := cr.Spec.CoLocation
+	if t == nil || t.TopologyKey == "" {
 		return ""
 	}
-	return string(cr.OwnerReferences[0].UID)
+	return t.TopologyKey + "\x00" + canonicalLabelSelector(t.LabelSelector)
+}
+
+// canonicalLabelSelector serialises a LabelSelector deterministically:
+// matchLabels by sorted key, matchExpressions sorted by (key, operator,
+// values). Two selectors that select the same set produce the same
+// string regardless of map-iteration or slice order, so co-located
+// pods of one workload always land in the same aggregation group.
+func canonicalLabelSelector(sel *metav1.LabelSelector) string {
+	if sel == nil {
+		return ""
+	}
+	var b strings.Builder
+	keys := make([]string, 0, len(sel.MatchLabels))
+	for k := range sel.MatchLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(sel.MatchLabels[k])
+		b.WriteByte(',')
+	}
+	exprs := append([]metav1.LabelSelectorRequirement(nil), sel.MatchExpressions...)
+	for i := range exprs {
+		vs := append([]string(nil), exprs[i].Values...)
+		sort.Strings(vs)
+		exprs[i].Values = vs
+	}
+	sort.Slice(exprs, func(i, j int) bool {
+		if exprs[i].Key != exprs[j].Key {
+			return exprs[i].Key < exprs[j].Key
+		}
+		if exprs[i].Operator != exprs[j].Operator {
+			return exprs[i].Operator < exprs[j].Operator
+		}
+		return strings.Join(exprs[i].Values, ",") < strings.Join(exprs[j].Values, ",")
+	})
+	b.WriteByte(';')
+	for _, e := range exprs {
+		b.WriteString(e.Key)
+		b.WriteByte(' ')
+		b.WriteString(string(e.Operator))
+		b.WriteByte(' ')
+		b.WriteString(strings.Join(e.Values, ","))
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 // withSameRequirement returns a copy of profile with a Same requirement

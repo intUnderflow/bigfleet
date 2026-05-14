@@ -58,6 +58,74 @@ spec:
               One CR per pod. Withdrawal is implicit: deleting the pod garbage-collects
               the CR via ownerReferences, which causes the next roll-up to omit it.
             properties:
+              coLocation:
+                description: |-
+                  CoLocation is the autoscaler-relevant projection of the source pod's
+                  required podAffinity — the structured "co-location signal" the
+                  cluster operator translates into the protobuf-only Same requirement
+                  at roll-up (paper §8). Absent means the pod declared no co-location;
+                  the CR then aggregates freely with other same-shaped CRs. Symmetric
+                  to TopologySpread, which is co-location's dual.
+                properties:
+                  labelSelector:
+                    description: |-
+                      LabelSelector selects the peer pods this pod co-locates with —
+                      the labelSelector of the source pod's podAffinity term. Nil
+                      selects nothing; in practice the source pod also carries the
+                      labels it selects on, so its own workload's pods share the term.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  topologyKey:
+                    description: |-
+                      TopologyKey is the node-label key defining the shared domain
+                      (e.g. topology.kubernetes.io/zone, or a rack key). It becomes the
+                      key of the Same requirement the operator emits.
+                    type: string
+                required:
+                - topologyKey
+                type: object
               interruptionPenalty:
                 anyOf:
                 - type: integer

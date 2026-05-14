@@ -92,7 +92,8 @@ operator:
   burst: 400
   ackConcurrency: 64
   rollupInterval: 1s
-  coLocationKey: topology.bigfleet/rack
+  # ADR-0024: co-location comes from each sameRack archetype's real
+  # podAffinity term, not an operator-wide key.
 
 slo:
   internalBindingLatencyP99Seconds: 15

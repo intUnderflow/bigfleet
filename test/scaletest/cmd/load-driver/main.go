@@ -49,7 +49,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -721,6 +720,18 @@ func (d *driver) createOnePod(ctx context.Context) error {
 	return nil
 }
 
+const (
+	// labelCoLocationGroup tags every Pod / CR of one sameRack group
+	// with a shared, group-unique value. The Pod's podAffinity selects
+	// it; the operator aggregates CRs carrying an equal CoLocation term
+	// into one Need. ADR-0024.
+	labelCoLocationGroup = "scaletest.bigfleet/co-location-group"
+	// topologyKeyRack is the node-label key sameRack archetypes
+	// co-locate on — the TopologyKey of their podAffinity term, which
+	// the operator turns into a Same(rack) requirement.
+	topologyKeyRack = "topology.bigfleet/rack"
+)
+
 // buildPodWithArchetype mirrors buildCRWithArchetype but emits a Pod.
 // Returns the Pod plus the archetype name (or "" for the legacy
 // single-shape fallback).
@@ -733,8 +744,9 @@ func (d *driver) buildPodWithArchetype(name string) (*corev1.Pod, string) {
 
 // buildArchetypePod constructs a Pod with the archetype's affinity
 // terms, resources, priority, penalty annotations, and (for sameRack
-// archetypes) an OwnerReference to drive the operator's owner→Same
-// translation downstream.
+// archetypes) a real podAffinity term — the co-location signal the
+// UPC translates into CR.Spec.CoLocation and the operator turns into
+// a Same requirement at roll-up (ADR-0024).
 func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.Pod {
 	terms := []corev1.NodeSelectorRequirement{}
 	if len(a.InstanceTypes) > 0 {
@@ -792,14 +804,33 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 			"bigfleet.lucy.sh/reclamation-penalty":  formatDollars(a.ReclamationPenalty),
 		},
 	}
+	affinity := &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: terms,
+				}},
+			},
+		},
+	}
 	if a.SameRack {
+		// ADR-0024: co-location is a real podAffinity term. The Pod
+		// carries a group-unique label and requires co-scheduling with
+		// peers carrying it on topology.bigfleet/rack. The UPC projects
+		// this into CR.Spec.CoLocation; the operator aggregates equal
+		// terms into one Need with a Same(rack) requirement. A fresh
+		// group label every PickGroupSize pods keeps each training-job-
+		// shaped group distinct.
 		gid := d.allocateOrGetGroupUID(a)
-		meta.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: "scaletest.bigfleet/v1alpha1",
-			Kind:       "ScaletestWorkload",
-			Name:       fmt.Sprintf("%s-group-%s", a.Name, gid),
-			UID:        types.UID(gid),
-		}}
+		labels[labelCoLocationGroup] = gid
+		affinity.PodAffinity = &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{labelCoLocationGroup: gid},
+				},
+				TopologyKey: topologyKeyRack,
+			}},
+		}
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: meta,
@@ -818,15 +849,7 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 					Limits:   resources,
 				},
 			}},
-			Affinity: &corev1.Affinity{
-				NodeAffinity: &corev1.NodeAffinity{
-					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-							MatchExpressions: terms,
-						}},
-					},
-				},
-			},
+			Affinity: affinity,
 		},
 	}
 	return pod
@@ -941,17 +964,6 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 	for k, v := range a.PickSize(d.rng) {
 		resources[corev1.ResourceName(k)] = resource.MustParse(v)
 	}
-	// ADR-0015 §4 / M37: tightly-coupled workloads use the operator's
-	// owner-grouping path to trigger Same translation during rollup.
-	// The CRD doesn't carry the Same requirement directly; it carries
-	// an OwnerReference, and the operator (configured with
-	// CoLocationKey = "topology.bigfleet/rack") emits Same(rack) on
-	// the rolled-up Need. See pkg/operator/rollup.go withSameRequirement.
-	// (M33's earlier Exists-on-rack approach was wrong — Exists
-	// does NOT trigger Same translation; only OwnerRef-grouped CRs do.)
-	// The OwnerReferences are attached at the metadata level below;
-	// no requirement is added to the spec.
-
 	// M35 / Item 2: per-axis label requirements. PickLabels draws a
 	// random value per axis (e.g. "team-7", "app-42") and we emit
 	// `In [value]` for each. Multiplies per-CR fingerprint
@@ -974,19 +986,22 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 		Namespace: "default",
 		Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
 	}
+	var coLocation *bfv1alpha1.CoLocationTerm
 	if a.SameRack {
-		// ADR-0015 §4 / M37: synthetic OwnerReference shared across
-		// the group triggers the operator's owner→Same translation.
-		// We allocate a new group UID every PickGroupSize CRs of this
-		// archetype on this driver so individual training-job-shaped
-		// groups stay distinct (each gets its own Same constraint).
+		// ADR-0024: Mode=cr sets the structured CoLocation field
+		// directly — the same shape the UPC produces from a Pod's
+		// podAffinity in Mode=pods. A fresh group label every
+		// PickGroupSize CRs keeps each training-job-shaped group
+		// distinct; the operator aggregates equal CoLocation terms
+		// into one Need with a Same(rack) requirement.
 		gid := d.allocateOrGetGroupUID(a)
-		meta.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: "scaletest.bigfleet/v1alpha1",
-			Kind:       "ScaletestWorkload",
-			Name:       fmt.Sprintf("%s-group-%s", a.Name, gid),
-			UID:        types.UID(gid),
-		}}
+		meta.Labels[labelCoLocationGroup] = gid
+		coLocation = &bfv1alpha1.CoLocationTerm{
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{labelCoLocationGroup: gid},
+			},
+			TopologyKey: topologyKeyRack,
+		}
 	}
 	return &bfv1alpha1.CapacityRequest{
 		ObjectMeta: meta,
@@ -994,6 +1009,7 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 			Requirements:        reqs,
 			Resources:           resources,
 			Priority:            pri,
+			CoLocation:          coLocation,
 			InterruptionPenalty: &intr,
 			ReclamationPenalty:  &recl,
 		},
