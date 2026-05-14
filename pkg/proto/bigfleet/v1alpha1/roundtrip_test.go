@@ -33,13 +33,17 @@ func TestRoundTrip_ClusterCapacityNeeds(t *testing.T) {
 						Operator: bigfleetv1alpha1.NodeSelectorRequirement_OPERATOR_SAME,
 					},
 				},
-				Resources: map[string]string{
+				AggregateResources: map[string]string{
+					"cpu":            "6144",
+					"memory":         "49152Gi",
+					"nvidia.com/gpu": "512",
+				},
+				MinUnit: map[string]string{
 					"cpu":            "96",
 					"memory":         "768Gi",
 					"nvidia.com/gpu": "8",
 				},
 				Priority: 1_000_000,
-				Count:    64,
 				Spread: []*bigfleetv1alpha1.TopologySpread{
 					{
 						TopologyKey:       "topology.kubernetes.io/zone",
@@ -348,9 +352,8 @@ func TestRoundTrip_ShardReport_WithShortfalls(t *testing.T) {
 		},
 		Shortfalls: []*bigfleetv1alpha1.Shortfall{
 			{
-				Resources:                 &bigfleetv1alpha1.Resources{Resources: map[string]string{"nvidia.com/gpu": "8"}},
+				Deficit:                   &bigfleetv1alpha1.Resources{Resources: map[string]string{"nvidia.com/gpu": "256"}},
 				Priority:                  1_000_000,
-				Count:                     32,
 				AgeCycles:                 6,
 				InterruptionPenaltyBucket: bigfleetv1alpha1.PenaltyBucket_PENALTY_BUCKET_PINNED,
 			},

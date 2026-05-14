@@ -37,7 +37,7 @@ func BenchmarkPhase2_ScaleInversions(b *testing.B) {
 			State:                              machine.StateConfigured,
 			Host:                               machine.HostRef{Provider: "fake", Ref: strconv.Itoa(i)},
 			Cluster:                            machine.ClusterID("c-" + strconv.Itoa(i%10)),
-			Profile:                            machine.Profile{InstanceType: t, Zone: "zone-a", CapacityType: machine.CapacityTypeBareMetal},
+			Profile:                            machine.Profile{InstanceType: t, Zone: "zone-a", CapacityType: machine.CapacityTypeBareMetal, Resources: map[string]string{"cpu": "1"}},
 			AssignedPriority:                   100, // low
 			AssignedInterruptionPenaltyDollars: 1.0,
 			AssignedReclamationPenaltyDollars:  1.0,
@@ -54,14 +54,15 @@ func BenchmarkPhase2_ScaleInversions(b *testing.B) {
 				Operator: needs.OperatorIn,
 				Values:   []string{t},
 			}},
-			nil, nil,
+			nil,
 			1_000_000, // higher than the configured priority
 			needs.PenaltyBucket8192,
 			needs.PenaltyBucketPinned,
 		)
+		unit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 		unresolved[i] = decision.UnsatisfiedNeed{
-			Need:    needs.Need{ClusterID: machine.ClusterID("preempting"), Profile: p, Count: 5},
-			Deficit: 5,
+			Need:    needs.Need{ClusterID: machine.ClusterID("preempting"), Profile: p, AggregateResources: needs.ScaleResources(unit, 5), MinUnit: unit},
+			Deficit: needs.ScaleResources(unit, 5),
 		}
 	}
 
@@ -106,7 +107,7 @@ func BenchmarkPhase2_NoPreemptableVictims(b *testing.B) {
 			State:                              machine.StateConfigured,
 			Host:                               machine.HostRef{Provider: "fake", Ref: strconv.Itoa(i)},
 			Cluster:                            machine.ClusterID("c-" + strconv.Itoa(i%50)),
-			Profile:                            machine.Profile{InstanceType: t, Zone: "zone-a", CapacityType: machine.CapacityTypeBareMetal},
+			Profile:                            machine.Profile{InstanceType: t, Zone: "zone-a", CapacityType: machine.CapacityTypeBareMetal, Resources: map[string]string{"cpu": "1"}},
 			AssignedPriority:                   1_000_000,
 			AssignedInterruptionPenaltyDollars: 8192,
 			AssignedReclamationPenaltyDollars:  65536,
@@ -122,14 +123,15 @@ func BenchmarkPhase2_NoPreemptableVictims(b *testing.B) {
 				Operator: needs.OperatorIn,
 				Values:   []string{"a3-highgpu-8g"},
 			}},
-			nil, nil,
+			nil,
 			1000,
 			needs.PenaltyBucket8192,
 			needs.PenaltyBucket65536,
 		)
+		unit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 		unresolved[i] = decision.UnsatisfiedNeed{
-			Need:    needs.Need{ClusterID: machine.ClusterID("c-" + strconv.Itoa(i%50)), Profile: p, Count: 5},
-			Deficit: 5,
+			Need:    needs.Need{ClusterID: machine.ClusterID("c-" + strconv.Itoa(i%50)), Profile: p, AggregateResources: needs.ScaleResources(unit, 5), MinUnit: unit},
+			Deficit: needs.ScaleResources(unit, 5),
 		}
 	}
 

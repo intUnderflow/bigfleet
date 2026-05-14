@@ -34,10 +34,11 @@ func NeedsFromRollup(in *pb.ClusterCapacityNeeds) ([]needs.Need, error) {
 			return nil, fmt.Errorf("need %d: %w", i, err)
 		}
 		out = append(out, needs.Need{
-			ClusterID:        cluster,
-			Profile:          profile,
-			Count:            int(n.GetCount()),
-			ArrivalUnixNanos: in.GetTimestampUnixNanos(),
+			ClusterID:          cluster,
+			Profile:            profile,
+			AggregateResources: resourceQtysFromProto(n.GetAggregateResources()),
+			MinUnit:            resourceQtysFromProto(n.GetMinUnit()),
+			ArrivalUnixNanos:   in.GetTimestampUnixNanos(),
 		})
 	}
 	return out, nil
@@ -56,10 +57,6 @@ func profileFromProto(n *pb.CapacityNeed) (needs.Profile, error) {
 			Values:   append([]string(nil), r.GetValues()...),
 		})
 	}
-	res := make([]needs.ResourceQty, 0, len(n.GetResources()))
-	for k, v := range n.GetResources() {
-		res = append(res, needs.ResourceQty{Name: k, Quantity: v})
-	}
 	spread := make([]needs.TopologySpread, 0, len(n.GetSpread()))
 	for _, s := range n.GetSpread() {
 		spread = append(spread, needs.TopologySpread{
@@ -69,11 +66,24 @@ func profileFromProto(n *pb.CapacityNeed) (needs.Profile, error) {
 		})
 	}
 	return needs.NewProfile(
-		reqs, res, spread,
+		reqs, spread,
 		n.GetPriority(),
 		penaltyBucketFromProto(n.GetInterruptionPenaltyBucket()),
 		penaltyBucketFromProto(n.GetReclamationPenaltyBucket()),
 	), nil
+}
+
+// resourceQtysFromProto converts a proto resource map into the domain
+// []needs.ResourceQty form used by Need.AggregateResources / MinUnit.
+func resourceQtysFromProto(m map[string]string) []needs.ResourceQty {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]needs.ResourceQty, 0, len(m))
+	for k, v := range m {
+		out = append(out, needs.ResourceQty{Name: k, Quantity: v})
+	}
+	return out
 }
 
 func operatorFromProto(op pb.NodeSelectorRequirement_Operator) (needs.Operator, error) {

@@ -143,13 +143,13 @@ func Soak(ctx context.Context, cfg SoakConfig) (*SoakReport, error) {
 	}
 
 	rng := rand.New(rand.NewPCG(cfg.Seed, cfg.Seed^0x55AA55AA))
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "1"}}
 	pf := func(prio int32) needs.Profile {
 		return needs.NewProfile(
 			[]needs.Requirement{{
 				Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn,
 				Values: []string{"soak-instance"},
 			}},
-			[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "1"}},
 			nil, prio,
 			needs.PenaltyBucket8192, needs.PenaltyBucket1,
 		)
@@ -171,7 +171,10 @@ func Soak(ctx context.Context, cfg SoakConfig) (*SoakReport, error) {
 			count := rng.IntN(50) + 1
 			prio := int32(rng.IntN(1_000_000))
 			sh.NeedsTable().Replace(cluster, []needs.Need{{
-				ClusterID: cluster, Profile: pf(prio), Count: count,
+				ClusterID:          cluster,
+				Profile:            pf(prio),
+				AggregateResources: needs.ScaleResources(gpuUnit, count),
+				MinUnit:            gpuUnit,
 			}})
 		}
 		// Occasionally withdraw a cluster's demand entirely to

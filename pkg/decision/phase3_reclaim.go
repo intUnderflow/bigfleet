@@ -99,21 +99,17 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 		}
 		for _, m := range configured {
 			i, ok := fpIdx[m.AssignedNeedFingerprint]
-			kept := ok && groups[i].remaining > 0
+			kept := ok && !needs.IsZero(groups[i].remaining)
 			if kept {
-				// ADR-0022 / M45.2: budget is now in Pod-units (M45.1
-				// changed Phase 1 the same way). The kept machine
-				// satisfies `density` Pods of demand based on its actual
-				// per-machine allocatable. For pre-ADR-0022 inventory
-				// where EffectiveAllocatable() falls back to
-				// Profile.Resources, density = 1 and this decrement is
-				// the same as the old machine-count math.
-				profResources := profileResourcesToMap(groups[i].profile.ResourcesRO())
-				d := PodsPerMachine(profResources, m.EffectiveAllocatable())
-				if d <= 0 {
-					d = 1
-				}
-				groups[i].remaining -= d
+				// ADR-0027: budget is a resource vector. The kept machine
+				// covers its own EffectiveAllocatable worth of the
+				// fingerprint's remaining demand; once the vector reaches
+				// zero the rest of the fingerprint's Configured machines
+				// are excess and reclaimed.
+				groups[i].remaining = needs.SubResources(
+					groups[i].remaining,
+					needs.ResourceQtysFromMap(m.EffectiveAllocatable()),
+				)
 				continue
 			}
 			out.Actions = append(out.Actions, Action{
@@ -130,17 +126,16 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 }
 
 // profileBudget is one row per distinct Profile fingerprint within a
-// cluster's needs: which Profile to MatchProfile against, and how many
-// Pods that fingerprint can collectively claim.
+// cluster's needs: which Profile this fingerprint represents, and the
+// aggregate resource demand it can collectively claim.
 //
-// ADR-0022 / M45.2: remaining is in Pod-units (sum of Need.Count across
-// all Needs sharing this Profile). When iterating Configured machines,
-// each kept machine decrements remaining by its actual density (Pods
-// per machine), not by 1. For pre-ADR-0022 inventory where density = 1
-// this is identical to the old machine-count math.
+// ADR-0027: remaining is a resource vector — the summed AggregateResources
+// of every Need sharing this Profile. Each kept Configured machine
+// decrements it by that machine's EffectiveAllocatable; once the vector
+// is zero, further machines of the fingerprint are excess and reclaimed.
 type profileBudget struct {
 	profile   needs.Profile
-	remaining int
+	remaining []needs.ResourceQty
 }
 
 // collapseByFingerprint collapses a cluster's needs into one row per
@@ -159,11 +154,11 @@ func collapseByFingerprint(ns []needs.Need) []profileBudget {
 	for _, n := range ns {
 		fp := n.Profile.Fingerprint()
 		if i, ok := idx[fp]; ok {
-			out[i].remaining += n.Count
+			out[i].remaining = needs.AddResources(out[i].remaining, n.AggregateResources)
 			continue
 		}
 		idx[fp] = len(out)
-		out = append(out, profileBudget{profile: n.Profile, remaining: n.Count})
+		out = append(out, profileBudget{profile: n.Profile, remaining: n.AggregateResources})
 	}
 	return out
 }

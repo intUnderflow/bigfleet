@@ -50,9 +50,12 @@ func (s *Shard) Summary() Summary {
 // Shortfall is one unresolved need the shard couldn't satisfy from its
 // own inventory and couldn't resolve via in-shard preemption. Reported
 // to the coordinator for cross-shard rebalancing.
+//
+// ADR-0027: Deficit is the residual aggregate resource demand — a
+// resource vector, not a machine count.
 type Shortfall struct {
 	Profile                   needs.Profile
-	Count                     int
+	Deficit                   []needs.ResourceQty
 	AgeCycles                 int
 	InterruptionPenaltyBucket needs.PenaltyBucket
 }
@@ -77,7 +80,7 @@ func (s *Shard) Shortfalls() []Shortfall {
 	for _, e := range s.shortfalls {
 		out = append(out, Shortfall{
 			Profile:                   e.Profile,
-			Count:                     e.Count,
+			Deficit:                   e.Deficit,
 			AgeCycles:                 e.AgeCycles,
 			InterruptionPenaltyBucket: e.InterruptionPenaltyBucket,
 		})
@@ -108,13 +111,13 @@ func (s *Shard) recordShortfalls(unresolved []shortfallSeed) {
 		fp := u.Profile.Fingerprint()
 		seen[fp] = struct{}{}
 		if existing, ok := s.shortfalls[fp]; ok {
-			existing.Count = u.Count
+			existing.Deficit = u.Deficit
 			existing.AgeCycles++
 			continue
 		}
 		s.shortfalls[fp] = &shortfallEntry{
 			Profile:                   u.Profile,
-			Count:                     u.Count,
+			Deficit:                   u.Deficit,
 			AgeCycles:                 1,
 			InterruptionPenaltyBucket: u.Profile.InterruptionPenaltyBucket(),
 		}
@@ -132,7 +135,7 @@ func (s *Shard) recordShortfalls(unresolved []shortfallSeed) {
 // pkg/decision (keeps the cycle helper portable).
 type shortfallSeed struct {
 	Profile needs.Profile
-	Count   int
+	Deficit []needs.ResourceQty
 }
 
 // AssignDomain marks a topology domain as owned by this shard. Called

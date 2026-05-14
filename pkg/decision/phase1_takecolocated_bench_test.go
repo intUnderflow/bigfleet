@@ -54,20 +54,21 @@ func BenchmarkTakeCoLocated_Repeated_50K(b *testing.B) {
 	// All Needs share the same Profile fingerprint (single archetype +
 	// Same(rack)). Different ClusterID per Need so they don't merge in
 	// the deficit bookkeeping.
+	unit := []needs.ResourceQty{{Name: "cpu", Quantity: "4"}}
 	profile := needs.NewProfile(
 		[]needs.Requirement{
 			{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{"c6i.4xlarge"}},
 			{Key: "topology.bigfleet/rack", Operator: needs.OperatorSame},
 		},
-		[]needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
 		nil, 1000, needs.PenaltyBucket8192, needs.PenaltyBucket8192,
 	)
 	allNeeds := make([]needs.Need, needsN)
 	for i := 0; i < needsN; i++ {
 		allNeeds[i] = needs.Need{
-			ClusterID: machine.ClusterID("c-" + strconv.Itoa(i)),
-			Profile:   profile,
-			Count:     1,
+			ClusterID:          machine.ClusterID("c-" + strconv.Itoa(i)),
+			Profile:            profile,
+			AggregateResources: unit,
+			MinUnit:            unit,
 		}
 	}
 

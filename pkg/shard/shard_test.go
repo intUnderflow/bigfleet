@@ -182,7 +182,10 @@ func (op *scriptedOperator) sendRollup(needs []*pb.CapacityNeed) {
 	}
 }
 
-// gpuNeed returns the standard 8-GPU profile used in most paper examples.
+// gpuNeed returns the standard 8-GPU CapacityNeed used in most paper
+// examples: `count` replicas, each a single a3-highgpu-8g (8 GPU) unit.
+// ADR-0027: demand is the aggregate resource vector (count × 8 GPU)
+// plus the per-replica MinUnit, not a Pod count.
 func gpuNeed(priority int32, count int32) *pb.CapacityNeed {
 	return &pb.CapacityNeed{
 		Requirements: []*pb.NodeSelectorRequirement{{
@@ -191,7 +194,8 @@ func gpuNeed(priority int32, count int32) *pb.CapacityNeed {
 			Values:   []string{"a3-highgpu-8g"},
 		}},
 		Priority:                  priority,
-		Count:                     count,
+		AggregateResources:        map[string]string{"nvidia.com/gpu": strconv.Itoa(int(count) * 8)},
+		MinUnit:                   map[string]string{"nvidia.com/gpu": "8"},
 		InterruptionPenaltyBucket: pb.PenaltyBucket_PENALTY_BUCKET_8192,
 		ReclamationPenaltyBucket:  pb.PenaltyBucket_PENALTY_BUCKET_PINNED,
 	}
@@ -222,7 +226,7 @@ func TestShard_TrainingJob_BootstrapFromIdle(t *testing.T) {
 	env := newTestEnv(t)
 	for i := 0; i < 4; i++ {
 		env.provider.AddIdle(machine.ID("gpu-"+strconv.Itoa(i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	op := newScriptedOperator(t, env, "cluster-train")
@@ -254,10 +258,10 @@ func TestShard_Stockout_PartialFulfilment(t *testing.T) {
 	t.Parallel()
 	env := newTestEnv(t)
 	env.provider.AddIdle("gpu-0",
-		machine.Profile{InstanceType: "a3-highgpu-8g"},
+		machine.Profile{InstanceType: "a3-highgpu-8g", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 		machine.CapacityTypeBareMetal, 0, 0)
 	env.provider.AddIdle("gpu-1",
-		machine.Profile{InstanceType: "a3-highgpu-8g"},
+		machine.Profile{InstanceType: "a3-highgpu-8g", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 		machine.CapacityTypeBareMetal, 0, 0)
 	op := newScriptedOperator(t, env, "cluster-train")
 	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 8)})
@@ -282,7 +286,7 @@ func TestShard_Withdrawal_ReclaimsConfigured(t *testing.T) {
 	env := newTestEnv(t)
 	for i := 0; i < 4; i++ {
 		env.provider.AddIdle(machine.ID("gpu-"+strconv.Itoa(i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	op := newScriptedOperator(t, env, "cluster-train")
@@ -307,7 +311,7 @@ func TestShard_PriorityInversion(t *testing.T) {
 	env := newTestEnv(t)
 	for i := 0; i < 4; i++ {
 		env.provider.AddIdle(machine.ID("gpu-"+strconv.Itoa(i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	batch := newScriptedOperator(t, env, "cluster-batch")
@@ -377,10 +381,10 @@ func TestShard_AvailableCapacity_EmitsToOperator(t *testing.T) {
 	env := newTestEnv(t)
 	// Two idle GPU machines at different prices — cheaper should win.
 	env.provider.AddIdle("gpu-a",
-		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 		machine.CapacityTypeBareMetal, 6.0, 0)
 	env.provider.AddIdle("gpu-b",
-		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 		machine.CapacityTypeBareMetal, 4.5, 0)
 
 	op := newScriptedOperator(t, env, "cluster-ac")

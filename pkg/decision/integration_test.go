@@ -26,14 +26,14 @@ func TestIntegration_TrainingJobWithTopology(t *testing.T) {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 	for i := 0; i < 64; i++ {
 		prov.AddIdle(machine.ID(idStr("gpu-", i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 
 	inv := mustSyncInventory(t, prov)
 	pf := gpuProfile(1_000_000)
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-train", Profile: pf, Count: 64},
+		gpuNeed("cluster-train", pf, 64),
 	})
 	if got := len(r.Actions); got != 64 {
 		t.Fatalf("phase1: actions = %d, want 64", got)
@@ -58,19 +58,19 @@ func TestIntegration_CapacityStockout(t *testing.T) {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 	for i := 0; i < 32; i++ {
 		prov.AddIdle(machine.ID(idStr("gpu-", i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	inv := mustSyncInventory(t, prov)
 
 	r1 := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), Count: 64},
+		gpuNeed("cluster-train", gpuProfile(1_000_000), 64),
 	})
 	if got := len(r1.Actions); got != 32 {
 		t.Fatalf("phase1: actions = %d, want 32", got)
 	}
-	if got := len(r1.Unsatisfied); got != 1 || r1.Unsatisfied[0].Deficit != 32 {
-		t.Errorf("phase1: unsatisfied = %+v, want deficit=32", r1.Unsatisfied)
+	if got := len(r1.Unsatisfied); got != 1 || gpuQty(r1.Unsatisfied[0].Deficit) != "256" {
+		t.Errorf("phase1: unsatisfied = %+v, want deficit nvidia.com/gpu=256 (32 units)", r1.Unsatisfied)
 	}
 	r2 := decision.Phase2(inv.Snapshot(), r1.Unsatisfied, decision.DefaultPhase2Options())
 	if got := len(r2.Actions); got != 0 {
@@ -88,14 +88,14 @@ func TestIntegration_Withdrawal(t *testing.T) {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 	for i := 0; i < 64; i++ {
 		prov.AddIdle(machine.ID(idStr("gpu-", i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	inv := mustSyncInventory(t, prov)
 	pf := gpuProfile(1_000_000)
 	// First, configure all 64 for the training cluster.
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-train", Profile: pf, Count: 64},
+		gpuNeed("cluster-train", pf, 64),
 	})
 	executeActions(t, prov, inv, pf, r.Actions)
 
@@ -115,7 +115,7 @@ func TestIntegration_PriorityInversion(t *testing.T) {
 	prov := fake.New(fake.Options{InstantTransitions: true})
 	for i := 0; i < 4; i++ {
 		prov.AddIdle(machine.ID(idStr("gpu-", i)),
-			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a"},
+			machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
 			machine.CapacityTypeBareMetal, 0, 0)
 	}
 	inv := mustSyncInventory(t, prov)
@@ -124,15 +124,15 @@ func TestIntegration_PriorityInversion(t *testing.T) {
 	// big enough to be preemptible).
 	batchPF := gpuProfile(100_000)
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-batch", Profile: batchPF, Count: 4},
+		gpuNeed("cluster-batch", batchPF, 4),
 	})
 	executeActions(t, prov, inv, batchPF, r.Actions)
 
 	// Now cluster-train at priority 1M wants the same 4 machines.
 	trainPF := gpuProfile(1_000_000)
 	r1 := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-batch", Profile: batchPF, Count: 4},
-		{ClusterID: "cluster-train", Profile: trainPF, Count: 4},
+		gpuNeed("cluster-batch", batchPF, 4),
+		gpuNeed("cluster-train", trainPF, 4),
 	})
 	if got := len(r1.Unsatisfied); got != 1 {
 		t.Fatalf("phase1: expected 1 unsatisfied (train), got %d", got)
@@ -169,7 +169,7 @@ func TestIntegration_PriorityInversion(t *testing.T) {
 
 	// Next cycle: Phase 1 picks up the now-Idle machines for cluster-train.
 	r3 := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-train", Profile: trainPF, Count: 4},
+		gpuNeed("cluster-train", trainPF, 4),
 	})
 	if got := len(r3.Actions); got != 4 {
 		t.Fatalf("phase1 round 2: actions = %d, want 4", got)

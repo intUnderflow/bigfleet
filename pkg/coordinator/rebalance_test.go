@@ -60,7 +60,9 @@ func TestRebalancer_EmitsTransferOnShortfall(t *testing.T) {
 		ShardId: "shard-shortfall", Cycle: 1,
 		Summary: &pb.ShardSummary{TotalMachines: 100, FreeMachines: 0},
 		Shortfalls: []*pb.Shortfall{{
-			Priority: 1_000_000, Count: 10, AgeCycles: 2,
+			Priority:  1_000_000,
+			Deficit:   &pb.Resources{Resources: map[string]string{"nvidia.com/gpu": "80"}},
+			AgeCycles: 2,
 		}},
 	}); err != nil {
 		t.Fatalf("inject shortfall: %v", err)
@@ -120,7 +122,7 @@ func TestRebalancer_NoDonor_NoOp(t *testing.T) {
 	if _, err := srv.ReportShard(ctx, &pb.ShardReport{
 		ShardId: "shard-only", Cycle: 1,
 		Summary:    &pb.ShardSummary{TotalMachines: 50, FreeMachines: 0},
-		Shortfalls: []*pb.Shortfall{{Priority: 1_000_000, Count: 5}},
+		Shortfalls: []*pb.Shortfall{{Priority: 1_000_000, Deficit: &pb.Resources{Resources: map[string]string{"nvidia.com/gpu": "40"}}}},
 	}); err != nil {
 		t.Fatalf("inject report: %v", err)
 	}

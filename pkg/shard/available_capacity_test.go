@@ -76,7 +76,7 @@ func gpuProfile() needs.Profile {
 			Operator: needs.OperatorIn,
 			Values:   []string{"a3-highgpu-8g"},
 		}},
-		nil, nil,
+		nil,
 		1000,
 		needs.PenaltyBucket8192,
 		needs.PenaltyBucketPinned,
@@ -89,7 +89,7 @@ func unpinnedProfile() needs.Profile {
 			Key:      "topology.kubernetes.io/zone",
 			Operator: needs.OperatorExists,
 		}},
-		nil, nil,
+		nil,
 		1000,
 		needs.PenaltyBucket8192,
 		needs.PenaltyBucketPinned,
@@ -177,14 +177,17 @@ func TestBuildAvailableCapacity_UnpinnedFallsBackToAllStateCounts(t *testing.T) 
 	}
 }
 
-func TestBuildAvailableCapacity_RequirementsAndResourcesPreserved(t *testing.T) {
+// ADR-0027: a Profile no longer carries a resource shape, so the
+// AvailableCapacityUpdate carries only the requirement set (plus count /
+// cost / confidence). This test confirms the full requirement list is
+// preserved through buildAvailableCapacityUpdate.
+func TestBuildAvailableCapacity_RequirementsPreserved(t *testing.T) {
 	t.Parallel()
 	prof := needs.NewProfile(
 		[]needs.Requirement{
 			{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{"a3-highgpu-8g"}},
 			{Key: "topology.kubernetes.io/zone", Operator: needs.OperatorIn, Values: []string{"zone-a", "zone-b"}},
 		},
-		[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
 		nil,
 		1000,
 		needs.PenaltyBucket8192,
@@ -197,7 +200,7 @@ func TestBuildAvailableCapacity_RequirementsAndResourcesPreserved(t *testing.T) 
 	if got := len(upd.GetRequirements()); got != 2 {
 		t.Errorf("requirements len = %d, want 2", got)
 	}
-	if upd.GetResources() == nil || upd.GetResources().GetResources()["nvidia.com/gpu"] != "8" {
-		t.Errorf("resources missing or wrong: %+v", upd.GetResources())
+	if upd.GetResources() != nil {
+		t.Errorf("resources should be nil under ADR-0027 (Profile carries no shape): %+v", upd.GetResources())
 	}
 }

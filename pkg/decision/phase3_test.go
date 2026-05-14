@@ -35,7 +35,7 @@ func TestPhase3_NoOpWhenExactlyMet(t *testing.T) {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: gpuProfile(100), Count: 3}},
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)},
 	)
 	if got := len(r.Actions); got != 0 {
 		t.Errorf("expected zero reclaim actions, got %d", got)
@@ -62,7 +62,7 @@ func TestPhase3_ReclaimsCheapestFirst(t *testing.T) {
 		_ = inv.Insert(m)
 	}
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: gpuProfile(100), Count: 3}},
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)},
 	)
 	if got := len(r.Actions); got != 2 {
 		t.Fatalf("reclaim actions = %d, want 2", got)
@@ -91,7 +91,7 @@ func TestPhase3_TiebreakByReclamationPenalty(t *testing.T) {
 	_ = inv.Insert(high)
 
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: gpuProfile(100), Count: 1}},
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)},
 	)
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("reclaim actions = %d, want 1", got)
@@ -114,7 +114,7 @@ func TestPhase3_StaleAssignmentReclaims(t *testing.T) {
 	pfA := gpuProfile(100)
 	pfB := needs.NewProfile(
 		// Subset of pfA's requirements (no instance-type pin).
-		nil, nil, nil, 100,
+		nil, nil, 100,
 		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
 	)
 
@@ -127,7 +127,7 @@ func TestPhase3_StaleAssignmentReclaims(t *testing.T) {
 	// requirements subset). Pre-Drop-F: keep because pfB matches m;
 	// post: reclaim because m.AssignedNeedFingerprint != pfB.fingerprint.
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: pfB, Count: 5}},
+		[]needs.Need{gpuNeed("cluster-a", pfB, 5)},
 	)
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("reclaim actions = %d, want 1 (stale machine should reclaim)", got)
@@ -149,7 +149,7 @@ func TestPhase3_PerProfileMatching(t *testing.T) {
 	}
 	// Roll-up says: only 1 GPU need remains (training mostly done).
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: gpuProfile(100), Count: 1}},
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)},
 	)
 	if got := len(r.Actions); got != 3 {
 		t.Errorf("reclaim actions = %d, want 3", got)
@@ -167,7 +167,7 @@ func TestPhase3_Conservation(t *testing.T) {
 	}
 	totalConfigured := 10
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{{ClusterID: "cluster-a", Profile: gpuProfile(100), Count: 4}},
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 4)},
 	)
 	reclaim := len(r.Actions)
 	keep := totalConfigured - reclaim
@@ -186,16 +186,16 @@ func TestPhase3_Conservation(t *testing.T) {
 func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
 	t.Parallel()
 
+	unit := []needs.ResourceQty{
+		{Name: "cpu", Quantity: "1"},
+		{Name: "memory", Quantity: "4Gi"},
+	}
 	profile := needs.NewProfile(
 		[]needs.Requirement{{
 			Key:      "node.kubernetes.io/instance-type",
 			Operator: needs.OperatorIn,
 			Values:   []string{"c6a.4xlarge"},
 		}},
-		[]needs.ResourceQty{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "4Gi"},
-		},
 		nil,
 		1000,
 		needs.PenaltyBucket64,
@@ -233,9 +233,10 @@ func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
 	// Demand = 8 Pods. First dense machine absorbs 8 (density). Second
 	// has no remaining budget → Reclaim.
 	need := needs.Need{
-		ClusterID: "cluster-A",
-		Profile:   profile,
-		Count:     8,
+		ClusterID:          "cluster-A",
+		Profile:            profile,
+		AggregateResources: needs.ScaleResources(unit, 8),
+		MinUnit:            unit,
 	}
 	res := decision.Phase3(snap, []needs.Need{need})
 

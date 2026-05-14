@@ -124,12 +124,14 @@ func (o *Operator) listCapacityRequests(ctx context.Context) ([]bfv1alpha1.Capac
 // group, then builds the proto message. Returns the rollup plus the
 // list of CRs that were Pending at observation time.
 //
-// ADR-0022: each CR contributes Count=1 (one Pod's worth of demand);
-// aggregation sums Count across same-(Profile, Group) Needs, so the
-// resulting CapacityNeed.count is the post-aggregation **Pod count**
-// (not machine count). The shard's Phase 1 / Phase 3 (M45.1 / M45.2)
-// translate Pod count to machine count by fitting against the
-// matching machine inventory's per-machine Allocatable.
+// ADR-0027: each CR contributes one Pod's worth of demand. Its resource
+// request is both the CR's AggregateResources and its MinUnit (one CR =
+// one Pod = the atomic schedulable unit). needs.Aggregate then sums
+// AggregateResources and maxes MinUnit across same-(Profile, Group)
+// Needs, so each wire CapacityNeed carries the constraint set's total
+// resource demand plus the largest single unit that must fit on one
+// machine. No Pod count crosses the wire — machine count is the
+// autoscaler's output.
 //
 // Co-location (paper §8, ADR-0024): a CR's co-location group is the
 // canonical form of its Spec.CoLocation term — the projection of the
@@ -145,7 +147,7 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 	rawNeeds := make([]needs.Need, 0, len(crs))
 	for i := range crs {
 		cr := &crs[i]
-		profile, err := profileFromCapacityRequest(cr)
+		profile, podResources, err := profileFromCapacityRequest(cr)
 		if err != nil {
 			o.log.Warn("skipping CR with bad profile", "cr", cr.Name, "ns", cr.Namespace, "err", err)
 			continue
@@ -154,11 +156,15 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 		if group != "" {
 			profile = withSameRequirement(profile, cr.Spec.CoLocation.TopologyKey)
 		}
+		// One CR = one Pod: its resource request is both the unit of
+		// aggregate demand and the atomic unit that must fit on a single
+		// machine. needs.Aggregate sums the former and maxes the latter.
 		rawNeeds = append(rawNeeds, needs.Need{
-			ClusterID: o.cfg.ClusterID,
-			Profile:   profile,
-			Count:     1,
-			Group:     group,
+			ClusterID:          o.cfg.ClusterID,
+			Profile:            profile,
+			AggregateResources: podResources,
+			MinUnit:            podResources,
+			Group:              group,
 		})
 		if cr.Status.Phase == "" || cr.Status.Phase == bfv1alpha1.CapacityRequestPending {
 			pending = append(pending, *cr)
@@ -172,7 +178,7 @@ func (o *Operator) buildRollup(crs []bfv1alpha1.CapacityRequest) (*pb.ClusterCap
 		Needs:              make([]*pb.CapacityNeed, 0, len(aggregated)),
 	}
 	for _, n := range aggregated {
-		out.Needs = append(out.Needs, profileToCapacityNeed(n.Profile, int32(n.Count)))
+		out.Needs = append(out.Needs, needToCapacityNeed(n))
 	}
 	return out, pending
 }
@@ -251,18 +257,21 @@ func withSameRequirement(p needs.Profile, key string) needs.Profile {
 	}
 	reqs := append([]needs.Requirement(nil), p.Requirements()...)
 	reqs = append(reqs, needs.Requirement{Key: key, Operator: needs.OperatorSame})
-	return needs.NewProfile(reqs, p.Resources(), p.Spread(), p.Priority(), p.InterruptionPenaltyBucket(), p.ReclamationPenaltyBucket())
+	return needs.NewProfile(reqs, p.Spread(), p.Priority(), p.InterruptionPenaltyBucket(), p.ReclamationPenaltyBucket())
 }
 
-// profileFromCapacityRequest maps a CR's spec into a needs.Profile.
-// Penalties are bucketed at this point; the cluster operator is the
-// canonical place where raw dollar values become PenaltyBuckets.
-func profileFromCapacityRequest(cr *bfv1alpha1.CapacityRequest) (needs.Profile, error) {
+// profileFromCapacityRequest maps a CR's spec into a needs.Profile (the
+// aggregation identity) and the CR's per-Pod resource request vector.
+// ADR-0027: the resource request is no longer part of the Profile — it
+// is the demand the operator sums into a CapacityNeed. Penalties are
+// bucketed here; the operator is the canonical place where raw dollar
+// values become PenaltyBuckets.
+func profileFromCapacityRequest(cr *bfv1alpha1.CapacityRequest) (needs.Profile, []needs.ResourceQty, error) {
 	reqs := make([]needs.Requirement, 0, len(cr.Spec.Requirements))
 	for _, r := range cr.Spec.Requirements {
 		op, err := requirementOperatorFromCore(r.Operator)
 		if err != nil {
-			return needs.Profile{}, err
+			return needs.Profile{}, nil, err
 		}
 		reqs = append(reqs, needs.Requirement{
 			Key:      r.Key,
@@ -294,7 +303,7 @@ func profileFromCapacityRequest(cr *bfv1alpha1.CapacityRequest) (needs.Profile, 
 		v, _ := cr.Spec.ReclamationPenalty.AsInt64()
 		recBucket = needs.BucketForDollars(float64(v))
 	}
-	return needs.NewProfile(reqs, res, spread, cr.Spec.Priority, intBucket, recBucket), nil
+	return needs.NewProfile(reqs, spread, cr.Spec.Priority, intBucket, recBucket), res, nil
 }
 
 // requirementOperatorFromCore maps the core/v1 NodeSelectorRequirement
@@ -325,22 +334,19 @@ func whenUnsatisfiableFromCore(w corev1.UnsatisfiableConstraintAction) needs.Whe
 	return needs.WhenUnsatisfiableUnspecified
 }
 
-// profileToCapacityNeed builds a wire-format CapacityNeed from a domain
-// Profile + count. Inverse of conv.NeedsFromRollup for the operator's
-// outbound direction.
-func profileToCapacityNeed(p needs.Profile, count int32) *pb.CapacityNeed {
+// needToCapacityNeed builds a wire-format CapacityNeed from an
+// aggregated domain Need. Inverse of conv.NeedsFromRollup for the
+// operator's outbound direction (ADR-0027: a constrained aggregate
+// resource request — requirements + aggregate_resources + min_unit).
+func needToCapacityNeed(n needs.Need) *pb.CapacityNeed {
+	p := n.Profile
 	out := &pb.CapacityNeed{
 		Requirements:              conv.RequirementsToProto(p.Requirements()),
+		AggregateResources:        resourceQtyMap(n.AggregateResources),
+		MinUnit:                   resourceQtyMap(n.MinUnit),
 		Priority:                  p.Priority(),
-		Count:                     count,
 		InterruptionPenaltyBucket: pb.PenaltyBucket(p.InterruptionPenaltyBucket()),
 		ReclamationPenaltyBucket:  pb.PenaltyBucket(p.ReclamationPenaltyBucket()),
-	}
-	if res := p.Resources(); len(res) > 0 {
-		out.Resources = make(map[string]string, len(res))
-		for _, r := range res {
-			out.Resources[r.Name] = r.Quantity
-		}
 	}
 	for _, s := range p.Spread() {
 		var w pb.TopologySpread_WhenUnsatisfiable
@@ -357,6 +363,20 @@ func profileToCapacityNeed(p needs.Profile, count int32) *pb.CapacityNeed {
 			MaxSkew:           s.MaxSkew,
 			WhenUnsatisfiable: w,
 		})
+	}
+	return out
+}
+
+// resourceQtyMap converts a []needs.ResourceQty into the proto's
+// name→quantity-string map shape. Returns nil for an empty vector so
+// the wire message stays compact.
+func resourceQtyMap(rs []needs.ResourceQty) map[string]string {
+	if len(rs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(rs))
+	for _, r := range rs {
+		out[r.Name] = r.Quantity
 	}
 	return out
 }

@@ -1014,11 +1014,12 @@ func (x *ShardSummary) GetUtilisationMemoryFraction() float64 {
 // uses these to drive cross-shard rebalancing and preemption.
 type Shortfall struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The unsatisfied profile.
+	// The unsatisfied profile's requirements.
 	Requirements []*NodeSelectorRequirement `protobuf:"bytes,1,rep,name=requirements,proto3" json:"requirements,omitempty"`
-	Resources    *Resources                 `protobuf:"bytes,2,opt,name=resources,proto3" json:"resources,omitempty"`
-	Priority     int32                      `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
-	Count        int32                      `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
+	// ADR-0027: the residual aggregate resource demand the shard could not
+	// place — a resource vector, not a machine count.
+	Deficit  *Resources `protobuf:"bytes,2,opt,name=deficit,proto3" json:"deficit,omitempty"`
+	Priority int32      `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
 	// Cycles this shortfall has been unresolved. >5 escalates to fleet
 	// telemetry per the shortfall protocol.
 	AgeCycles int32 `protobuf:"varint,5,opt,name=age_cycles,json=ageCycles,proto3" json:"age_cycles,omitempty"`
@@ -1066,9 +1067,9 @@ func (x *Shortfall) GetRequirements() []*NodeSelectorRequirement {
 	return nil
 }
 
-func (x *Shortfall) GetResources() *Resources {
+func (x *Shortfall) GetDeficit() *Resources {
 	if x != nil {
-		return x.Resources
+		return x.Deficit
 	}
 	return nil
 }
@@ -1076,13 +1077,6 @@ func (x *Shortfall) GetResources() *Resources {
 func (x *Shortfall) GetPriority() int32 {
 	if x != nil {
 		return x.Priority
-	}
-	return 0
-}
-
-func (x *Shortfall) GetCount() int32 {
-	if x != nil {
-		return x.Count
 	}
 	return 0
 }
@@ -1732,15 +1726,14 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1a@\n" +
 	"\x12PerZoneCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xca\x02\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xb6\x02\n" +
 	"\tShortfall\x12N\n" +
-	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12:\n" +
-	"\tresources\x18\x02 \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\tresources\x12\x1a\n" +
-	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12\x14\n" +
-	"\x05count\x18\x04 \x01(\x05R\x05count\x12\x1d\n" +
+	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x126\n" +
+	"\adeficit\x18\x02 \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\adeficit\x12\x1a\n" +
+	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12\x1d\n" +
 	"\n" +
 	"age_cycles\x18\x05 \x01(\x05R\tageCycles\x12`\n" +
-	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\"\xa9\x01\n" +
+	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucketJ\x04\b\x04\x10\x05\"\xa9\x01\n" +
 	"\tReportAck\x12)\n" +
 	"\x10coordinator_term\x18\x01 \x01(\x03R\x0fcoordinatorTerm\x12\"\n" +
 	"\facknowledged\x18\x02 \x01(\bR\facknowledged\x12M\n" +
@@ -1855,7 +1848,7 @@ var file_bigfleet_v1alpha1_coordinator_proto_depIdxs = []int32{
 	28, // 7: bigfleet.v1alpha1.ShardSummary.per_instance_type_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
 	29, // 8: bigfleet.v1alpha1.ShardSummary.per_zone_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
 	30, // 9: bigfleet.v1alpha1.Shortfall.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	31, // 10: bigfleet.v1alpha1.Shortfall.resources:type_name -> bigfleet.v1alpha1.Resources
+	31, // 10: bigfleet.v1alpha1.Shortfall.deficit:type_name -> bigfleet.v1alpha1.Resources
 	32, // 11: bigfleet.v1alpha1.Shortfall.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
 	20, // 12: bigfleet.v1alpha1.ReportAck.instructions:type_name -> bigfleet.v1alpha1.CoordinatorInstruction
 	21, // 13: bigfleet.v1alpha1.CoordinatorInstruction.assign_domain:type_name -> bigfleet.v1alpha1.AssignDomain

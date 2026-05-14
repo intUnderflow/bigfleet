@@ -114,9 +114,9 @@ message CapacityNeed {
   int32 priority = 3;
   reserved 4;                                         // ADR-0027: was per-pod `count`; machine count is the autoscaler's output
   repeated TopologySpread spread = 5;
-  map<string, string> min_unit = 6;                   // ADR-0027: largest atomic schedulable unit — per-machine floor
-  PenaltyBucket interruption_penalty = 7;             // powers-of-2 dollar bucket; carried per Need
-  PenaltyBucket reclamation_penalty = 8;              // powers-of-2 dollar bucket; carried per Need
+  PenaltyBucket interruption_penalty_bucket = 6;      // powers-of-2 dollar bucket; carried per Need
+  PenaltyBucket reclamation_penalty_bucket  = 7;      // powers-of-2 dollar bucket; carried per Need
+  map<string, string> min_unit = 8;                   // ADR-0027: largest atomic schedulable unit — per-machine floor
 }
 
 message TopologySpread {

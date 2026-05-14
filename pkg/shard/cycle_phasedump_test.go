@@ -123,6 +123,16 @@ func setupBenchShard(t *testing.T, invSize, clusters, perCluster int) *Shard {
 		_ = s.SeedInventory(machine.Machine{ID: id, State: machine.StateIdle, Profile: profile})
 	}
 
+	// Per-replica unit shapes matching the seeded machines so each Need's
+	// MinUnit fits on one machine of its instance type.
+	units := map[string][]needs.ResourceQty{
+		"a3-highgpu-8g":  {{Name: "nvidia.com/gpu", Quantity: "8"}},
+		"m6i.large":      {{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "8Gi"}},
+		"c6i.4xlarge":    {{Name: "cpu", Quantity: "16"}, {Name: "memory", Quantity: "32Gi"}},
+		"n2-standard-32": {{Name: "cpu", Quantity: "32"}, {Name: "memory", Quantity: "128Gi"}},
+		"r6i.xlarge":     {{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "32Gi"}},
+	}
+
 	for c := 0; c < clusters; c++ {
 		clusterID := machine.ClusterID(fmt.Sprintf("phasedump-cluster-%d", c))
 		ns := make([]needs.Need, 0, perCluster)
@@ -134,12 +144,12 @@ func setupBenchShard(t *testing.T, invSize, clusters, perCluster int) *Shard {
 					Operator: needs.OperatorIn,
 					Values:   []string{typ},
 				}},
-				nil, nil,
+				nil,
 				int32(1000+(i%10)*1000),
 				needs.PenaltyBucket8192,
 				needs.PenaltyBucket8192,
 			)
-			ns = append(ns, needs.Need{ClusterID: clusterID, Profile: p, Count: 1})
+			ns = append(ns, needs.Need{ClusterID: clusterID, Profile: p, AggregateResources: units[typ], MinUnit: units[typ]})
 		}
 		s.NeedsTable().Replace(clusterID, ns)
 	}

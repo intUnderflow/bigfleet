@@ -18,22 +18,29 @@ type Phase1Result struct {
 }
 
 // UnsatisfiedNeed is a Need whose Phase 1 deficit could not be filled
-// from idle or speculative inventory.
+// from existing supply, idle, or speculative inventory.
+//
+// ADR-0027: Deficit is the residual resource vector — what aggregate
+// capacity is still missing — not a Pod count.
 type UnsatisfiedNeed struct {
 	Need    needs.Need
-	Deficit int
+	Deficit []needs.ResourceQty
 }
 
 // Phase1 walks the priority-sorted needs and emits Bootstrap (idle →
 // configured) and Provision (speculative → configured) actions to fill
 // each cluster's deficit.
 //
+// ADR-0027: demand is a resource vector. For each Need the deficit is
+// `AggregateResources` minus the EffectiveAllocatable of the existing
+// matching machines, then minus what Idle and Speculative `take` can
+// cover. Supply is credited via the allocator's global claimed set, so
+// each machine's capacity is counted for exactly one Need — the
+// per-fingerprint over-credit that masked real shortfalls is gone.
+//
 // Performance: backed by phase1Allocator, which caches per-Profile
-// candidate pools across the Needs loop and shares a global claimed set
-// so high-priority Needs drain inventory before low-priority ones see
-// it. Bench (pkg/shard/cycle_bench_test.go) at 500K inventory + 50K
-// demand: ~948 s pre-M11.16 (just the M11.15 instance-type index) vs
-// the new allocator's expected order-of-magnitude improvement.
+// candidate pools across the Needs loop and shares the claimed set so
+// high-priority Needs drain inventory before low-priority ones see it.
 func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	sorted := make([]needs.Need, len(allNeeds))
 	copy(sorted, allNeeds)
@@ -42,116 +49,25 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	})
 
 	alloc := newPhase1Allocator(snap)
-
-	// M44.4 Drop D: deficit math is per (cluster, fingerprint) supply,
-	// distributed across Needs in priority order — not per-Need.
-	//
-	// Drop C counted machines with `AssignedNeedFingerprint == fp` but
-	// compared that count to ONE Need's count (typically 1). When many
-	// CRs share a fingerprint — the load-driver case: each Pod gets its
-	// own CR with its own ownerRef UID, so Aggregate keeps every Need
-	// with Count=1 — the count-1000-bound-200 cluster looked like
-	// `deficit = 1 - 200 = -199` on every single one of the 1000 Needs.
-	// Phase 1 skipped them all even though 800 were unsatisfied.
-	// Surfaced as the scaleway-50k cliff at ~19 K bootstraps with
-	// Phase 1 emit rate 0/sec.
-	//
-	// Correct math: for each (cluster, fingerprint), `have` is the
-	// supply (configured machines bound to that fp); `total` is the
-	// sum of Need.Count across every Need with that fp; deficit =
-	// total - have. Walked in priority order, each Need claims
-	// available supply first, then deficit-allocates from Idle/spec.
-	//
-	// Per-fingerprint state is created lazily on first sight and
-	// remembered across Needs sharing the fingerprint, so high-priority
-	// Needs claim the supply before low-priority Needs see it — Phase 2
-	// preemption then sees the right Unsatisfied set.
-	type fpKey struct {
-		cluster machine.ClusterID
-		fp      string
-	}
-	type fpState struct {
-		supplyRemaining int
-	}
-	state := make(map[fpKey]*fpState, len(sorted))
-
 	result := Phase1Result{}
+
 	for _, n := range sorted {
 		profile := n.Profile
-		fp := profile.Fingerprint()
-		profResources := profileResourcesToMap(profile.ResourcesRO())
-		k := fpKey{n.ClusterID, fp}
-		s, ok := state[k]
-		if !ok {
-			// M44.4 Drop H: count Configured AND Configuring with the
-			// matching fingerprint as supply. Configuring machines are
-			// committed to satisfy their Need (the Bootstrap action is
-			// in flight); pre-Drop-H, Phase 1 saw them as "not yet
-			// supply" and emitted another Bootstrap on a fresh Idle
-			// machine for the same Need on the next cycle. Combined
-			// with the pendingActions dedup, this caused 61 % of
-			// Bootstrap emits to be deduped silently — the cycle's
-			// emit cap (maxActionsPerCycle) was burned on duplicates
-			// instead of new demand.
-			//
-			// ADR-0022 / M45.1: supply is now in Pod-units (sum of each
-			// matching machine's density), not machine count. For
-			// pre-ADR-0022 inventory where machine.EffectiveAllocatable()
-			// equals profile.Resources, density = 1 per machine and
-			// supply equals the old machine-count value — behaviour
-			// preserved. M45.4 introduces seeded inventory with density
-			// > 1 and the same code path keeps working without change.
-			supply := 0
-			matchPodSupply := func(state machine.State) {
-				for _, m := range snap.ListByClusterState(n.ClusterID, state) {
-					if m.AssignedNeedFingerprint != fp {
-						continue
-					}
-					d := PodsPerMachine(profResources, m.EffectiveAllocatable())
-					if d <= 0 {
-						d = 1
-					}
-					supply += d
-				}
-			}
-			matchPodSupply(machine.StateConfigured)
-			matchPodSupply(machine.StateConfiguring)
-			s = &fpState{supplyRemaining: supply}
-			state[k] = s
-		}
-		// Claim from existing supply (Pod-units) first.
-		fromSupply := n.Count
-		if fromSupply > s.supplyRemaining {
-			fromSupply = s.supplyRemaining
-		}
-		if fromSupply < 0 {
-			fromSupply = 0
-		}
-		s.supplyRemaining -= fromSupply
-		deficitPods := n.Count - fromSupply
-		if deficitPods <= 0 {
+
+		// Existing Configured / Configuring machines in this cluster that
+		// match the Need's requirements and can host one MinUnit credit
+		// toward the demand vector first. Each is claimed, so a peer Need
+		// of the same (cluster, fingerprint) — distinct only by Group —
+		// can't double-count it. This claimed-set credit replaces the old
+		// per-fingerprint supplyRemaining bookkeeping.
+		deficit := alloc.creditExistingSupply(n.ClusterID, profile, n.AggregateResources, n.MinUnit)
+		if needs.IsZero(deficit) {
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()
 			continue
 		}
 
-		// ADR-0022 / M45.1: translate the Pod deficit into a machine-count
-		// take() request. machinesNeeded = ceil(deficitPods / density),
-		// where density is PodsPerMachine of a matching pool machine.
-		//
-		// M45.1 intended this but mis-wired it: it computed
-		// MachinesForAggregate(profResources, profResources, …), which
-		// passes the per-replica shape as BOTH args → density always 1 →
-		// machinesNeeded always == deficitPods. take() was then asked for
-		// ~density× too many machines. Harmless for the large standard
-		// pool (surplus-credit below recovers it), but it drained the
-		// scarce co-located pool dry — takeCoLocated returned 0 and every
-		// Same-requirement Need (ADR-0024 sameRack archetypes) went to
-		// shortfall. densityFor reads the pool's actual machine shape.
-		idleDensity := alloc.densityFor(machine.StateIdle, profile)
-		machinesNeeded := (deficitPods + idleDensity - 1) / idleDensity
-
 		// Idle first: cheapest path (one Configure call, no Create).
-		idle := alloc.take(machine.StateIdle, profile, machinesNeeded)
+		idle := alloc.take(machine.StateIdle, profile, deficit, n.MinUnit)
 		if len(idle) == 0 {
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("take_returned_zero").Inc()
 		} else {
@@ -165,31 +81,14 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				SourceProfile: &profile,
 				Reason:        "phase1.idle",
 			})
-			d := PodsPerMachine(profResources, m.EffectiveAllocatable())
-			if d <= 0 {
-				d = 1
-			}
-			deficitPods -= d
+			deficit = needs.SubResources(deficit, needs.ResourceQtysFromMap(m.EffectiveAllocatable()))
 		}
-		if deficitPods <= 0 {
-			// ADR-0022 / M45.4: the machine(s) we just took absorbed
-			// more Pods than this single Need wanted (density > 1 +
-			// Count=1 Needs from per-Pod CR fan-out). Credit the
-			// surplus back to the per-fp supply pool so peer Needs of
-			// the same (cluster, fp) consume it before allocating
-			// fresh machines. Without this, dev-5k at density=10 with
-			// 5000 single-Pod Needs emits ~5000 Bootstraps instead of
-			// the ~520 the math wants — Phase 1 stalls because Idle
-			// inventory runs out and 4400+ Needs go Unsatisfied each
-			// cycle.
-			s.supplyRemaining += -deficitPods
+		if needs.IsZero(deficit) {
 			continue
 		}
 
 		// Fall back to speculative: pick by lowest effective_cost.
-		specDensity := alloc.densityFor(machine.StateSpeculative, profile)
-		machinesNeeded = (deficitPods + specDensity - 1) / specDensity
-		spec := alloc.take(machine.StateSpeculative, profile, machinesNeeded)
+		spec := alloc.take(machine.StateSpeculative, profile, deficit, n.MinUnit)
 		if len(spec) > 0 {
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
 		}
@@ -201,32 +100,60 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				SourceProfile: &profile,
 				Reason:        "phase1.speculative",
 			})
-			d := PodsPerMachine(profResources, m.EffectiveAllocatable())
-			if d <= 0 {
-				d = 1
-			}
-			deficitPods -= d
+			deficit = needs.SubResources(deficit, needs.ResourceQtysFromMap(m.EffectiveAllocatable()))
 		}
-
-		if deficitPods <= 0 {
-			// Same surplus-credit story as the Idle branch above.
-			s.supplyRemaining += -deficitPods
+		if needs.IsZero(deficit) {
 			continue
 		}
 
 		metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
 		result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
-			Need: n,
-			// Phase 2 / shortfall protocol still operates in Pod
-			// units here. Translating to machine units for the
-			// downstream coordinator interaction is M45.2+ work.
-			Deficit: deficitPods,
+			Need:    n,
+			Deficit: deficit,
 		})
 	}
 
 	metrics.ShardPhase1EmitsPerCycle.Observe(float64(len(result.Actions)))
 
 	return result
+}
+
+// creditExistingSupply credits the Configured and Configuring machines
+// in cluster that match profile's requirements and can host one minUnit
+// against deficit, claiming each so a peer Need doesn't double-count it.
+// It returns the remaining deficit vector.
+//
+// ADR-0027: supply is the sum of matching machines' EffectiveAllocatable,
+// counted once per machine via the global claimed set — not a
+// per-fingerprint Pod count. Configuring machines count too: their
+// Bootstrap is in flight and committed to this demand, so crediting them
+// here is what stops Phase 1 re-emitting on the next cycle (Drop H).
+func (a *phase1Allocator) creditExistingSupply(
+	cluster machine.ClusterID,
+	profile needs.Profile,
+	demand, minUnit []needs.ResourceQty,
+) []needs.ResourceQty {
+	remaining := demand
+	for _, state := range []machine.State{machine.StateConfigured, machine.StateConfiguring} {
+		for _, m := range a.snap.ListByClusterState(cluster, state) {
+			if needs.IsZero(remaining) {
+				return remaining
+			}
+			if _, claimed := a.claimed[m.ID]; claimed {
+				continue
+			}
+			if !MatchProfile(profile, m) {
+				continue
+			}
+			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+			if !needs.Covers(alloc, minUnit) {
+				continue
+			}
+			a.claimed[m.ID] = struct{}{}
+			remaining = needs.SubResources(remaining, alloc)
+		}
+	}
+	return remaining
 }
 
 // pinnedInstanceTypes returns the explicit instance-type values from

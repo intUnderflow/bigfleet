@@ -29,15 +29,15 @@ func BenchmarkTableSnapshot_50K(b *testing.B) {
 				}, {
 					Key: "topology.bigfleet/rack", Operator: needs.OperatorSame,
 				}},
-				[]needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
 				nil, 1000, needs.PenaltyBucket8192, needs.PenaltyBucket8192,
 			)
 			ns[i] = needs.Need{
-				ClusterID:        clusterID,
-				Profile:          profile,
-				Count:            1,
-				Group:            "g-" + strconv.Itoa(c) + "-" + strconv.Itoa(i),
-				ArrivalUnixNanos: int64(c*1000 + i),
+				ClusterID:          clusterID,
+				Profile:            profile,
+				AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+				MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+				Group:              "g-" + strconv.Itoa(c) + "-" + strconv.Itoa(i),
+				ArrivalUnixNanos:   int64(c*1000 + i),
 			}
 		}
 		t.Replace(clusterID, ns)

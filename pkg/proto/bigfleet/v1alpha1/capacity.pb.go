@@ -172,9 +172,10 @@ const (
 	NodeSelectorRequirement_OPERATOR_NOT_IN         NodeSelectorRequirement_Operator = 2
 	NodeSelectorRequirement_OPERATOR_EXISTS         NodeSelectorRequirement_Operator = 3
 	NodeSelectorRequirement_OPERATOR_DOES_NOT_EXIST NodeSelectorRequirement_Operator = 4
-	// Same: all `count` nodes in this CapacityNeed must share a value for
-	// this key. Optional values restrict which value is acceptable. Only
-	// valid in the protobuf wire format; not surfaced on the CRD.
+	// Same: all machines provisioned for this CapacityNeed must share a
+	// value for this key. Optional values restrict which value is
+	// acceptable. Only valid in the protobuf wire format; not surfaced on
+	// the CRD.
 	NodeSelectorRequirement_OPERATOR_SAME NodeSelectorRequirement_Operator = 5
 )
 
@@ -284,7 +285,8 @@ type ClusterCapacityNeeds struct {
 	ClusterId string `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	// Wall-clock time at which the operator built this snapshot.
 	TimestampUnixNanos int64 `protobuf:"varint,2,opt,name=timestamp_unix_nanos,json=timestampUnixNanos,proto3" json:"timestamp_unix_nanos,omitempty"`
-	// Aggregated demand. Pods sharing a profile collapse into one entry.
+	// Aggregated demand. Each CapacityNeed is a constrained aggregate resource
+	// request; CRs sharing an aggregation key collapse into one entry.
 	Needs         []*CapacityNeed `protobuf:"bytes,3,rep,name=needs,proto3" json:"needs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -341,39 +343,31 @@ func (x *ClusterCapacityNeeds) GetNeeds() []*CapacityNeed {
 	return nil
 }
 
-// CapacityNeed is the aggregated unit of capacity demand. The aggregation
-// key is (requirements, resources, priority, spread, interruption_penalty_bucket,
-// reclamation_penalty_bucket). Two CRs whose fields all match across that key
-// become a single CapacityNeed with count = 2.
+// CapacityNeed is the aggregated unit of capacity demand — a constrained
+// aggregate resource request (ADR-0027). The aggregation key is
+// (requirements, priority, spread, interruption_penalty_bucket,
+// reclamation_penalty_bucket). CRs whose fields all match across that key
+// collapse into a single CapacityNeed: their per-replica resource requests
+// are summed into aggregate_resources, and min_unit is the largest of them.
 type CapacityNeed struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Node-selector style requirements that must be satisfied. The autoscaler
 	// is responsible for honouring all standard operators (In, NotIn, Exists,
 	// DoesNotExist) plus the protobuf-only Same operator (see below).
 	Requirements []*NodeSelectorRequirement `protobuf:"bytes,1,rep,name=requirements,proto3" json:"requirements,omitempty"`
-	// Per-replica resource request — what one Pod of this Profile asks for.
-	// Map keys are Kubernetes resource names ("cpu", "memory",
-	// "nvidia.com/gpu"); values are quantity strings ("96", "768Gi", "8").
+	// Aggregate resource demand for this constraint set — the vector sum of
+	// the per-replica requests of every CR in this CapacityNeed. Map keys are
+	// Kubernetes resource names ("cpu", "memory", "nvidia.com/gpu"); values
+	// are quantity strings.
 	//
-	// ADR-0022: this is the per-replica shape, *not* a machine shape. The
-	// autoscaler aggregates `count × resources` across all CRs in this
-	// CapacityNeed and provisions however many machines are needed to host
-	// that aggregate at the provider's instance-shape granularity.
-	Resources map[string]string `protobuf:"bytes,2,rep,name=resources,proto3" json:"resources,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// ADR-0027: the autoscaler diffs this against the sum of Allocatable over
+	// matching machines, in resource-vector space. It does not reconstruct a
+	// per-pod count or density — machine count is the autoscaler's output,
+	// never the cluster's input.
+	AggregateResources map[string]string `protobuf:"bytes,2,rep,name=aggregate_resources,json=aggregateResources,proto3" json:"aggregate_resources,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// The pod's PriorityClass value. Higher = served first. The autoscaler
 	// walks needs top-down by priority.
 	Priority int32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
-	// Number of Pods aggregated into this CapacityNeed. ADR-0022: this is
-	// the post-aggregation Pod count, *not* the number of machines the
-	// autoscaler should provision. The autoscaler derives machine count
-	// from `count × resources` against the matching machine inventory's
-	// per-machine Allocatable.
-	//
-	// Example: count=100, resources={cpu:1,memory:4Gi}, matching machines
-	// are c6a.4xlarge ({cpu:16,memory:32Gi}) → autoscaler provisions
-	// ceil(100 / min(16, 8)) = ceil(100/8) = 13 machines (memory is the
-	// bottleneck dimension at 32Gi / 4Gi = 8 replicas per machine).
-	Count int32 `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
 	// Topology-spread constraints copied from the source pod(s). Pass-through
 	// to the autoscaler so it can spread provisioning across domains.
 	Spread []*TopologySpread `protobuf:"bytes,5,rep,name=spread,proto3" json:"spread,omitempty"`
@@ -384,8 +378,14 @@ type CapacityNeed struct {
 	// workload-specific.
 	InterruptionPenaltyBucket PenaltyBucket `protobuf:"varint,6,opt,name=interruption_penalty_bucket,json=interruptionPenaltyBucket,proto3,enum=bigfleet.v1alpha1.PenaltyBucket" json:"interruption_penalty_bucket,omitempty"`
 	ReclamationPenaltyBucket  PenaltyBucket `protobuf:"varint,7,opt,name=reclamation_penalty_bucket,json=reclamationPenaltyBucket,proto3,enum=bigfleet.v1alpha1.PenaltyBucket" json:"reclamation_penalty_bucket,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// ADR-0027: the largest atomic schedulable unit — a resource vector that
+	// every machine provisioned for this CapacityNeed must individually be
+	// able to host (the indivisibility floor; e.g. an 8-GPU pod needs 8 GPU
+	// on one machine). With the Workload API this is the declared gang/unit
+	// size. Same map shape as aggregate_resources.
+	MinUnit       map[string]string `protobuf:"bytes,8,rep,name=min_unit,json=minUnit,proto3" json:"min_unit,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CapacityNeed) Reset() {
@@ -425,9 +425,9 @@ func (x *CapacityNeed) GetRequirements() []*NodeSelectorRequirement {
 	return nil
 }
 
-func (x *CapacityNeed) GetResources() map[string]string {
+func (x *CapacityNeed) GetAggregateResources() map[string]string {
 	if x != nil {
-		return x.Resources
+		return x.AggregateResources
 	}
 	return nil
 }
@@ -435,13 +435,6 @@ func (x *CapacityNeed) GetResources() map[string]string {
 func (x *CapacityNeed) GetPriority() int32 {
 	if x != nil {
 		return x.Priority
-	}
-	return 0
-}
-
-func (x *CapacityNeed) GetCount() int32 {
-	if x != nil {
-		return x.Count
 	}
 	return 0
 }
@@ -465,6 +458,13 @@ func (x *CapacityNeed) GetReclamationPenaltyBucket() PenaltyBucket {
 		return x.ReclamationPenaltyBucket
 	}
 	return PenaltyBucket_PENALTY_BUCKET_UNSPECIFIED
+}
+
+func (x *CapacityNeed) GetMinUnit() map[string]string {
+	if x != nil {
+		return x.MinUnit
+	}
+	return nil
 }
 
 // NodeSelectorRequirement mirrors core/v1.NodeSelectorRequirement, plus a
@@ -602,18 +602,21 @@ const file_bigfleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x120\n" +
 	"\x14timestamp_unix_nanos\x18\x02 \x01(\x03R\x12timestampUnixNanos\x125\n" +
-	"\x05needs\x18\x03 \x03(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x05needs\"\x99\x04\n" +
+	"\x05needs\x18\x03 \x03(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x05needs\"\xb3\x05\n" +
 	"\fCapacityNeed\x12N\n" +
-	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12L\n" +
-	"\tresources\x18\x02 \x03(\v2..bigfleet.v1alpha1.CapacityNeed.ResourcesEntryR\tresources\x12\x1a\n" +
-	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12\x14\n" +
-	"\x05count\x18\x04 \x01(\x05R\x05count\x129\n" +
+	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12h\n" +
+	"\x13aggregate_resources\x18\x02 \x03(\v27.bigfleet.v1alpha1.CapacityNeed.AggregateResourcesEntryR\x12aggregateResources\x12\x1a\n" +
+	"\bpriority\x18\x03 \x01(\x05R\bpriority\x129\n" +
 	"\x06spread\x18\x05 \x03(\v2!.bigfleet.v1alpha1.TopologySpreadR\x06spread\x12`\n" +
 	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\x12^\n" +
-	"\x1areclamation_penalty_bucket\x18\a \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x18reclamationPenaltyBucket\x1a<\n" +
-	"\x0eResourcesEntry\x12\x10\n" +
+	"\x1areclamation_penalty_bucket\x18\a \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x18reclamationPenaltyBucket\x12G\n" +
+	"\bmin_unit\x18\b \x03(\v2,.bigfleet.v1alpha1.CapacityNeed.MinUnitEntryR\aminUnit\x1aE\n" +
+	"\x17AggregateResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa6\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
+	"\fMinUnitEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05\"\xa6\x02\n" +
 	"\x17NodeSelectorRequirement\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12O\n" +
 	"\boperator\x18\x02 \x01(\x0e23.bigfleet.v1alpha1.NodeSelectorRequirement.OperatorR\boperator\x12\x16\n" +
@@ -678,7 +681,7 @@ func file_bigfleet_v1alpha1_capacity_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_capacity_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_bigfleet_v1alpha1_capacity_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_bigfleet_v1alpha1_capacity_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_bigfleet_v1alpha1_capacity_proto_goTypes = []any{
 	(PenaltyBucket)(0),                    // 0: bigfleet.v1alpha1.PenaltyBucket
 	(NodeSelectorRequirement_Operator)(0), // 1: bigfleet.v1alpha1.NodeSelectorRequirement.Operator
@@ -687,22 +690,24 @@ var file_bigfleet_v1alpha1_capacity_proto_goTypes = []any{
 	(*CapacityNeed)(nil),                  // 4: bigfleet.v1alpha1.CapacityNeed
 	(*NodeSelectorRequirement)(nil),       // 5: bigfleet.v1alpha1.NodeSelectorRequirement
 	(*TopologySpread)(nil),                // 6: bigfleet.v1alpha1.TopologySpread
-	nil,                                   // 7: bigfleet.v1alpha1.CapacityNeed.ResourcesEntry
+	nil,                                   // 7: bigfleet.v1alpha1.CapacityNeed.AggregateResourcesEntry
+	nil,                                   // 8: bigfleet.v1alpha1.CapacityNeed.MinUnitEntry
 }
 var file_bigfleet_v1alpha1_capacity_proto_depIdxs = []int32{
 	4, // 0: bigfleet.v1alpha1.ClusterCapacityNeeds.needs:type_name -> bigfleet.v1alpha1.CapacityNeed
 	5, // 1: bigfleet.v1alpha1.CapacityNeed.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	7, // 2: bigfleet.v1alpha1.CapacityNeed.resources:type_name -> bigfleet.v1alpha1.CapacityNeed.ResourcesEntry
+	7, // 2: bigfleet.v1alpha1.CapacityNeed.aggregate_resources:type_name -> bigfleet.v1alpha1.CapacityNeed.AggregateResourcesEntry
 	6, // 3: bigfleet.v1alpha1.CapacityNeed.spread:type_name -> bigfleet.v1alpha1.TopologySpread
 	0, // 4: bigfleet.v1alpha1.CapacityNeed.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
 	0, // 5: bigfleet.v1alpha1.CapacityNeed.reclamation_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
-	1, // 6: bigfleet.v1alpha1.NodeSelectorRequirement.operator:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement.Operator
-	2, // 7: bigfleet.v1alpha1.TopologySpread.when_unsatisfiable:type_name -> bigfleet.v1alpha1.TopologySpread.WhenUnsatisfiable
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	8, // 6: bigfleet.v1alpha1.CapacityNeed.min_unit:type_name -> bigfleet.v1alpha1.CapacityNeed.MinUnitEntry
+	1, // 7: bigfleet.v1alpha1.NodeSelectorRequirement.operator:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement.Operator
+	2, // 8: bigfleet.v1alpha1.TopologySpread.when_unsatisfiable:type_name -> bigfleet.v1alpha1.TopologySpread.WhenUnsatisfiable
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_capacity_proto_init() }
@@ -716,7 +721,7 @@ func file_bigfleet_v1alpha1_capacity_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_capacity_proto_rawDesc), len(file_bigfleet_v1alpha1_capacity_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

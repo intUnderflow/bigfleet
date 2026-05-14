@@ -89,11 +89,13 @@ type ShardSummary struct {
 }
 
 // ShardShortfall mirrors pb.Shortfall in domain form.
+//
+// ADR-0027: Deficit is the residual aggregate resource demand — a
+// resource vector. The old (Resources, Count) pair is gone.
 type ShardShortfall struct {
 	Requirements              []ShortfallRequirement
-	Resources                 map[string]string
+	Deficit                   map[string]string
 	Priority                  int32
-	Count                     int32
 	AgeCycles                 int32
 	InterruptionPenaltyBucket pb.PenaltyBucket
 }
@@ -304,9 +306,9 @@ func shortfallsToProto(in []ShardShortfall) []*pb.Shortfall {
 	}
 	out := make([]*pb.Shortfall, 0, len(in))
 	for _, s := range in {
-		var resources *pb.Resources
-		if len(s.Resources) > 0 {
-			resources = &pb.Resources{Resources: s.Resources}
+		var deficit *pb.Resources
+		if len(s.Deficit) > 0 {
+			deficit = &pb.Resources{Resources: s.Deficit}
 		}
 		reqs := make([]*pb.NodeSelectorRequirement, 0, len(s.Requirements))
 		for _, r := range s.Requirements {
@@ -318,9 +320,8 @@ func shortfallsToProto(in []ShardShortfall) []*pb.Shortfall {
 		}
 		out = append(out, &pb.Shortfall{
 			Requirements:              reqs,
-			Resources:                 resources,
+			Deficit:                   deficit,
 			Priority:                  s.Priority,
-			Count:                     s.Count,
 			AgeCycles:                 s.AgeCycles,
 			InterruptionPenaltyBucket: s.InterruptionPenaltyBucket,
 		})

@@ -176,12 +176,15 @@ message ShardSummary {
 // inventory and could not resolve via in-shard preemption. The coordinator
 // uses these to drive cross-shard rebalancing and preemption.
 message Shortfall {
-  // The unsatisfied profile.
+  // The unsatisfied profile's requirements.
   repeated NodeSelectorRequirement requirements = 1;
-  Resources resources                            = 2;
+
+  // ADR-0027: the residual aggregate resource demand the shard could not
+  // place — a resource vector, not a machine count.
+  Resources deficit = 2;
 
   int32 priority = 3;
-  int32 count    = 4;
+  reserved 4; // was `count`; removed by ADR-0027 (demand is the `deficit` vector)
 
   // Cycles this shortfall has been unresolved. >5 escalates to fleet
   // telemetry per the shortfall protocol.

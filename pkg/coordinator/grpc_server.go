@@ -48,9 +48,12 @@ type ShardSummarySoft struct {
 }
 
 // ShortfallSoft is the leader-local copy of one outstanding shortfall.
+//
+// ADR-0027: Deficit is the residual aggregate resource demand — a
+// resource vector — replacing the old machine `Count`.
 type ShortfallSoft struct {
 	Priority                  int32
-	Count                     int32
+	Deficit                   map[string]string
 	AgeCycles                 int32
 	InterruptionPenaltyBucket pb.PenaltyBucket
 }
@@ -128,7 +131,7 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 		for _, sf := range req.GetShortfalls() {
 			copy = append(copy, ShortfallSoft{
 				Priority:                  sf.GetPriority(),
-				Count:                     sf.GetCount(),
+				Deficit:                   sf.GetDeficit().GetResources(),
 				AgeCycles:                 sf.GetAgeCycles(),
 				InterruptionPenaltyBucket: sf.GetInterruptionPenaltyBucket(),
 			})

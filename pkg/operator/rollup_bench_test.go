@@ -48,7 +48,7 @@ func BenchmarkProfileFromCapacityRequest(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _ = profileFromCapacityRequest(cr)
+		_, _, _ = profileFromCapacityRequest(cr)
 	}
 }
 

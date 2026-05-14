@@ -23,12 +23,12 @@ func withdrawal() sim.Scenario {
 			Resources:    map[string]string{"nvidia.com/gpu": "8"},
 		})
 	}
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
 	pf := needs.NewProfile(
 		[]needs.Requirement{{
 			Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn,
 			Values: []string{"a3-highgpu-8g"},
 		}},
-		[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
 		nil, 1_000_000,
 		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
 	)
@@ -38,8 +38,13 @@ func withdrawal() sim.Scenario {
 		InitialIdle: idle,
 		Events: []sim.Event{
 			{
-				Cluster:     "cluster-train",
-				Needs:       []needs.Need{{ClusterID: "cluster-train", Profile: pf, Count: 32}},
+				Cluster: "cluster-train",
+				Needs: []needs.Need{{
+					ClusterID:          "cluster-train",
+					Profile:            pf,
+					AggregateResources: needs.ScaleResources(gpuUnit, 32),
+					MinUnit:            gpuUnit,
+				}},
 				CyclesAfter: 1,
 			},
 			{

@@ -202,13 +202,10 @@ func buildAvailableCapacityUpdate(snap *inventory.Snapshot, profile needs.Profil
 		Confidence:     confidence,
 		CostPerHour:    cheapest,
 	}
-	if res := profile.Resources(); len(res) > 0 {
-		out := make(map[string]string, len(res))
-		for _, r := range res {
-			out[r.Name] = r.Quantity
-		}
-		upd.Resources = &pb.Resources{Resources: out}
-	}
+	// ADR-0027: a Profile no longer carries a resource shape, and the
+	// machines matching a requirement-only Profile are heterogeneous in
+	// size — there is no single Resources value to advertise. The hint
+	// carries requirements + count + cost + confidence.
 	return upd
 }
 

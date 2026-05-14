@@ -17,21 +17,16 @@ import (
 // match here is satisfied by any machine that has a value for the key
 // and (if Values is non-empty) a value drawn from the listed values.
 //
-// Match also enforces that the machine's resources cover the need's
-// resources by exact-string equality. This is intentionally cheap; the
-// cluster operator is responsible for sending canonicalised quantity
-// strings.
+// ADR-0027: MatchProfile is purely requirement-based. A Profile carries
+// no resource shape — demand is the Need's AggregateResources / MinUnit
+// vectors, which Phase 1 diffs against Σ Machine.Allocatable separately.
+// "Can this machine host one atomic unit" (the MinUnit floor) is a
+// resource-vector check the allocator applies, not a Profile match.
 func MatchProfile(p needs.Profile, m machine.Machine) bool {
-	// RO accessors — the per-call defensive-copy alloc was the
+	// RO accessor — the per-call defensive-copy alloc was the
 	// dominant cost at 450K Phase 3 candidates per cycle (M30.2).
 	for _, r := range p.RequirementsRO() {
 		if !matchRequirement(r, m) {
-			return false
-		}
-	}
-	for _, want := range p.ResourcesRO() {
-		got, ok := m.Profile.Resources[want.Name]
-		if !ok || got != want.Quantity {
 			return false
 		}
 	}

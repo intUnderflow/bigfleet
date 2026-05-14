@@ -27,7 +27,7 @@ func gpuProfileWithSame(priority int32, sameKey string) needs.Profile {
 				Operator: needs.OperatorSame,
 			},
 		},
-		nil, nil, priority,
+		nil, priority,
 		needs.PenaltyBucket8192,
 		needs.PenaltyBucketPinned,
 	)
@@ -42,6 +42,7 @@ func gpuMachineInZone(id machine.ID, zone string, price float64) machine.Machine
 			InstanceType: "a3-highgpu-8g",
 			Zone:         zone,
 			CapacityType: machine.CapacityTypeBareMetal,
+			Resources:    map[string]string{"nvidia.com/gpu": "8"},
 		},
 		PricePerHour: price,
 	}
@@ -58,11 +59,11 @@ func TestPhase1_Same_PicksOneZone(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
-		Count:     3,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		3,
+	)})
 
 	if got := len(r.Actions); got != 3 {
 		t.Fatalf("actions = %d, want 3", got)
@@ -93,11 +94,11 @@ func TestPhase1_Same_PicksAtomicSatisfiableZone(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
-		Count:     4,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		4,
+	)})
 
 	if got := len(r.Actions); got != 4 {
 		t.Fatalf("actions = %d, want 4", got)
@@ -121,11 +122,11 @@ func TestPhase1_Same_FallsBackToLargestBucketWithShortfall(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
-		Count:     5,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		5,
+	)})
 
 	if got := len(r.Actions); got != 3 {
 		t.Errorf("actions = %d, want 3 (largest single zone)", got)
@@ -133,8 +134,8 @@ func TestPhase1_Same_FallsBackToLargestBucketWithShortfall(t *testing.T) {
 	if len(r.Unsatisfied) != 1 {
 		t.Fatalf("unsatisfied = %d, want 1", len(r.Unsatisfied))
 	}
-	if r.Unsatisfied[0].Deficit != 2 {
-		t.Errorf("deficit = %d, want 2", r.Unsatisfied[0].Deficit)
+	if gpuQty(r.Unsatisfied[0].Deficit) != "16" {
+		t.Errorf("deficit nvidia.com/gpu = %q, want 16 (2 units)", gpuQty(r.Unsatisfied[0].Deficit))
 	}
 	zones := map[string]int{}
 	for _, a := range r.Actions {
@@ -172,7 +173,6 @@ func gpuProfileSameWithRes(priority int32, sameKey string) needs.Profile {
 			{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{"a3-highgpu-8g"}},
 			{Key: sameKey, Operator: needs.OperatorSame},
 		},
-		[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
 		nil, priority,
 		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
 	)
@@ -194,11 +194,11 @@ func TestPhase1_Same_DensityAwareMachineCount(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileSameWithRes(1_000_000, "topology.kubernetes.io/zone"),
-		Count:     8,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileSameWithRes(1_000_000, "topology.kubernetes.io/zone"),
+		8,
+	)})
 
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("actions = %d, want 1 (density-100: one machine covers a group of 8). Pre-fix this took 8 — the over-consumption bug.", got)
@@ -223,8 +223,8 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 	hi := gpuProfileWithSame(2_000_000, "topology.kubernetes.io/zone")
 	lo := gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone")
 	r := decision.Phase1(snap, []needs.Need{
-		{ClusterID: "cluster-x", Profile: hi, Count: 3, Group: "owner-A"},
-		{ClusterID: "cluster-x", Profile: lo, Count: 3, Group: "owner-B"},
+		{ClusterID: "cluster-x", Profile: hi, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-A"},
+		{ClusterID: "cluster-x", Profile: lo, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-B"},
 	})
 
 	if got := len(r.Actions); got != 6 {

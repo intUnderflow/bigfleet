@@ -6,6 +6,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
 // Phase2Result is the output of a Phase 2 pass: preempt actions plus
@@ -158,17 +159,20 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 			scoredCache[key] = sorted
 		}
 
-		// Drain Deficit victims from the cached head, skipping any
-		// already claimed in this Phase 2 pass.
-		picks := make([]scoredVictim, 0, u.Deficit)
+		// Drain victims from the cached head until the freed
+		// EffectiveAllocatable covers the deficit vector (ADR-0027),
+		// skipping any already claimed in this Phase 2 pass.
+		remaining := u.Deficit
+		var picks []scoredVictim
 		for _, sv := range sorted {
-			if len(picks) >= u.Deficit {
+			if needs.IsZero(remaining) {
 				break
 			}
 			if _, taken := claimed[sv.m.ID]; taken {
 				continue
 			}
 			picks = append(picks, sv)
+			remaining = needs.SubResources(remaining, needs.ResourceQtysFromMap(sv.m.EffectiveAllocatable()))
 		}
 
 		for _, c := range picks {
@@ -182,10 +186,10 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 				Reason:            "phase2.inversion",
 			})
 		}
-		if len(picks) < u.Deficit {
+		if !needs.IsZero(remaining) {
 			out.Unresolved = append(out.Unresolved, UnsatisfiedNeed{
 				Need:    u.Need,
-				Deficit: u.Deficit - len(picks),
+				Deficit: remaining,
 			})
 		}
 	}

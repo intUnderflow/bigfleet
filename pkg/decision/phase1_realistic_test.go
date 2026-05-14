@@ -84,16 +84,17 @@ func TestPhase1_RealisticCatalog_BindsIdleSeed(t *testing.T) {
 				{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: a.InstanceTypes},
 				{Key: "topology.kubernetes.io/zone", Operator: needs.OperatorIn, Values: a.Zones},
 			},
-			resQ, nil,
+			nil,
 			a.PriorityClasses[0],
 			needs.PenaltyBucket1024,
 			needs.PenaltyBucket8192,
 		)
 		allNeeds = append(allNeeds, needs.Need{
-			ClusterID: "kwok-cluster-0",
-			Profile:   profile,
-			Count:     1,
-			Group:     "pod-" + strconv.Itoa(i),
+			ClusterID:          "kwok-cluster-0",
+			Profile:            profile,
+			AggregateResources: resQ,
+			MinUnit:            resQ,
+			Group:              "pod-" + strconv.Itoa(i),
 		})
 	}
 
@@ -107,7 +108,7 @@ func TestPhase1_RealisticCatalog_BindsIdleSeed(t *testing.T) {
 		for _, req := range allNeeds[0].Profile.RequirementsRO() {
 			t.Logf("  Key=%s Op=%v Values=%v", req.Key, req.Operator, req.Values)
 		}
-		t.Logf("Need[0] profile.Resources: %v", allNeeds[0].Profile.ResourcesRO())
+		t.Logf("Need[0] AggregateResources=%v MinUnit=%v", allNeeds[0].AggregateResources, allNeeds[0].MinUnit)
 		// Sample a few Idle machines
 		idle := inv.Snapshot().ListByState(machine.StateIdle)
 		t.Logf("Idle machines (showing 3 of %d):", len(idle))

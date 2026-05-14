@@ -9,6 +9,10 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
+// gpuUnit is the per-replica resource shape of the standard "8-GPU H100"
+// need: one a3-highgpu-8g machine hosts exactly one unit.
+var gpuUnit = []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
+
 // gpuProfile returns the standard "8-GPU H100" need profile used in most
 // of the paper's examples.
 func gpuProfile(priority int32) needs.Profile {
@@ -18,10 +22,31 @@ func gpuProfile(priority int32) needs.Profile {
 			Operator: needs.OperatorIn,
 			Values:   []string{"a3-highgpu-8g"},
 		}},
-		nil, nil, priority,
+		nil, priority,
 		needs.PenaltyBucket8192,
 		needs.PenaltyBucketPinned,
 	)
+}
+
+// gpuNeed builds a Need for `count` 8-GPU units under the given profile.
+func gpuNeed(cluster machine.ClusterID, pf needs.Profile, count int) needs.Need {
+	return needs.Need{
+		ClusterID:          cluster,
+		Profile:            pf,
+		AggregateResources: needs.ScaleResources(gpuUnit, count),
+		MinUnit:            gpuUnit,
+	}
+}
+
+// gpuQty pulls the nvidia.com/gpu quantity string out of a resource
+// vector — used to assert deficits in 8-GPU-unit terms.
+func gpuQty(v []needs.ResourceQty) string {
+	for _, r := range v {
+		if r.Name == "nvidia.com/gpu" {
+			return r.Quantity
+		}
+	}
+	return ""
 }
 
 func gpuMachine(id machine.ID, state machine.State, cluster machine.ClusterID, capType machine.CapacityType, price float64) machine.Machine {
@@ -32,6 +57,7 @@ func gpuMachine(id machine.ID, state machine.State, cluster machine.ClusterID, c
 			InstanceType: "a3-highgpu-8g",
 			Zone:         "us-east-1a",
 			CapacityType: capType,
+			Resources:    map[string]string{"nvidia.com/gpu": "8"},
 		},
 		PricePerHour: price,
 	}
@@ -54,7 +80,7 @@ func TestPhase1_IdleOnly(t *testing.T) {
 	snap := inv.Snapshot()
 
 	r := decision.Phase1(snap, []needs.Need{
-		{ClusterID: "cluster-a", Profile: gpuProfile(1_000_000), Count: 3},
+		gpuNeed("cluster-a", gpuProfile(1_000_000), 3),
 	})
 	if got := len(r.Actions); got != 3 {
 		t.Fatalf("actions = %d, want 3", got)
@@ -84,7 +110,7 @@ func TestPhase1_SpeculativeFallback_PrefersCheapest(t *testing.T) {
 	_ = inv.Insert(expensive)
 
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-a", Profile: gpuProfile(1_000_000), Count: 1},
+		gpuNeed("cluster-a", gpuProfile(1_000_000), 1),
 	})
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("actions = %d, want 1", got)
@@ -116,12 +142,12 @@ func TestPhase1_HighPenalty_PrefersOnDemand(t *testing.T) {
 			Operator: needs.OperatorIn,
 			Values:   []string{"a3-highgpu-8g"},
 		}},
-		nil, nil, 1_000_000,
+		nil, 1_000_000,
 		needs.PenaltyBucket8388608,
 		needs.PenaltyBucketPinned,
 	)
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-a", Profile: pf, Count: 1},
+		gpuNeed("cluster-a", pf, 1),
 	})
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("actions = %d, want 1", got)
@@ -142,7 +168,7 @@ func TestPhase1_IdleBeatsSpeculative(t *testing.T) {
 	_ = inv.Insert(cheap)
 
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-a", Profile: gpuProfile(1_000_000), Count: 1},
+		gpuNeed("cluster-a", gpuProfile(1_000_000), 1),
 	})
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("actions = %d, want 1", got)
@@ -160,7 +186,7 @@ func TestPhase1_NoOpWhenSatisfied(t *testing.T) {
 	_ = inv.Insert(gpuMachine("c-2", machine.StateConfigured, "cluster-a", machine.CapacityTypeBareMetal, 0))
 
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-a", Profile: gpuProfile(1_000_000), Count: 2},
+		gpuNeed("cluster-a", gpuProfile(1_000_000), 2),
 	})
 	if len(r.Actions) != 0 {
 		t.Errorf("expected zero actions, got %d", len(r.Actions))
@@ -175,13 +201,13 @@ func TestPhase1_PartialStockout(t *testing.T) {
 	_ = inv.Insert(gpuMachine("i-2", machine.StateIdle, "", machine.CapacityTypeBareMetal, 0))
 
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-a", Profile: gpuProfile(1_000_000), Count: 5},
+		gpuNeed("cluster-a", gpuProfile(1_000_000), 5),
 	})
 	if got := len(r.Actions); got != 2 {
 		t.Fatalf("actions = %d, want 2", got)
 	}
-	if got := len(r.Unsatisfied); got != 1 || r.Unsatisfied[0].Deficit != 3 {
-		t.Errorf("unsatisfied = %+v, want 1 entry with deficit=3", r.Unsatisfied)
+	if got := len(r.Unsatisfied); got != 1 || gpuQty(r.Unsatisfied[0].Deficit) != "24" {
+		t.Errorf("unsatisfied = %+v, want 1 entry with deficit nvidia.com/gpu=24 (3 units)", r.Unsatisfied)
 	}
 }
 
@@ -193,8 +219,8 @@ func TestPhase1_HighPriorityWinsContestedPool(t *testing.T) {
 	_ = inv.Insert(gpuMachine("i-2", machine.StateIdle, "", machine.CapacityTypeBareMetal, 0))
 
 	r := decision.Phase1(inv.Snapshot(), []needs.Need{
-		{ClusterID: "cluster-low", Profile: gpuProfile(0), Count: 2},
-		{ClusterID: "cluster-high", Profile: gpuProfile(1_000_000), Count: 2},
+		gpuNeed("cluster-low", gpuProfile(0), 2),
+		gpuNeed("cluster-high", gpuProfile(1_000_000), 2),
 	})
 
 	cluster := map[machine.ClusterID]int{}
@@ -243,15 +269,16 @@ func TestPhase1_ManyNeedsSharingFingerprint_DistributesAcrossNeeds(t *testing.T)
 		_ = inv.Insert(gpuMachine(idN(i), machine.StateIdle, "", machine.CapacityTypeBareMetal, 0))
 	}
 
-	// 30 Needs, each Count=1, each with a unique Group (the load-driver
-	// case: every Pod is its own ownerRef UID).
+	// 30 Needs, each one 8-GPU unit, each with a unique Group (the
+	// load-driver case: every Pod is its own ownerRef UID).
 	allNeeds := make([]needs.Need, 0, 30)
 	for i := 0; i < 30; i++ {
 		allNeeds = append(allNeeds, needs.Need{
-			ClusterID: "cluster-a",
-			Profile:   pf,
-			Count:     1,
-			Group:     "pod-" + string(rune('a'+i%26)),
+			ClusterID:          "cluster-a",
+			Profile:            pf,
+			AggregateResources: gpuUnit,
+			MinUnit:            gpuUnit,
+			Group:              "pod-" + string(rune('a'+i%26)),
 		})
 	}
 	r := decision.Phase1(inv.Snapshot(), allNeeds)
@@ -277,17 +304,17 @@ func TestPhase1_ManyNeedsSharingFingerprint_DistributesAcrossNeeds(t *testing.T)
 func TestPhase1_DenseMachine_OneAbsorbsManyPods(t *testing.T) {
 	t.Parallel()
 
-	// Per-replica profile: each Pod wants 1 CPU + 4 GiB.
+	// Per-replica unit: each Pod wants 1 CPU + 4 GiB.
+	unit := []needs.ResourceQty{
+		{Name: "cpu", Quantity: "1"},
+		{Name: "memory", Quantity: "4Gi"},
+	}
 	profile := needs.NewProfile(
 		[]needs.Requirement{{
 			Key:      "node.kubernetes.io/instance-type",
 			Operator: needs.OperatorIn,
 			Values:   []string{"c6a.4xlarge"},
 		}},
-		[]needs.ResourceQty{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "4Gi"},
-		},
 		nil,
 		1000,
 		needs.PenaltyBucket64,
@@ -316,96 +343,135 @@ func TestPhase1_DenseMachine_OneAbsorbsManyPods(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	// Demand: 10 Pods. The existing dense machine covers 8; we should
-	// see Phase 1 emit Bootstraps only for the remaining 2 Pods.
+	// Demand: 10 Pods (aggregate 10 CPU / 40 GiB). The existing dense
+	// machine covers 8 Pods of it (32 GiB allocatable / 4 GiB per Pod);
+	// we should see Phase 1 emit Bootstraps only for the remaining 2.
 	need := needs.Need{
-		ClusterID: "cluster-A",
-		Profile:   profile,
-		Count:     10,
+		ClusterID:          "cluster-A",
+		Profile:            profile,
+		AggregateResources: needs.ScaleResources(unit, 10),
+		MinUnit:            unit,
 	}
 	res := decision.Phase1(snap, []needs.Need{need})
 
 	// With no Idle/Speculative inventory in the snap, Phase 1 can't fill
 	// the remaining 2 Pods — they become Unsatisfied. The point of the
-	// test is to confirm the deficit is computed as 10 - 8 = 2, not
-	// 10 - 1 = 9 (the pre-ADR-0022 machine-count math).
+	// test is to confirm the deficit is the residual aggregate vector
+	// 10·unit - allocatable = {cpu:10-16→0, memory:40Gi-32Gi=8Gi}, i.e.
+	// memory is the binding dimension and 8 GiB == 2 Pods remain.
 	if len(res.Actions) != 0 {
 		t.Errorf("no Idle/Spec in inventory; expected 0 actions, got %d", len(res.Actions))
 	}
 	if len(res.Unsatisfied) != 1 {
 		t.Fatalf("expected 1 unsatisfied Need, got %d", len(res.Unsatisfied))
 	}
-	if got := res.Unsatisfied[0].Deficit; got != 2 {
-		t.Errorf("Unsatisfied.Deficit = %d, want 2 (10 Pods - density 8 absorbed)", got)
+	mem := ""
+	for _, r := range res.Unsatisfied[0].Deficit {
+		if r.Name == "memory" {
+			mem = r.Quantity
+		}
+	}
+	if mem != "8Gi" {
+		t.Errorf("Unsatisfied.Deficit memory = %q, want 8Gi (10 Pods - density 8 absorbed)", mem)
 	}
 }
 
-// TestPhase1_PerPodCRs_DensitySurplusCredit guards the M45.4 surplus
-// credit. Under Pod-mode each Pod has its own CR with its own ownerRef
-// UID, so the operator's rollup keeps every Need with Count=1 (Aggregate
-// keys by (cluster, fp, group) and Group differs per CR). For 100 Pods
-// sharing one Profile at density=10 the correct emit is ~10 Bootstraps,
-// not 100 — each newly-bootstrapped machine's spare 9 Pods of capacity
-// should satisfy 9 peer Needs of the same fingerprint before another
-// machine is taken. Without the credit Phase 1 emits one Bootstrap per
-// Need (Count=1), which on dev-5k at 5000 Pods × density 10 exhausted
-// the Idle pool and stalled the chain.
-func TestPhase1_PerPodCRs_DensitySurplusCredit(t *testing.T) {
+// TestPhase1_PerPodCRs_ClaimGreedilyOncePerMachine encodes the
+// ADR-0027 supply contract: aggregate supply is `Σ Machine.Allocatable`
+// over matching machines, counted *once per machine*, and the allocator
+// claims each unit of supply to exactly one demand. The M45.4
+// "surplus-credit" behaviour — where a single bootstrapped machine's
+// spare density was credited to peer Needs of the same fingerprint —
+// was the over-credit bug ADR-0027 removed (ADR-0027 §"What goes wrong",
+// the surplus-credit logic absorbed genuinely-stuck Pods against phantom
+// capacity).
+//
+// Consequence for Pod-mode load: 100 per-Pod CRs, each its own ownerRef
+// UID → its own Group → its own single-unit Need, do NOT pack onto
+// fewer machines within one cycle. Each Need's take() claims a whole
+// machine, so 50 Idle machines satisfy 50 Needs and the other 50 become
+// Unsatisfied. The convergence loop still closes — every cycle the
+// roll-up re-lists the stuck Pods and the Idle/Speculative pools refill
+// — but it does so without the phantom over-credit. To pack 100 Pods of
+// one workload onto 10 dense machines the operator must aggregate them
+// into one Need (shared Group); that path is the second half of this
+// test.
+func TestPhase1_PerPodCRs_ClaimGreedilyOncePerMachine(t *testing.T) {
 	t.Parallel()
 
+	unit := []needs.ResourceQty{
+		{Name: "cpu", Quantity: "1"},
+		{Name: "memory", Quantity: "4Gi"},
+	}
 	profile := needs.NewProfile(
 		[]needs.Requirement{{
 			Key:      "node.kubernetes.io/instance-type",
 			Operator: needs.OperatorIn,
 			Values:   []string{"c6a.4xlarge"},
 		}},
-		[]needs.ResourceQty{
-			{Name: "cpu", Quantity: "1"},
-			{Name: "memory", Quantity: "4Gi"},
-		},
 		nil,
 		1000,
 		needs.PenaltyBucket64,
 		needs.PenaltyBucketPinned,
 	)
 
-	// 50 Idle machines, each density 10 — far more capacity than we need.
-	inv := inventory.New()
-	for i := 0; i < 50; i++ {
-		m := machine.Machine{
-			ID:    machine.ID("idle-" + string(rune('A'+i%26)) + string(rune('a'+i/26))),
-			State: machine.StateIdle,
-			Host:  machine.HostRef{Provider: "fake", Ref: "idle"},
-			Profile: machine.Profile{
-				InstanceType: "c6a.4xlarge",
-				Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
-			},
-			Allocatable: map[string]string{"cpu": "10", "memory": "40Gi"},
+	newInv := func() *inventory.Snapshot {
+		inv := inventory.New()
+		for i := 0; i < 50; i++ {
+			m := machine.Machine{
+				ID:    machine.ID("idle-" + string(rune('A'+i%26)) + string(rune('a'+i/26))),
+				State: machine.StateIdle,
+				Host:  machine.HostRef{Provider: "fake", Ref: "idle"},
+				Profile: machine.Profile{
+					InstanceType: "c6a.4xlarge",
+					Resources:    map[string]string{"cpu": "1", "memory": "4Gi"},
+				},
+				Allocatable: map[string]string{"cpu": "10", "memory": "40Gi"},
+			}
+			if err := inv.Insert(m); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
 		}
-		if err := inv.Insert(m); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+		return inv.Snapshot()
 	}
-	snap := inv.Snapshot()
 
-	// 100 separate Needs sharing the fingerprint (the Pod-mode load
-	// shape: 100 distinct CR/Pod groups, each Count=1).
-	nl := make([]needs.Need, 0, 100)
+	// Per-Pod shape: 100 distinct Groups, each a single-unit Need. Each
+	// take() claims a whole machine — 50 machines → 50 Bootstraps, 50
+	// Unsatisfied. No surplus credit.
+	perPod := make([]needs.Need, 0, 100)
 	for i := 0; i < 100; i++ {
-		nl = append(nl, needs.Need{
-			ClusterID: "cluster-A",
-			Profile:   profile,
-			Count:     1,
-			Group:     "pod-" + string(rune('A'+i%26)) + string(rune('a'+i/26)),
+		perPod = append(perPod, needs.Need{
+			ClusterID:          "cluster-A",
+			Profile:            profile,
+			AggregateResources: unit,
+			MinUnit:            unit,
+			Group:              "pod-" + string(rune('A'+i%26)) + string(rune('a'+i/26)),
 		})
 	}
-	res := decision.Phase1(snap, nl)
-
-	// ceil(100 / 10) = 10 Bootstraps expected.
-	if len(res.Actions) != 10 {
-		t.Errorf("Phase 1 emitted %d Bootstraps, want 10 (100 Pods / density 10)", len(res.Actions))
+	res := decision.Phase1(newInv(), perPod)
+	if len(res.Actions) != 50 {
+		t.Errorf("per-Pod CRs: Phase 1 emitted %d Bootstraps, want 50 (one machine claimed per Need, 50 Idle)", len(res.Actions))
 	}
-	if len(res.Unsatisfied) != 0 {
-		t.Errorf("expected 0 unsatisfied Needs (inventory has headroom), got %d", len(res.Unsatisfied))
+	if len(res.Unsatisfied) != 50 {
+		t.Errorf("per-Pod CRs: expected 50 Unsatisfied (no surplus credit under ADR-0027), got %d", len(res.Unsatisfied))
+	}
+
+	// Aggregated shape: the 100 Pods of one workload share a Group, so
+	// the operator's rollup folds them into one Need for 100 units. That
+	// Need's deficit vector is diffed against summed Allocatable, so 10
+	// dense machines (density 10) cover it exactly.
+	aggregated := []needs.Need{{
+		ClusterID:          "cluster-A",
+		Profile:            profile,
+		AggregateResources: needs.ScaleResources(unit, 100),
+		MinUnit:            unit,
+		Group:              "workload-1",
+	}}
+	resAgg := decision.Phase1(newInv(), aggregated)
+	if len(resAgg.Actions) != 10 {
+		t.Errorf("aggregated Need: Phase 1 emitted %d Bootstraps, want 10 (100 units / density 10)", len(resAgg.Actions))
+	}
+	if len(resAgg.Unsatisfied) != 0 {
+		t.Errorf("aggregated Need: expected 0 Unsatisfied (inventory has headroom), got %d", len(resAgg.Unsatisfied))
 	}
 }

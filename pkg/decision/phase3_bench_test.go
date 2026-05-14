@@ -46,6 +46,7 @@ func BenchmarkPhase3_HighDemand(b *testing.B) {
 				InstanceType: t,
 				Zone:         "zone-a",
 				CapacityType: machine.CapacityTypeOnDemand,
+				Resources:    map[string]string{"cpu": "1"},
 			},
 			AssignedPriority:                   100,
 			AssignedInterruptionPenaltyDollars: 1.0,
@@ -70,15 +71,17 @@ func BenchmarkPhase3_HighDemand(b *testing.B) {
 					Operator: needs.OperatorIn,
 					Values:   []string{t},
 				}},
-				nil, nil,
+				nil,
 				1_000_000,
 				needs.PenaltyBucket8192,
 				needs.PenaltyBucketPinned,
 			)
+			unit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 			allNeeds = append(allNeeds, needs.Need{
-				ClusterID: clusterID,
-				Profile:   profile,
-				Count:     machinesPerCluster / needsPerCluster,
+				ClusterID:          clusterID,
+				Profile:            profile,
+				AggregateResources: needs.ScaleResources(unit, machinesPerCluster/needsPerCluster),
+				MinUnit:            unit,
 			})
 		}
 	}
@@ -120,6 +123,7 @@ func BenchmarkPhase3_M29Shape(b *testing.B) {
 					InstanceType: instType,
 					Zone:         "zone-a",
 					CapacityType: machine.CapacityTypeBareMetal,
+					Resources:    map[string]string{"cpu": "1"},
 				},
 				AssignedPriority:                   1_000_000,
 				AssignedInterruptionPenaltyDollars: 8192,
@@ -141,15 +145,17 @@ func BenchmarkPhase3_M29Shape(b *testing.B) {
 				Operator: needs.OperatorIn,
 				Values:   []string{instType},
 			}},
-			nil, nil,
+			nil,
 			1000,
 			needs.PenaltyBucket8192,
 			needs.PenaltyBucket65536,
 		)
+		unit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 		allNeeds = append(allNeeds, needs.Need{
-			ClusterID: clusterID,
-			Profile:   profile,
-			Count:     needsPerCluster,
+			ClusterID:          clusterID,
+			Profile:            profile,
+			AggregateResources: needs.ScaleResources(unit, needsPerCluster),
+			MinUnit:            unit,
 		})
 	}
 

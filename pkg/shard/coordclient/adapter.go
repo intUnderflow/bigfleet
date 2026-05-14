@@ -45,15 +45,14 @@ func (a shardAdapter) Shortfalls() []ShardShortfall {
 				Values:   r.Values,
 			})
 		}
-		resources := make(map[string]string, len(s.Profile.Resources()))
-		for _, rq := range s.Profile.Resources() {
-			resources[rq.Name] = rq.Quantity
+		deficit := make(map[string]string, len(s.Deficit))
+		for _, rq := range s.Deficit {
+			deficit[rq.Name] = rq.Quantity
 		}
 		out = append(out, ShardShortfall{
 			Requirements:              reqs,
-			Resources:                 resources,
+			Deficit:                   deficit,
 			Priority:                  s.Profile.Priority(),
-			Count:                     int32(s.Count),
 			AgeCycles:                 int32(s.AgeCycles),
 			InterruptionPenaltyBucket: pb.PenaltyBucket(s.InterruptionPenaltyBucket),
 		})

@@ -24,12 +24,12 @@ func capacityStockout() sim.Scenario {
 			Resources:    map[string]string{"nvidia.com/gpu": "8"},
 		})
 	}
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
 	pf := needs.NewProfile(
 		[]needs.Requirement{{
 			Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn,
 			Values: []string{"a3-highgpu-8g"},
 		}},
-		[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
 		nil, 1_000_000,
 		needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
 	)
@@ -38,8 +38,13 @@ func capacityStockout() sim.Scenario {
 		Description: "64 needed, 32 idle, no preemption candidates. 32 satisfied + 32 shortfall.",
 		InitialIdle: idle,
 		Events: []sim.Event{{
-			Cluster:     "cluster-train",
-			Needs:       []needs.Need{{ClusterID: "cluster-train", Profile: pf, Count: 64}},
+			Cluster: "cluster-train",
+			Needs: []needs.Need{{
+				ClusterID:          "cluster-train",
+				Profile:            pf,
+				AggregateResources: needs.ScaleResources(gpuUnit, 64),
+				MinUnit:            gpuUnit,
+			}},
 			CyclesAfter: 2, // one cycle for assignment, one for shortfall to surface in tracking.
 		}},
 		Assertions: []sim.Assertion{
@@ -60,14 +65,20 @@ func capacityStockout() sim.Scenario {
 				},
 			},
 			{
-				Name: "shortfall recorded with deficit 32",
+				Name: "shortfall recorded with gpu deficit 256",
 				Check: func(s *shard.Shard) error {
 					sfs := s.Shortfalls()
 					if len(sfs) != 1 {
 						return fmt.Errorf("shortfalls = %d, want 1", len(sfs))
 					}
-					if sfs[0].Count != 32 {
-						return fmt.Errorf("shortfall.Count = %d, want 32", sfs[0].Count)
+					gpu := ""
+					for _, r := range sfs[0].Deficit {
+						if r.Name == "nvidia.com/gpu" {
+							gpu = r.Quantity
+						}
+					}
+					if gpu != "256" {
+						return fmt.Errorf("shortfall deficit nvidia.com/gpu = %q, want 256", gpu)
 					}
 					return nil
 				},

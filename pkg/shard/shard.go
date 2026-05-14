@@ -240,7 +240,7 @@ type domainKey struct {
 // shortfallEntry is one tracked unresolved need.
 type shortfallEntry struct {
 	Profile                   needs.Profile
-	Count                     int
+	Deficit                   []needs.ResourceQty
 	AgeCycles                 int
 	InterruptionPenaltyBucket needs.PenaltyBucket
 }
@@ -612,7 +612,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// anything still here cannot be resolved within this shard.
 	seeds := make([]shortfallSeed, 0, len(p2.Unresolved))
 	for _, u := range p2.Unresolved {
-		seeds = append(seeds, shortfallSeed{Profile: u.Need.Profile, Count: u.Deficit})
+		seeds = append(seeds, shortfallSeed{Profile: u.Need.Profile, Deficit: u.Deficit})
 	}
 	s.recordShortfalls(seeds)
 
@@ -702,13 +702,14 @@ func emitInventoryByCapacityAndPenalty(snap *inventory.Snapshot) {
 	}
 }
 
-// emitDemandByPenaltyBucket walks the NeedsTable snapshot and
-// publishes per-bucket aggregate demand. Bounded cardinality (28
-// buckets max). M25.
+// emitDemandByPenaltyBucket walks the NeedsTable snapshot and publishes
+// the per-bucket count of demand rows. Bounded cardinality (28 buckets
+// max). M25; ADR-0027: demand is a resource vector, so this reports the
+// number of Need rows in each penalty bucket, not a Pod count.
 func emitDemandByPenaltyBucket(rows []needs.Need) {
 	counts := make(map[needs.PenaltyBucket]int, 8)
 	for _, r := range rows {
-		counts[r.Profile.InterruptionPenaltyBucket()] += r.Count
+		counts[r.Profile.InterruptionPenaltyBucket()]++
 	}
 	// Reset every bucket label to 0 first so empty NeedsTable rows
 	// don't keep stale values around.

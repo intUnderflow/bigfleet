@@ -99,8 +99,11 @@ func TestBuildRollup_AppendsSameWhenCoLocationPresent(t *testing.T) {
 		t.Fatalf("needs len = %d, want 1 (single co-location group)", got)
 	}
 	n := rollup.GetNeeds()[0]
-	if n.GetCount() != 3 {
-		t.Errorf("count = %d, want 3", n.GetCount())
+	if got := n.GetAggregateResources()["nvidia.com/gpu"]; got != "24" {
+		t.Errorf("aggregate_resources nvidia.com/gpu = %q, want 24 (3 CRs × 8)", got)
+	}
+	if got := n.GetMinUnit()["nvidia.com/gpu"]; got != "8" {
+		t.Errorf("min_unit nvidia.com/gpu = %q, want 8", got)
 	}
 	if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
 		t.Errorf("Same requirement on the term's topology key missing; got: %+v", n.GetRequirements())
@@ -123,8 +126,8 @@ func TestBuildRollup_DifferentCoLocationStaySeparate(t *testing.T) {
 		t.Fatalf("needs len = %d, want 2 (two independent workloads)", got)
 	}
 	for _, n := range rollup.GetNeeds() {
-		if n.GetCount() != 2 {
-			t.Errorf("count = %d, want 2 per workload", n.GetCount())
+		if got := n.GetAggregateResources()["nvidia.com/gpu"]; got != "16" {
+			t.Errorf("aggregate_resources nvidia.com/gpu = %q, want 16 per workload (2 CRs × 8)", got)
 		}
 		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); !ok {
 			t.Errorf("Same requirement missing on a per-workload Need")
@@ -145,8 +148,8 @@ func TestBuildRollup_NoCoLocationAggregateNormally(t *testing.T) {
 		t.Fatalf("needs len = %d, want 1 (no co-location → single aggregated need)", got)
 	}
 	n := rollup.GetNeeds()[0]
-	if n.GetCount() != 3 {
-		t.Errorf("count = %d, want 3", n.GetCount())
+	if got := n.GetAggregateResources()["nvidia.com/gpu"]; got != "24" {
+		t.Errorf("aggregate_resources nvidia.com/gpu = %q, want 24 (3 CRs × 8)", got)
 	}
 	for _, r := range n.GetRequirements() {
 		if r.GetOperator() == pb.NodeSelectorRequirement_OPERATOR_SAME {
@@ -173,8 +176,8 @@ func TestBuildRollup_CoLocatedAndPlainStaySeparate(t *testing.T) {
 	}
 	var sawSame, sawPlain bool
 	for _, n := range rollup.GetNeeds() {
-		if n.GetCount() != 2 {
-			t.Errorf("count = %d, want 2", n.GetCount())
+		if got := n.GetAggregateResources()["nvidia.com/gpu"]; got != "16" {
+			t.Errorf("aggregate_resources nvidia.com/gpu = %q, want 16 (2 CRs × 8)", got)
 		}
 		if _, ok := sameRequirementOnKey(n.GetRequirements(), "topology.bigfleet/rack"); ok {
 			sawSame = true

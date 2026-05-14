@@ -220,11 +220,12 @@ func buildRealisticDemand(clusters, perCluster int) []needs.Need {
 				res = append(res, needs.ResourceQty{Name: k, Quantity: v})
 			}
 
-			profile := needs.NewProfile(reqs, res, nil, pri, needs.PenaltyBucket8192, needs.PenaltyBucket8192)
+			profile := needs.NewProfile(reqs, nil, pri, needs.PenaltyBucket8192, needs.PenaltyBucket8192)
 			out = append(out, needs.Need{
-				ClusterID: clusterID,
-				Profile:   profile,
-				Count:     1,
+				ClusterID:          clusterID,
+				Profile:            profile,
+				AggregateResources: res,
+				MinUnit:            res,
 			})
 		}
 	}
@@ -269,8 +270,8 @@ func buildRealisticDemandAllSame(clusters, perCluster int) []needs.Need {
 			for k, v := range size {
 				res = append(res, needs.ResourceQty{Name: k, Quantity: v})
 			}
-			profile := needs.NewProfile(reqs, res, nil, pri, needs.PenaltyBucket8192, needs.PenaltyBucket8192)
-			out = append(out, needs.Need{ClusterID: clusterID, Profile: profile, Count: 1})
+			profile := needs.NewProfile(reqs, nil, pri, needs.PenaltyBucket8192, needs.PenaltyBucket8192)
+			out = append(out, needs.Need{ClusterID: clusterID, Profile: profile, AggregateResources: res, MinUnit: res})
 		}
 	}
 	return out

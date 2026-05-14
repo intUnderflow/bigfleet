@@ -8,9 +8,10 @@
 //   - Snapshot(): a priority-sorted slice the worker walks top-down.
 //
 // The aggregation key (Profile) is the bundle of fields that make two
-// CapacityRequests collapse into one Need with count > 1. Bucketed
-// penalty fields participate in the key, so workload-specific raw
-// penalties don't defeat aggregation (plan §0.1 B).
+// CapacityRequests collapse into one Need (ADR-0027: their per-replica
+// requests sum into AggregateResources, the larger folds into MinUnit).
+// Bucketed penalty fields participate in the key, so workload-specific
+// raw penalties don't defeat aggregation (plan §0.1 B).
 package needs
 
 import (
@@ -187,31 +188,28 @@ const (
 	WhenUnsatisfiableScheduleAnyway
 )
 
-// ResourceQty is one entry in a need's resource map. Stored as
-// (name, quantity-string) so canonicalisation is straightforward —
-// quantity-aware comparison is left to the cluster operator at
-// CR-aggregation time.
+// ResourceQty is one entry in a resource vector — a (name,
+// quantity-string) pair. Used for a Need's AggregateResources and
+// MinUnit. Quantity-aware arithmetic (AddResources, MaxResources) lives
+// in resources.go.
 type ResourceQty struct {
 	Name     string
 	Quantity string
 }
 
-// Profile is the aggregation key for a Need. Two CRs whose Profiles are
-// equal collapse into one Need with Count = 2. Profiles are immutable
-// once constructed via NewProfile; the fingerprint is computed once and
+// Profile is the aggregation key for a Need — pure identity, no payload.
+// Two CRs whose Profiles are equal collapse into one Need (their
+// resource demand sums; see Need). Profiles are immutable once
+// constructed via NewProfile; the fingerprint is computed once and
 // cached so map-keyed lookups don't re-walk the slices.
 //
-// ADR-0022: Profile.Resources is the *per-replica* request shape — what
-// one Pod of this Profile asks for. It's *not* the per-machine
-// allocatable. The Pod-to-machine relationship is derived at Phase 1
-// time by dividing the aggregate `Resources × Need.Count` demand by the
-// matching machine inventory's `Machine.Allocatable`. For homogeneous
-// 1 Pod = 1 machine fleets (the pre-ADR-0022 default), Resources and
-// Allocatable happen to be equal and Count maps 1:1 to machine count;
-// the math works either way.
+// ADR-0027: Profile carries no resource shape. Demand is expressed as
+// the Need's AggregateResources + MinUnit vectors, diffed against
+// Σ Machine.Allocatable in resource-vector space. The aggregation
+// identity is (requirements, priority, spread, interruption-bucket,
+// reclamation-bucket).
 type Profile struct {
 	requirements              []Requirement
-	resources                 []ResourceQty
 	spread                    []TopologySpread
 	priority                  int32
 	interruptionPenaltyBucket PenaltyBucket
@@ -223,7 +221,6 @@ type Profile struct {
 // that two semantically-equal Profiles produce the same fingerprint.
 func NewProfile(
 	requirements []Requirement,
-	resources []ResourceQty,
 	spread []TopologySpread,
 	priority int32,
 	interruptionPenaltyBucket, reclamationPenaltyBucket PenaltyBucket,
@@ -242,17 +239,12 @@ func NewProfile(
 		return reqs[i].Operator < reqs[j].Operator
 	})
 
-	res := make([]ResourceQty, len(resources))
-	copy(res, resources)
-	sort.Slice(res, func(i, j int) bool { return res[i].Name < res[j].Name })
-
 	spr := make([]TopologySpread, len(spread))
 	copy(spr, spread)
 	sort.Slice(spr, func(i, j int) bool { return spr[i].TopologyKey < spr[j].TopologyKey })
 
 	p := Profile{
 		requirements:              reqs,
-		resources:                 res,
 		spread:                    spr,
 		priority:                  priority,
 		interruptionPenaltyBucket: interruptionPenaltyBucket,
@@ -278,13 +270,6 @@ func (p Profile) Requirements() []Requirement {
 	return out
 }
 
-// Resources returns a defensive copy of the resources slice.
-func (p Profile) Resources() []ResourceQty {
-	out := make([]ResourceQty, len(p.resources))
-	copy(out, p.resources)
-	return out
-}
-
 // RequirementsRO returns the requirements slice without copying. The
 // returned slice MUST NOT be mutated. Used by hot match paths
 // (decision.MatchProfile) where the per-call defensive-copy alloc
@@ -295,12 +280,6 @@ func (p Profile) Resources() []ResourceQty {
 // that might) MUST use Requirements() instead.
 func (p Profile) RequirementsRO() []Requirement {
 	return p.requirements
-}
-
-// ResourcesRO returns the resources slice without copying. Same
-// contract as RequirementsRO — read-only.
-func (p Profile) ResourcesRO() []ResourceQty {
-	return p.resources
 }
 
 // Spread returns a defensive copy of the spread slice.
@@ -331,13 +310,6 @@ func (p Profile) computeFingerprint() string {
 		b.WriteString(strings.Join(r.Values, ","))
 		b.WriteByte(';')
 	}
-	b.WriteString("|res=")
-	for _, r := range p.resources {
-		b.WriteString(r.Name)
-		b.WriteByte('=')
-		b.WriteString(r.Quantity)
-		b.WriteByte(';')
-	}
 	b.WriteString("|spr=")
 	for _, s := range p.spread {
 		b.WriteString(s.TopologyKey)
@@ -350,14 +322,17 @@ func (p Profile) computeFingerprint() string {
 	return b.String()
 }
 
-// Need is one row of the NeedsTable: a post-aggregation count of Pods
-// that one cluster currently wants of one identically-shaped Profile.
+// Need is one row of the NeedsTable: one cluster's aggregate capacity
+// demand for one Profile (aggregation identity).
 //
-// ADR-0022: Count is *Pod count*, not machine count. The shard's Phase 1
-// derives machine count from the aggregate (`Profile.Resources × Count`)
-// fitted against the matching machine inventory's `Machine.Allocatable`.
-// For the homogeneous pre-ADR-0022 fleet where one Pod fills one machine
-// the math collapses to 1:1, but the field's semantics are Pod-count.
+// ADR-0027: demand is a resource vector, not a Pod count.
+// AggregateResources is the vector sum of the per-replica requests of
+// every CR that aggregated into this Need; MinUnit is the largest
+// single atomic schedulable unit among them — the indivisibility floor
+// every machine provisioned for this Need must individually be able to
+// host. Phase 1 diffs AggregateResources against Σ Machine.Allocatable
+// over matching machines, in resource-vector space; machine count is
+// the autoscaler's output, never carried here.
 //
 // Group is an opaque per-Need co-location bucket. Two Needs with the
 // same (Cluster, Profile.Fingerprint) but different Group are kept
@@ -372,19 +347,21 @@ func (p Profile) computeFingerprint() string {
 // identical, and the Phase 1 allocator can co-locate each group
 // independently.
 type Need struct {
-	ClusterID        machine.ClusterID
-	Profile          Profile
-	Count            int
-	ArrivalUnixNanos int64
-	Group            string
+	ClusterID          machine.ClusterID
+	Profile            Profile
+	AggregateResources []ResourceQty
+	MinUnit            []ResourceQty
+	ArrivalUnixNanos   int64
+	Group              string
 }
 
 // Aggregate groups a slice of Needs by (cluster, profile fingerprint,
-// group), summing counts. Useful in tests and when the operator wants
-// to merge raw per-CR observations into the wire-level Need
-// representation. CRs from the same workload (same Group) collapse
-// into one Need; CRs from different workloads stay separate even if
-// they share a Profile fingerprint.
+// group): AggregateResources sum per group, MinUnit takes the per-group
+// maximum. This is the shared roll-up primitive — the operator folds
+// raw per-CR observations into the wire-level Need representation with
+// it, and tests use it directly. CRs from the same workload (same
+// Group) collapse into one Need; CRs from different workloads stay
+// separate even if they share a Profile fingerprint.
 func Aggregate(in []Need) []Need {
 	type key struct {
 		cluster machine.ClusterID
@@ -396,7 +373,8 @@ func Aggregate(in []Need) []Need {
 	for _, n := range in {
 		k := key{n.ClusterID, n.Profile.Fingerprint(), n.Group}
 		if at, ok := idx[k]; ok {
-			out[at].Count += n.Count
+			out[at].AggregateResources = AddResources(out[at].AggregateResources, n.AggregateResources)
+			out[at].MinUnit = MaxResources(out[at].MinUnit, n.MinUnit)
 			// Keep earliest arrival time so age calculations are accurate.
 			if n.ArrivalUnixNanos != 0 && (out[at].ArrivalUnixNanos == 0 || n.ArrivalUnixNanos < out[at].ArrivalUnixNanos) {
 				out[at].ArrivalUnixNanos = n.ArrivalUnixNanos
@@ -511,16 +489,12 @@ func (t *Table) Stats() Stats {
 	s := Stats{Clusters: len(t.byCluster)}
 	for _, ns := range t.byCluster {
 		s.Needs += len(ns)
-		for _, n := range ns {
-			s.PendingMachines += n.Count
-		}
 	}
 	return s
 }
 
 // Stats summarises the table.
 type Stats struct {
-	Clusters        int
-	Needs           int
-	PendingMachines int
+	Clusters int
+	Needs    int
 }

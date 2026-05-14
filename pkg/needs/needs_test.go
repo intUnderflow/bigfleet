@@ -34,14 +34,12 @@ func TestBucketForDollars(t *testing.T) {
 
 func TestProfile_Fingerprint_StableAcrossEqualInputs(t *testing.T) {
 	t.Parallel()
+	// ADR-0027: Profile is pure identity — requirements, spread, priority,
+	// and the two penalty buckets. No resource shape participates.
 	a := needs.NewProfile(
 		[]needs.Requirement{
 			{Key: "z", Operator: needs.OperatorIn, Values: []string{"b", "a"}},
 			{Key: "a", Operator: needs.OperatorIn, Values: []string{"x"}},
-		},
-		[]needs.ResourceQty{
-			{Name: "memory", Quantity: "768Gi"},
-			{Name: "cpu", Quantity: "96"},
 		},
 		nil,
 		1_000_000,
@@ -52,10 +50,6 @@ func TestProfile_Fingerprint_StableAcrossEqualInputs(t *testing.T) {
 		[]needs.Requirement{
 			{Key: "a", Operator: needs.OperatorIn, Values: []string{"x"}},
 			{Key: "z", Operator: needs.OperatorIn, Values: []string{"a", "b"}},
-		},
-		[]needs.ResourceQty{
-			{Name: "cpu", Quantity: "96"},
-			{Name: "memory", Quantity: "768Gi"},
 		},
 		nil,
 		1_000_000,
@@ -69,20 +63,16 @@ func TestProfile_Fingerprint_StableAcrossEqualInputs(t *testing.T) {
 
 func TestProfile_Fingerprint_DiffersOnAnyField(t *testing.T) {
 	t.Parallel()
-	base := needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	base := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
 	variants := []needs.Profile{
-		needs.NewProfile(nil, nil, nil, 200, needs.PenaltyBucket1, needs.PenaltyBucket1),
-		needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket2, needs.PenaltyBucket1),
-		needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket2),
+		needs.NewProfile(nil, nil, 200, needs.PenaltyBucket1, needs.PenaltyBucket1),
+		needs.NewProfile(nil, nil, 100, needs.PenaltyBucket2, needs.PenaltyBucket1),
+		needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket2),
 		needs.NewProfile(
 			[]needs.Requirement{{Key: "x", Operator: needs.OperatorExists}},
-			nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1),
-		needs.NewProfile(
-			nil,
-			[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 			nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1),
 		needs.NewProfile(
-			nil, nil,
+			nil,
 			[]needs.TopologySpread{{TopologyKey: "zone", MaxSkew: 1}},
 			100, needs.PenaltyBucket1, needs.PenaltyBucket1),
 	}
@@ -93,65 +83,86 @@ func TestProfile_Fingerprint_DiffersOnAnyField(t *testing.T) {
 	}
 }
 
-func TestAggregate_PropertyDisaggregateRoundTrip(t *testing.T) {
+func TestAggregate_SumsResourcesAndMaxesMinUnit(t *testing.T) {
 	t.Parallel()
-	// Property: aggregating then disaggregating preserves the multiset
-	// of (cluster, profile) entries.
+	// ADR-0027: aggregating Needs that share (cluster, profile, group)
+	// sums their AggregateResources and takes the per-dimension max of
+	// MinUnit.
 	pf := func(p int32) needs.Profile {
-		return needs.NewProfile(nil, nil, nil, p, needs.PenaltyBucket1, needs.PenaltyBucket1)
+		return needs.NewProfile(nil, nil, p, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	}
+	rq := func(cpu string) []needs.ResourceQty {
+		return []needs.ResourceQty{{Name: "cpu", Quantity: cpu}}
 	}
 	in := []needs.Need{
-		{ClusterID: "a", Profile: pf(100), Count: 1},
-		{ClusterID: "a", Profile: pf(100), Count: 1},
-		{ClusterID: "a", Profile: pf(100), Count: 3},
-		{ClusterID: "b", Profile: pf(100), Count: 2},
-		{ClusterID: "a", Profile: pf(200), Count: 4},
+		{ClusterID: "a", Profile: pf(100), AggregateResources: rq("1"), MinUnit: rq("1")},
+		{ClusterID: "a", Profile: pf(100), AggregateResources: rq("1"), MinUnit: rq("1")},
+		{ClusterID: "a", Profile: pf(100), AggregateResources: rq("3"), MinUnit: rq("3")},
+		{ClusterID: "b", Profile: pf(100), AggregateResources: rq("2"), MinUnit: rq("2")},
+		{ClusterID: "a", Profile: pf(200), AggregateResources: rq("4"), MinUnit: rq("4")},
 	}
 	agg := needs.Aggregate(in)
-	wantTotals := map[string]int{
-		"a|p=100": 1 + 1 + 3,
-		"b|p=100": 2,
-		"a|p=200": 4,
+
+	type want struct{ aggCPU, minUnitCPU string }
+	wantBy := map[string]want{
+		"a|p=100": {"5", "3"}, // 1+1+3 summed; max(1,1,3) folded into min-unit
+		"b|p=100": {"2", "2"},
+		"a|p=200": {"4", "4"},
 	}
-	gotTotals := map[string]int{}
+	if len(agg) != len(wantBy) {
+		t.Fatalf("aggregate produced %d entries, want %d", len(agg), len(wantBy))
+	}
 	for _, n := range agg {
 		key := string(n.ClusterID) + "|p=" + intToString(int(n.Profile.Priority()))
-		gotTotals[key] += n.Count
-	}
-	if len(gotTotals) != len(wantTotals) {
-		t.Fatalf("aggregate produced %d entries, want %d", len(gotTotals), len(wantTotals))
-	}
-	for k, v := range wantTotals {
-		if gotTotals[k] != v {
-			t.Errorf("totals[%s] = %d, want %d", k, gotTotals[k], v)
+		w, ok := wantBy[key]
+		if !ok {
+			t.Errorf("unexpected aggregate entry %s", key)
+			continue
+		}
+		if got := cpuOf(n.AggregateResources); got != w.aggCPU {
+			t.Errorf("%s: aggregate cpu = %q, want %q", key, got, w.aggCPU)
+		}
+		if got := cpuOf(n.MinUnit); got != w.minUnitCPU {
+			t.Errorf("%s: min-unit cpu = %q, want %q", key, got, w.minUnitCPU)
 		}
 	}
+}
+
+func cpuOf(rs []needs.ResourceQty) string {
+	for _, r := range rs {
+		if r.Name == "cpu" {
+			return r.Quantity
+		}
+	}
+	return ""
 }
 
 func TestTable_Replace_FullReplacementSemantics(t *testing.T) {
 	t.Parallel()
 	tbl := needs.NewTable()
-	pf := needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	pf1 := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	pf2 := needs.NewProfile(nil, nil, 200, needs.PenaltyBucket1, needs.PenaltyBucket1)
 
 	tbl.Replace("cluster-a", []needs.Need{
-		{ClusterID: "cluster-a", Profile: pf, Count: 5},
+		{ClusterID: "cluster-a", Profile: pf1},
+		{ClusterID: "cluster-a", Profile: pf2},
 	})
-	if got := tbl.Stats().PendingMachines; got != 5 {
-		t.Fatalf("after first replace: pending = %d, want 5", got)
+	if got := tbl.Stats().Needs; got != 2 {
+		t.Fatalf("after first replace: needs = %d, want 2", got)
 	}
 
-	// Replace with a smaller set — the prior 5 must be gone.
+	// Replace with a smaller set — the prior 2 must be gone.
 	tbl.Replace("cluster-a", []needs.Need{
-		{ClusterID: "cluster-a", Profile: pf, Count: 2},
+		{ClusterID: "cluster-a", Profile: pf1},
 	})
-	if got := tbl.Stats().PendingMachines; got != 2 {
-		t.Fatalf("after second replace: pending = %d, want 2", got)
+	if got := tbl.Stats().Needs; got != 1 {
+		t.Fatalf("after second replace: needs = %d, want 1", got)
 	}
 
 	// Replace with empty — withdrawal.
 	tbl.Replace("cluster-a", nil)
-	if got := tbl.Stats().PendingMachines; got != 0 {
-		t.Fatalf("after empty replace: pending = %d, want 0", got)
+	if got := tbl.Stats().Needs; got != 0 {
+		t.Fatalf("after empty replace: needs = %d, want 0", got)
 	}
 	if got := tbl.Stats().Clusters; got != 0 {
 		t.Fatalf("after empty replace: clusters = %d, want 0", got)
@@ -161,17 +172,17 @@ func TestTable_Replace_FullReplacementSemantics(t *testing.T) {
 func TestTable_Snapshot_PrioritySortedThenArrival(t *testing.T) {
 	t.Parallel()
 	tbl := needs.NewTable()
-	hi := needs.NewProfile(nil, nil, nil, 1_000_000, needs.PenaltyBucket1, needs.PenaltyBucket1)
-	mid := needs.NewProfile(nil, nil, nil, 500_000, needs.PenaltyBucket1, needs.PenaltyBucket1)
-	lo := needs.NewProfile(nil, nil, nil, 0, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	hi := needs.NewProfile(nil, nil, 1_000_000, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	mid := needs.NewProfile(nil, nil, 500_000, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	lo := needs.NewProfile(nil, nil, 0, needs.PenaltyBucket1, needs.PenaltyBucket1)
 
 	tbl.Replace("cluster-a", []needs.Need{
-		{ClusterID: "cluster-a", Profile: lo, Count: 1, ArrivalUnixNanos: 30},
-		{ClusterID: "cluster-a", Profile: hi, Count: 2, ArrivalUnixNanos: 20},
+		{ClusterID: "cluster-a", Profile: lo, ArrivalUnixNanos: 30},
+		{ClusterID: "cluster-a", Profile: hi, ArrivalUnixNanos: 20},
 	})
 	tbl.Replace("cluster-b", []needs.Need{
-		{ClusterID: "cluster-b", Profile: mid, Count: 1, ArrivalUnixNanos: 10},
-		{ClusterID: "cluster-b", Profile: hi, Count: 1, ArrivalUnixNanos: 5},
+		{ClusterID: "cluster-b", Profile: mid, ArrivalUnixNanos: 10},
+		{ClusterID: "cluster-b", Profile: hi, ArrivalUnixNanos: 5},
 	})
 
 	snap := tbl.Snapshot()
@@ -198,9 +209,9 @@ func TestTable_Snapshot_PrioritySortedThenArrival(t *testing.T) {
 func TestTable_Snapshot_CachedAcrossCleanReads(t *testing.T) {
 	t.Parallel()
 	tbl := needs.NewTable()
-	pf := needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	pf := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
 	tbl.Replace("cluster-a", []needs.Need{
-		{ClusterID: "cluster-a", Profile: pf, Count: 1},
+		{ClusterID: "cluster-a", Profile: pf},
 	})
 	first := tbl.Snapshot()
 	second := tbl.Snapshot()
@@ -214,8 +225,8 @@ func TestTable_Snapshot_CachedAcrossCleanReads(t *testing.T) {
 		}
 	}
 	// Mutate first; second must not change.
-	first[0].Count = 999
-	if second[0].Count == 999 {
+	first[0].Group = "mutated"
+	if second[0].Group == "mutated" {
 		t.Fatalf("snapshots not isolated: mutating first changed second")
 	}
 }
@@ -223,13 +234,13 @@ func TestTable_Snapshot_CachedAcrossCleanReads(t *testing.T) {
 func TestTable_Concurrent_NoRace(t *testing.T) {
 	t.Parallel()
 	tbl := needs.NewTable()
-	pf := needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	pf := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
 
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 1000; i++ {
 			tbl.Replace(machine.ClusterID(intToString(i%10)), []needs.Need{
-				{ClusterID: machine.ClusterID(intToString(i % 10)), Profile: pf, Count: 1},
+				{ClusterID: machine.ClusterID(intToString(i % 10)), Profile: pf},
 			})
 		}
 		close(done)
@@ -246,10 +257,10 @@ func TestTable_Concurrent_NoRace(t *testing.T) {
 func TestTable_Snapshot_DeterministicWithinPriorityAndArrival(t *testing.T) {
 	t.Parallel()
 	tbl := needs.NewTable()
-	pf := needs.NewProfile(nil, nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
-	tbl.Replace("cluster-c", []needs.Need{{ClusterID: "cluster-c", Profile: pf, Count: 1, ArrivalUnixNanos: 0}})
-	tbl.Replace("cluster-a", []needs.Need{{ClusterID: "cluster-a", Profile: pf, Count: 1, ArrivalUnixNanos: 0}})
-	tbl.Replace("cluster-b", []needs.Need{{ClusterID: "cluster-b", Profile: pf, Count: 1, ArrivalUnixNanos: 0}})
+	pf := needs.NewProfile(nil, nil, 100, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	tbl.Replace("cluster-c", []needs.Need{{ClusterID: "cluster-c", Profile: pf, ArrivalUnixNanos: 0}})
+	tbl.Replace("cluster-a", []needs.Need{{ClusterID: "cluster-a", Profile: pf, ArrivalUnixNanos: 0}})
+	tbl.Replace("cluster-b", []needs.Need{{ClusterID: "cluster-b", Profile: pf, ArrivalUnixNanos: 0}})
 
 	snap := tbl.Snapshot()
 	got := make([]string, len(snap))

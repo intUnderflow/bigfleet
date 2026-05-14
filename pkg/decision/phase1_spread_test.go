@@ -22,7 +22,6 @@ func gpuProfileWithSpread(priority int32, key string, maxSkew int32, action need
 			Operator: needs.OperatorIn,
 			Values:   []string{"a3-highgpu-8g"},
 		}},
-		nil,
 		[]needs.TopologySpread{{
 			TopologyKey:       key,
 			MaxSkew:           maxSkew,
@@ -46,11 +45,11 @@ func TestPhase1_Spread_MaxSkew1_DistributesEvenly(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
-		Count:     6,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
+		6,
+	)})
 
 	if got := len(r.Actions); got != 6 {
 		t.Fatalf("actions = %d, want 6", got)
@@ -81,11 +80,11 @@ func TestPhase1_Spread_MaxSkew1_RespectsConstraintWhenSupplyUneven(t *testing.T)
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
-		Count:     6,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
+		6,
+	)})
 
 	if got := len(r.Actions); got != 5 {
 		t.Errorf("actions = %d, want 5 (constrained by MaxSkew=1)", got)
@@ -107,8 +106,8 @@ func TestPhase1_Spread_MaxSkew1_RespectsConstraintWhenSupplyUneven(t *testing.T)
 	if max-min > 1 {
 		t.Errorf("MaxSkew=1 violated: distribution = %+v (max-min=%d)", zones, max-min)
 	}
-	if r.Unsatisfied[0].Deficit != 1 {
-		t.Errorf("deficit = %d, want 1", r.Unsatisfied[0].Deficit)
+	if gpuQty(r.Unsatisfied[0].Deficit) != "8" {
+		t.Errorf("deficit nvidia.com/gpu = %q, want 8 (1 unit)", gpuQty(r.Unsatisfied[0].Deficit))
 	}
 }
 
@@ -124,11 +123,11 @@ func TestPhase1_Spread_MaxSkew2_AllowsLargerSkew(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 2, needs.WhenUnsatisfiableDoNotSchedule),
-		Count:     8,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 2, needs.WhenUnsatisfiableDoNotSchedule),
+		8,
+	)})
 
 	if got := len(r.Actions); got != 8 {
 		t.Fatalf("actions = %d, want 8", got)
@@ -167,11 +166,11 @@ func TestPhase1_Spread_ScheduleAnyway_DoesNotEnforce(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableScheduleAnyway),
-		Count:     4,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableScheduleAnyway),
+		4,
+	)})
 
 	if got := len(r.Actions); got != 4 {
 		t.Fatalf("actions = %d, want 4", got)
@@ -200,11 +199,11 @@ func TestPhase1_Spread_PrefersCheaperBucketWithinSkew(t *testing.T) {
 	snap := inv.Snapshot()
 
 	// MaxSkew=1: alternates a, b, a, b — 2/2.
-	r := decision.Phase1(snap, []needs.Need{{
-		ClusterID: "cluster-x",
-		Profile:   gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
-		Count:     4,
-	}})
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSpread(1_000_000, "topology.kubernetes.io/zone", 1, needs.WhenUnsatisfiableDoNotSchedule),
+		4,
+	)})
 	if got := len(r.Actions); got != 4 {
 		t.Fatalf("actions = %d, want 4", got)
 	}

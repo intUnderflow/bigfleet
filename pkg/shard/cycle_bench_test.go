@@ -117,14 +117,15 @@ func buildShardForBench(b *testing.B, invSize int) *Shard {
 func loadDemand(b *testing.B, s *Shard, clusters, perCluster int) {
 	b.Helper()
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
-	resources := map[string]string{
-		"a3-highgpu-8g":  "nvidia.com/gpu=8",
-		"m6i.large":      "cpu=2",
-		"c6i.4xlarge":    "cpu=16",
-		"n2-standard-32": "cpu=32",
-		"r6i.xlarge":     "cpu=4",
+	// Per-replica unit shapes matching the seeded machines' Resources so
+	// each Need's MinUnit fits on one machine of its instance type.
+	units := map[string][]needs.ResourceQty{
+		"a3-highgpu-8g":  {{Name: "nvidia.com/gpu", Quantity: "8"}},
+		"m6i.large":      {{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "8Gi"}},
+		"c6i.4xlarge":    {{Name: "cpu", Quantity: "16"}, {Name: "memory", Quantity: "32Gi"}},
+		"n2-standard-32": {{Name: "cpu", Quantity: "32"}, {Name: "memory", Quantity: "128Gi"}},
+		"r6i.xlarge":     {{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "32Gi"}},
 	}
-	_ = resources
 
 	for c := 0; c < clusters; c++ {
 		clusterID := machine.ClusterID("bench-cluster-" + strconv.Itoa(c))
@@ -137,15 +138,16 @@ func loadDemand(b *testing.B, s *Shard, clusters, perCluster int) {
 					Operator: needs.OperatorIn,
 					Values:   []string{t},
 				}},
-				nil, nil,
+				nil,
 				int32(1000+(i%10)*1000),
 				needs.PenaltyBucket8192,
 				needs.PenaltyBucket8192,
 			)
 			ns = append(ns, needs.Need{
-				ClusterID: clusterID,
-				Profile:   p,
-				Count:     1,
+				ClusterID:          clusterID,
+				Profile:            p,
+				AggregateResources: units[t],
+				MinUnit:            units[t],
 			})
 		}
 		s.NeedsTable().Replace(clusterID, ns)

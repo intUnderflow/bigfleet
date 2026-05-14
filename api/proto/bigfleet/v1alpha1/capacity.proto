@@ -25,45 +25,42 @@ message ClusterCapacityNeeds {
   // Wall-clock time at which the operator built this snapshot.
   int64 timestamp_unix_nanos = 2;
 
-  // Aggregated demand. Pods sharing a profile collapse into one entry.
+  // Aggregated demand. Each CapacityNeed is a constrained aggregate resource
+  // request; CRs sharing an aggregation key collapse into one entry.
   repeated CapacityNeed needs = 3;
 }
 
-// CapacityNeed is the aggregated unit of capacity demand. The aggregation
-// key is (requirements, resources, priority, spread, interruption_penalty_bucket,
-// reclamation_penalty_bucket). Two CRs whose fields all match across that key
-// become a single CapacityNeed with count = 2.
+// CapacityNeed is the aggregated unit of capacity demand — a constrained
+// aggregate resource request (ADR-0027). The aggregation key is
+// (requirements, priority, spread, interruption_penalty_bucket,
+// reclamation_penalty_bucket). CRs whose fields all match across that key
+// collapse into a single CapacityNeed: their per-replica resource requests
+// are summed into aggregate_resources, and min_unit is the largest of them.
 message CapacityNeed {
   // Node-selector style requirements that must be satisfied. The autoscaler
   // is responsible for honouring all standard operators (In, NotIn, Exists,
   // DoesNotExist) plus the protobuf-only Same operator (see below).
   repeated NodeSelectorRequirement requirements = 1;
 
-  // Per-replica resource request — what one Pod of this Profile asks for.
-  // Map keys are Kubernetes resource names ("cpu", "memory",
-  // "nvidia.com/gpu"); values are quantity strings ("96", "768Gi", "8").
+  // Aggregate resource demand for this constraint set — the vector sum of
+  // the per-replica requests of every CR in this CapacityNeed. Map keys are
+  // Kubernetes resource names ("cpu", "memory", "nvidia.com/gpu"); values
+  // are quantity strings.
   //
-  // ADR-0022: this is the per-replica shape, *not* a machine shape. The
-  // autoscaler aggregates `count × resources` across all CRs in this
-  // CapacityNeed and provisions however many machines are needed to host
-  // that aggregate at the provider's instance-shape granularity.
-  map<string, string> resources = 2;
+  // ADR-0027: the autoscaler diffs this against the sum of Allocatable over
+  // matching machines, in resource-vector space. It does not reconstruct a
+  // per-pod count or density — machine count is the autoscaler's output,
+  // never the cluster's input.
+  map<string, string> aggregate_resources = 2;
 
   // The pod's PriorityClass value. Higher = served first. The autoscaler
   // walks needs top-down by priority.
   int32 priority = 3;
 
-  // Number of Pods aggregated into this CapacityNeed. ADR-0022: this is
-  // the post-aggregation Pod count, *not* the number of machines the
-  // autoscaler should provision. The autoscaler derives machine count
-  // from `count × resources` against the matching machine inventory's
-  // per-machine Allocatable.
-  //
-  // Example: count=100, resources={cpu:1,memory:4Gi}, matching machines
-  // are c6a.4xlarge ({cpu:16,memory:32Gi}) → autoscaler provisions
-  // ceil(100 / min(16, 8)) = ceil(100/8) = 13 machines (memory is the
-  // bottleneck dimension at 32Gi / 4Gi = 8 replicas per machine).
-  int32 count = 4;
+  // Field 4 was `count` (post-aggregation Pod count). Removed by ADR-0027:
+  // demand is now expressed as aggregate_resources + min_unit, and machine
+  // count is the autoscaler's output, never the cluster's input.
+  reserved 4;
 
   // Topology-spread constraints copied from the source pod(s). Pass-through
   // to the autoscaler so it can spread provisioning across domains.
@@ -76,6 +73,13 @@ message CapacityNeed {
   // workload-specific.
   PenaltyBucket interruption_penalty_bucket = 6;
   PenaltyBucket reclamation_penalty_bucket  = 7;
+
+  // ADR-0027: the largest atomic schedulable unit — a resource vector that
+  // every machine provisioned for this CapacityNeed must individually be
+  // able to host (the indivisibility floor; e.g. an 8-GPU pod needs 8 GPU
+  // on one machine). With the Workload API this is the declared gang/unit
+  // size. Same map shape as aggregate_resources.
+  map<string, string> min_unit = 8;
 }
 
 // NodeSelectorRequirement mirrors core/v1.NodeSelectorRequirement, plus a
@@ -89,9 +93,10 @@ message NodeSelectorRequirement {
     OPERATOR_NOT_IN       = 2;
     OPERATOR_EXISTS       = 3;
     OPERATOR_DOES_NOT_EXIST = 4;
-    // Same: all `count` nodes in this CapacityNeed must share a value for
-    // this key. Optional values restrict which value is acceptable. Only
-    // valid in the protobuf wire format; not surfaced on the CRD.
+    // Same: all machines provisioned for this CapacityNeed must share a
+    // value for this key. Optional values restrict which value is
+    // acceptable. Only valid in the protobuf wire format; not surfaced on
+    // the CRD.
     OPERATOR_SAME         = 5;
   }
   Operator operator       = 2;

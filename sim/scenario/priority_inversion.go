@@ -30,13 +30,13 @@ func priorityInversion() sim.Scenario {
 			Resources:    map[string]string{"nvidia.com/gpu": "8"},
 		})
 	}
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
 	mkProfile := func(prio int32) needs.Profile {
 		return needs.NewProfile(
 			[]needs.Requirement{{
 				Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn,
 				Values: []string{"a3-highgpu-8g"},
 			}},
-			[]needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}},
 			nil, prio,
 			needs.PenaltyBucket8192, needs.PenaltyBucketPinned,
 		)
@@ -49,8 +49,13 @@ func priorityInversion() sim.Scenario {
 		InitialIdle: idle,
 		Events: []sim.Event{
 			{
-				Cluster:     "cluster-batch",
-				Needs:       []needs.Need{{ClusterID: "cluster-batch", Profile: low, Count: 4}},
+				Cluster: "cluster-batch",
+				Needs: []needs.Need{{
+					ClusterID:          "cluster-batch",
+					Profile:            low,
+					AggregateResources: needs.ScaleResources(gpuUnit, 4),
+					MinUnit:            gpuUnit,
+				}},
 				CyclesAfter: 1,
 			},
 			{
@@ -58,7 +63,12 @@ func priorityInversion() sim.Scenario {
 				// in place by re-asserting it (full-replacement
 				// semantics would otherwise withdraw it).
 				Cluster: "cluster-train",
-				Needs:   []needs.Need{{ClusterID: "cluster-train", Profile: high, Count: 4}},
+				Needs: []needs.Need{{
+					ClusterID:          "cluster-train",
+					Profile:            high,
+					AggregateResources: needs.ScaleResources(gpuUnit, 4),
+					MinUnit:            gpuUnit,
+				}},
 				// Two cycles: cycle A emits Preempt actions
 				// (Configured→Idle in instant mode); cycle B's Phase 1
 				// re-bootstraps the now-Idle machines for cluster-train.

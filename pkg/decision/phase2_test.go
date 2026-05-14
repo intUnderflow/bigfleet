@@ -42,7 +42,7 @@ func TestPhase2_PriorityInversion_Preempts(t *testing.T) {
 	}
 	r := decision.Phase2(inv.Snapshot(),
 		[]decision.UnsatisfiedNeed{
-			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), Count: 4}, Deficit: 4},
+			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), AggregateResources: needs.ScaleResources(gpuUnit, 4), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 4)},
 		},
 		decision.DefaultPhase2Options(),
 	)
@@ -74,15 +74,15 @@ func TestPhase2_RefusesToPreemptEqualOrHigher(t *testing.T) {
 	}
 	r := decision.Phase2(inv.Snapshot(),
 		[]decision.UnsatisfiedNeed{
-			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), Count: 2}, Deficit: 2},
+			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), AggregateResources: needs.ScaleResources(gpuUnit, 2), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 2)},
 		},
 		decision.DefaultPhase2Options(),
 	)
 	if len(r.Actions) != 0 {
 		t.Errorf("expected zero preemption (equal priority), got %d", len(r.Actions))
 	}
-	if len(r.Unresolved) != 1 || r.Unresolved[0].Deficit != 2 {
-		t.Errorf("expected unresolved deficit=2, got %+v", r.Unresolved)
+	if len(r.Unresolved) != 1 || gpuQty(r.Unresolved[0].Deficit) != "16" {
+		t.Errorf("expected unresolved deficit nvidia.com/gpu=16 (2 units), got %+v", r.Unresolved)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestPhase2_PrefersLowerInterruptionPenalty(t *testing.T) {
 
 	r := decision.Phase2(inv.Snapshot(),
 		[]decision.UnsatisfiedNeed{
-			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), Count: 1}, Deficit: 1},
+			{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), AggregateResources: needs.ScaleResources(gpuUnit, 1), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 1)},
 		},
 		decision.DefaultPhase2Options(),
 	)
@@ -128,7 +128,7 @@ func TestPhase2_GracePeriodMatchesGap(t *testing.T) {
 			_ = inv.Insert(configuredVictim("v-1", "cluster-batch", tc.victimPriority, 5.0, 1.0))
 			r := decision.Phase2(inv.Snapshot(),
 				[]decision.UnsatisfiedNeed{
-					{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), Count: 1}, Deficit: 1},
+					{Need: needs.Need{ClusterID: "cluster-train", Profile: gpuProfile(1_000_000), AggregateResources: needs.ScaleResources(gpuUnit, 1), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 1)},
 				},
 				decision.DefaultPhase2Options(),
 			)
@@ -150,8 +150,8 @@ func TestPhase2_MultiplePreemptorsResolvedByPriority(t *testing.T) {
 
 	r := decision.Phase2(inv.Snapshot(),
 		[]decision.UnsatisfiedNeed{
-			{Need: needs.Need{ClusterID: "cluster-mid", Profile: gpuProfile(500_000), Count: 1}, Deficit: 1},
-			{Need: needs.Need{ClusterID: "cluster-high", Profile: gpuProfile(1_000_000), Count: 1}, Deficit: 1},
+			{Need: needs.Need{ClusterID: "cluster-mid", Profile: gpuProfile(500_000), AggregateResources: needs.ScaleResources(gpuUnit, 1), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 1)},
+			{Need: needs.Need{ClusterID: "cluster-high", Profile: gpuProfile(1_000_000), AggregateResources: needs.ScaleResources(gpuUnit, 1), MinUnit: gpuUnit}, Deficit: needs.ScaleResources(gpuUnit, 1)},
 		},
 		decision.DefaultPhase2Options(),
 	)

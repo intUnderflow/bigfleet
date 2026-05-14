@@ -48,27 +48,24 @@ type phase1Allocator struct {
 // slice. take() never mutates src; it just advances head and applies
 // the lazy MatchProfile + claimed filter.
 //
+// ADR-0027: pools are heterogeneous in machine size — MatchProfile is
+// requirement-only now, so an `instance-type In [a, b]` Need's pool
+// holds both a-shaped and b-shaped machines. take() sums their actual
+// EffectiveAllocatable against the Need's deficit vector; there is no
+// per-pool "density" because there is no single per-machine shape.
+//
 // coLocated* fields are M44.4 / ADR-0019: cache the MatchProfile-and-
 // bucketed-by-sameKey layout, with per-bucket head cursors. Subsequent
 // takeCoLocated calls don't re-walk pool.src, and don't re-bucket the
 // already-walked machines — they advance head cursors past claimed
-// machines (O(claimed) amortised) and pick the best bucket in
-// O(buckets) per call. At cloud scale this is the path the operator's
-// owner-grouped → Same translation routes every Need through, so the
-// optimization matters for every realistic Pod-mode profile.
+// machines (O(claimed) amortised) and pick the best bucket. At cloud
+// scale this is the path the operator's owner-grouped → Same translation
+// routes every Need through, so the optimization matters for every
+// realistic Pod-mode profile.
 type phase1Pool struct {
-	src     []machine.Machine
-	profile needs.Profile
-	head    int
-	// density caches PodsPerMachine of a representative matching
-	// machine — how many Pods of this Need's shape fit on one machine
-	// of this pool. 0 = not yet computed. All machines that MatchProfile
-	// a given Need carry Resources == profile.Resources (MatchProfile
-	// enforces exact equality), so their EffectiveAllocatable —
-	// densityMultiplier × Resources — is uniform; the first match is
-	// representative. Used to size take() requests in machine units
-	// (ADR-0022 density model).
-	density          int
+	src              []machine.Machine
+	profile          needs.Profile
+	head             int
 	coLocatedBuilt   bool
 	coLocatedSameKey string
 	coLocatedBuckets []coLocatedBucket
@@ -88,42 +85,13 @@ func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 	}
 }
 
-// densityFor returns how many Pods of profile's shape fit on one
-// matching machine in the (state, profile) pool. Phase 1 uses it to
-// translate a Pod deficit into a machine-count take() request — the
-// piece M45.1 intended but never wired (phase1_assign.go computed
-// MachinesForAggregate(profResources, profResources, ...), which is
-// always density 1, so take() was asked for ~density× too many
-// machines). Harmless for the large standard pool — surplus-credit
-// recovers it — but it burns the scarce co-located pool dry, so
-// takeCoLocated returned 0 and Same-requirement Needs went to
-// shortfall (ADR-0024 sameRack archetypes). Returns 1 when the pool
-// is empty or has no matching machine: the conservative pre-ADR-0022
-// fallback (1 Pod = 1 machine). Cached on the pool — one
-// find-first-match walk per (state, profile) per cycle.
-func (a *phase1Allocator) densityFor(state machine.State, profile needs.Profile) int {
-	pool := a.poolFor(state, profile)
-	if pool == nil {
-		return 1
-	}
-	if pool.density == 0 {
-		pool.density = 1
-		profRes := profileResourcesToMap(profile.ResourcesRO())
-		for _, m := range pool.src {
-			if !MatchProfile(pool.profile, m) {
-				continue
-			}
-			if d := PodsPerMachine(profRes, m.EffectiveAllocatable()); d >= 1 {
-				pool.density = d
-			}
-			break
-		}
-	}
-	return pool.density
-}
-
-// take returns up to n unclaimed, MatchProfile-passing machines from
-// the per-(state, fingerprint) pool. It claims them as it goes.
+// take returns unclaimed, MatchProfile-passing machines from the
+// per-(state, fingerprint) pool whose summed EffectiveAllocatable covers
+// the deficit vector (ADR-0027) — or as many as the pool can offer if it
+// cannot fully cover. Each returned machine can host one minUnit (the
+// indivisibility floor); a machine too small for minUnit is skipped
+// without consuming the pool's head cursor, since a peer Need with a
+// smaller minUnit may still use it. take claims what it returns.
 //
 // Topology routing (paper §8):
 //
@@ -144,16 +112,16 @@ func (a *phase1Allocator) densityFor(state machine.State, profile needs.Profile)
 func (a *phase1Allocator) take(
 	state machine.State,
 	profile needs.Profile,
-	n int,
+	deficit, minUnit []needs.ResourceQty,
 ) []machine.Machine {
-	if n <= 0 {
+	if needs.IsZero(deficit) {
 		return nil
 	}
 	if key, ok := sameRequirementKey(profile); ok {
-		return a.takeCoLocated(state, profile, n, key)
+		return a.takeCoLocated(state, profile, deficit, minUnit, key)
 	}
 	if key, skew, ok := strictSpread(profile); ok {
-		return a.takeSpread(state, profile, n, key, skew)
+		return a.takeSpread(state, profile, deficit, minUnit, key, skew)
 	}
 	start := time.Now()
 	defer func() {
@@ -164,34 +132,56 @@ func (a *phase1Allocator) take(
 	if pool == nil {
 		return nil
 	}
-	taken := make([]machine.Machine, 0, n)
-	for pool.head < len(pool.src) && len(taken) < n {
-		m := pool.src[pool.head]
-		pool.head++
+	remaining := deficit
+	var taken []machine.Machine
+	// advancing tracks whether pool.head is still moving past a prefix
+	// of permanently-done machines (claimed globally, or MatchProfile
+	// failures for this pool). Once a minUnit-too-small machine is hit,
+	// head stops advancing — that machine must stay visible to a peer
+	// Need whose minUnit is smaller.
+	advancing := true
+	for i := pool.head; i < len(pool.src) && !needs.IsZero(remaining); i++ {
+		m := pool.src[i]
 		if _, claimed := a.claimed[m.ID]; claimed {
+			if advancing {
+				pool.head = i + 1
+			}
 			continue
 		}
 		if !MatchProfile(pool.profile, m) {
+			if advancing {
+				pool.head = i + 1
+			}
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, minUnit) {
+			advancing = false
 			continue
 		}
 		taken = append(taken, m)
 		a.claimed[m.ID] = struct{}{}
+		remaining = needs.SubResources(remaining, alloc)
+		if advancing {
+			pool.head = i + 1
+		}
 	}
 	return taken
 }
 
 // takeCoLocated honours a Profile's Same requirement (paper §8): all
-// returned machines share the same value for the Same key. Picks the
-// best single-value bucket: atomic-satisfiable (≥n machines) with the
-// cheapest head wins; falls back to the largest bucket for a partial
-// fill (the residual becomes a shortfall via the caller's deficit
-// arithmetic).
+// returned machines share one value for the Same key. It picks the best
+// single-value bucket — a bucket whose unclaimed, minUnit-passing
+// machines have enough summed EffectiveAllocatable to cover the deficit
+// ("atomic-satisfiable") wins, cheapest head first; otherwise the bucket
+// with the most available machines is taken for a partial fill (the
+// residual becomes a shortfall via the caller's deficit arithmetic).
 //
-// Does NOT advance pool.head — bucketing implies we walk the whole
-// pool and skip the head cursor convention. Subsequent regular take()
-// calls on the same pool still behave normally; the global claimed set
-// catches anything we consumed.
-func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profile, n int, sameKey string) []machine.Machine {
+// Does NOT advance pool.head — bucketing implies we walk the whole pool
+// and skip the head cursor convention. Subsequent regular take() calls
+// on the same pool still behave normally; the global claimed set catches
+// anything we consumed.
+func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profile, deficit, minUnit []needs.ResourceQty, sameKey string) []machine.Machine {
 	start := time.Now()
 	defer func() {
 		metrics.ShardPhase1TakeDuration.WithLabelValues("takeCoLocated").Observe(time.Since(start).Seconds())
@@ -202,13 +192,9 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		return nil
 	}
 
-	// ADR-0019 (M44.4): cache the MatchProfile-and-bucketed layout
-	// once per pool. Subsequent calls advance per-bucket head cursors
-	// past claimed machines and pick the best bucket in O(buckets).
-	// Pre-cache, takeCoLocated re-walked pool.src on every call;
-	// at scaleway-50k cloud scale (50 K Same-everywhere Needs against
-	// ~10 K Idle per pool) that was ~5×10⁸ MatchProfile calls per
-	// cycle and dominated Phase 1 wall-clock.
+	// ADR-0019 (M44.4): cache the MatchProfile-and-bucketed layout once
+	// per pool. Subsequent calls advance per-bucket head cursors past
+	// claimed machines and re-scan the unclaimed tail.
 	if !pool.coLocatedBuilt || pool.coLocatedSameKey != sameKey {
 		index := make(map[string]int)
 		pool.coLocatedBuckets = pool.coLocatedBuckets[:0]
@@ -232,9 +218,8 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		pool.coLocatedSameKey = sameKey
 	}
 
-	// Advance each bucket's head cursor past machines claimed in
-	// earlier calls. Total advancement across the cycle is O(claims),
-	// amortised to O(1) per claim.
+	// Advance each bucket's head cursor past machines claimed in earlier
+	// calls. Total advancement across the cycle is O(claims).
 	for i := range pool.coLocatedBuckets {
 		b := &pool.coLocatedBuckets[i]
 		for b.head < len(b.machines) {
@@ -245,74 +230,96 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		}
 	}
 
-	// Pick the best non-empty bucket.
-	//   1. Atomic-satisfiable (≥ n unclaimed) preferred.
-	//   2. Within atomic-satisfiable: cheapest head price, then
-	//      smaller available, then key.
-	//   3. If none atomic: pick the largest available, then cheapest
-	//      head, then key.
+	// Score every non-empty bucket. atomic = its unclaimed, minUnit-
+	// passing machines' summed EffectiveAllocatable covers the deficit.
+	//   1. atomic-satisfiable preferred;
+	//   2. within atomic: cheapest head price, then key;
+	//   3. within partial: most available machines, then cheapest head,
+	//      then key.
 	bestIdx := -1
+	bestAtomic := false
+	bestHeadPrice := 0.0
+	bestAvail := -1
 	for i := range pool.coLocatedBuckets {
 		b := &pool.coLocatedBuckets[i]
-		avail := len(b.machines) - b.head
-		if avail <= 0 {
+		avail := 0
+		var capacity []needs.ResourceQty
+		headPrice := 0.0
+		headSet := false
+		for j := b.head; j < len(b.machines); j++ {
+			m := b.machines[j]
+			if _, claimed := a.claimed[m.ID]; claimed {
+				continue
+			}
+			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+			if !needs.Covers(alloc, minUnit) {
+				continue
+			}
+			if !headSet {
+				headPrice = m.PricePerHour
+				headSet = true
+			}
+			avail++
+			capacity = needs.AddResources(capacity, alloc)
+		}
+		if avail == 0 {
 			continue
 		}
-		if bestIdx < 0 {
-			bestIdx = i
-			continue
-		}
-		bb := &pool.coLocatedBuckets[bestIdx]
-		bestAvail := len(bb.machines) - bb.head
-		bestAtomic := bestAvail >= n
-		bAtomic := avail >= n
+		atomic := needs.Covers(capacity, deficit)
 		better := false
 		switch {
-		case bAtomic && !bestAtomic:
+		case bestIdx < 0:
 			better = true
-		case bAtomic == bestAtomic:
-			if bAtomic {
-				// Both atomic: cheapest head, then smaller available, then key.
+		case atomic && !bestAtomic:
+			better = true
+		case atomic == bestAtomic:
+			bestKey := pool.coLocatedBuckets[bestIdx].key
+			if atomic {
 				switch {
-				case b.machines[b.head].PricePerHour < bb.machines[bb.head].PricePerHour:
+				case headPrice < bestHeadPrice:
 					better = true
-				case b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && avail < bestAvail:
-					better = true
-				case b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && avail == bestAvail && b.key < bb.key:
+				case headPrice == bestHeadPrice && b.key < bestKey:
 					better = true
 				}
 			} else {
-				// Both partial: largest available, then cheapest head, then key.
 				switch {
 				case avail > bestAvail:
 					better = true
-				case avail == bestAvail && b.machines[b.head].PricePerHour < bb.machines[bb.head].PricePerHour:
+				case avail == bestAvail && headPrice < bestHeadPrice:
 					better = true
-				case avail == bestAvail && b.machines[b.head].PricePerHour == bb.machines[bb.head].PricePerHour && b.key < bb.key:
+				case avail == bestAvail && headPrice == bestHeadPrice && b.key < bestKey:
 					better = true
 				}
 			}
 		}
 		if better {
 			bestIdx = i
+			bestAtomic = atomic
+			bestHeadPrice = headPrice
+			bestAvail = avail
 		}
 	}
 	if bestIdx < 0 {
 		return nil
 	}
-	best := &pool.coLocatedBuckets[bestIdx]
 
-	avail := len(best.machines) - best.head
-	take := n
-	if take > avail {
-		take = avail
-	}
-	out := make([]machine.Machine, take)
-	for i := 0; i < take; i++ {
-		m := best.machines[best.head]
-		best.head++
-		out[i] = m
+	// Take from the chosen bucket until the deficit is covered or the
+	// bucket is exhausted.
+	best := &pool.coLocatedBuckets[bestIdx]
+	remaining := deficit
+	var out []machine.Machine
+	for j := best.head; j < len(best.machines) && !needs.IsZero(remaining); j++ {
+		m := best.machines[j]
+		if _, claimed := a.claimed[m.ID]; claimed {
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, minUnit) {
+			continue
+		}
+		out = append(out, m)
 		a.claimed[m.ID] = struct{}{}
+		remaining = needs.SubResources(remaining, alloc)
 	}
 	return out
 }
@@ -348,17 +355,19 @@ func strictSpread(p needs.Profile) (string, int32, bool) {
 }
 
 // takeSpread enforces a DoNotSchedule TopologySpread: the per-bucket
-// pick count never exceeds (current minimum + maxSkew). At each step
-// it picks the cheapest head among buckets that are within the skew
-// envelope, so cost ordering is preserved within the constraint.
+// pick count never exceeds (current minimum + maxSkew). At each step it
+// picks the cheapest head among buckets within the skew envelope, so
+// cost ordering is preserved within the constraint, and stops once the
+// taken machines' summed EffectiveAllocatable covers the deficit vector.
 //
 // MaxSkew clamps to ≥1 (a profile that asked for 0 would be
 // unsatisfiable by definition).
 //
 // Same as takeCoLocated, this does NOT advance pool.head — bucketing
-// implies a whole-pool walk, and the global claimed set handles
-// dedup across Needs.
-func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile, n int, key string, maxSkew int32) []machine.Machine {
+// implies a whole-pool walk, and the global claimed set handles dedup
+// across Needs. minUnit-too-small machines are filtered at build time so
+// they never enter a bucket.
+func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile, deficit, minUnit []needs.ResourceQty, key string, maxSkew int32) []machine.Machine {
 	start := time.Now()
 	defer func() {
 		metrics.ShardPhase1TakeDuration.WithLabelValues("takeSpread").Observe(time.Since(start).Seconds())
@@ -386,6 +395,9 @@ func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile,
 		if !MatchProfile(pool.profile, m) {
 			continue
 		}
+		if !needs.Covers(needs.ResourceQtysFromMap(m.EffectiveAllocatable()), minUnit) {
+			continue
+		}
 		v, ok := lookupAttribute(key, m)
 		if !ok {
 			continue
@@ -403,14 +415,14 @@ func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile,
 	}
 
 	counts := make(map[string]int, len(keys))
-	out := make([]machine.Machine, 0, n)
+	remaining := deficit
+	var out []machine.Machine
 
-	for len(out) < n {
-		// minCount is the lowest pick count across ALL buckets in
-		// the topology domain — including exhausted buckets whose
-		// counts are frozen. The skew constraint is "max - min ≤
-		// maxSkew" over the whole domain, not just buckets that
-		// still have candidates.
+	for !needs.IsZero(remaining) {
+		// minCount is the lowest pick count across ALL buckets in the
+		// topology domain — including exhausted buckets whose counts are
+		// frozen. The skew constraint is "max - min ≤ maxSkew" over the
+		// whole domain, not just buckets that still have candidates.
 		minCount := -1
 		for _, k := range keys {
 			c := counts[k]
@@ -451,6 +463,7 @@ func (a *phase1Allocator) takeSpread(state machine.State, profile needs.Profile,
 		out = append(out, m)
 		a.claimed[m.ID] = struct{}{}
 		counts[bestKey]++
+		remaining = needs.SubResources(remaining, needs.ResourceQtysFromMap(m.EffectiveAllocatable()))
 	}
 	return out
 }

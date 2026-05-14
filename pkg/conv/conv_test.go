@@ -27,9 +27,11 @@ func TestNeedsFromRollup_FullProfile(t *testing.T) {
 						Operator: pb.NodeSelectorRequirement_OPERATOR_SAME,
 					},
 				},
-				Resources: map[string]string{"cpu": "96", "nvidia.com/gpu": "8"},
-				Priority:  1_000_000,
-				Count:     64,
+				// ADR-0027: aggregate demand + the indivisibility floor,
+				// not a per-pod shape and count.
+				AggregateResources: map[string]string{"cpu": "6144", "nvidia.com/gpu": "512"},
+				MinUnit:            map[string]string{"cpu": "96", "nvidia.com/gpu": "8"},
+				Priority:           1_000_000,
 				Spread: []*pb.TopologySpread{{
 					TopologyKey:       "topology.kubernetes.io/zone",
 					MaxSkew:           1,
@@ -51,8 +53,14 @@ func TestNeedsFromRollup_FullProfile(t *testing.T) {
 	if n.ClusterID != "cluster-amsterdam" {
 		t.Errorf("ClusterID = %s", n.ClusterID)
 	}
-	if n.Count != 64 {
-		t.Errorf("Count = %d", n.Count)
+	if got := qtyOf(n.AggregateResources, "cpu"); got != "6144" {
+		t.Errorf("AggregateResources[cpu] = %q, want 6144", got)
+	}
+	if got := qtyOf(n.AggregateResources, "nvidia.com/gpu"); got != "512" {
+		t.Errorf("AggregateResources[nvidia.com/gpu] = %q, want 512", got)
+	}
+	if got := qtyOf(n.MinUnit, "nvidia.com/gpu"); got != "8" {
+		t.Errorf("MinUnit[nvidia.com/gpu] = %q, want 8", got)
 	}
 	if n.Profile.Priority() != 1_000_000 {
 		t.Errorf("Priority = %d", n.Profile.Priority())
@@ -66,6 +74,15 @@ func TestNeedsFromRollup_FullProfile(t *testing.T) {
 	if got, want := len(n.Profile.Requirements()), 2; got != want {
 		t.Errorf("requirements len = %d, want %d", got, want)
 	}
+}
+
+func qtyOf(rs []needs.ResourceQty, name string) string {
+	for _, r := range rs {
+		if r.Name == name {
+			return r.Quantity
+		}
+	}
+	return ""
 }
 
 func TestNeedsFromRollup_NilSafe(t *testing.T) {
