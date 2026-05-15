@@ -57,12 +57,15 @@ shard:
   # paper's capacity model is two-tier; an Idle-only harness only
   # exercises half of BigFleet. 0 = no Speculative tier (not advised).
   seedSpeculative: 0
-  # ADR-0022 / M45.4: each seeded machine carries
-  # Allocatable = N × Profile.Resources. N=1 (or unset) keeps the
-  # pre-ADR-0022 1 Pod = 1 machine math. N>1 models real-fleet density —
-  # e.g. CPU services packing ~10/machine, GPU inference ~8/machine —
-  # so Phase 1 emits one Bootstrap per N aggregated Pods instead of one
-  # per Pod. Per-profile knob; larger profiles set higher density.
+  # Each seeded machine carries Allocatable = N × Profile.Resources —
+  # one machine has the real capacity of N replicas of its Profile
+  # (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 (or
+  # unset) keeps the legacy 1 Pod = 1 machine math. Under ADR-0027's
+  # resource-vector model this is just per-machine capacity: Phase 1
+  # diffs aggregate demand against the machine's true Allocatable, so
+  # one machine absorbs up to N replicas of aggregated demand without
+  # any per-Pod density reconstruction. Per-profile knob; larger
+  # profiles set higher density.
   seedDensityMultiplier: 0
   # M29: pre-seed N Configured machines per kwok cluster owned by this
   # shard. Models the production-realistic shape where most fleet

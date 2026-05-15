@@ -108,6 +108,14 @@ type Archetype struct {
 	// production CR shapes that pin to labels like
 	// `app=foo, team=search, version=v1.4` — with 50 teams × 200
 	// apps × 5 versions = 50_000 distinct fingerprints per cluster.
+	//
+	// Under ADR-0027 this is the *only* mechanism that creates
+	// per-CR fingerprint diversity within an archetype: the Profile
+	// fingerprint no longer includes resource shape, so varying
+	// sizeBuckets alone produces a single Profile that aggregates
+	// across resource sizes. LabelAxes is how the harness models
+	// realistic CR fan-out for the operator's aggregate-resource
+	// rollup path.
 	LabelAxes []LabelAxis `yaml:"labelAxes"`
 }
 

@@ -10,15 +10,21 @@
 # the seed every cycle and the test measures reprovisioning, not
 # steady-state.
 #
-# ADR-0022 / M45.4: per-archetype fingerprint cardinality is now
+# ADR-0022 → ADR-0027: per-archetype fingerprint cardinality is
 # deliberately bounded — most archetypes carry a single sizeBucket and
 # a single priorityClass, so each archetype contributes 1-2 distinct
 # Profile fingerprints per cluster. Total fleet target is ~8-10 fp
 # per cluster; with 1000 Pods/cluster (scaleway-50k) that's ~100 Pods
 # per Profile, which is what makes the aggregate-demand model actually
-# aggregate. Earlier revisions ran with 4-bucket × 2-prio expansions
-# (~30 fp/cluster) which collapsed Need.Count to ~1 everywhere and
-# hid the M45 vector-math bug.
+# aggregate. Under ADR-0027 the Profile fingerprint no longer includes
+# resource shape (only requirements + priority + spread + penalty
+# buckets), so cardinality is driven entirely by requirements
+# (instanceType, zone, labels) and by labelAxes below. Earlier
+# revisions ran with 4-bucket × 2-prio expansions (~30 fp/cluster)
+# which collapsed Need.Count to ~1 everywhere and hid the M45
+# vector-math bug; the same discipline matters under ADR-0027 because
+# bounded cardinality is what exercises the operator's aggregate-
+# resource rollup at production-realistic Pods-per-Profile ratios.
 #
 # Schema (per-archetype):
 #   name                : human-readable label
