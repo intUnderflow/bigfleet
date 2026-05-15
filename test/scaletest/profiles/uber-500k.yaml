@@ -86,7 +86,10 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  target: 10000000   # 10M demand CRs (500 clusters × 20K each).
+  # per-cluster CR demand; runner multiplies by clusterCount on each
+  # host. 100 000 per cluster × 10 clusters/host × 50 hosts = 50M total
+  # CRs = 500K machines at density 100.
+  target: 100000
   churnPerMinute: 0.02
   durationSeconds: 1800
   reconcilePerTickCap: 200
