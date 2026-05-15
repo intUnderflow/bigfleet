@@ -1,22 +1,35 @@
 # uber-50k — 50K-machine fleet, 5M aggregated Pods at density=100.
 #
-# Production-realistic per-cluster shape mirroring scaleway-50k exactly
-# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
-# cluster runs on its own dedicated host.
+# Topology: 20 hosts × 10 kwok clusters per host = 200 clusters total,
+# single shard. Per-cluster target 25K Pods × density 100 = 250
+# machines; 200 clusters × 250 = 50K machines / 5M Pods total.
 #
-# Topology: 50 hosts × 1 cluster each, single shard.
-#   - 50 cluster→shard streams converge on the primary's shard.
-#   - Primary host: shard + coordinator + 1 kwok cluster + crossHost
-#     NodePort exposure.
-#   - Satellite hosts (49 of them): 1 kwok cluster each; operators
-#     dial the primary's shard through an SSH/TCP tunnel.
+# Mirror of scaleway-50k's total scale (5M Pods, 50K machines) at
+# Uber-infra per-cluster shape. Where scaleway-50k uses 50 clusters
+# × 100K Pods on PRO2-L Kapsule (kube-scheduler ~110 binds/sec/cluster
+# on Scaleway hardware), uber-50k uses 200 clusters × 25K Pods on
+# Uber hosts (kube-scheduler ~30 binds/sec/cluster as measured).
+# Same total demand; 4× more clusters at 1/4 the per-cluster size to
+# fit the same 60-min budget on slower per-cluster bind throughput.
 #
-# Per-host deployment: one Helm release per host. Satellite-side
-# overrides (host N where N = 2..50):
+# Per-host deployment: one Helm release per host. 20 hosts is a real
+# infrastructure ask but each host runs the same kwok+shard+operators
+# stack — scaling pattern is linear extension of uber-5k's 2-host
+# setup. Satellite-side overrides (host N, N = 2..20):
 #   --set shard.skip=true \
 #   --set coordinator.skip=true \
 #   --set shard.overrideAddr=<tunnel-endpoint:30780> \
 #   --set kwok.clusterIdPrefix=h${N}-
+#
+# `loadProfile.target` is **per-cluster** CR demand; runner multiplies
+# by clusterCount on each host. 25 000 per cluster × 10 clusters/host
+# × 20 hosts = 5M total CRs = 50K machines at density 100.
+#
+# Validation status: aspirational pending uber-5k SLO-pass. Same
+# per-cluster shape uber-5k uses, so the per-cluster rate math holds;
+# the new validation surface is shard fan-out at 200 streams (uber-5k
+# tested 20 streams; scaleway-50k tested 50 streams; this is 4×
+# either of those).
 
 namespace: bigfleet-scaletest
 
@@ -33,10 +46,12 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 1   # per host; 50 hosts × 1 = 50 clusters total
+  clusterCount: 10   # per host; 20 hosts × 10 = 200 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
-    limits:   { cpu: 8, memory: 16Gi }
+    # 8 GiB comfortably holds 25K objects/cluster (per-cluster
+    # apiserver OOM threshold is ~90K on this limit).
+    limits:   { cpu: 8, memory: 8Gi }
   workloadResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 4, memory: 8Gi }
@@ -49,6 +64,7 @@ podShim:
 shard:
   replicas: 1
   # 60K Idle × density-100 = 6M Pod capacity vs 5M demand (20 % headroom).
+  # Mirrors scaleway-50k exactly.
   seedMachines: 60000
   seedSpeculative: 100000
   seedDensityMultiplier: 100
@@ -72,13 +88,16 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  # per-cluster; with clusterCount=1, equals per-host total. 100 000
-  # per cluster × 50 hosts = 5M total CRs = 50K machines at density 100.
-  target: 100000
+  target: 25000   # per-cluster; 200 clusters × 25K = 5M total CRs.
   churnPerMinute: 0.02
-  durationSeconds: 1800
+  durationSeconds: 3600
   reconcilePerTickCap: 200
 
+# Uniform 60 m rampBudget across the uber-* family — the SLO is the
+# SLO, and if BigFleet can't clear at this budget that's signal about
+# scaling rather than a budget-tuning issue. Per-cluster bind work is
+# the same as uber-5k (25K binds at ~30/sec ≈ 14 min); what's new at
+# this scale is shard fan-out across 200 streams (vs uber-5k's 20).
 rampBudget: 60m
 
 operator:
@@ -97,6 +116,7 @@ prometheus:
     limits:   { cpu: 4, memory: 16Gi }
 
 costEstimate:
-  vCPU: 16
-  memoryGB: 40
-  notes: "50 dedicated Uber-infra hosts (primary + 49 satellites); free at run-time. Per-host footprint above; 50× for total. M45.5: 50K machines, 5M aggregated Pods at density=100. Each cluster on its own host — production-realistic per-cluster shape matching scaleway-50k exactly."
+  # Per-host. 20 hosts × this footprint.
+  vCPU: 80
+  memoryGB: 160
+  notes: "20 Uber-infra hosts (primary + 19 satellites); free at run-time. M45.5: 50K machines, 5M aggregated Pods at density=100. Mirror of scaleway-50k's total scale, sized for Uber-infra's per-cluster bind throughput (~30 Pods/sec/cluster vs Scaleway's ~110)."

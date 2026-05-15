@@ -1,27 +1,30 @@
 # uber-5m — 5,000,000-machine fleet, 500M aggregated Pods at density=100.
 #
-# Production-realistic per-cluster shape mirroring scaleway-5m exactly
-# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
-# cluster runs on its own dedicated host. 10 shards × 500K under
-# management — the per-shard ceiling from M11.x. The largest profile
-# in the family; reserve for once-per-release validation.
+# Topology: 2000 hosts × 10 kwok clusters per host = 20000 clusters
+# total, 10 shards × 500K each (per-shard ceiling from M11.x).
+# Per-cluster target 25K Pods × density 100 = 250 machines;
+# 20000 clusters × 250 = 5M machines / 500M Pods total. The largest
+# profile in the family; reserve for once-per-release validation.
 #
-# Topology: 5000 hosts × 1 cluster each, 10 shards.
-#   - 5000 cluster→shard streams split 500-per-shard across 10 shards
-#     by ordinal (per M12.5: cluster-N routed to shard-(N % 10)).
-#   - Primary host: shard-0 + coordinator + 1 kwok cluster + crossHost
-#     NodePort exposure.
-#   - 9 shard hosts (one per remaining shard): each runs its shard +
-#     1 kwok cluster + crossHost exposure; reaches coordinator via
-#     tunnel.
-#   - Other satellite hosts (4990 of them): 1 kwok cluster each;
-#     operators route to their shard-(N % 10) through the appropriate
-#     tunnel.
+# Mirror of scaleway-5m's total scale, sized for Uber-infra per-
+# cluster shape. Where scaleway-5m uses 5000 clusters × 100K Pods,
+# uber-5m uses 20000 clusters × 25K Pods — 4× more clusters at 1/4
+# the per-cluster size to fit the same 90-min budget on Uber's
+# per-cluster bind throughput.
 #
-# Per-host deployment: one Helm release per host. 5000 hosts is the
-# largest infrastructure commitment in the family; coordinate
-# availability well in advance. Satellite-side override pattern is
-# the same as uber-1m, generalised over 10 shards instead of 2.
+# Per-host deployment: one Helm release per host. **2000 hosts is the
+# largest infrastructure commitment in the family.** Coordinate host
+# availability well in advance; likely requires automation beyond
+# what's documented for the current cross-host substrate (tunnel
+# lifecycle management at 2000 endpoints, registry sync, multi-shard
+# ordinal assignment across 10 shards). Satellite-side override
+# pattern is the same as uber-1m, generalised over 10 shards
+# instead of 2.
+#
+# Validation status: aspirational pending uber-1m SLO-pass. Reserved
+# as the paper's M13 5M target — once it lands, BigFleet's horizontal-
+# scaling claim (N × per-shard ceiling) has its full reference
+# number on Uber infra under the post-ADR-0027 engine.
 
 namespace: bigfleet-scaletest
 
@@ -38,10 +41,10 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 1   # per host; 5000 hosts × 1 = 5000 clusters total
+  clusterCount: 10   # per host; 2000 hosts × 10 = 20000 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
-    limits:   { cpu: 8, memory: 16Gi }
+    limits:   { cpu: 8, memory: 8Gi }
   workloadResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 4, memory: 8Gi }
@@ -54,7 +57,7 @@ podShim:
 shard:
   replicas: 10   # 10 shards × 500K = 5M aggregate, per-shard ceiling from M11.x
   # 600K Idle × density-100 per shard = 60M Pod capacity per shard
-  # vs 50M demand per shard (20 % headroom).
+  # vs 50M demand per shard (20 % headroom). Matches scaleway-5m.
   seedMachines: 600000   # per shard
   seedSpeculative: 1000000
   seedDensityMultiplier: 100
@@ -78,14 +81,19 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  # per-cluster; with clusterCount=1, equals per-host total. 100 000
-  # per cluster × 5000 hosts = 500M total CRs = 5M machines at density 100.
-  target: 100000
+  target: 25000   # per-cluster; 20000 clusters × 25K = 500M total CRs.
   churnPerMinute: 0.02
   durationSeconds: 3600
   reconcilePerTickCap: 200
 
-rampBudget: 120m
+# Uniform 60 m rampBudget across the uber-* family — the SLO is the
+# SLO, and if BigFleet can't clear at this budget that's signal
+# about scaling rather than a budget-tuning issue. Per-cluster bind
+# work is the same as uber-5k (25K binds at ~30/sec ≈ 14 min); what's
+# new at this scale is 10 shards × 2000 cluster→shard streams each.
+# Whether the coordinator can orchestrate 10 shards with fan-out at
+# that count inside 60 m is the question this profile answers.
+rampBudget: 60m
 
 operator:
   qps: 3200
@@ -103,6 +111,6 @@ prometheus:
     limits:   { cpu: 32, memory: 128Gi }
 
 costEstimate:
-  vCPU: 16
-  memoryGB: 40
-  notes: "5000 dedicated Uber-infra hosts (1 primary + 9 shard hosts + 4990 satellites); free at run-time. Per-host footprint above; 5000× for total. M45.5: 5M machines, 500M aggregated Pods at density=100. 10 shards × 500K — production-realistic per-cluster shape matching scaleway-5m exactly, once-per-release exercise."
+  vCPU: 80
+  memoryGB: 160
+  notes: "2000 Uber-infra hosts (1 primary + 9 shard hosts + 1990 satellites); free at run-time. M45.5: 5M machines, 500M aggregated Pods at density=100. 10 shards × 500K — Uber-infra mirror of scaleway-5m at Uber-shaped per-cluster size, once-per-release exercise."

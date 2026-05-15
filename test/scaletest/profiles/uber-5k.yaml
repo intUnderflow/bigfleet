@@ -93,10 +93,11 @@ loadProfile:
   durationSeconds: 1800
   reconcilePerTickCap: 200
 
-# 60 m matches scaleway-50k's convention and gives ~2× #14 demo 1's
-# "got to 96.7 % at 30 m" time — margin for SLO compliance (99.9 %
-# sustained) rather than just "hit a high percentage." With abundant
-# Uber compute the marginal cost of 60 m over 30 m is zero.
+# Uniform 60 m rampBudget across the uber-* family — the SLO is the
+# SLO, and if BigFleet can't clear at this budget that's signal about
+# scaling rather than a budget-tuning issue. 60 m gives ~2× #14
+# demo 1's "got to 96.7 % at 30 m" time for SLO compliance margin
+# (99.9 % sustained) on the smallest rung.
 rampBudget: 60m
 
 operator:
