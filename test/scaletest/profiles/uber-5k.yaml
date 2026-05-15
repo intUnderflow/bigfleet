@@ -1,0 +1,99 @@
+# uber-5k — 5K-machine fleet, 500K aggregated Pods at density=100.
+#
+# Profile shape mirrors scaleway-5k (5 clusters × 1K machines × 100
+# Pods/machine = 500K Pods); sized for Uber-infra (kwok-based,
+# single-host). Real K8s control plane per cluster (etcd backend,
+# ADR-0023 kube-scheduler mode).
+#
+# Topology: single-host, single-shard.
+#   - 1 host runs shard + coordinator + 5 kwok clusters.
+#   - 5 etcd instances on a single host's disk — well under the I/O
+#     contention threshold we hit at 20 etcds/disk.
+#   - Per-cluster object count ~100K (Pods + Nodes + harness CRs);
+#     16 GiB apiserver memory provides ~10 % headroom over OOM
+#     threshold measured at ~90K objects on the previous 8 GiB limit.
+#
+# Validation status: shape is the post-ADR-0027 canonical Uber-infra
+# entry point; SLO-passing publication tracked separately on
+# `docs/scaletest-results.md` once a clean run lands.
+
+namespace: bigfleet-scaletest
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: main
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: main
+    pullPolicy: Always
+
+kwok:
+  # Real etcd backend — kine sqlite's WAL fsync serialisation hits a
+  # write-tail ceiling at density=100; etcd's BoltDB MVCC writes
+  # parallelise cleanly. Same call as scaleway-* profiles.
+  storage: etcd
+  clusterCount: 5
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    # 16 GiB holds ~100K objects/cluster with headroom past the ~90K
+    # OOM threshold the per-cluster apiserver hit on the 8 GiB limit.
+    limits:   { cpu: 8, memory: 16Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
+
+shard:
+  replicas: 1
+  # 6000 Idle × density-100 = 600K Pod capacity vs 500K demand (20 % headroom).
+  seedMachines: 6000
+  seedSpeculative: 15000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+
+coordinator:
+  replicas: 1
+
+harness:
+  scheduler: kube-scheduler
+
+loadProfile:
+  target: 100000   # 100K demand CRs (5 clusters × 20K each at the canonical 1:5 shape).
+  churnPerMinute: 0.02
+  durationSeconds: 1800
+  reconcilePerTickCap: 200
+
+rampBudget: 15m
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 64
+  rollupInterval: 1s
+
+slo:
+  internalBindingLatencyP99Seconds: 15
+  shardCycleDurationP99Seconds: 5
+
+prometheus:
+  resources:
+    requests: { cpu: 1, memory: 4Gi }
+    limits:   { cpu: 2, memory: 8Gi }
+
+costEstimate:
+  vCPU: 32
+  memoryGB: 128
+  notes: "Single Uber-infra host; free at run-time. M45.5: 5K machines, 500K aggregated Pods at density=100. Cheapest Uber-infra profile under the convention."

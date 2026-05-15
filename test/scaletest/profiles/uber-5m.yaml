@@ -1,0 +1,109 @@
+# uber-5m — 5,000,000-machine fleet, 500M aggregated Pods at density=100.
+#
+# Profile shape mirrors scaleway-5m (5000 clusters × 1K machines × 100
+# Pods/machine = 500M Pods); sized for Uber-infra (kwok-based,
+# multi-host). 10 shards × 500K under management — the per-shard
+# ceiling from M11.x. The largest profile in the family; reserve for
+# once-per-release validation.
+#
+# Topology: multi-host, multi-shard.
+#   - 500 hosts (1 primary + 499 satellites), each running 10 kwok
+#     clusters → 5000 clusters total.
+#   - Each host: 10 etcd instances on its own disk (cross-host
+#     I/O-clean budget).
+#   - 10 shards, each authoritative over 500 cluster→shard streams
+#     (per M12.5 routing: cluster-N routed to shard-(N % 10)).
+#   - Shared coordinator on the primary host; all 10 shards heartbeat
+#     to it; satellite shards reach the coordinator via tunnel.
+#
+# Validation status: aspirational. The corresponding scaleway-5m run
+# (M13 in the plan) is pending. uber-5m needs uber-1m + scaleway-5m
+# validated first; this profile is the documented target shape.
+#
+# 500 hosts is a significant infra commitment. Coordinate host
+# availability and tunnel orchestration before kicking off. Likely
+# requires automation beyond what's currently documented for the
+# cross-host substrate (tunnel lifecycle management, registry sync,
+# multi-shard ordinal assignment).
+
+namespace: bigfleet-scaletest
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: main
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: main
+    pullPolicy: Always
+
+kwok:
+  storage: etcd
+  clusterCount: 10   # per host; 500 hosts × 10 = 5000 clusters total
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 8, memory: 16Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
+
+shard:
+  replicas: 10   # 10 shards × 500K = 5M aggregate, per-shard ceiling from M11.x
+  # 6M Idle × density-100 = 600M Pod capacity vs 500M demand (20 % headroom),
+  # split across all 10 shards.
+  seedMachines: 600000   # per shard
+  seedSpeculative: 1000000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 8192
+  executeConcurrency: 512
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 16, memory: 32Gi }
+
+coordinator:
+  replicas: 1
+
+harness:
+  scheduler: kube-scheduler
+
+crossHost:
+  expose: true
+  shardNodePort: 30780
+  coordinatorNodePort: 30790
+
+loadProfile:
+  target: 100000000   # 100M demand CRs (5000 clusters × 20K each).
+  churnPerMinute: 0.02
+  durationSeconds: 3600
+  reconcilePerTickCap: 200
+
+rampBudget: 120m
+
+operator:
+  qps: 3200
+  burst: 6400
+  ackConcurrency: 1024
+  rollupInterval: 1s
+
+slo:
+  internalBindingLatencyP99Seconds: 15
+  shardCycleDurationP99Seconds: 5
+
+prometheus:
+  resources:
+    requests: { cpu: 16, memory: 64Gi }
+    limits:   { cpu: 32, memory: 128Gi }
+
+costEstimate:
+  vCPU: 16000   # 500 hosts × ~32 vCPU
+  memoryGB: 64000
+  notes: "500 Uber-infra hosts (primary + 499 satellites); free at run-time. M45.5: 5M machines, 500M aggregated Pods at density=100. 10 shards × 500K — Uber-infra mirror of scaleway-5m, once-per-release exercise."

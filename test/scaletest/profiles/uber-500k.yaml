@@ -1,0 +1,114 @@
+# uber-500k — 500K-machine fleet, 50M aggregated Pods at density=100.
+#
+# Profile shape mirrors scaleway-500k (500 clusters × 1K machines ×
+# 100 Pods/machine = 50M Pods); sized for Uber-infra (kwok-based,
+# multi-host). 500K machines is the per-shard ceiling from M11.x —
+# the largest single-shard configuration BigFleet can hold under the
+# 100 ms cycle p99 SLO.
+#
+# Topology: multi-host, single-shard.
+#   - 50 hosts (1 primary + 49 satellites), each running 10 kwok
+#     clusters → 500 clusters total.
+#   - Each host: 10 etcd instances on its own disk (cross-host
+#     I/O-clean budget).
+#   - Per-cluster object count ~100K; 16 GiB apiserver per cluster.
+#   - All 500 cluster→shard streams converge on the primary's single
+#     shard — validates the per-shard ceiling on Uber infra (mirror
+#     of scaleway-500k's role on Scaleway).
+#
+# The cross-host substrate scales by SSH/TCP-tunnelling each satellite
+# host's operators to the primary's shard NodePort. 50 hosts is a
+# significant infra ask — coordinate host availability before kicking
+# this off.
+#
+# Satellite-side overrides (per host, where N = 2..50):
+#   --set shard.skip=true \
+#   --set coordinator.skip=true \
+#   --set shard.overrideAddr=<tunnel-endpoint:30780> \
+#   --set kwok.clusterIdPrefix=h${N}-
+#
+# Validation status: aspirational. The cross-host substrate is proven
+# at 2 hosts; scaling to 50 hosts is an open question (tunnel
+# orchestration, per-host etcd I/O, shard fan-out at 500 streams).
+# Validate uber-50k first; uber-500k follows from confidence at 5 hosts.
+
+namespace: bigfleet-scaletest
+
+image:
+  repository: ghcr.io/intunderflow/bigfleet-scaletest
+  tag: main
+  pullPolicy: Always
+
+bigfleet:
+  image:
+    repository: ghcr.io/intunderflow/bigfleet
+    tag: main
+    pullPolicy: Always
+
+kwok:
+  storage: etcd
+  clusterCount: 10   # per host; 50 hosts × 10 = 500 clusters total
+  apiserverResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 8, memory: 16Gi }
+  workloadResources:
+    requests: { cpu: 2, memory: 4Gi }
+    limits:   { cpu: 4, memory: 8Gi }
+  sharedVolumeSizeLimit: "2Gi"
+
+podShim:
+  binderConcurrency: 256
+  upcomingNodeConcurrency: 32
+
+shard:
+  replicas: 1
+  # 600K Idle × density-100 = 60M Pod capacity vs 50M demand (20 % headroom).
+  seedMachines: 600000
+  seedSpeculative: 1000000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 8192
+  executeConcurrency: 512
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 16, memory: 32Gi }
+
+coordinator:
+  replicas: 1
+
+harness:
+  scheduler: kube-scheduler
+
+crossHost:
+  expose: true
+  shardNodePort: 30780
+  coordinatorNodePort: 30790
+
+loadProfile:
+  target: 10000000   # 10M demand CRs (500 clusters × 20K each).
+  churnPerMinute: 0.02
+  durationSeconds: 1800
+  reconcilePerTickCap: 200
+
+rampBudget: 60m
+
+operator:
+  qps: 800
+  burst: 1600
+  ackConcurrency: 256
+  rollupInterval: 1s
+
+slo:
+  internalBindingLatencyP99Seconds: 15
+  shardCycleDurationP99Seconds: 5
+
+prometheus:
+  resources:
+    requests: { cpu: 4, memory: 16Gi }
+    limits:   { cpu: 8, memory: 32Gi }
+
+costEstimate:
+  vCPU: 1600   # 50 hosts × ~32 vCPU
+  memoryGB: 6400
+  notes: "50 Uber-infra hosts (primary + 49 satellites); free at run-time. M45.5: 500K machines, 50M aggregated Pods at density=100. Per-shard ceiling under the M11.x SLO."
