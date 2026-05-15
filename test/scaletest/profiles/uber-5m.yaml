@@ -1,30 +1,27 @@
 # uber-5m — 5,000,000-machine fleet, 500M aggregated Pods at density=100.
 #
-# Profile shape mirrors scaleway-5m (5000 clusters × 1K machines × 100
-# Pods/machine = 500M Pods); sized for Uber-infra (kwok-based,
-# multi-host). 10 shards × 500K under management — the per-shard
-# ceiling from M11.x. The largest profile in the family; reserve for
-# once-per-release validation.
+# Production-realistic per-cluster shape mirroring scaleway-5m exactly
+# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
+# cluster runs on its own dedicated host. 10 shards × 500K under
+# management — the per-shard ceiling from M11.x. The largest profile
+# in the family; reserve for once-per-release validation.
 #
-# Topology: multi-host, multi-shard.
-#   - 500 hosts (1 primary + 499 satellites), each running 10 kwok
-#     clusters → 5000 clusters total.
-#   - Each host: 10 etcd instances on its own disk (cross-host
-#     I/O-clean budget).
-#   - 10 shards, each authoritative over 500 cluster→shard streams
-#     (per M12.5 routing: cluster-N routed to shard-(N % 10)).
-#   - Shared coordinator on the primary host; all 10 shards heartbeat
-#     to it; satellite shards reach the coordinator via tunnel.
+# Topology: 5000 hosts × 1 cluster each, 10 shards.
+#   - 5000 cluster→shard streams split 500-per-shard across 10 shards
+#     by ordinal (per M12.5: cluster-N routed to shard-(N % 10)).
+#   - Primary host: shard-0 + coordinator + 1 kwok cluster + crossHost
+#     NodePort exposure.
+#   - 9 shard hosts (one per remaining shard): each runs its shard +
+#     1 kwok cluster + crossHost exposure; reaches coordinator via
+#     tunnel.
+#   - Other satellite hosts (4990 of them): 1 kwok cluster each;
+#     operators route to their shard-(N % 10) through the appropriate
+#     tunnel.
 #
-# Validation status: aspirational. The corresponding scaleway-5m run
-# (M13 in the plan) is pending. uber-5m needs uber-1m + scaleway-5m
-# validated first; this profile is the documented target shape.
-#
-# 500 hosts is a significant infra commitment. Coordinate host
-# availability and tunnel orchestration before kicking off. Likely
-# requires automation beyond what's currently documented for the
-# cross-host substrate (tunnel lifecycle management, registry sync,
-# multi-shard ordinal assignment).
+# Per-host deployment: one Helm release per host. 5000 hosts is the
+# largest infrastructure commitment in the family; coordinate
+# availability well in advance. Satellite-side override pattern is
+# the same as uber-1m, generalised over 10 shards instead of 2.
 
 namespace: bigfleet-scaletest
 
@@ -41,7 +38,7 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 10   # per host; 500 hosts × 10 = 5000 clusters total
+  clusterCount: 1   # per host; 5000 hosts × 1 = 5000 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 8, memory: 16Gi }
@@ -56,8 +53,8 @@ podShim:
 
 shard:
   replicas: 10   # 10 shards × 500K = 5M aggregate, per-shard ceiling from M11.x
-  # 6M Idle × density-100 = 600M Pod capacity vs 500M demand (20 % headroom),
-  # split across all 10 shards.
+  # 600K Idle × density-100 per shard = 60M Pod capacity per shard
+  # vs 50M demand per shard (20 % headroom).
   seedMachines: 600000   # per shard
   seedSpeculative: 1000000
   seedDensityMultiplier: 100
@@ -81,9 +78,8 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  # per-cluster CR demand; runner multiplies by clusterCount on each
-  # host. 100 000 per cluster × 10 clusters/host × 500 hosts = 500M total
-  # CRs = 5M machines at density 100.
+  # per-cluster; with clusterCount=1, equals per-host total. 100 000
+  # per cluster × 5000 hosts = 500M total CRs = 5M machines at density 100.
   target: 100000
   churnPerMinute: 0.02
   durationSeconds: 3600
@@ -107,6 +103,6 @@ prometheus:
     limits:   { cpu: 32, memory: 128Gi }
 
 costEstimate:
-  vCPU: 16000   # 500 hosts × ~32 vCPU
-  memoryGB: 64000
-  notes: "500 Uber-infra hosts (primary + 499 satellites); free at run-time. M45.5: 5M machines, 500M aggregated Pods at density=100. 10 shards × 500K — Uber-infra mirror of scaleway-5m, once-per-release exercise."
+  vCPU: 16
+  memoryGB: 40
+  notes: "5000 dedicated Uber-infra hosts (1 primary + 9 shard hosts + 4990 satellites); free at run-time. Per-host footprint above; 5000× for total. M45.5: 5M machines, 500M aggregated Pods at density=100. 10 shards × 500K — production-realistic per-cluster shape matching scaleway-5m exactly, once-per-release exercise."

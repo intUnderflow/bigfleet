@@ -1,36 +1,35 @@
 # uber-1m — 1,000,000-machine fleet, 100M aggregated Pods at density=100.
 #
-# Profile shape mirrors scaleway-1m (1000 clusters × 1K machines × 100
-# Pods/machine = 100M Pods); sized for Uber-infra (kwok-based,
-# multi-host). 2 shards × 500K under management — the per-shard
-# ceiling from M11.x. Aggregate-named: `shard.replicas: 2` reflects
-# how we test, not what the name reports.
+# Production-realistic per-cluster shape mirroring scaleway-1m exactly
+# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
+# cluster runs on its own dedicated host. 2 shards × 500K under
+# management — the per-shard ceiling from M11.x. Aggregate-named:
+# `shard.replicas: 2` reflects how we test, not what the name reports.
 #
-# Topology: multi-host, multi-shard.
-#   - 100 hosts (1 primary + 99 satellites), each running 10 kwok
-#     clusters → 1000 clusters total.
-#   - Each host: 10 etcd instances on its own disk (cross-host
-#     I/O-clean budget).
-#   - 2 shards, each authoritative over 500 cluster→shard streams
-#     (per M12.5 routing: cluster-N routed to shard-(N % 2)).
-#   - Shared coordinator on the primary host; both shards heartbeat
-#     to it; satellite shards reach the coordinator via tunnel.
+# Topology: 1000 hosts × 1 cluster each, 2 shards.
+#   - 1000 cluster→shard streams split 500/500 across shards by
+#     ordinal (per M12.5: cluster-N routed to shard-(N % 2)).
+#   - Primary host: shard-0 + coordinator + 1 kwok cluster + crossHost
+#     NodePort exposure for both shard-0 and the coordinator.
+#   - Shard-1 host: shard-1 + 1 kwok cluster + crossHost NodePort
+#     exposure for shard-1; reaches coordinator via tunnel.
+#   - Other satellite hosts (998 of them): 1 kwok cluster each;
+#     operators route to shard-0 or shard-1 by their cluster ordinal,
+#     through an SSH/TCP tunnel to the appropriate shard host.
 #
-# Validation status: aspirational. The corresponding scaleway-1m run
-# passed under the pre-ADR-0027 decision engine (M13.gate, M30.2); the
-# Uber-infra equivalent is unblocked by the cross-host substrate but
-# unproven at this host count.
-#
-# Satellite-side overrides per host (N = 2..100):
+# Per-host deployment: one Helm release per host. Satellite-side
+# overrides for the 998 cluster-only hosts (N = 3..1000):
 #   --set shard.skip=true \
 #   --set coordinator.skip=true \
-#   --set shard.overrideAddr=<tunnel-endpoint:30780> \
-#   --set coordinator.overrideAddr=<tunnel-endpoint:30790> \
+#   --set shard.overrideAddr=<shard-N%2-tunnel-endpoint:30780> \
 #   --set kwok.clusterIdPrefix=h${N}-
-# Hosts hosting the second shard add:
+# Shard-1 host's overrides (host 2):
 #   --set shard.skip=false \
+#   --set coordinator.skip=true \
 #   --set shard.overrideId=shard-1 \
-#   --set shard.overrideAdvertise=<that-host's-tunnel-endpoint:7780>
+#   --set shard.overrideAdvertise=<host-2-tunnel-endpoint:7780> \
+#   --set coordinator.overrideAddr=<primary-tunnel-endpoint:30790> \
+#   --set kwok.clusterIdPrefix=h2-
 
 namespace: bigfleet-scaletest
 
@@ -47,7 +46,7 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 10   # per host; 100 hosts × 10 = 1000 clusters total
+  clusterCount: 1   # per host; 1000 hosts × 1 = 1000 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 8, memory: 16Gi }
@@ -62,8 +61,8 @@ podShim:
 
 shard:
   replicas: 2   # 2 shards × 500K = 1M aggregate, per-shard ceiling from M11.x
-  # 1.2M Idle × density-100 = 120M Pod capacity vs 100M demand (20 % headroom),
-  # split across both shards.
+  # 600K Idle × density-100 per shard = 60M Pod capacity per shard vs
+  # 50M demand per shard (20 % headroom).
   seedMachines: 600000   # per shard
   seedSpeculative: 1000000
   seedDensityMultiplier: 100
@@ -87,9 +86,8 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  # per-cluster CR demand; runner multiplies by clusterCount on each
-  # host. 100 000 per cluster × 10 clusters/host × 100 hosts = 100M total
-  # CRs = 1M machines at density 100.
+  # per-cluster; with clusterCount=1, equals per-host total. 100 000
+  # per cluster × 1000 hosts = 100M total CRs = 1M machines at density 100.
   target: 100000
   churnPerMinute: 0.02
   durationSeconds: 1800
@@ -113,6 +111,6 @@ prometheus:
     limits:   { cpu: 16, memory: 64Gi }
 
 costEstimate:
-  vCPU: 3200   # 100 hosts × ~32 vCPU
-  memoryGB: 12800
-  notes: "100 Uber-infra hosts (primary + 99 satellites); free at run-time. M45.5: 1M machines, 100M aggregated Pods at density=100. 2 shards × 500K — Uber-infra mirror of scaleway-1m."
+  vCPU: 16
+  memoryGB: 40
+  notes: "1000 dedicated Uber-infra hosts (1 primary + 1 shard-1 + 998 satellites); free at run-time. Per-host footprint above; 1000× for total. M45.5: 1M machines, 100M aggregated Pods at density=100. 2 shards × 500K — production-realistic per-cluster shape matching scaleway-1m exactly."

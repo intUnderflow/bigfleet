@@ -1,36 +1,30 @@
 # uber-5k — 5K-machine fleet, 500K aggregated Pods at density=100.
 #
-# Profile shape mirrors scaleway-5k (500K Pods total at density 100 →
-# 5K machines); sized for Uber-infra (kwok-based, multi-host). Real K8s
-# control plane per cluster (etcd backend, ADR-0023 kube-scheduler mode).
+# Production-realistic per-cluster shape mirroring scaleway-5k exactly
+# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
+# cluster runs on its own dedicated host — no kwok-apiserver
+# co-tenancy, no etcd-disk contention, no per-host CPU sharing.
+# Per-cluster shape sits inside K8s SIG-scalability's tested
+# production limits (5K nodes / 150K pods / 300K containers).
 #
-# Topology: multi-host, single-shard.
-#   - 2 hosts (1 primary + 1 satellite), each running 10 kwok clusters
-#     → 20 clusters total. Per-cluster object count ~25K — well under
-#     the kube-scheduler write-amplification curve where bind rate
-#     degrades sharply (≥30K objects/cluster).
-#   - Each host: 10 etcd instances on its own disk (the contention-
-#     clean budget; 20 etcds-on-one-disk caused the late-phase rate
-#     collapse measured during cross-host validation).
-#   - All 20 cluster→shard streams converge on the primary's single
-#     shard. This is the shape that validated cleanly at 96.7% ramp
-#     in 30 min during cross-host substrate work.
+# Topology: 5 hosts × 1 cluster each, single shard.
+#   - 5 cluster→shard streams converge on the primary's shard.
+#   - Primary host: shard + coordinator + 1 kwok cluster + crossHost
+#     NodePort exposure.
+#   - Satellite hosts (4 of them): 1 kwok cluster each, no shard, no
+#     coordinator; operators dial the primary's shard through an
+#     SSH/TCP tunnel.
 #
-# `loadProfile.target` is **per-cluster** CR demand — the runner
-# multiplies by clusterCount on each host to get that host's total.
-# 25 000 per cluster × 10 clusters/host × 2 hosts = 500 000 total CRs
-# = 5K machines at density 100.
-#
-# Satellite-side overrides (the second host, prefixed h2):
+# Per-host deployment: one Helm release per host with these values.
+# Satellite-side overrides (host N where N = 2..5):
 #   --set shard.skip=true \
 #   --set coordinator.skip=true \
 #   --set shard.overrideAddr=<tunnel-endpoint:30780> \
-#   --set kwok.clusterIdPrefix=h2-
+#   --set kwok.clusterIdPrefix=h${N}-
 #
-# Validation status: the underlying shape (20 clusters × 25K Pods,
-# 2-host topology) was validated at 96.7% ramp in cross-host work.
-# Publication of an SLO-passing uber-5k row to `docs/scaletest-
-# results.md` is tracked separately.
+# `loadProfile.target` is **per-cluster** CR demand; with clusterCount=1
+# the per-host total equals target. 100 000 per cluster × 5 hosts =
+# 500 000 total CRs = 5K machines at density 100.
 
 namespace: bigfleet-scaletest
 
@@ -46,17 +40,12 @@ bigfleet:
     pullPolicy: Always
 
 kwok:
-  # Real etcd backend — kine sqlite's WAL fsync serialisation hits a
-  # write-tail ceiling at density=100; etcd's BoltDB MVCC writes
-  # parallelise cleanly.
   storage: etcd
-  clusterCount: 10   # per host; 2 hosts × 10 = 20 clusters total
+  clusterCount: 1   # per host; 5 hosts × 1 = 5 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
-    # 16 GiB holds ~100K objects/cluster with headroom past the ~90K
-    # OOM threshold the per-cluster apiserver hit on the 8 GiB limit.
-    # At 25K objects/cluster this is generous; sized for consistency
-    # with the rest of the uber-* family.
+    # 16 GiB holds 100K-object/cluster comfortably (per-cluster
+    # apiserver hit OOM at ~90K on the previous 8 GiB limit).
     limits:   { cpu: 8, memory: 16Gi }
   workloadResources:
     requests: { cpu: 2, memory: 4Gi }
@@ -88,20 +77,17 @@ harness:
   scheduler: kube-scheduler
 
 crossHost:
-  # Primary-host config. Renders NodePort Services for the satellite
-  # host's tunnel to reach the shard and coordinator. The satellite
-  # leaves this unset (or false) and overrides the dial addresses.
   expose: true
   shardNodePort: 30780
   coordinatorNodePort: 30790
 
 loadProfile:
-  target: 25000   # per-cluster; 20 clusters × 25K = 500K total CRs.
+  target: 100000   # per-cluster; matches scaleway-5k exactly.
   churnPerMinute: 0.02
   durationSeconds: 1800
   reconcilePerTickCap: 200
 
-rampBudget: 30m   # 30 m matches the cross-host-validated reach time at this per-cluster shape.
+rampBudget: 15m
 
 operator:
   qps: 200
@@ -119,6 +105,7 @@ prometheus:
     limits:   { cpu: 2, memory: 8Gi }
 
 costEstimate:
-  vCPU: 64    # 2 hosts × ~32 vCPU
-  memoryGB: 256
-  notes: "2 Uber-infra hosts (primary + 1 satellite); free at run-time. M45.5: 5K machines, 500K aggregated Pods at density=100. Smallest profile in the uber-* family; multi-host required because single-host kube-scheduler write-amp blocks SLO inside a 30-min budget at this scale."
+  # Per-host. 5 hosts × this footprint.
+  vCPU: 16
+  memoryGB: 40
+  notes: "5 dedicated Uber-infra hosts (primary + 4 satellites); free at run-time. M45.5: 5K machines, 500K aggregated Pods at density=100. Each cluster on its own host — production-realistic per-cluster shape matching scaleway-5k exactly."

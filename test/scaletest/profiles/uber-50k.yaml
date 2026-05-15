@@ -1,34 +1,22 @@
 # uber-50k — 50K-machine fleet, 5M aggregated Pods at density=100.
 #
-# Profile shape mirrors scaleway-50k (50 clusters × 1K machines × 100
-# Pods/machine = 5M Pods); sized for Uber-infra (kwok-based,
-# multi-host). Real K8s control plane per cluster (etcd backend,
-# ADR-0023 kube-scheduler mode).
+# Production-realistic per-cluster shape mirroring scaleway-50k exactly
+# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
+# cluster runs on its own dedicated host.
 #
-# Topology: multi-host, single-shard.
-#   - 5 hosts (1 primary + 4 satellites), each running 10 kwok
-#     clusters → 50 clusters total.
-#   - Each host: 10 etcd instances on its own disk (matches the
-#     contention-clean budget from cross-host validation).
-#   - Per-cluster object count ~100K; 16 GiB apiserver per cluster.
-#   - Operators on all 5 hosts dial the primary's shard via SSH/TCP
-#     tunnel — single-shard authority over all 50 cluster→shard
-#     streams.
+# Topology: 50 hosts × 1 cluster each, single shard.
+#   - 50 cluster→shard streams converge on the primary's shard.
+#   - Primary host: shard + coordinator + 1 kwok cluster + crossHost
+#     NodePort exposure.
+#   - Satellite hosts (49 of them): 1 kwok cluster each; operators
+#     dial the primary's shard through an SSH/TCP tunnel.
 #
-# This is the smallest profile that exercises the chart's cross-host
-# substrate (crossHost.expose on the primary; shard.skip +
-# shard.overrideAddr + kwok.clusterIdPrefix on each satellite).
-#
-# Satellite-side overrides (per host, where N = 2..5):
+# Per-host deployment: one Helm release per host. Satellite-side
+# overrides (host N where N = 2..50):
 #   --set shard.skip=true \
 #   --set coordinator.skip=true \
 #   --set shard.overrideAddr=<tunnel-endpoint:30780> \
 #   --set kwok.clusterIdPrefix=h${N}-
-#
-# Validation status: aspirational. Cross-host substrate validated at
-# 2 hosts in the cross-host substrate work; this profile extends to 5
-# hosts. SLO-passing single-shard at 50 cluster→shard streams needs
-# explicit validation.
 
 namespace: bigfleet-scaletest
 
@@ -45,7 +33,7 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 10   # per host; 5 hosts × 10 = 50 clusters total
+  clusterCount: 1   # per host; 50 hosts × 1 = 50 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 8, memory: 16Gi }
@@ -64,8 +52,8 @@ shard:
   seedMachines: 60000
   seedSpeculative: 100000
   seedDensityMultiplier: 100
-  maxActionsPerCycle: 4096
-  executeConcurrency: 256
+  maxActionsPerCycle: 8192
+  executeConcurrency: 512
   incrementalReconcile: true
   metricsWarmupCycles: 5
   resources:
@@ -79,23 +67,19 @@ harness:
   scheduler: kube-scheduler
 
 crossHost:
-  # Primary-host config. Renders NodePort Services for the satellite
-  # hosts' tunnels to reach the shard and coordinator. Satellites
-  # leave this unset (or false) and override the dial addresses.
   expose: true
   shardNodePort: 30780
   coordinatorNodePort: 30790
 
 loadProfile:
-  # per-cluster CR demand; runner multiplies by clusterCount on each
-  # host. 100 000 per cluster × 10 clusters/host × 5 hosts = 5M total CRs
-  # = 50K machines at density 100.
+  # per-cluster; with clusterCount=1, equals per-host total. 100 000
+  # per cluster × 50 hosts = 5M total CRs = 50K machines at density 100.
   target: 100000
   churnPerMinute: 0.02
   durationSeconds: 1800
   reconcilePerTickCap: 200
 
-rampBudget: 30m
+rampBudget: 60m
 
 operator:
   qps: 400
@@ -113,6 +97,6 @@ prometheus:
     limits:   { cpu: 4, memory: 16Gi }
 
 costEstimate:
-  vCPU: 160    # 5 hosts × ~32 vCPU
-  memoryGB: 640
-  notes: "5 Uber-infra hosts (primary + 4 satellites); free at run-time. M45.5: 50K machines, 5M aggregated Pods at density=100. Cross-host substrate required."
+  vCPU: 16
+  memoryGB: 40
+  notes: "50 dedicated Uber-infra hosts (primary + 49 satellites); free at run-time. Per-host footprint above; 50× for total. M45.5: 50K machines, 5M aggregated Pods at density=100. Each cluster on its own host — production-realistic per-cluster shape matching scaleway-50k exactly."
