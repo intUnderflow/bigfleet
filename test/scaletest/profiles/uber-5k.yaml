@@ -1,30 +1,36 @@
 # uber-5k — 5K-machine fleet, 500K aggregated Pods at density=100.
 #
-# Production-realistic per-cluster shape mirroring scaleway-5k exactly
-# (1K machines/cluster × density 100 = 100K Pods/cluster). Each
-# cluster runs on its own dedicated host — no kwok-apiserver
-# co-tenancy, no etcd-disk contention, no per-host CPU sharing.
-# Per-cluster shape sits inside K8s SIG-scalability's tested
-# production limits (5K nodes / 150K pods / 300K containers).
+# Topology: 2 hosts × 10 kwok clusters per host = 20 clusters total,
+# single shard. Per-cluster target 25K Pods × density 100 = 250
+# machines; 20 clusters × 250 = 5K machines / 500K Pods total.
 #
-# Topology: 5 hosts × 1 cluster each, single shard.
-#   - 5 cluster→shard streams converge on the primary's shard.
-#   - Primary host: shard + coordinator + 1 kwok cluster + crossHost
-#     NodePort exposure.
-#   - Satellite hosts (4 of them): 1 kwok cluster each, no shard, no
-#     coordinator; operators dial the primary's shard through an
-#     SSH/TCP tunnel.
+# Per-cluster object count ~25K — comfortably under the per-cluster
+# kube-scheduler write-amplification curve (where bind rate degrades
+# sharply at ~30K objects/cluster). This shape validated at 96.7%
+# ramp in 30 min during cross-host substrate work; this profile makes
+# that shape canonical.
 #
-# Per-host deployment: one Helm release per host with these values.
-# Satellite-side overrides (host N where N = 2..5):
+# Why not 5 clusters × 100K Pods/cluster (production-realistic
+# K8s SIG-scalability cluster size): kube-scheduler at 100K
+# objects/cluster binds ~25 Pods/sec regardless of host isolation
+# (validated by running both single-host and dedicated-host-per-
+# cluster shapes — both stuck at ~25% ramp in 15m). 100K objects/
+# cluster is a steady-state production property; reaching it inside
+# a test ramp budget takes hours. uber-5k tests BigFleet's ramp
+# behaviour, so it sizes per-cluster demand to what kube-scheduler
+# can bind in budget.
+#
+# Per-host deployment: one Helm release per host. Satellite-side
+# overrides (the second host, prefixed h2):
 #   --set shard.skip=true \
 #   --set coordinator.skip=true \
 #   --set shard.overrideAddr=<tunnel-endpoint:30780> \
-#   --set kwok.clusterIdPrefix=h${N}-
+#   --set kwok.clusterIdPrefix=h2-
 #
-# `loadProfile.target` is **per-cluster** CR demand; with clusterCount=1
-# the per-host total equals target. 100 000 per cluster × 5 hosts =
-# 500 000 total CRs = 5K machines at density 100.
+# `loadProfile.target` is **per-cluster** CR demand; runner
+# multiplies by clusterCount on each host. 25 000 per cluster × 10
+# clusters/host × 2 hosts = 500K total CRs = 5K machines at
+# density 100.
 
 namespace: bigfleet-scaletest
 
@@ -41,12 +47,12 @@ bigfleet:
 
 kwok:
   storage: etcd
-  clusterCount: 1   # per host; 5 hosts × 1 = 5 clusters total
+  clusterCount: 10   # per host; 2 hosts × 10 = 20 clusters total
   apiserverResources:
     requests: { cpu: 2, memory: 4Gi }
-    # 16 GiB holds 100K-object/cluster comfortably (per-cluster
-    # apiserver hit OOM at ~90K on the previous 8 GiB limit).
-    limits:   { cpu: 8, memory: 16Gi }
+    # 8 GiB comfortably holds 25K objects/cluster (per-cluster
+    # apiserver OOM threshold is ~90K on this limit).
+    limits:   { cpu: 8, memory: 8Gi }
   workloadResources:
     requests: { cpu: 2, memory: 4Gi }
     limits:   { cpu: 4, memory: 8Gi }
@@ -82,12 +88,12 @@ crossHost:
   coordinatorNodePort: 30790
 
 loadProfile:
-  target: 100000   # per-cluster; matches scaleway-5k exactly.
+  target: 25000   # per-cluster; 20 clusters × 25K = 500K total CRs.
   churnPerMinute: 0.02
   durationSeconds: 1800
   reconcilePerTickCap: 200
 
-rampBudget: 15m
+rampBudget: 30m
 
 operator:
   qps: 200
@@ -105,7 +111,6 @@ prometheus:
     limits:   { cpu: 2, memory: 8Gi }
 
 costEstimate:
-  # Per-host. 5 hosts × this footprint.
-  vCPU: 16
-  memoryGB: 40
-  notes: "5 dedicated Uber-infra hosts (primary + 4 satellites); free at run-time. M45.5: 5K machines, 500K aggregated Pods at density=100. Each cluster on its own host — production-realistic per-cluster shape matching scaleway-5k exactly."
+  vCPU: 80
+  memoryGB: 160
+  notes: "2 Uber-infra hosts (primary + 1 satellite); free at run-time. M45.5: 5K machines, 500K aggregated Pods at density=100. 20 clusters × 25K Pods each — sized for kube-scheduler bind rate inside a 30-min ramp budget, not for K8s SIG-scalability per-cluster capacity. The 25K objects/cluster shape validated cleanly at 96.7% in cross-host substrate work; uber-50k+ will likely need scaleway-style 1:10 burst regime (lots of inventory, small demand per ramp) — addressed after this rung lands."
