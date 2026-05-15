@@ -29,3 +29,7 @@
 | [21](/adr/0021-persistent-execute-pool/) | Persistent execute pool |
 | [22](/adr/0022-need-count-semantics-pod-vs-machine/) | `Need.Count` semantics — Pod count vs machine count, and where packing lives |
 | [23](/adr/0023-real-kube-scheduler-in-scaletest-harness/) | Real kube-scheduler in the scaletest harness, retire pod-shim's binding role |
+| [24](/adr/0024-co-location-via-podaffinity/) | Co-location via podAffinity — the `CoLocation` CR field, roll-up aggregates |
+| [25](/adr/0025-harness-anchors-samerack-groups/) | The load-driver anchors sameRack groups — a gang-scheduler stand-in |
+| [26](/adr/0026-scaletest-models-speculative-tier/) | The scaletest harness must model the Speculative tier |
+| [27](/adr/0027-rollup-demand-is-a-constrained-resource-request/) | Roll-up demand is a constrained aggregate resource request, not `(per-pod-shape, count)` |
