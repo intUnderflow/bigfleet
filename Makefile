@@ -155,3 +155,19 @@ verify: vet lint test ## What CI runs on every PR.
 .PHONY: clean
 clean: ## Remove build artifacts.
 	rm -rf $(BIN) dist coverage.out coverage.html
+
+##@ Git hooks
+
+.PHONY: install-hooks
+install-hooks: ## Point this clone's git hooks at .githooks/ (pre-commit lint + pre-push verify).
+	@chmod +x .githooks/pre-commit .githooks/pre-push
+	@git config core.hooksPath .githooks
+	@echo "git hooks installed (core.hooksPath -> .githooks)"
+	@echo "  pre-commit: make lint"
+	@echo "  pre-push:   make verify"
+	@echo "Bypass either run with --no-verify if you need to."
+
+.PHONY: uninstall-hooks
+uninstall-hooks: ## Restore default git hook handling (.git/hooks/) for this clone.
+	@git config --unset core.hooksPath || true
+	@echo "git hooks uninstalled (core.hooksPath cleared; .git/hooks/ is back in charge)"

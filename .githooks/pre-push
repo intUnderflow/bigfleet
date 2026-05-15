@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# pre-push: run `make verify` (vet + lint + test) before the push lands.
+#
+# This is the canonical CI gate, run locally. If pre-push passes, CI
+# should pass — meaning we don't burn a CI cycle (and tie up
+# origin/main's history) on something that would have failed.
+#
+# Bypass with `git push --no-verify` if you need to push WIP work to a
+# personal branch for review or a temporary backup. CI will still gate
+# the eventual merge.
+#
+# Cost: ~30-45 s on a warm cache (the coordinator test alone is ~15 s).
+# Worth it: a failed CI run is 2-5 min round-trip and clutters the
+# branch history with revert/fix commits.
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "[pre-push] running make verify (vet + lint + test)…"
+
+if ! make verify; then
+  echo
+  echo "[pre-push] FAILED — fix the errors above, or rerun with"
+  echo "          git push --no-verify  (CI will still gate the merge)."
+  exit 1
+fi

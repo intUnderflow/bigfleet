@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# pre-commit: run `make lint` before the commit lands.
+#
+# Matches the discipline documented in MEMORY: feedback-lint-before-commit
+# (CI's verify gate is golangci-lint; skipping locally = red CI). Fast
+# enough (~10s on a warm cache) not to be intrusive on every commit.
+#
+# Bypass with `git commit --no-verify` if you genuinely need to skip
+# (WIP commits on a private branch, mid-rebase, etc.). The pre-push
+# hook re-runs the full verify gate either way, so a bypass here is
+# caught on push.
+
+set -euo pipefail
+
+# Resolve to the repo root so the hook works from any subdir.
+cd "$(git rev-parse --show-toplevel)"
+
+echo "[pre-commit] running make lint…"
+
+if ! make lint; then
+  echo
+  echo "[pre-commit] FAILED — fix the lint errors above, or rerun with"
+  echo "            git commit --no-verify  (and prepare for the pre-push"
+  echo "            gate or CI to catch it later)."
+  exit 1
+fi
