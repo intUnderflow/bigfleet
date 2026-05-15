@@ -18,7 +18,7 @@ set -euo pipefail
 : "${POD_NAME:?POD_NAME required}"
 : "${LOAD_PROFILE:?LOAD_PROFILE required (path to YAML)}"
 
-CLUSTER_ID="${POD_NAME}"
+CLUSTER_ID="${CLUSTER_ID_PREFIX:-}${POD_NAME}"
 
 # ---- multi-shard endpoint resolution ----
 #

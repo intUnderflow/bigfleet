@@ -1,0 +1,61 @@
+{{- /*
+NodePort exposure for cross-host scaletest topologies. When
+`crossHost.expose: true`, exports the shard's gRPC port (and the
+coordinator's, if enabled) on the host network so an operator running
+on a remote host can dial through an SSH/TCP tunnel terminating on
+this host's Docker bridge gateway.
+
+Disabled by default — only renders when explicitly opted in, so
+single-host profiles (dev-*, scaleway-*) are unaffected.
+
+The pieces that make this useful together:
+  - `shard.overrideAddr` on the remote host's kwok pods, set to the
+    tunnel's local-side endpoint (typically `<docker-bridge>:30780`),
+    so operators dial the tunnel instead of in-cluster DNS.
+  - `shard.skip` / `coordinator.skip` on the remote host, so it
+    doesn't deploy its own shard/coordinator — the satellite is purely
+    operator-bearing.
+  - `kwok.clusterIdPrefix` on the remote host, so its kwok cluster
+    pod-names don't collide with the local host's.
+*/ -}}
+{{- if .Values.crossHost }}
+{{- if .Values.crossHost.expose }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-shard-nodeport
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: shard
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - name: grpc
+      port: 7780
+      targetPort: grpc
+      nodePort: {{ .Values.crossHost.shardNodePort | default 30780 }}
+---
+{{- if and .Values.coordinator .Values.coordinator.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: bigfleet-coordinator-nodeport
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "scaletest.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/component: coordinator
+    app.kubernetes.io/part-of: bigfleet-scaletest
+  ports:
+    - name: grpc
+      port: 7790
+      targetPort: grpc
+      nodePort: {{ .Values.crossHost.coordinatorNodePort | default 30790 }}
+{{- end }}
+{{- end }}
+{{- end }}

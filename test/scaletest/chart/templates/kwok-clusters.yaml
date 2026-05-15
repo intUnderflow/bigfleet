@@ -110,17 +110,36 @@ spec:
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
-            # Multi-shard endpoint resolution. The workload entrypoint
-            # picks an ordinal as `N % BIGFLEET_SHARD_REPLICAS` from
-            # POD_NAME and dials the per-pod headless DNS. Stable
-            # across pod restarts — required for cluster-to-shard
-            # binding to survive a StatefulSet rollout-restart.
+            # CLUSTER_ID_PREFIX: prepended to POD_NAME when forming this
+            # kwok cluster's identifier. Lets two hosts (both running pods
+            # named kwok-cluster-0…N) share one shard without cluster-ID
+            # collisions — set to e.g. "h2-" on the satellite host. Empty
+            # by default; single-host profiles don't need it.
+            {{- if .Values.kwok.clusterIdPrefix }}
+            - name: CLUSTER_ID_PREFIX
+              value: "{{ .Values.kwok.clusterIdPrefix }}"
+            {{- end }}
+            # Shard endpoint resolution. Two paths:
+            #   1. shard.overrideAddr set (cross-host satellite): operator
+            #      dials the override address directly — typically the
+            #      local Docker bridge gateway fronting an SSH/TCP tunnel
+            #      to a remote shard. Bypasses in-cluster DNS entirely.
+            #   2. Default (M12, single-host): operator picks an ordinal as
+            #      `N % BIGFLEET_SHARD_REPLICAS` from POD_NAME and dials
+            #      the per-pod headless DNS. Stable across pod restarts —
+            #      required for cluster-to-shard binding to survive a
+            #      StatefulSet rollout-restart.
+            {{- if .Values.shard.overrideAddr }}
+            - name: BIGFLEET_SHARD_ADDR
+              value: "{{ .Values.shard.overrideAddr }}"
+            {{- else }}
             - name: BIGFLEET_SHARD_HEADLESS_DNS
               value: "bigfleet-shard-headless.{{ .Values.namespace }}.svc"
             - name: BIGFLEET_SHARD_PORT
               value: "7780"
             - name: BIGFLEET_SHARD_REPLICAS
               value: "{{ .Values.shard.replicas | default 1 }}"
+            {{- end }}
             - name: LOAD_PROFILE
               value: /etc/loadgen/profile.yaml
             - name: OPERATOR_QPS

@@ -20,8 +20,7 @@ bigfleet:
     pullPolicy: IfNotPresent
 
 coordinator:
-  # The scaletest chart always renders a coordinator (the template
-  # isn't gated). `enabled` controls whether the *shards* dial it via
+  # `enabled` controls whether the *shards* dial the coordinator via
   # --coordinator-addr; turning this off in a profile produces a
   # static-stability test (shards run, coordinator runs, but no
   # registration / heartbeats fire). Keep `true` for normal runs;
@@ -29,6 +28,17 @@ coordinator:
   # so bigfleet_coordinator_apply_total + pending_instructions
   # never appear in /metrics (only the always-on raft_term gauge does).
   enabled: true
+  # When true, the coordinator StatefulSet and Service do not render.
+  # Used in cross-host scaletest topologies for "satellite" hosts that
+  # connect operators / shards to a remote coordinator via
+  # coordinator.overrideAddr. Single-host profiles leave this unset.
+  skip: false
+  # If set, the shard dials this gRPC address as the coordinator
+  # instead of the in-cluster bigfleet-coordinator Service. Takes
+  # precedence over coordinator.enabled. Used in cross-host
+  # topologies where the shard reaches the coordinator through an
+  # SSH/TCP tunnel — set to the tunnel's local endpoint.
+  overrideAddr: ""
   replicas: 1
   resources:
     requests: { cpu: 500m, memory: 1Gi }
@@ -41,6 +51,26 @@ coordinator:
 
 shard:
   replicas: 1
+  # When true, the shard StatefulSet + headless Service do not render.
+  # Used in cross-host scaletest topologies for "satellite" hosts that
+  # connect operators to a remote shard via shard.overrideAddr.
+  # Single-host profiles leave this unset.
+  skip: false
+  # If set, operators in this chart's kwok pods dial this gRPC address
+  # for the shard, bypassing the in-cluster headless DNS path. Used in
+  # cross-host topologies — typically the local Docker bridge gateway
+  # IP + the NodePort that tunnels to a remote shard.
+  overrideAddr: ""
+  # If set, the shard binary uses this as --id instead of POD_NAME.
+  # Lets multi-shard topologies spanning hosts assign stable shard IDs
+  # that don't collide across host boundaries (e.g. "shard-0" and
+  # "shard-1" rather than POD_NAME-derived defaults).
+  overrideId: ""
+  # If set, the shard advertises this address (--advertise-addr) to
+  # the coordinator instead of its pod-derived headless DNS name.
+  # Required for cross-host multi-shard topologies where the per-pod
+  # DNS isn't reachable from peer shards.
+  overrideAdvertise: ""
   resources:
     requests: { cpu: 1, memory: 2Gi }
     limits:   { cpu: 4, memory: 8Gi }
@@ -155,6 +185,12 @@ kwok:
   workloadResources:
     requests: { cpu: 500m, memory: 1Gi }
     limits:   { cpu: 2,    memory: 2Gi }
+  # Prepended to POD_NAME when forming each kwok cluster's identifier.
+  # Lets two hosts running pods named kwok-cluster-0…N (e.g. primary +
+  # satellite in a cross-host topology) share one shard without
+  # cluster-ID collisions. Set to e.g. "h2-" on the satellite host;
+  # empty on single-host profiles.
+  clusterIdPrefix: ""
 
 # Operator tunables. Profiles override to push the apiserver budget
 # higher when the underlying apiserver can absorb more (Scaleway PRO2
@@ -349,3 +385,23 @@ costEstimate:
   memoryGB: 9
   awsSpotUsdPerHour: 0.20
   notes: "dev-5k baseline; runs free on M5 Max kind"
+
+# Cross-host scaletest topologies. When operators on a "satellite"
+# host dial a shard on a "primary" host via an SSH/TCP tunnel, this
+# block configures the primary's NodePort exposure for tunnel ingress.
+# All fields default off; single-host profiles are unaffected. See
+# also: shard.overrideAddr, coordinator.overrideAddr, shard.skip,
+# coordinator.skip, kwok.clusterIdPrefix — the satellite-side knobs
+# that pair with this block.
+crossHost:
+  # When true, render NodePort Services for the shard (and the
+  # coordinator, if coordinator.enabled) so they're reachable on the
+  # host network. Required on the primary host that satellites tunnel
+  # into; harmless on the satellite (which has shard.skip /
+  # coordinator.skip set anyway).
+  expose: false
+  # NodePort the primary host exposes for shard gRPC.
+  shardNodePort: 30780
+  # NodePort the primary host exposes for coordinator gRPC. Only
+  # rendered when coordinator.enabled is also true.
+  coordinatorNodePort: 30790

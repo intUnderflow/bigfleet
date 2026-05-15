@@ -1,3 +1,4 @@
+{{- if not .Values.shard.skip }}
 # M12: shard runs as a StatefulSet with stable per-pod DNS via the
 # `bigfleet-shard-headless` Service. kwok-cluster pods derive their
 # shard endpoint as `bigfleet-shard-(N % shard.replicas)` from
@@ -65,10 +66,20 @@ spec:
             - shard
             - --listen=:7780
             - --metrics-addr=:8780
+            {{- if .Values.shard.overrideId }}
+            - --id={{ .Values.shard.overrideId }}
+            {{- else }}
             - --id=$(POD_NAME)
+            {{- end }}
             - --data-dir=/var/lib/bigfleet
+            {{- if .Values.shard.overrideAdvertise }}
+            - --advertise-addr={{ .Values.shard.overrideAdvertise }}
+            {{- else }}
             - --advertise-addr=$(POD_NAME).bigfleet-shard-headless.{{ .Values.namespace }}.svc:7780
-            {{- if .Values.coordinator.enabled }}
+            {{- end }}
+            {{- if .Values.coordinator.overrideAddr }}
+            - --coordinator-addr={{ .Values.coordinator.overrideAddr }}
+            {{- else if .Values.coordinator.enabled }}
             - --coordinator-addr=bigfleet-coordinator.{{ .Values.namespace }}.svc:7790
             {{- end }}
             - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
@@ -126,3 +137,5 @@ spec:
           configMap:
             name: kwok-load-profile
         {{- end }}
+
+{{- end }}
