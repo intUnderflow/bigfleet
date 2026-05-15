@@ -1,10 +1,31 @@
 .idea/
 .claude/
+.DS_Store
 bin/
 dist/
 coverage.out
 coverage.html
+
 # Anchored to repo root so it matches only the built binary at ./bigfleet,
 # not the source directory ./cmd/bigfleet/ which also happens to be named
 # "bigfleet". Pre-anchor `git add cmd/bigfleet/...` was rejected as ignored.
 /bigfleet
+
+# Stray `go build` outputs at repo root from invocations like `go build
+# ./test/scaletest/cmd/node-creator/`. The canonical build location is
+# bin/ (per the Makefile); anything landing at repo root is accidental.
+/node-creator
+/pod-shim
+/scaletest-runner
+
+# Scaletest run outputs — large (hundreds of MB-to-GB per run, accumulating)
+# and per-clone; the canonical summaries live in docs/scaletest-results.md
+# and run artefacts that need preserving belong in bigfleet-uber's runs/.
+/test/scaletest/results/
+
+# Root-level node tooling (not the Astro site at site/package.json,
+# which is a separate, intentional npm project). Anything that ends up
+# at repo root via accidental `npm install` lands here and is silenced.
+/package.json
+/package-lock.json
+/node_modules/
