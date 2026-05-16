@@ -40,15 +40,6 @@ type phase1Allocator struct {
 	snap    *inventory.Snapshot
 	pools   map[string]*phase1Pool
 	claimed map[machine.ID]struct{}
-	// Scratch maps reused across every takeCoLocated invocation in a
-	// single Phase 1 cycle. takeCoLocated runs once per Need (tens of
-	// thousands per cycle at uber-50k scale per bigfleet-uber #17);
-	// reusing these eliminates the per-call map allocation that would
-	// otherwise dominate the path.
-	scratchMinUnit   map[string]int64
-	scratchDeficit   map[string]int64
-	scratchCapacity  map[string]int64
-	scratchRemaining map[string]int64
 }
 
 // phase1Pool holds the candidate slice for one (state, fingerprint).
@@ -83,22 +74,14 @@ type phase1Pool struct {
 type coLocatedBucket struct {
 	key      string
 	machines []machine.Machine
-	// parsedAllocs[j] is machines[j]'s EffectiveAllocatable in parsed
-	// (int64 milli-unit) form, populated once at bucket build time.
-	// The score loop iterates these instead of re-parsing per call.
-	parsedAllocs [][]needs.ParsedQty
-	head         int // advances past claimed machines across calls
+	head     int // advances past claimed machines across calls
 }
 
 func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 	return &phase1Allocator{
-		snap:             snap,
-		pools:            make(map[string]*phase1Pool),
-		claimed:          make(map[machine.ID]struct{}),
-		scratchMinUnit:   make(map[string]int64, 4),
-		scratchDeficit:   make(map[string]int64, 4),
-		scratchCapacity:  make(map[string]int64, 4),
-		scratchRemaining: make(map[string]int64, 4),
+		snap:    snap,
+		pools:   make(map[string]*phase1Pool),
+		claimed: make(map[machine.ID]struct{}),
 	}
 }
 
@@ -212,10 +195,6 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 	// ADR-0019 (M44.4): cache the MatchProfile-and-bucketed layout once
 	// per pool. Subsequent calls advance per-bucket head cursors past
 	// claimed machines and re-scan the unclaimed tail.
-	//
-	// parsedAllocs is populated alongside machines so the score loop
-	// never re-parses EffectiveAllocatable strings and never allocates
-	// a per-machine []ResourceQty inside the hot path.
 	if !pool.coLocatedBuilt || pool.coLocatedSameKey != sameKey {
 		index := make(map[string]int)
 		pool.coLocatedBuckets = pool.coLocatedBuckets[:0]
@@ -233,9 +212,7 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 				index[v] = i
 				pool.coLocatedBuckets = append(pool.coLocatedBuckets, coLocatedBucket{key: v})
 			}
-			b := &pool.coLocatedBuckets[i]
-			b.machines = append(b.machines, m)
-			b.parsedAllocs = append(b.parsedAllocs, needs.ParseAllocatableMap(m.EffectiveAllocatable()))
+			pool.coLocatedBuckets[i].machines = append(pool.coLocatedBuckets[i].machines, m)
 		}
 		pool.coLocatedBuilt = true
 		pool.coLocatedSameKey = sameKey
@@ -253,38 +230,20 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		}
 	}
 
-	// Parse the per-Need vectors once into pre-allocated scratch maps.
-	// The previous shape re-parsed minUnit and the accumulating
-	// capacity through Covers/AddResources on every machine — at
-	// bigfleet-uber #17's uber-50k that path produced the bulk of
-	// Phase 1's allocations. Reusing the allocator's scratch maps
-	// keeps both inputs alloc-free across tens of thousands of calls
-	// per cycle.
-	minUnitMap := a.scratchMinUnit
-	needs.ClearMap(minUnitMap)
-	fillParsedMap(minUnitMap, minUnit)
-	deficitMap := a.scratchDeficit
-	needs.ClearMap(deficitMap)
-	fillParsedMap(deficitMap, deficit)
-
 	// Score every non-empty bucket. atomic = its unclaimed, minUnit-
 	// passing machines' summed EffectiveAllocatable covers the deficit.
 	//   1. atomic-satisfiable preferred;
 	//   2. within atomic: cheapest head price, then key;
 	//   3. within partial: most available machines, then cheapest head,
 	//      then key.
-	//
-	// capacity is the scratch map reused across buckets — ClearMap +
-	// AddParsedInto run with zero per-iteration allocations.
-	capacity := a.scratchCapacity
 	bestIdx := -1
 	bestAtomic := false
 	bestHeadPrice := 0.0
 	bestAvail := -1
 	for i := range pool.coLocatedBuckets {
 		b := &pool.coLocatedBuckets[i]
-		needs.ClearMap(capacity)
 		avail := 0
+		var capacity []needs.ResourceQty
 		headPrice := 0.0
 		headSet := false
 		for j := b.head; j < len(b.machines); j++ {
@@ -292,8 +251,8 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 			if _, claimed := a.claimed[m.ID]; claimed {
 				continue
 			}
-			alloc := b.parsedAllocs[j]
-			if !needs.CoversParsed(alloc, minUnitMap) {
+			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+			if !needs.Covers(alloc, minUnit) {
 				continue
 			}
 			if !headSet {
@@ -301,12 +260,12 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 				headSet = true
 			}
 			avail++
-			needs.AddParsedInto(capacity, alloc)
+			capacity = needs.AddResources(capacity, alloc)
 		}
 		if avail == 0 {
 			continue
 		}
-		atomic := needs.CoversMaps(capacity, deficitMap)
+		atomic := needs.Covers(capacity, deficit)
 		better := false
 		switch {
 		case bestIdx < 0:
@@ -345,40 +304,24 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 	}
 
 	// Take from the chosen bucket until the deficit is covered or the
-	// bucket is exhausted. remaining mirrors SubResources's saturating
-	// semantics (clamps negative to zero) but mutates in place.
+	// bucket is exhausted.
 	best := &pool.coLocatedBuckets[bestIdx]
-	remaining := a.scratchRemaining
-	needs.ClearMap(remaining)
-	for k, v := range deficitMap {
-		remaining[k] = v
-	}
+	remaining := deficit
 	var out []machine.Machine
-	for j := best.head; j < len(best.machines); j++ {
-		if needs.IsZeroMap(remaining) {
-			break
-		}
+	for j := best.head; j < len(best.machines) && !needs.IsZero(remaining); j++ {
 		m := best.machines[j]
 		if _, claimed := a.claimed[m.ID]; claimed {
 			continue
 		}
-		alloc := best.parsedAllocs[j]
-		if !needs.CoversParsed(alloc, minUnitMap) {
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, minUnit) {
 			continue
 		}
 		out = append(out, m)
 		a.claimed[m.ID] = struct{}{}
-		needs.SubParsedInto(remaining, alloc)
+		remaining = needs.SubResources(remaining, alloc)
 	}
 	return out
-}
-
-// fillParsedMap populates dst with src's parsed milli-values. Assumes
-// dst was just cleared; entries are written, not merged.
-func fillParsedMap(dst map[string]int64, src []needs.ResourceQty) {
-	for _, r := range src {
-		dst[r.Name] = needs.ParseQtyMilli(r.Quantity)
-	}
 }
 
 // sameRequirementKey returns the key of the first Same requirement on
