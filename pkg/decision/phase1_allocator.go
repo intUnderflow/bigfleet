@@ -40,6 +40,12 @@ type phase1Allocator struct {
 	snap    *inventory.Snapshot
 	pools   map[string]*phase1Pool
 	claimed map[machine.ID]struct{}
+	// Scratch maps reused across every takeCoLocated invocation in a
+	// single Phase 1 cycle. takeCoLocated runs once per Need; reusing
+	// these eliminates per-call map allocations.
+	scratchMinUnit   map[string]int64
+	scratchDeficit   map[string]int64
+	scratchRemaining map[string]int64
 }
 
 // phase1Pool holds the candidate slice for one (state, fingerprint).
@@ -71,17 +77,40 @@ type phase1Pool struct {
 	coLocatedBuckets []coLocatedBucket
 }
 
+// coLocatedBucket caches the aggregate score of a single sameKey
+// bucket, maintained incrementally across takeCoLocated calls so the
+// score loop is O(buckets) per call instead of O(machines-in-bucket).
+//
+// Aggregates assume no per-Need minUnit filter — i.e. every bucket
+// machine is assumed to pass minUnit. This is true for the realistic-
+// catalog case where one Profile fingerprint corresponds to one
+// archetype with uniform machine shape, so all Needs hitting this
+// pool share the same minUnit shape that every bucket machine clears.
+// If a Need's minUnit is smaller than the bucket can serve, the score
+// is over-optimistic — the take loop's per-machine CoversParsed check
+// still filters correctly, but the bucket might be picked when a
+// smaller bucket would have been a tighter fit. Sim goldens guard the
+// correctness boundary; the wrong-pick case is bounded by the same
+// partial-fill semantics the algorithm already has.
 type coLocatedBucket struct {
 	key      string
 	machines []machine.Machine
-	head     int // advances past claimed machines across calls
+	// parsedAllocs[j] is machines[j]'s EffectiveAllocatable in parsed
+	// (int64 milli-unit) form. Populated once at bucket build.
+	parsedAllocs [][]needs.ParsedQty
+	head         int              // advances past claimed machines at the front
+	avail        int              // count of unclaimed machines in [head..end]
+	capacity     map[string]int64 // sum of unclaimed machines' allocs in [head..end]
 }
 
 func newPhase1Allocator(snap *inventory.Snapshot) *phase1Allocator {
 	return &phase1Allocator{
-		snap:    snap,
-		pools:   make(map[string]*phase1Pool),
-		claimed: make(map[machine.ID]struct{}),
+		snap:             snap,
+		pools:            make(map[string]*phase1Pool),
+		claimed:          make(map[machine.ID]struct{}),
+		scratchMinUnit:   make(map[string]int64, 4),
+		scratchDeficit:   make(map[string]int64, 4),
+		scratchRemaining: make(map[string]int64, 4),
 	}
 }
 
@@ -194,7 +223,13 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 
 	// ADR-0019 (M44.4): cache the MatchProfile-and-bucketed layout once
 	// per pool. Subsequent calls advance per-bucket head cursors past
-	// claimed machines and re-scan the unclaimed tail.
+	// claimed machines and read pre-maintained aggregate scores.
+	//
+	// Build also populates parsedAllocs (per-machine alloc in parsed
+	// form) and the avail/capacity aggregates assuming every machine is
+	// unclaimed. Subsequent claims maintain the aggregates incrementally
+	// inside the take loop below; head-advance just prunes the claimed
+	// prefix (no aggregate change since claims already decremented).
 	if !pool.coLocatedBuilt || pool.coLocatedSameKey != sameKey {
 		index := make(map[string]int)
 		pool.coLocatedBuckets = pool.coLocatedBuckets[:0]
@@ -210,16 +245,26 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 			if !exists {
 				i = len(pool.coLocatedBuckets)
 				index[v] = i
-				pool.coLocatedBuckets = append(pool.coLocatedBuckets, coLocatedBucket{key: v})
+				pool.coLocatedBuckets = append(pool.coLocatedBuckets, coLocatedBucket{
+					key:      v,
+					capacity: make(map[string]int64, 4),
+				})
 			}
-			pool.coLocatedBuckets[i].machines = append(pool.coLocatedBuckets[i].machines, m)
+			b := &pool.coLocatedBuckets[i]
+			alloc := needs.ParseAllocatableMap(m.EffectiveAllocatable())
+			b.machines = append(b.machines, m)
+			b.parsedAllocs = append(b.parsedAllocs, alloc)
+			b.avail++
+			needs.AddParsedInto(b.capacity, alloc)
 		}
 		pool.coLocatedBuilt = true
 		pool.coLocatedSameKey = sameKey
 	}
 
 	// Advance each bucket's head cursor past machines claimed in earlier
-	// calls. Total advancement across the cycle is O(claims).
+	// calls. Aggregates were already decremented when each claim happened
+	// in the take loop, so head-advance does not touch avail/capacity —
+	// it just skips a stale prefix to keep machines[head] addressable.
 	for i := range pool.coLocatedBuckets {
 		b := &pool.coLocatedBuckets[i]
 		for b.head < len(b.machines) {
@@ -230,8 +275,19 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 		}
 	}
 
-	// Score every non-empty bucket. atomic = its unclaimed, minUnit-
-	// passing machines' summed EffectiveAllocatable covers the deficit.
+	// Parse the per-Need vectors once into pre-allocated scratch maps.
+	minUnitMap := a.scratchMinUnit
+	needs.ClearMap(minUnitMap)
+	fillParsedMap(minUnitMap, minUnit)
+	deficitMap := a.scratchDeficit
+	needs.ClearMap(deficitMap)
+	fillParsedMap(deficitMap, deficit)
+
+	// Score every non-empty bucket directly from cached aggregates.
+	// O(buckets), no per-machine walk — the score loop's previous shape
+	// (O(unclaimed-in-bucket) per call) was the dominant cost at
+	// uber-50k (bigfleet-uber #17: 9.41 ms/call from per-machine
+	// allocation overhead × ~2.5K machines per bucket).
 	//   1. atomic-satisfiable preferred;
 	//   2. within atomic: cheapest head price, then key;
 	//   3. within partial: most available machines, then cheapest head,
@@ -242,30 +298,23 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 	bestAvail := -1
 	for i := range pool.coLocatedBuckets {
 		b := &pool.coLocatedBuckets[i]
-		avail := 0
-		var capacity []needs.ResourceQty
-		headPrice := 0.0
-		headSet := false
-		for j := b.head; j < len(b.machines); j++ {
-			m := b.machines[j]
-			if _, claimed := a.claimed[m.ID]; claimed {
-				continue
-			}
-			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-			if !needs.Covers(alloc, minUnit) {
-				continue
-			}
-			if !headSet {
-				headPrice = m.PricePerHour
-				headSet = true
-			}
-			avail++
-			capacity = needs.AddResources(capacity, alloc)
-		}
-		if avail == 0 {
+		// b.head past end ⇒ bucket exhausted from this pool's view.
+		// Cached avail may be stale (over-counted) when another pool
+		// sharing the same snapshot instance-type bucket claims one of
+		// our machines: we don't see that claim until head-advance
+		// walks past it, and we don't decrement avail/capacity for
+		// cross-pool claims. The functional impact is bounded — take
+		// loop won't find anything to claim and Phase 1 falls through
+		// to Speculative — but we still skip the bucket explicitly.
+		if b.avail == 0 || b.head >= len(b.machines) {
 			continue
 		}
-		atomic := needs.Covers(capacity, deficit)
+		atomic := needs.CoversMaps(b.capacity, deficitMap)
+		// machines[head] is the cheapest unclaimed; pool.src is
+		// price-sorted (idle) or EffectiveCost-sorted (speculative),
+		// bucketing preserves that order within each value.
+		headPrice := b.machines[b.head].PricePerHour
+		avail := b.avail
 		better := false
 		switch {
 		case bestIdx < 0:
@@ -304,24 +353,49 @@ func (a *phase1Allocator) takeCoLocated(state machine.State, profile needs.Profi
 	}
 
 	// Take from the chosen bucket until the deficit is covered or the
-	// bucket is exhausted.
+	// bucket is exhausted. Each claim maintains the bucket's avail and
+	// capacity aggregates so subsequent score-loop reads stay valid.
 	best := &pool.coLocatedBuckets[bestIdx]
-	remaining := deficit
+	remaining := a.scratchRemaining
+	needs.ClearMap(remaining)
+	for k, v := range deficitMap {
+		remaining[k] = v
+	}
 	var out []machine.Machine
-	for j := best.head; j < len(best.machines) && !needs.IsZero(remaining); j++ {
+	for j := best.head; j < len(best.machines); j++ {
+		if needs.IsZeroMap(remaining) {
+			break
+		}
 		m := best.machines[j]
 		if _, claimed := a.claimed[m.ID]; claimed {
 			continue
 		}
-		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-		if !needs.Covers(alloc, minUnit) {
+		alloc := best.parsedAllocs[j]
+		if !needs.CoversParsed(alloc, minUnitMap) {
 			continue
 		}
 		out = append(out, m)
 		a.claimed[m.ID] = struct{}{}
-		remaining = needs.SubResources(remaining, alloc)
+		needs.SubParsedInto(remaining, alloc)
+		// Maintain bucket aggregates.
+		best.avail--
+		for _, r := range alloc {
+			v := best.capacity[r.Name] - r.Milli
+			if v < 0 {
+				v = 0
+			}
+			best.capacity[r.Name] = v
+		}
 	}
 	return out
+}
+
+// fillParsedMap populates dst with src's parsed milli-values. Assumes
+// dst was just cleared; entries are written, not merged.
+func fillParsedMap(dst map[string]int64, src []needs.ResourceQty) {
+	for _, r := range src {
+		dst[r.Name] = needs.ParseQtyMilli(r.Quantity)
+	}
 }
 
 // sameRequirementKey returns the key of the first Same requirement on
