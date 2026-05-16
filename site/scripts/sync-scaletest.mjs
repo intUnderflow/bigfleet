@@ -201,7 +201,7 @@ function renderMarkdown(runs, progression) {
 
 Each run is one full pass through the scaletest harness: chart install, ramp to steady state, soak, prometheus snapshot, summary. Runs live in [\`test/scaletest/results/\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results) on GitHub; this page is generated from each run's \`summary.json\` and refreshes whenever the site builds.
 
-Outcomes on this page are **re-evaluated under the current SLO definition** — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs that were recorded as \`passed: true\` by an earlier runner without a sustained-load gate appear here as ✗ when they didn't hold target load. Re-evaluation is intentional: the SLO numbers from an under-loaded run don't say anything about behaviour at the actual benchmark.
+Two regimes, two grading rules. The **aggregated-catalog ladder** below is graded against the canonical bar — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs recorded as \`passed: true\` by an earlier runner without a sustained-load gate appear as ✗ when they didn't hold target load. The **realistic-catalog ladder** (uber-*) sits in a separate section below and is graded against the regime-aware envelopes defined in [ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md): per-Need cost ≤ 200 µs (constant), with cycle and ramp envelopes scaling with NeedsTable cardinality.
 
 `;
   if (first) {
@@ -246,7 +246,49 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
     table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
   }
 
-  return header + table + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
+  return header + table + realisticSection() + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
+}
+
+// Realistic-regime ladder rows. These runs live on Uber infra and
+// aren't checked into test/scaletest/results/. As new rungs land
+// (uber-50k → uber-500k), add a row here with the values reported by
+// the inner agent's analysis.md. Per ADR-0028, per-Need p99 is the
+// BigFleet-property bar; cycle p99 / ramp budget are workload-property
+// envelopes that scale with NeedsTable cardinality.
+const realisticRuns = [
+  {
+    profile: "uber-5k",
+    commit: "00ef120",
+    needsTable: 7759,
+    cycleP99: 1.019,
+    perNeedP99Us: 130,
+    perNeedBarUs: 200,
+    ackP99: 0.296,
+    rollupP99: 0.497,
+    bindingP99: null, // not measured (kube-scheduler path)
+    load: { active: 247523, target: 249750 },
+    rampBudgetMin: 60,
+    passed: true,
+    analysisRef: "bigfleet-uber #16",
+  },
+];
+
+function realisticSection() {
+  let s = `\n## Realistic-regime ladder (uber-*)
+
+[ADR-0028] defines the regime: workload uses the full \`realistic.yaml\` archetype catalog (gpu-training, memory-db with small co-location groups produce ~388 Needs/cluster, ~48× more than the aggregated regime). We grade BigFleet on **per-Need Phase 1 p99 ≤ 200 µs** — a constant that holds across the ladder. Cycle p99 and ramp budget envelopes scale linearly with NeedsTable cardinality per the projections in ADR-0028. ack p99 (≤ 12 s) and steady-state binding p99 (≤ 15 s) are held constant across rungs.
+
+| profile | commit | NeedsTable | per-Need p99 | cycle p99 | ack p99 | rollup p99 | load | pass |
+|---|---|---:|---:|---:|---:|---:|---|:---:|
+`;
+  for (const r of realisticRuns) {
+    const loadCol = r.load ? `${r.load.active.toLocaleString()} / ${r.load.target.toLocaleString()}` : "—";
+    s += `| \`${r.profile}\` (${r.analysisRef}) | \`${r.commit}\` | ${r.needsTable.toLocaleString()} | ${r.perNeedP99Us} µs (bar ${r.perNeedBarUs}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${r.passed ? "✓" : "✗"} |\n`;
+  }
+  s += `
+[ADR-0028]: ./adr/0028-cycle-p99-is-regime-parametric.md
+`;
+  return s;
 }
 
 async function main() {

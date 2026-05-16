@@ -33,3 +33,4 @@
 | [25](/adr/0025-harness-anchors-samerack-groups/) | The load-driver anchors sameRack groups — a gang-scheduler stand-in |
 | [26](/adr/0026-scaletest-models-speculative-tier/) | The scaletest harness must model the Speculative tier |
 | [27](/adr/0027-rollup-demand-is-a-constrained-resource-request/) | Roll-up demand is a constrained aggregate resource request, not `(per-pod-shape, count)` |
+| [28](/adr/0028-cycle-p99-is-regime-parametric/) | Cycle-p99 SLO is regime-parametric; the realistic catalog scales with Need cardinality |

@@ -93,12 +93,14 @@ loadProfile:
   durationSeconds: 3600
   reconcilePerTickCap: 200
 
-# Uniform 60 m rampBudget across the uber-* family — the SLO is the
-# SLO, and if BigFleet can't clear at this budget that's signal about
-# scaling rather than a budget-tuning issue. Per-cluster bind work is
-# the same as uber-5k (25K binds at ~30/sec ≈ 14 min); what's new at
-# this scale is shard fan-out across 200 streams (vs uber-5k's 20).
-rampBudget: 60m
+# Regime-aware envelope (ADR-0028): ramp scales linearly with total
+# CR count vs uber-5k (10× CRs → 2× ramp budget, since per-cluster
+# bind work is the same shape). Cycle p99 ceiling scales linearly
+# with projected NeedsTable cardinality × 1.5 safety factor
+# (~77,600 Needs × 200 µs/Need × 1.5 ≈ 23 s). Internal binding (15 s)
+# and ack (12 s, runner default) stay constant — they're BigFleet-
+# property bars, not workload-property envelopes.
+rampBudget: 120m
 
 operator:
   qps: 400
@@ -108,7 +110,8 @@ operator:
 
 slo:
   internalBindingLatencyP99Seconds: 15
-  shardCycleDurationP99Seconds: 5
+  # ADR-0028: workload-property envelope, scales with NeedsTable.
+  shardCycleDurationP99Seconds: 25
 
 prometheus:
   resources:

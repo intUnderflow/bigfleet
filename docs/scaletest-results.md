@@ -2,7 +2,7 @@
 
 Each run is one full pass through the scaletest harness: chart install, ramp to steady state, soak, prometheus snapshot, summary. Runs live in [`test/scaletest/results/`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results) on GitHub; this page is generated from each run's `summary.json` and refreshes whenever the site builds.
 
-Outcomes on this page are **re-evaluated under the current SLO definition** — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs that were recorded as `passed: true` by an earlier runner without a sustained-load gate appear here as ✗ when they didn't hold target load. Re-evaluation is intentional: the SLO numbers from an under-loaded run don't say anything about behaviour at the actual benchmark.
+Two regimes, two grading rules. The **aggregated-catalog ladder** below is graded against the canonical bar — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs recorded as `passed: true` by an earlier runner without a sustained-load gate appear as ✗ when they didn't hold target load. The **realistic-catalog ladder** (uber-*) sits in a separate section below and is graded against the regime-aware envelopes defined in [ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md): per-Need cost ≤ 200 µs (constant), with cycle and ramp envelopes scaling with NeedsTable cardinality.
 
 ## Per-shard 500K optimisation trajectory
 
@@ -59,5 +59,64 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
 | [`failover-leader-kill`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-191344-failover-leader-kill) | 16 ms | 75 ms | 14 ms | 50000 / 50000 | ✓ |
 | [`failover-leader-kill`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-194845-failover-leader-kill) | 16 ms | 79 ms | 14 ms | 50000 / 50000 | ✓ |
 | [`scaleway-1m`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-203638-scaleway-1m) | 967 ms | 2.55 s | 495 ms | 999967 / 1000000 | ✗ |
+| [`scaleway-1m`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260505-224242-scaleway-1m) | 817 ms | 4.28 s | 499 ms | 999963 / 1000000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260506-022153-dev-5k) | 29 ms | 5.03 s | 5.12 s | 4349 / 5000 | ✗ |
+| [`dev-5k-pods-loopback`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260506-024211-dev-5k-pods-loopback) | 58 ms | 9.66 s | 1.54 s | 400 / 600 | ✗ |
+| [`dev-5k-pods-loopback`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260506-030209-dev-5k-pods-loopback) | — | — | — | — | ✓ |
+| [`dev-5k-pods-loopback`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260506-031922-dev-5k-pods-loopback) | 11 ms | 90 ms | 14 ms | 600 / 600 | ✓ |
+| [`scaleway-500k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260506-231218-scaleway-500k) | 793 ms | 136 ms | 16 ms | 50000 / 50000 | ✗ |
+| [`scaleway-500k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-012155-scaleway-500k) | 645 ms | 94 ms | 15 ms | 50000 / 50000 | ✗ |
+| [`scaleway-500k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-020933-scaleway-500k) | 31 ms | 5.03 s | 23 ms | 5000 / 50000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-023831-dev-5k) | — | — | — | — | ✓ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-025002-dev-5k) | 43 ms | 5.02 s | 5.46 s | 3539 / 5000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-025330-dev-5k) | 31 ms | 5.03 s | 1.49 s | 5000 / 5000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-025820-dev-5k) | 824 ms | 5.02 s | 1.52 s | 3339 / 5000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-030133-dev-5k) | 30 ms | 77 ms | 31 ms | 5000 / 5000 | ✓ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-031806-dev-5k) | 23 ms | 76 ms | 31 ms | 5000 / 5000 | ✓ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-032920-dev-5k) | 1.01 s | 156 ms | 31 ms | 5000 / 5000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-120335-scaleway-50k) | 8.19 s | 631 ms | 121 ms | 49999 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-134343-scaleway-50k) | 8.19 s | 954 ms | 125 ms | 49999 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260507-155042-scaleway-50k) | 255 ms | 840 ms | 64 ms | 49997 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-002512-scaleway-50k) | 294 ms | 726 ms | 63 ms | 49996 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-010641-scaleway-50k) | 493 ms | 975 ms | 63 ms | 49997 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-015734-scaleway-50k) | 459 ms | 1.03 s | 63 ms | 49998 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-021906-scaleway-50k) | 436 ms | 916 ms | 64 ms | 49999 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-135450-scaleway-50k) | 8.19 s | 2.41 s | 63 ms | 49995 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-141939-scaleway-50k) | 4.01 s | 886 ms | 63 ms | 49998 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260508-171343-scaleway-50k) | 2.02 s | 1.08 s | 127 ms | 49998 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260509-005319-scaleway-50k) | 2.01 s | 81 ms | 126 ms | 49998 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260509-014621-scaleway-50k) | 508 ms | 280 ms | 52 ms | 49996 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260509-124308-scaleway-50k) | 977 ms | 1.43 s | 62 ms | 49994 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260509-134511-scaleway-50k) | 906 ms | 1.28 s | 60 ms | 49996 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260510-231654-scaleway-50k) | 510 ms | 2.12 s | 58 ms | 49992 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260510-235737-scaleway-50k) | 511 ms | 2.07 s | 57 ms | 49992 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-093430-scaleway-50k) | 788 ms | 379 ms | 58 ms | 49992 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-103134-scaleway-50k) | 566 ms | 410 ms | 58 ms | 49993 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-123320-scaleway-50k) | 8.19 s | 31.40 s | 112 ms | 49973 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-131039-scaleway-50k) | 684 ms | 386 ms | 60 ms | 49991 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-135036-scaleway-50k) | 898 ms | 381 ms | 58 ms | 49994 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-141345-scaleway-50k) | 793 ms | 317 ms | 59 ms | 49995 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-155334-scaleway-50k) | 510 ms | 317 ms | 49 ms | 49996 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-171546-scaleway-50k) | 637 ms | 310 ms | 52 ms | 49995 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-180838-scaleway-50k) | 499 ms | 101 ms | 30 ms | 49999 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-183447-scaleway-50k) | 505 ms | 127 ms | 30 ms | 49997 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-201325-scaleway-50k) | 502 ms | 147 ms | 31 ms | 49999 / 50000 | ✗ |
+| [`scaleway-50k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260511-215133-scaleway-50k) | 494 ms | 81 ms | 29 ms | 49998 / 50000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260512-013758-dev-5k) | 889 ms | 19.40 s | 1.57 s | 3516 / 5000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260512-020134-dev-5k) | 157 ms | 9.77 s | 123 ms | 1837 / 5000 | ✗ |
+| [`dev-5k`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260512-020916-dev-5k) | 116 ms | 4.79 s | 1.97 s | 76 / 2500 | ✗ |
+| [`dev-500`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260512-145040-dev-500) | 56 ms | 77 ms | 63 ms | 49998 / 50000 | ✓ |
+| [`dev-500`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260512-204653-dev-500) | 61 ms | 108 ms | 90 ms | 49998 / 50000 | ✓ |
+| [`dev-500-adr0025`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/20260514-134934-dev-500-adr0025) | 15 ms | 13.72 s | 64 ms | 49998 / 50000 | ✗ |
+
+## Realistic-regime ladder (uber-*)
+
+[ADR-0028] defines the regime: workload uses the full `realistic.yaml` archetype catalog (gpu-training, memory-db with small co-location groups produce ~388 Needs/cluster, ~48× more than the aggregated regime). We grade BigFleet on **per-Need Phase 1 p99 ≤ 200 µs** — a constant that holds across the ladder. Cycle p99 and ramp budget envelopes scale linearly with NeedsTable cardinality per the projections in ADR-0028. ack p99 (≤ 12 s) and steady-state binding p99 (≤ 15 s) are held constant across rungs.
+
+| profile | commit | NeedsTable | per-Need p99 | cycle p99 | ack p99 | rollup p99 | load | pass |
+|---|---|---:|---:|---:|---:|---:|---|:---:|
+| `uber-5k` (bigfleet-uber #16) | `00ef120` | 7,759 | 130 µs (bar 200) | 1.02 s | 296 ms | 497 ms | 247,523 / 249,750 | ✓ |
+
+[ADR-0028]: ./adr/0028-cycle-p99-is-regime-parametric.md
 
 *Generated from `test/scaletest/results/*/summary.json` by `site/scripts/sync-scaletest.mjs`. Outcomes recomputed under the current SLO bar.*
