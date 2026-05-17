@@ -6,6 +6,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -183,6 +184,20 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 	prec := PrecedenceFromProfile(qn.Need.Profile)
 	mode := modeFor(qn.Need)
 	topologyConstrained := hasTopologyConstraint(qn.Need.Profile)
+	startingDeficit := computeDeficit(qn.Need, state)
+	committedAnything := false
+
+	defer func() {
+		// "Retries exhausted" only counts when the worker entered with
+		// real demand AND finished without committing anything new
+		// AND the budget hit zero. Catalog-bound zero-deficit Needs
+		// (covered by pre-pass) don't count; per-cycle Needs that
+		// committed and then ran out of budget on a follow-up state
+		// don't count either.
+		if qn.RetriesLeft <= 0 && !committedAnything && !needs.IsZero(startingDeficit) {
+			metrics.ShardPhase1OCCRetriesExhaustedTotal.Inc()
+		}
+	}()
 
 	for _, st := range []machine.State{machine.StateIdle, machine.StateSpeculative} {
 		committedThisState := false
@@ -216,6 +231,7 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 
 			if r.Status == StatusCommitted {
 				committedThisState = true
+				committedAnything = true
 				// Topology-constrained Needs: don't retry in this
 				// state. The constraint's bucket / skew accounting
 				// is per-call; a second call after partial commit

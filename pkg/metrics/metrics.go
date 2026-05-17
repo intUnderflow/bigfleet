@@ -262,6 +262,46 @@ var (
 		Help:    "Number of Bootstrap+Provision actions Phase 1 emitted in a single cycle. A persistent low value with unmet demand indicates Phase 1 is supply-bound (existing Configured covers per-fp demand), allocator-bound (pool filter rejects available Idle), or input-bound (NeedsTable snapshot underflows).",
 		Buckets: []float64{0, 1, 4, 16, 64, 256, 1024, 4096, 16384},
 	})
+
+	// OCC broker observability (ADR-0029, requested in bigfleet-uber
+	// #20 follow-up).
+	//
+	// Together with ShardPhase1EmitsPerCycle and ShardCyclePhaseDuration
+	// {phase=phase1}, these answer "is OCC over-conflicting or
+	// under-emitting?" — the primary diagnostic axis for the M46.3
+	// cutover.
+
+	// ShardPhase1OCCProposalsTotal counts every broker.Propose call,
+	// labelled by outcome. conflict / committed ratio is the cycle's
+	// effective conflict rate; ADR-0029 §Performance projections target
+	// ≤ 0.15 in steady state, ≤ 0.3 at cold start.
+	ShardPhase1OCCProposalsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_phase1_occ_proposals_total",
+		Help: "OCC broker proposal count by outcome. outcome=committed = proposal mutated state; outcome=conflict = proposal aborted (stale seqno OR immovable claim under the proposer's mode). conflict/committed ratio is the broker's conflict rate.",
+	}, []string{"outcome"})
+
+	// ShardPhase1OCCDisplacementsTotal counts incumbent Needs that
+	// were evicted by a higher-precedence proposal. One increment
+	// per displaced-Need (broker dedupes machine-level displacements
+	// into one entry per evicted Need). Compared against
+	// ShardPhase1OCCProposalsTotal{outcome=committed} this gives the
+	// "what fraction of commits required displacement" rate, a
+	// signal for genuine priority asymmetry vs unclaimed-pool work.
+	ShardPhase1OCCDisplacementsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_phase1_occ_displacements_total",
+		Help: "Count of incumbent Needs displaced by higher-precedence proposals at the OCC broker. One increment per evicted Need (machine-level displacements dedupe to one per Need).",
+	})
+
+	// ShardPhase1OCCRetriesExhaustedTotal counts Needs that exhausted
+	// their per-Need retry budget without committing any new claims
+	// (post-pre-pass). Distinct from "Unsatisfied" — a Need can be
+	// Unsatisfied because no candidates exist (catalog-bound) or
+	// because retries ran out (contention-bound). Non-zero values
+	// here mean broker contention is starving the affected Needs.
+	ShardPhase1OCCRetriesExhaustedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_phase1_occ_retries_exhausted_total",
+		Help: "Count of Needs that hit their retry budget without committing. Differentiates contention-bound Unsatisfied from catalog-bound Unsatisfied.",
+	})
 )
 
 // Coordinator metrics.

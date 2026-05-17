@@ -2,6 +2,7 @@ package occ
 
 import (
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -56,6 +57,7 @@ func (b *Broker) Propose(p Proposal) Result {
 	//    read it invalidates the proposal.
 	currentSeq := b.state.bucketSeq[p.Bucket]
 	if currentSeq != p.ObservedSeq {
+		metrics.ShardPhase1OCCProposalsTotal.WithLabelValues("conflict").Inc()
 		return Result{Status: StatusConflict, NewSeq: currentSeq}
 	}
 
@@ -94,10 +96,12 @@ func (b *Broker) Propose(p Proposal) Result {
 	switch p.Mode {
 	case ModeAllOrNothing:
 		if len(conflicted) > 0 {
+			metrics.ShardPhase1OCCProposalsTotal.WithLabelValues("conflict").Inc()
 			return Result{Status: StatusConflict, NewSeq: currentSeq}
 		}
 	case ModeIncremental:
 		if len(newClaim)+len(displace) == 0 {
+			metrics.ShardPhase1OCCProposalsTotal.WithLabelValues("conflict").Inc()
 			return Result{Status: StatusConflict, NewSeq: currentSeq}
 		}
 	}
@@ -150,6 +154,11 @@ func (b *Broker) Propose(p Proposal) Result {
 		reverse[mid] = struct{}{}
 	}
 	b.state.bucketSeq[p.Bucket] = currentSeq + 1
+
+	metrics.ShardPhase1OCCProposalsTotal.WithLabelValues("committed").Inc()
+	if n := len(displaced); n > 0 {
+		metrics.ShardPhase1OCCDisplacementsTotal.Add(float64(n))
+	}
 
 	return Result{
 		Status:     StatusCommitted,
