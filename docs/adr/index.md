@@ -37,3 +37,4 @@
 | [29](/adr/0029-phase1-omega-style-occ/) | Phase 1 Omega-style OCC — shared-state, commit-broker priority, dual-mode commits |
 | [30](/adr/0030-incremental-phase1/) | Incremental Phase 1 — delta-only processing as a layered optimization (Proposed) |
 | [31](/adr/0031-parsync-partitioned-sync/) | ParSync-style partitioned synchronization — conditional follow-on for raised per-shard ceilings (Proposed) |
+| [32](/adr/0032-realistic-catalog-production-calibration/) | Realistic catalog production-calibrated workload distribution |
