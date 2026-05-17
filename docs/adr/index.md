@@ -34,4 +34,6 @@
 | [26](/adr/0026-scaletest-models-speculative-tier/) | The scaletest harness must model the Speculative tier |
 | [27](/adr/0027-rollup-demand-is-a-constrained-resource-request/) | Roll-up demand is a constrained aggregate resource request, not `(per-pod-shape, count)` |
 | [28](/adr/0028-cycle-p99-is-regime-parametric/) | Cycle-p99 SLO is regime-parametric; the realistic catalog scales with Need cardinality |
-| [29](/adr/0029-phase1-omega-style-occ/) | Phase 1 Omega-style OCC — shared-state, scheduler-kind partitioning, commit-broker priority |
+| [29](/adr/0029-phase1-omega-style-occ/) | Phase 1 Omega-style OCC — shared-state, commit-broker priority, dual-mode commits |
+| [30](/adr/0030-incremental-phase1/) | Incremental Phase 1 — delta-only processing as a layered optimization (Proposed) |
+| [31](/adr/0031-parsync-partitioned-sync/) | ParSync-style partitioned synchronization — conditional follow-on for raised per-shard ceilings (Proposed) |
