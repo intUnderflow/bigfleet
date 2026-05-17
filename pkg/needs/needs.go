@@ -15,6 +15,7 @@
 package needs
 
 import (
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,6 +122,33 @@ func (b PenaltyBucket) Label() string {
 		return "pinned"
 	}
 	return "unspecified"
+}
+
+// UpperBoundDollars returns the upper bound, in dollars, of the
+// bucket. PenaltyBucketPinned returns +Inf so anything compared
+// against it picks the alternative. Used wherever the bucketed
+// penalty has to be turned back into a number for cost math; the
+// conservative choice (overestimate the cost of interruption) biases
+// toward more-expensive but safer capacity.
+func (b PenaltyBucket) UpperBoundDollars() float64 {
+	switch b {
+	case PenaltyBucketUnspecified:
+		return 0
+	case PenaltyBucketZero:
+		return 0
+	case PenaltyBucketHalfDollar:
+		return 0.5
+	case PenaltyBucketPinned:
+		return math.Inf(1)
+	}
+	// Buckets PenaltyBucket1 through PenaltyBucket10485760 are powers
+	// of 2 starting at 1.0. The bucket value's distance from
+	// PenaltyBucket1 gives the exponent.
+	exp := int(b) - int(PenaltyBucket1)
+	if exp < 0 {
+		return 0
+	}
+	return math.Pow(2, float64(exp))
 }
 
 // BucketForDollars returns the smallest bucket whose upper bound is at

@@ -8,55 +8,25 @@
 package decision
 
 import (
-	"math"
 	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
-// EffectiveCost is the locked cost formula:
-//
-//	effective_cost = price + (interruption_probability × interruption_penalty)
-//
-// `price` is per-hour, `penalty` is dollars. The two terms are
-// dimensionally inconsistent on paper but the formula is the locked
-// design choice; the result is a per-hour expected cost that can be
-// compared directly against another machine's price.
+// EffectiveCost wraps machine.Machine.EffectiveCost as a free
+// function for ergonomic use throughout the decision package. The
+// locked formula lives on the method; this is the legacy spelling
+// kept for call-site continuity.
 func EffectiveCost(m machine.Machine, interruptionPenaltyDollars float64) float64 {
-	if interruptionPenaltyDollars < 0 {
-		interruptionPenaltyDollars = 0
-	}
-	return m.PricePerHour + (m.InterruptionProbability * interruptionPenaltyDollars)
+	return m.EffectiveCost(interruptionPenaltyDollars)
 }
 
-// BucketUpperBoundDollars returns the upper bound, in dollars, of a
-// PenaltyBucket. The decision engine uses the upper bound when it has to
-// turn a bucketed penalty back into a number for cost math; this is a
-// conservative choice (overestimates the cost of interruption, biasing
-// toward more-expensive but safer capacity).
-//
-// PenaltyBucketPinned returns +Inf so anything compared against it picks
-// the alternative.
+// BucketUpperBoundDollars wraps needs.PenaltyBucket.UpperBoundDollars
+// as a free function for ergonomic use throughout the decision
+// package.
 func BucketUpperBoundDollars(b needs.PenaltyBucket) float64 {
-	switch b {
-	case needs.PenaltyBucketUnspecified:
-		return 0
-	case needs.PenaltyBucketZero:
-		return 0
-	case needs.PenaltyBucketHalfDollar:
-		return 0.5
-	case needs.PenaltyBucketPinned:
-		return math.Inf(1)
-	}
-	// Buckets PenaltyBucket1 through PenaltyBucket10485760 are powers of
-	// 2 starting at 1.0. The bucket value's distance from PenaltyBucket1
-	// gives the exponent.
-	exp := int(b) - int(needs.PenaltyBucket1)
-	if exp < 0 {
-		return 0
-	}
-	return math.Pow(2, float64(exp))
+	return b.UpperBoundDollars()
 }
 
 // VictimWeights tunes the relative importance of the four dimensions in

@@ -1,0 +1,430 @@
+package occ_test
+
+import (
+	"sort"
+	"strconv"
+	"sync"
+	"testing"
+
+	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
+	"github.com/intUnderflow/bigfleet/pkg/inventory"
+	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/needs"
+)
+
+// ---- fixtures ---------------------------------------------------------
+
+func smallProfile(pri int32, instanceTypes ...string) needs.Profile {
+	if len(instanceTypes) == 0 {
+		instanceTypes = []string{"m5.large"}
+	}
+	return needs.NewProfile(
+		[]needs.Requirement{{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: needs.OperatorIn,
+			Values:   instanceTypes,
+		}},
+		nil, pri,
+		needs.PenaltyBucket1024,
+		needs.PenaltyBucket1,
+	)
+}
+
+func sameProfile(pri int32, sameKey string) needs.Profile {
+	return needs.NewProfile(
+		[]needs.Requirement{
+			{
+				Key:      "node.kubernetes.io/instance-type",
+				Operator: needs.OperatorIn,
+				Values:   []string{"m5.large"},
+			},
+			{Key: sameKey, Operator: needs.OperatorSame},
+		},
+		nil, pri,
+		needs.PenaltyBucket1024,
+		needs.PenaltyBucket1,
+	)
+}
+
+func spreadProfile(pri int32, topoKey string, maxSkew int32) needs.Profile {
+	return needs.NewProfile(
+		[]needs.Requirement{{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: needs.OperatorIn,
+			Values:   []string{"m5.large"},
+		}},
+		[]needs.TopologySpread{{
+			TopologyKey:       topoKey,
+			MaxSkew:           maxSkew,
+			WhenUnsatisfiable: needs.WhenUnsatisfiableDoNotSchedule,
+		}},
+		pri,
+		needs.PenaltyBucket1024,
+		needs.PenaltyBucket1,
+	)
+}
+
+// idleMachine constructs an Idle machine with a fixed (4 cpu, 8Gi) shape.
+func idleMachine(id machine.ID, price float64, labels map[string]string) machine.Machine {
+	mp := machine.Profile{
+		InstanceType: "m5.large",
+		Zone:         "us-east-1a",
+		CapacityType: machine.CapacityTypeOnDemand,
+		Resources:    map[string]string{"cpu": "4", "memory": "16Gi"},
+		Labels:       labels,
+	}
+	return machine.Machine{
+		ID:           id,
+		State:        machine.StateIdle,
+		Profile:      mp,
+		PricePerHour: price,
+		Host:         machine.HostRef{Provider: "fake", Ref: string(id)},
+	}
+}
+
+func snapWith(machines ...machine.Machine) *inventory.Snapshot {
+	inv := inventory.New()
+	for _, m := range machines {
+		_ = inv.Insert(m)
+	}
+	return inv.Snapshot()
+}
+
+func freshStateWith(machines ...machine.Machine) *occ.SharedState {
+	return occ.NewSharedState(snapWith(machines...))
+}
+
+// ---- PoolCache --------------------------------------------------------
+
+func TestPoolCache_GetCachesSameProfile(t *testing.T) {
+	t.Parallel()
+	snap := snapWith(idleMachine("m1", 1.0, nil), idleMachine("m2", 2.0, nil))
+	cache := occ.NewPoolCache(snap)
+	profile := smallProfile(100)
+
+	p1 := cache.Get(machine.StateIdle, profile)
+	p2 := cache.Get(machine.StateIdle, profile)
+	if p1 != p2 {
+		t.Fatalf("Get for same profile returned distinct pools (%p vs %p)", p1, p2)
+	}
+}
+
+func TestPoolCache_ConcurrentGetIsSafe(t *testing.T) {
+	t.Parallel()
+	const N = 50
+	var machines []machine.Machine
+	for i := 0; i < N; i++ {
+		machines = append(machines, idleMachine(machine.ID("m-"+strconv.Itoa(i)), float64(i), nil))
+	}
+	snap := snapWith(machines...)
+	cache := occ.NewPoolCache(snap)
+	profile := smallProfile(100)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	seen := make([]*occ.Pool, workers)
+	for w := 0; w < workers; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			seen[w] = cache.Get(machine.StateIdle, profile)
+		}()
+	}
+	wg.Wait()
+	for w := 1; w < workers; w++ {
+		if seen[w] != seen[0] {
+			t.Errorf("worker %d got distinct Pool %p vs %p", w, seen[w], seen[0])
+		}
+	}
+}
+
+// ---- FindBasic --------------------------------------------------------
+
+func TestFindBasic_PicksCheapestUnclaimed(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		idleMachine("m-cheap", 1.0, nil),
+		idleMachine("m-mid", 2.0, nil),
+		idleMachine("m-exp", 3.0, nil),
+	)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := smallProfile(100)
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "4"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	if len(c.Machines) != 1 || c.Machines[0] != "m-cheap" {
+		t.Fatalf("FindBasic = %v, want [m-cheap]", c.Machines)
+	}
+	if c.Bucket.State != machine.StateIdle {
+		t.Errorf("Bucket.State = %v, want Idle", c.Bucket.State)
+	}
+	if c.Bucket.ProfileFP == "" {
+		t.Error("Bucket.ProfileFP empty")
+	}
+}
+
+func TestFindBasic_SkipsClaimedMachines(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		idleMachine("m-cheap", 1.0, nil),
+		idleMachine("m-mid", 2.0, nil),
+	)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := smallProfile(100)
+	pool := cache.Get(machine.StateIdle, profile)
+
+	state.SeedClaim("m-cheap", &needs.Need{}, occ.Precedence{Priority: 50}, 10)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "4"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	if len(c.Machines) != 1 || c.Machines[0] != "m-mid" {
+		t.Fatalf("FindBasic with m-cheap claimed = %v, want [m-mid]", c.Machines)
+	}
+}
+
+func TestFindBasic_AccumulatesUntilCovered(t *testing.T) {
+	t.Parallel()
+	// 3 machines of cpu=4 each; deficit cpu=10 needs all three (12 ≥ 10).
+	state := freshStateWith(
+		idleMachine("m1", 1.0, nil),
+		idleMachine("m2", 1.0, nil),
+		idleMachine("m3", 1.0, nil),
+	)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := smallProfile(100)
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "10"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	if len(c.Machines) != 3 {
+		t.Fatalf("FindBasic = %v, want all 3 machines", c.Machines)
+	}
+}
+
+func TestFindBasic_ReturnsEmptyOnZeroDeficit(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(idleMachine("m1", 1.0, nil))
+	cache := occ.NewPoolCache(state.Snapshot())
+	pool := cache.Get(machine.StateIdle, smallProfile(100))
+
+	c := pool.FindBasic(state, machine.StateIdle, nil, nil)
+	if len(c.Machines) != 0 {
+		t.Fatalf("FindBasic on zero deficit = %v, want empty", c.Machines)
+	}
+}
+
+// ---- FindSame ---------------------------------------------------------
+
+func TestFindSame_PrefersAtomicSatisfiableBucket(t *testing.T) {
+	t.Parallel()
+	// Two racks. Rack A has 1 machine (capacity 4 cpu, can't atomically cover 8 cpu).
+	// Rack B has 2 machines (capacity 8 cpu, atomically covers).
+	// Atomic must win over partial.
+	mA := idleMachine("a-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-a"})
+	mB1 := idleMachine("b-1", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	mB2 := idleMachine("b-2", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	state := freshStateWith(mA, mB1, mB2)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := sameProfile(100, "topology.kubernetes.io/rack")
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "8"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindSame(state, machine.StateIdle, deficit, minUnit, "topology.kubernetes.io/rack")
+	if c.Bucket.SameValue != "rack-b" {
+		t.Fatalf("FindSame chose %q, want rack-b (atomic)", c.Bucket.SameValue)
+	}
+	if len(c.Machines) != 2 {
+		t.Fatalf("FindSame Machines = %v, want both rack-b machines", c.Machines)
+	}
+}
+
+func TestFindSame_FallsBackToMostAvailableWhenNoAtomic(t *testing.T) {
+	t.Parallel()
+	// Neither rack can atomically cover deficit cpu=20; rack with more
+	// machines wins (most-available tie-break).
+	mA := idleMachine("a-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-a"})
+	mB1 := idleMachine("b-1", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	mB2 := idleMachine("b-2", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	mB3 := idleMachine("b-3", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	state := freshStateWith(mA, mB1, mB2, mB3)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := sameProfile(100, "topology.kubernetes.io/rack")
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "20"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindSame(state, machine.StateIdle, deficit, minUnit, "topology.kubernetes.io/rack")
+	if c.Bucket.SameValue != "rack-b" {
+		t.Fatalf("FindSame chose %q, want rack-b (most available for partial fill)", c.Bucket.SameValue)
+	}
+}
+
+func TestFindSame_BucketKeyCarriesSameKeyAndValue(t *testing.T) {
+	t.Parallel()
+	m1 := idleMachine("m1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-a"})
+	state := freshStateWith(m1)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := sameProfile(100, "topology.kubernetes.io/rack")
+	pool := cache.Get(machine.StateIdle, profile)
+
+	c := pool.FindSame(state, machine.StateIdle,
+		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+		"topology.kubernetes.io/rack",
+	)
+	if c.Bucket.SameKey != "topology.kubernetes.io/rack" {
+		t.Errorf("Bucket.SameKey = %q, want topology.kubernetes.io/rack", c.Bucket.SameKey)
+	}
+	if c.Bucket.SameValue != "rack-a" {
+		t.Errorf("Bucket.SameValue = %q, want rack-a", c.Bucket.SameValue)
+	}
+}
+
+// ---- FindSpread -------------------------------------------------------
+
+func TestFindSpread_RespectsMaxSkew(t *testing.T) {
+	t.Parallel()
+	// Three racks (using a custom topology key so the Labels path is
+	// exercised — the well-known Zone projection on machine.Profile is
+	// hardcoded by idleMachine and would collapse all into one bucket).
+	// Two machines per rack. With maxSkew=1 and deficit cpu=12 (1
+	// machine = 4 cpu so 3 machines cover), we should pick one per
+	// rack.
+	rackKey := "topology.kubernetes.io/rack"
+	mka := idleMachine("a-1", 1.0, map[string]string{rackKey: "rack-a"})
+	mka2 := idleMachine("a-2", 1.0, map[string]string{rackKey: "rack-a"})
+	mb := idleMachine("b-1", 2.0, map[string]string{rackKey: "rack-b"})
+	mb2 := idleMachine("b-2", 2.0, map[string]string{rackKey: "rack-b"})
+	mc := idleMachine("c-1", 3.0, map[string]string{rackKey: "rack-c"})
+	mc2 := idleMachine("c-2", 3.0, map[string]string{rackKey: "rack-c"})
+	state := freshStateWith(mka, mka2, mb, mb2, mc, mc2)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := spreadProfile(100, rackKey, 1)
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "12"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindSpread(state, machine.StateIdle, deficit, minUnit, rackKey, 1)
+	if len(c.Machines) != 3 {
+		t.Fatalf("FindSpread = %v, want 3 machines", c.Machines)
+	}
+	racks := map[string]int{}
+	for _, mid := range c.Machines {
+		racks[string(mid)[:1]]++
+	}
+	for r, count := range racks {
+		if count != 1 {
+			t.Errorf("rack %s picked %d times under skew=1; want 1", r, count)
+		}
+	}
+}
+
+// ---- SeedConfiguredSupply --------------------------------------------
+
+func TestSeedConfiguredSupply_CreditsHighPriFirst(t *testing.T) {
+	t.Parallel()
+	// One Configured machine in cluster c1; two Needs of the same
+	// profile but different priorities. The high-pri Need must get the
+	// claim; the low-pri Need carries the full deficit.
+	configured := machine.Machine{
+		ID:    "m-conf",
+		State: machine.StateConfigured,
+		Profile: machine.Profile{
+			InstanceType: "m5.large",
+			Resources:    map[string]string{"cpu": "4"},
+		},
+		Cluster: "c1",
+		Host:    machine.HostRef{Provider: "fake", Ref: "m-conf"},
+	}
+	state := freshStateWith(configured)
+	profile := smallProfile(100)
+	highPriProfile := smallProfile(500)
+
+	highPri := needs.Need{
+		ClusterID:          "c1",
+		Profile:            highPriProfile,
+		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+	}
+	lowPri := needs.Need{
+		ClusterID:          "c1",
+		Profile:            profile,
+		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+	}
+
+	results := occ.SeedConfiguredSupply(state, []needs.Need{lowPri, highPri}, 10)
+	if !state.IsClaimed("m-conf") {
+		t.Fatal("Configured machine not claimed by pre-pass")
+	}
+
+	// Find each Need in results and check its deficit.
+	for _, r := range results {
+		switch r.Need.Profile.Priority() {
+		case 500: // high-pri — should be covered
+			if !needs.IsZero(r.Deficit) {
+				t.Errorf("high-pri deficit = %v, want zero (Configured supply absorbed it)", r.Deficit)
+			}
+		case 100: // low-pri — should still carry full deficit
+			if needs.IsZero(r.Deficit) {
+				t.Error("low-pri deficit zero; pre-pass shouldn't have credited because m-conf went to high-pri")
+			}
+		}
+	}
+}
+
+func TestSeedConfiguredSupply_OnlyCreditsMatchingMachines(t *testing.T) {
+	t.Parallel()
+	// Machine pinned to t3.large; Need pins m5.large. No credit.
+	configured := machine.Machine{
+		ID:    "m-conf",
+		State: machine.StateConfigured,
+		Profile: machine.Profile{
+			InstanceType: "t3.large",
+			Resources:    map[string]string{"cpu": "4"},
+		},
+		Cluster: "c1",
+		Host:    machine.HostRef{Provider: "fake", Ref: "m-conf"},
+	}
+	state := freshStateWith(configured)
+	profile := smallProfile(100) // pins m5.large
+
+	n := needs.Need{
+		ClusterID:          "c1",
+		Profile:            profile,
+		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+	}
+	results := occ.SeedConfiguredSupply(state, []needs.Need{n}, 10)
+	if state.IsClaimed("m-conf") {
+		t.Error("non-matching Configured machine was claimed; MatchProfile filter broken")
+	}
+	if needs.IsZero(results[0].Deficit) {
+		t.Error("deficit zero despite no matching supply credited")
+	}
+}
+
+// sortedIDs is shared with displacement_test.go — define a local copy
+// because Go doesn't deduplicate across _test files of the same
+// package and we want this self-contained. Different name to avoid
+// clash.
+func sortedIDsCand(in []machine.ID) []machine.ID {
+	out := make([]machine.ID, len(in))
+	copy(out, in)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+var _ = sortedIDsCand

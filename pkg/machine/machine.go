@@ -261,6 +261,22 @@ func (m *Machine) EffectiveAllocatable() map[string]string {
 	return m.Profile.Resources
 }
 
+// EffectiveCost is the locked cost formula (CLAUDE.md, ADR-0029,
+// paper §16):
+//
+//	effective_cost = price + (interruption_probability × interruption_penalty)
+//
+// price is per-hour, penalty is dollars. Dimensionally inconsistent
+// on paper but the formula is the locked design choice; the result
+// is a per-hour expected cost comparable to another machine's
+// price. Not pluggable.
+func (m Machine) EffectiveCost(interruptionPenaltyDollars float64) float64 {
+	if interruptionPenaltyDollars < 0 {
+		interruptionPenaltyDollars = 0
+	}
+	return m.PricePerHour + (m.InterruptionProbability * interruptionPenaltyDollars)
+}
+
 // Invariant validates the structural invariants of a Machine. Returns the
 // first invariant violated, or nil. Used by tests and reconciliation
 // code to assert state-machine consistency.

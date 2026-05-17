@@ -130,6 +130,32 @@ const (
 	StatusConflict
 )
 
+// NeedResult is the per-Need outcome of one cycle. The OCC worker
+// populates one of these per Need it processes; decision.Phase1
+// converts them into Action + UnsatisfiedNeed slices for emission.
+//
+// Configured/Configuring machines credited via the existing-supply
+// pre-pass don't appear here — they're seeded directly on
+// SharedState before workers start and never produce an Action.
+//
+// BootstrapMachines and ProvisionMachines correspond to Idle and
+// Speculative commits respectively (mirroring the legacy
+// ActionKindBootstrap / ActionKindProvision distinction). They are
+// emitted as the worker successfully commits; on conflict + retry,
+// only committed machines accumulate here.
+//
+// Unsatisfied=true plus Deficit captures the residual that the
+// worker couldn't cover before exhausting its retry budget or its
+// candidate pool. The shortfall buffer (`pkg/shortfall`) consumes
+// these.
+type NeedResult struct {
+	Need              *needs.Need
+	BootstrapMachines []machine.ID
+	ProvisionMachines []machine.ID
+	Unsatisfied       bool
+	Deficit           []needs.ResourceQty
+}
+
 // Result is what Propose returns.
 //
 //   - Committed: machines now owned by the proposing Need (subset of

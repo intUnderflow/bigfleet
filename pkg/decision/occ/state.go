@@ -49,6 +49,22 @@ func NewSharedState(snap *inventory.Snapshot) *SharedState {
 	}
 }
 
+// SeedClaim records an initial claim outside the broker's plan-then-
+// commit path. Used by the pre-pass that credits existing supply
+// (matching Configured/Configuring machines for each Need's cluster)
+// before the OCC worker pool starts. Not safe for concurrent use:
+// the pre-pass is single-threaded by construction.
+//
+// The seeded claim participates in normal displacement logic — a
+// later higher-precedence proposal will evict it just like any
+// other claim. retriesLeft is the budget the displaced incumbent
+// will inherit if that happens.
+func (s *SharedState) SeedClaim(mid machine.ID, n *needs.Need, prec Precedence, retriesLeft int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.claimedBy[mid] = claim{need: n, precedence: prec, retriesLeft: retriesLeft}
+}
+
 // Snapshot returns the cycle's immutable inventory snapshot. Callers
 // read it without taking the state lock.
 func (s *SharedState) Snapshot() *inventory.Snapshot {
