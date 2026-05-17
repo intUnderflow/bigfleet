@@ -847,9 +847,11 @@ Sequence:
    under the new code; must show no regression on aggregated-
    regime benches and material improvement on realistic-regime.
 
-5. **Scaleway validation.** Re-run `scaleway-500k` in cloud
-   before merge; verify cycle p99 ≤ 100 ms still holds. This is
-   the canonical regression gate.
+5. **Cloud regression gate (uber-500k).** Once the uber-5k and
+   uber-50k validation in step 6 passes, run `uber-500k` against
+   the OCC-cutover commit; verify cycle p99 stays within the
+   regime envelope per ADR-0028 and no aggregated-regime SLO
+   regresses. This is the canonical per-shard regression gate.
 
 6. **Scale-test validation.** File a scale-test follow-up once
    code is on `main` to run uber-5k + uber-50k against the new
