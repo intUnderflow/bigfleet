@@ -847,27 +847,25 @@ Sequence:
    under the new code; must show no regression on aggregated-
    regime benches and material improvement on realistic-regime.
 
-5. **Cloud regression gate (uber-500k).** Once the uber-5k and
-   uber-50k validation in step 6 passes, run `uber-500k` against
-   the OCC-cutover commit; verify cycle p99 stays within the
-   regime envelope per ADR-0028 and no aggregated-regime SLO
-   regresses. This is the canonical per-shard regression gate.
+5. **Cloud regression + win gate (uber-5k + uber-50k).** File a
+   scale-test follow-up once code is on `main`. Bench runners
+   report per-Need cost, conflict rate, cycle p99. uber-5k is the
+   100 ms canonical-bar pass; uber-50k is the 25 s realistic-
+   regime envelope per ADR-0028. These two rungs cover both the
+   regression check and the OCC win demonstration; uber-50k is
+   the highest auto-runnable rung. uber-500k+ would extend the
+   per-shard ceiling claim but requires prior Uber approval and
+   is filed separately if/when that comes through.
 
-6. **Scale-test validation.** File a scale-test follow-up once
-   code is on `main` to run uber-5k + uber-50k against the new
-   commit. Bench runners report per-Need cost, conflict rate, cycle p99.
-   uber-5k expected to easily pass the 100 ms canonical bar;
-   uber-50k expected to pass the 25 s regime envelope.
-
-7. **Documentation update.** `bigfleet.md` §8 ("walk needs
+6. **Documentation update.** `bigfleet.md` §8 ("walk needs
    top-down by priority") gets a footnote pointing to this ADR;
    the implementation language is updated to reflect that
    priority is enforced at commit. Paper-level text doesn't need
    a full rewrite — the design intent (priority wins) is
    preserved.
 
-Rollback plan: if scaleway-500k regresses post-cutover, revert
-the cutover commit. Sim goldens running on the reverted code are
+Rollback plan: if uber-5k or uber-50k regresses post-cutover,
+revert the cutover commit. Sim goldens running on the reverted code are
 the immediate signal. Time-to-detect: one CI run (~10 min). No
 intermediate dual-path code to remove.
 
