@@ -152,6 +152,78 @@ envelopes relax with cardinality.
    profile-aggregated catalog) continues to be graded against the
    100 ms canonical bar. That bar has not moved; it has been scoped.
 
+## Empirical addendum (uber-50k, bigfleet-uber #17): per-Need cost is not scale-invariant
+
+Three optimization attempts against uber-50k (11-host compressed; 110
+clusters; ~42K Needs/cycle) measured how Phase 1 actually scales under
+the realistic catalog. The decision above assumed per-Need Phase 1
+cost was a constant property of BigFleet (~130 µs from uber-5k). The
+data refutes that assumption.
+
+| Attempt | Per-call | Cycle | Per-Need | Mechanism |
+|---|---|---|---|---|
+| `4ce1e70` baseline | 9.41 ms | ~20 min | 7.0 ms | original O(machines-in-bucket) score loop |
+| `b9b7037` parsed-form (reverted) | 6.04 ms | ~16 min | 22.1 ms¹ | per-machine alloc elimination via int64 milli-units + scratch maps |
+| `0f05854` O(buckets) cache (reverted) | 30.8 ms | ~14.8 min | 21.1 ms | per-bucket aggregate cache, score loop O(buckets) |
+
+¹ The inner agent reported `calls/Need = 3.66`; with only two `alloc.take()` callsites in Phase 1 (`phase1_assign.go:70,91`) the true value is bounded at 2 per Need — the 22.1 ms figure averages cumulative counter deltas across the steady-state window. Order of magnitude is correct; the conclusion below does not depend on the exact attribution.
+
+**The mechanism that defeats both optimizations.** At uber-50k under
+the realistic catalog, the operator's per-CR `CoLocation.LabelSelector`
+makes each gpu-training / memory-db co-location group its **own bucket**
+(distinct sameKey value). Bucket count therefore scales with Need
+count (~42K buckets for ~42K Needs at uber-50k). Both attempted
+optimizations targeted per-iteration cost inside a bucket; neither
+reduces the iteration count itself. With bucket-count ≈ Need-count,
+`O(buckets)` is `O(Needs)` — there is no asymptotic improvement to
+extract from the score-loop layout.
+
+**Conclusion.** Phase 1's wall-clock cost under the realistic
+catalog scales with **Need cardinality**, not with the constant
+per-Need cost we measured at uber-5k. The "200 µs/Need" bar in §2
+above is therefore a calibration that holds at uber-5k but not in
+general — Decision §3's claim that uber-5k passing implies the bar
+holds across the ladder is empirically false. uber-50k cleared the
+ramp gate at 11.7%–37.2% across three attempts; constant-factor
+optimization cannot reach the regime-aware cycle envelope.
+
+The levers that remain reduce **iteration count**, not per-iteration
+cost:
+
+1. **Incremental Phase 1.** Only walk Needs whose state changed
+   since the previous cycle. In steady state this may approach
+   sub-linear in Need count; under sustained churn it tracks the
+   churn rate.
+2. **Parallel Phase 1.** Partition the NeedsTable across goroutines
+   (Omega-OCC-style optimistic concurrency control). Conflicts on
+   shared inventory reconcile at commit time. This is what the
+   paper anticipates for fan-out scaling.
+3. **Reduce realistic Need cardinality.** Coalesce co-location
+   groups across CRs that share a Profile fingerprint, so per-pool
+   buckets stay bounded. Considered and rejected in §Alternatives
+   below — it tunes the workload to the implementation.
+
+(1) and (2) are real engineering. (2) — Phase 1 OCC — is what
+Decision §5 already deferred as "the long-term mechanism." The data
+this addendum captures is exactly what Decision §5 asked for: it
+informs whether OCC is worth pursuing. The answer is yes, with the
+caveat that uber-500k will need OCC to land, not just to be
+profile-validated.
+
+**Status of the per-Need bar.** §2's 200 µs/Need bar is retained
+as the *aspirational* bar that an OCC-redesigned Phase 1 should
+clear at every rung. It is not currently a pass/fail gate for
+single-threaded Phase 1 at uber-50k+; the regime-aware cycle and
+ramp envelopes are. When OCC ships, the per-Need bar becomes
+gating again.
+
+**uber-5k remains the only passing rung under the realistic
+catalog.** uber-50k under-passes its regime-aware envelopes
+(11.7% ramp completion in the best attempt; bound by Phase 1
+wall-clock). Published as a failing row in `docs/scaletest-results.md`
+when re-graded against this addendum, with the empirical attribution
+documented so the next OCC iteration has a baseline to beat.
+
 ## Held bars vs scaled envelopes
 
 The principle: each SLO scales (or doesn't) with workload size based

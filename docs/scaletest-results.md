@@ -116,6 +116,7 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
 | profile | commit | NeedsTable | per-Need p99 | cycle p99 | ack p99 | rollup p99 | load | pass |
 |---|---|---:|---:|---:|---:|---:|---|:---:|
 | `uber-5k` (bigfleet-uber #16) | `00ef120` | 7,759 | 130 µs (bar 200) | 1.02 s | 296 ms | 497 ms | 247,523 / 249,750 | ✓ |
+| `uber-50k` (bigfleet-uber #17) | `4ce1e70` | 42,680 | 7000 µs (bar 200) | 885.90 s | — | — | 92,160 / 247,500 | ✗ |
 
 [ADR-0028]: ./adr/0028-cycle-p99-is-regime-parametric.md
 

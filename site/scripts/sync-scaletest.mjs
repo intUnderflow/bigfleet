@@ -265,11 +265,31 @@ const realisticRuns = [
     perNeedBarUs: 200,
     ackP99: 0.296,
     rollupP99: 0.497,
-    bindingP99: null, // not measured (kube-scheduler path)
+    bindingP99: null,
     load: { active: 247523, target: 249750 },
     rampBudgetMin: 60,
     passed: true,
     analysisRef: "bigfleet-uber #16",
+  },
+  {
+    // uber-50k 11-host compressed (devpod limit). Three attempts
+    // measured baseline + two single-thread optimization passes;
+    // all failed the regime-aware envelope at the same structural
+    // wall (bucket count ≈ Need count under realistic catalog).
+    // See ADR-0028 empirical addendum.
+    profile: "uber-50k",
+    commit: "4ce1e70",
+    needsTable: 42680,
+    cycleP99: 885.9, // ~14.8 min from best attempt
+    perNeedP99Us: 7000,
+    perNeedBarUs: 200,
+    ackP99: null,
+    rollupP99: null,
+    bindingP99: null,
+    load: { active: 92160, target: 247500 },
+    rampBudgetMin: 120,
+    passed: false,
+    analysisRef: "bigfleet-uber #17",
   },
 ];
 
