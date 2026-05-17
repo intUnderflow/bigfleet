@@ -155,7 +155,7 @@ func TestFindBasic_PicksCheapestUnclaimed(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "4"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	c := pool.FindBasic(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit)
 	if len(c.Machines) != 1 || c.Machines[0] != "m-cheap" {
 		t.Fatalf("FindBasic = %v, want [m-cheap]", c.Machines)
 	}
@@ -182,7 +182,7 @@ func TestFindBasic_SkipsClaimedMachines(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "4"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	c := pool.FindBasic(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit)
 	if len(c.Machines) != 1 || c.Machines[0] != "m-mid" {
 		t.Fatalf("FindBasic with m-cheap claimed = %v, want [m-mid]", c.Machines)
 	}
@@ -203,7 +203,7 @@ func TestFindBasic_AccumulatesUntilCovered(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "10"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindBasic(state, machine.StateIdle, deficit, minUnit)
+	c := pool.FindBasic(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit)
 	if len(c.Machines) != 3 {
 		t.Fatalf("FindBasic = %v, want all 3 machines", c.Machines)
 	}
@@ -215,7 +215,7 @@ func TestFindBasic_ReturnsEmptyOnZeroDeficit(t *testing.T) {
 	cache := occ.NewPoolCache(state.Snapshot())
 	pool := cache.Get(machine.StateIdle, smallProfile(100))
 
-	c := pool.FindBasic(state, machine.StateIdle, nil, nil)
+	c := pool.FindBasic(state, machine.StateIdle, occ.Precedence{}, nil, nil)
 	if len(c.Machines) != 0 {
 		t.Fatalf("FindBasic on zero deficit = %v, want empty", c.Machines)
 	}
@@ -239,7 +239,7 @@ func TestFindSame_PrefersAtomicSatisfiableBucket(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "8"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindSame(state, machine.StateIdle, deficit, minUnit, "topology.kubernetes.io/rack")
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack")
 	if c.Bucket.SameValue != "rack-b" {
 		t.Fatalf("FindSame chose %q, want rack-b (atomic)", c.Bucket.SameValue)
 	}
@@ -264,7 +264,7 @@ func TestFindSame_FallsBackToMostAvailableWhenNoAtomic(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "20"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindSame(state, machine.StateIdle, deficit, minUnit, "topology.kubernetes.io/rack")
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack")
 	if c.Bucket.SameValue != "rack-b" {
 		t.Fatalf("FindSame chose %q, want rack-b (most available for partial fill)", c.Bucket.SameValue)
 	}
@@ -278,7 +278,7 @@ func TestFindSame_BucketKeyCarriesSameKeyAndValue(t *testing.T) {
 	profile := sameProfile(100, "topology.kubernetes.io/rack")
 	pool := cache.Get(machine.StateIdle, profile)
 
-	c := pool.FindSame(state, machine.StateIdle,
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{},
 		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 		"topology.kubernetes.io/rack",
@@ -316,7 +316,7 @@ func TestFindSpread_RespectsMaxSkew(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "12"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindSpread(state, machine.StateIdle, deficit, minUnit, rackKey, 1)
+	c := pool.FindSpread(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, rackKey, 1)
 	if len(c.Machines) != 3 {
 		t.Fatalf("FindSpread = %v, want 3 machines", c.Machines)
 	}
@@ -365,7 +365,7 @@ func TestSeedConfiguredSupply_CreditsHighPriFirst(t *testing.T) {
 		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 	}
 
-	results := occ.SeedConfiguredSupply(state, []needs.Need{lowPri, highPri}, 10)
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&lowPri, &highPri}, 10)
 	if !state.IsClaimed("m-conf") {
 		t.Fatal("Configured machine not claimed by pre-pass")
 	}
@@ -407,7 +407,7 @@ func TestSeedConfiguredSupply_OnlyCreditsMatchingMachines(t *testing.T) {
 		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
 		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 	}
-	results := occ.SeedConfiguredSupply(state, []needs.Need{n}, 10)
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
 	if state.IsClaimed("m-conf") {
 		t.Error("non-matching Configured machine was claimed; MatchProfile filter broken")
 	}

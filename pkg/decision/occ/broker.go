@@ -1,6 +1,9 @@
 package occ
 
-import "github.com/intUnderflow/bigfleet/pkg/machine"
+import (
+	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/needs"
+)
 
 // Broker is the single synchronization point for commits. Workers
 // submit Proposals; the broker validates the bucket's seqno, plans
@@ -102,17 +105,32 @@ func (b *Broker) Propose(p Proposal) Result {
 	// 4. Commit atomically.
 	//
 	//    Release displaced incumbents first (their machines
-	//    become un-claimed); then claim every machine the
-	//    proposal can take. Build the Displaced list so the
-	//    proposer's worker can re-queue them.
-	displaced := make([]QueuedNeed, 0, len(displace))
+	//    become un-claimed and drop out of claimedByNeed); then
+	//    claim every machine the proposal can take into both
+	//    claimedBy and claimedByNeed. Build the Displaced list
+	//    so the proposer's worker can re-queue them. Multiple
+	//    machines displaced from the same incumbent collapse to
+	//    one Displaced entry (the worker dedupes anyway, but
+	//    deduping here saves the queue an entry).
+	displacedByNeed := make(map[*needs.Need]int)
 	for _, d := range displace {
 		delete(b.state.claimedBy, d.mid)
-		displaced = append(displaced, QueuedNeed{
-			Need:        d.old.need,
-			RetriesLeft: d.old.retriesLeft - 1,
-		})
+		if set, ok := b.state.claimedByNeed[d.old.need]; ok {
+			delete(set, d.mid)
+			if len(set) == 0 {
+				delete(b.state.claimedByNeed, d.old.need)
+			}
+		}
+		newRetries := d.old.retriesLeft - 1
+		if cur, ok := displacedByNeed[d.old.need]; !ok || newRetries < cur {
+			displacedByNeed[d.old.need] = newRetries
+		}
 	}
+	displaced := make([]QueuedNeed, 0, len(displacedByNeed))
+	for n, retries := range displacedByNeed {
+		displaced = append(displaced, QueuedNeed{Need: n, RetriesLeft: retries})
+	}
+
 	newRecord := claim{
 		need:        p.Need,
 		precedence:  p.Precedence,
@@ -123,8 +141,13 @@ func (b *Broker) Propose(p Proposal) Result {
 	for _, d := range displace {
 		committed = append(committed, d.mid)
 	}
+	if b.state.claimedByNeed[p.Need] == nil {
+		b.state.claimedByNeed[p.Need] = make(map[machine.ID]struct{}, len(committed))
+	}
+	reverse := b.state.claimedByNeed[p.Need]
 	for _, mid := range committed {
 		b.state.claimedBy[mid] = newRecord
+		reverse[mid] = struct{}{}
 	}
 	b.state.bucketSeq[p.Bucket] = currentSeq + 1
 

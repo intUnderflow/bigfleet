@@ -19,23 +19,63 @@ type Candidates struct {
 	Bucket   BucketKey
 }
 
-// FindBasic returns up to enough unclaimed, MatchProfile-passing,
-// minUnit-fitting machines from pool to cover deficit. Walks pool.src
-// in price/cost order and stops as soon as the running allocatable
-// sum covers deficit. Mirrors phase1Allocator.take from the legacy
-// allocator at pkg/decision/phase1_allocator.go:112; the head-cursor
-// amortisation is gone (workers run in parallel, no cursor state),
-// replaced with a per-Need rewalk that filters via state.IsClaimed.
-func (p *Pool) FindBasic(state *SharedState, st machine.State, deficit, minUnit []needs.ResourceQty) Candidates {
+// FindBasic returns up to enough MatchProfile-passing, minUnit-
+// fitting machines from pool to cover deficit. Walks pool.src in
+// price/cost order in two passes:
+//
+//  1. First pass picks unclaimed machines only — the cheap path when
+//     contention is low.
+//
+//  2. If deficit remains, a second pass picks displaceable claimed
+//     machines (incumbent has strictly-lower precedence than prec).
+//     Displacement at the broker on commit evicts the incumbent.
+//
+// Two-pass biases toward zero-cost wins: under low contention (most
+// of the realistic catalog) no displacement happens; under high
+// contention with priority asymmetry the proposer can still claim
+// from lower-precedence holders. Avoids cascading displacement chains
+// that would burn the retry budget in 1:1 demand-to-supply tests
+// (e.g. N Needs and N machines where every Need wants exactly one).
+//
+// Mirrors phase1Allocator.take from the legacy allocator at
+// pkg/decision/phase1_allocator.go:112; the head-cursor amortisation
+// is gone (workers run in parallel, no cursor state).
+func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty) Candidates {
 	if needs.IsZero(deficit) {
 		return Candidates{}
 	}
 	bucket := BucketKey{State: st, ProfileFP: p.profile.Fingerprint()}
 	out := make([]machine.ID, 0, 4)
 	remaining := deficit
+
+	// Pass 1: unclaimed machines only.
 	for i := range p.src {
 		m := &p.src[i]
 		if state.IsClaimed(m.ID) {
+			continue
+		}
+		if !matchProfile(p.profile, *m) {
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, minUnit) {
+			continue
+		}
+		out = append(out, m.ID)
+		remaining = needs.SubResources(remaining, alloc)
+		if needs.IsZero(remaining) {
+			return Candidates{Machines: out, Bucket: bucket}
+		}
+	}
+
+	// Pass 2: displaceable claimed machines (lower-precedence
+	// incumbents).
+	for i := range p.src {
+		m := &p.src[i]
+		if !state.IsClaimed(m.ID) {
+			continue
+		}
+		if !state.DisplaceableBy(m.ID, prec) {
 			continue
 		}
 		if !matchProfile(p.profile, *m) {
@@ -66,7 +106,7 @@ func (p *Pool) FindBasic(state *SharedState, st machine.State, deficit, minUnit 
 // fresh via state.IsClaimed. For realistic-catalog scale (few-hundred-
 // machine pools, ~3% Same-carrying Needs) this stays under the
 // per-Need cost envelope.
-func (p *Pool) FindSame(state *SharedState, st machine.State, deficit, minUnit []needs.ResourceQty, sameKey string) Candidates {
+func (p *Pool) FindSame(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty, sameKey string) Candidates {
 	if needs.IsZero(deficit) {
 		return Candidates{}
 	}
@@ -106,7 +146,7 @@ func (p *Pool) FindSame(state *SharedState, st machine.State, deficit, minUnit [
 		headPrice := 0.0
 		headSet := false
 		for _, m := range b.machines {
-			if state.IsClaimed(m.ID) {
+			if !state.DisplaceableBy(m.ID, prec) {
 				continue
 			}
 			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
@@ -165,7 +205,7 @@ func (p *Pool) FindSame(state *SharedState, st machine.State, deficit, minUnit [
 	out := make([]machine.ID, 0, 4)
 	remaining := deficit
 	for _, m := range best.machines {
-		if state.IsClaimed(m.ID) {
+		if !state.DisplaceableBy(m.ID, prec) {
 			continue
 		}
 		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
@@ -200,7 +240,7 @@ func (p *Pool) FindSame(state *SharedState, st machine.State, deficit, minUnit [
 // broker conflict-grain is the (state, profile, topology-key)
 // triple. Workers competing for Spread on the same key share one
 // CAS line.
-func (p *Pool) FindSpread(state *SharedState, st machine.State, deficit, minUnit []needs.ResourceQty, topoKey string, maxSkew int32) Candidates {
+func (p *Pool) FindSpread(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty, topoKey string, maxSkew int32) Candidates {
 	if needs.IsZero(deficit) {
 		return Candidates{}
 	}
@@ -217,7 +257,7 @@ func (p *Pool) FindSpread(state *SharedState, st machine.State, deficit, minUnit
 	keys := make([]string, 0)
 	for i := range p.src {
 		m := &p.src[i]
-		if state.IsClaimed(m.ID) {
+		if !state.DisplaceableBy(m.ID, prec) {
 			continue
 		}
 		if !matchProfile(p.profile, *m) {

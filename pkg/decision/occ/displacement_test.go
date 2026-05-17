@@ -168,8 +168,10 @@ func TestBroker_AllOrNothingWithDisplacement_HappyPath(t *testing.T) {
 	if len(r.Committed) != 3 {
 		t.Fatalf("Committed = %v, want 3", r.Committed)
 	}
-	if len(r.Displaced) != 2 {
-		t.Fatalf("Displaced = %v, want 2", r.Displaced)
+	// Both m1 and m2 belonged to the same incumbent Need; the broker
+	// dedupes displaced entries by Need, so one entry covers both.
+	if len(r.Displaced) != 1 {
+		t.Fatalf("Displaced = %v, want 1 (single Need across m1+m2)", r.Displaced)
 	}
 	if len(r.Conflicted) != 0 {
 		t.Fatalf("Conflicted = %v, want empty", r.Conflicted)
@@ -307,13 +309,13 @@ func TestBroker_DisplacementMutationsAreAtomic(t *testing.T) {
 	if r.Status != occ.StatusCommitted {
 		t.Fatalf("Status = %v, want Committed", r.Status)
 	}
-	if len(r.Displaced) != 2 {
-		t.Fatalf("Displaced = %v, want 2", r.Displaced)
+	// Broker dedupes displaced incumbents by Need pointer: m1 + m2
+	// both belonged to the same Need, so one Displaced entry covers
+	// the pair (with retriesLeft = min retries across the
+	// displaced machines).
+	if len(r.Displaced) != 1 {
+		t.Fatalf("Displaced = %v, want 1 (deduped by Need)", r.Displaced)
 	}
-	// Both displacements should reference the same incumbent — but
-	// the broker doesn't de-dupe (each machine is a separate
-	// displacement record). M46.3's worker dedupes by Need
-	// pointer before re-queueing.
 	for _, d := range r.Displaced {
 		if d.Need == nil {
 			t.Errorf("Displaced entry has nil Need")
@@ -393,13 +395,17 @@ func TestBroker_PriorityIsMonotoneUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestBroker_ConservationOfClaimedSet races many workers and asserts
-// the per-commit conservation law: each successful Propose adds
-// (len(Committed) - len(Displaced)) entries to claimedBy. Summed over
-// all commits, the final |claimedBy| must equal Σ Committed - Σ
-// Displaced. This is the broker-side contribution to the ADR-0027
-// stage 5.1 attribution invariant — Phase 1's accounting of who owns
-// what stays coherent under arbitrary concurrent mutation.
+// TestBroker_ConservationOfClaimedSet races many workers proposing
+// single-machine claims and asserts the per-commit conservation
+// law: each successful Propose adds (len(Committed) − len(Displaced))
+// entries to claimedBy. Under single-machine proposals each Displaced
+// entry represents exactly one released machine, so Σ Committed −
+// Σ Displaced equals the final |claimedBy| count. This is the
+// broker-side contribution to the ADR-0027 stage 5.1 attribution
+// invariant: Phase 1's accounting of who owns what stays coherent
+// under arbitrary concurrent mutation. Multi-machine proposals have
+// a deduplication factor (multiple machines from one Need collapse
+// to one Displaced entry); separate tests cover that.
 func TestBroker_ConservationOfClaimedSet(t *testing.T) {
 	t.Parallel()
 	state, b := freshBroker()

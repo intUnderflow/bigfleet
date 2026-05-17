@@ -15,15 +15,21 @@ import (
 // (ADR-0029 [1, §5.2]).
 //
 // Readers of the snapshot need no synchronisation — the snapshot is
-// captured immutable at cycle start. The claimed-set and bucketSeq
-// maps are guarded by mu; the broker holds mu for the duration of
-// every Propose call.
+// captured immutable at cycle start. The claimed-set, bucketSeq, and
+// reverse-index maps are guarded by mu; the broker holds mu for the
+// duration of every Propose call.
+//
+// The reverse index (claimedByNeed) lets RunCycle compute each
+// Need's residual deficit in O(claimsForNeed) rather than walking
+// all claims. The broker keeps the forward (claimedBy) and reverse
+// (claimedByNeed) maps in sync atomically inside each Propose call.
 type SharedState struct {
 	snap *inventory.Snapshot
 
-	mu        sync.Mutex
-	claimedBy map[machine.ID]claim
-	bucketSeq map[BucketKey]uint64
+	mu            sync.Mutex
+	claimedBy     map[machine.ID]claim
+	claimedByNeed map[*needs.Need]map[machine.ID]struct{}
+	bucketSeq     map[BucketKey]uint64
 }
 
 // claim is the per-machine record the broker stores when it
@@ -43,9 +49,10 @@ type claim struct {
 // lifetime; SharedState only reads from it.
 func NewSharedState(snap *inventory.Snapshot) *SharedState {
 	return &SharedState{
-		snap:      snap,
-		claimedBy: make(map[machine.ID]claim),
-		bucketSeq: make(map[BucketKey]uint64),
+		snap:          snap,
+		claimedBy:     make(map[machine.ID]claim),
+		claimedByNeed: make(map[*needs.Need]map[machine.ID]struct{}),
+		bucketSeq:     make(map[BucketKey]uint64),
 	}
 }
 
@@ -63,6 +70,27 @@ func (s *SharedState) SeedClaim(mid machine.ID, n *needs.Need, prec Precedence, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.claimedBy[mid] = claim{need: n, precedence: prec, retriesLeft: retriesLeft}
+	if s.claimedByNeed[n] == nil {
+		s.claimedByNeed[n] = make(map[machine.ID]struct{})
+	}
+	s.claimedByNeed[n][mid] = struct{}{}
+}
+
+// ClaimedFor returns a snapshot of the machine IDs currently
+// claimed for n. Used by the per-Need worker flow to compute the
+// residual deficit (AggregateResources minus Σ Allocatable across
+// claimed machines) without walking the entire claimed-set.
+//
+// The returned slice is a fresh copy; the caller may mutate it
+// freely. Order is not stable.
+func (s *SharedState) ClaimedFor(n *needs.Need) []machine.ID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]machine.ID, 0, len(s.claimedByNeed[n]))
+	for mid := range s.claimedByNeed[n] {
+		out = append(out, mid)
+	}
+	return out
 }
 
 // Snapshot returns the cycle's immutable inventory snapshot. Callers
@@ -94,6 +122,24 @@ func (s *SharedState) IsClaimed(mid machine.ID) bool {
 	defer s.mu.Unlock()
 	_, ok := s.claimedBy[mid]
 	return ok
+}
+
+// DisplaceableBy reports whether a proposer with precedence prec
+// could legitimately claim mid: either mid is unclaimed, or its
+// incumbent has strictly lower precedence (so displacement at the
+// broker would succeed). This is the candidate-finder's filter:
+// FindBasic / FindSame / FindSpread call it instead of IsClaimed so
+// that high-priority Needs propose for machines lower-priority
+// Needs are sitting on, letting the broker's displacement logic
+// enforce priority on conflict (bigfleet.md §16).
+func (s *SharedState) DisplaceableBy(mid machine.ID, prec Precedence) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inc, ok := s.claimedBy[mid]
+	if !ok {
+		return true
+	}
+	return inc.precedence.Less(prec)
 }
 
 // PrecedenceAt reports whether mid is claimed by an incumbent with

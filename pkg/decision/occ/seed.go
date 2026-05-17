@@ -10,7 +10,7 @@ import (
 // SeedConfiguredSupply runs the priority-sorted credit-existing-
 // supply pre-pass before the OCC worker pool starts. For each Need
 // in priority-descending order, it walks the matching Configured /
-// Configuring machines in the Need's cluster, claims them via
+// Configuring machines in the Need's cluster and claims them via
 // state.SeedClaim until either the cluster's matching supply
 // exhausts or the Need's AggregateResources are covered.
 //
@@ -18,29 +18,34 @@ import (
 // (priority is the sole throttling mechanism). Mirrors the pre-OCC
 // phase1Allocator.creditExistingSupply method but writes to the OCC
 // SharedState directly. The seeded claims participate in normal
-// displacement during the OCC pass, so a higher-precedence Need
-// proposing for the same machine in a later cycle's pre-pass would
-// still evict (though in practice the pre-pass walks priority-
-// descending so this never happens within one cycle).
+// displacement during the OCC pass.
 //
 // retryBudget is forwarded to each seeded claim — if a worker
 // later displaces a seeded claim, the displaced Need re-enters
 // the queue with retryBudget-1.
 //
-// Returns the per-Need outcomes (BootstrapMachines / ProvisionMachines
-// empty at this point; only Deficit is populated). The OCC worker
-// pool fills in Bootstrap/Provision machines as it runs.
-func SeedConfiguredSupply(state *SharedState, allNeeds []needs.Need, retryBudget int) []NeedResult {
-	sorted := make([]needs.Need, len(allNeeds))
-	copy(sorted, allNeeds)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Profile.Priority() > sorted[j].Profile.Priority()
+// Returns *needs.Need pointers in the same order needsByIdx
+// presented; element i corresponds to needsByIdx[i]. Each Need's
+// "residual deficit after pre-pass" is encoded in the returned
+// NeedResult.Deficit. Callers that need stable Need pointers must
+// guarantee needsByIdx doesn't shift the underlying storage after
+// SeedConfiguredSupply returns.
+func SeedConfiguredSupply(state *SharedState, needsByIdx []*needs.Need, retryBudget int) []NeedResult {
+	// Sort an index slice (not the Needs themselves) so the caller's
+	// pointers remain stable. Priority-descending walk.
+	order := make([]int, len(needsByIdx))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return needsByIdx[order[a]].Profile.Priority() > needsByIdx[order[b]].Profile.Priority()
 	})
 
-	results := make([]NeedResult, len(sorted))
+	results := make([]NeedResult, len(needsByIdx))
 	snap := state.Snapshot()
-	for i := range sorted {
-		n := &sorted[i]
+
+	for _, idx := range order {
+		n := needsByIdx[idx]
 		profile := n.Profile
 		prec := PrecedenceFromProfile(profile)
 		remaining := n.AggregateResources
@@ -68,7 +73,7 @@ func SeedConfiguredSupply(state *SharedState, allNeeds []needs.Need, retryBudget
 			}
 		}
 
-		results[i] = NeedResult{
+		results[idx] = NeedResult{
 			Need:    n,
 			Deficit: remaining,
 		}
