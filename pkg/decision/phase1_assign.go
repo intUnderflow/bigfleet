@@ -1,10 +1,8 @@
 package decision
 
 import (
-	"sort"
-
+	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
-	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
@@ -27,138 +25,83 @@ type UnsatisfiedNeed struct {
 	Deficit []needs.ResourceQty
 }
 
-// Phase1 walks the priority-sorted needs and emits Bootstrap (idle →
-// configured) and Provision (speculative → configured) actions to fill
-// each cluster's deficit.
+// Phase1 emits Bootstrap (idle → configured) and Provision
+// (speculative → configured) actions to fill each Need's deficit,
+// then records any unfilled residual as an UnsatisfiedNeed for
+// Phase 2 / shortfall escalation.
 //
-// ADR-0027: demand is a resource vector. For each Need the deficit is
-// `AggregateResources` minus the EffectiveAllocatable of the existing
-// matching machines, then minus what Idle and Speculative `take` can
-// cover. Supply is credited via the allocator's global claimed set, so
-// each machine's capacity is counted for exactly one Need — the
-// per-fingerprint over-credit that masked real shortfalls is gone.
+// As of ADR-0029, Phase 1 runs as an Omega-style optimistic-
+// concurrency-control scheduler: workers race over a shared queue
+// of Needs, each proposing to a commit broker that enforces
+// priority on conflict (rather than a single-threaded
+// priority-sorted outer loop). The cycle barrier guarantees a
+// coherent post-Phase-1 claimed-set for Phase 2 / Phase 3 to read.
+// The ADR-0027 stage 5.1 attribution invariant is preserved because
+// both phases consume the same post-barrier claimed-set.
 //
-// Performance: backed by phase1Allocator, which caches per-Profile
-// candidate pools across the Needs loop and shares the claimed set so
-// high-priority Needs drain inventory before low-priority ones see it.
+// The cost formula and ADR-0027 resource-vector demand model are
+// unchanged from the pre-OCC Phase 1; only the iteration shape
+// changed.
 func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
-	sorted := make([]needs.Need, len(allNeeds))
-	copy(sorted, allNeeds)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].Profile.Priority() > sorted[j].Profile.Priority()
-	})
+	cycle := occ.RunCycle(snap, allNeeds)
 
-	alloc := newPhase1Allocator(snap)
 	result := Phase1Result{}
-
-	for _, n := range sorted {
-		profile := n.Profile
-
-		// Existing Configured / Configuring machines in this cluster that
-		// match the Need's requirements and can host one MinUnit credit
-		// toward the demand vector first. Each is claimed, so a peer Need
-		// of the same (cluster, fingerprint) — distinct only by Group —
-		// can't double-count it. This claimed-set credit replaces the old
-		// per-fingerprint supplyRemaining bookkeeping.
-		deficit := alloc.creditExistingSupply(n.ClusterID, profile, n.AggregateResources, n.MinUnit)
-		if needs.IsZero(deficit) {
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()
+	for _, r := range cycle.Results {
+		if r.Need == nil {
 			continue
 		}
+		profile := r.Need.Profile
 
-		// Idle first: cheapest path (one Configure call, no Create).
-		idle := alloc.take(machine.StateIdle, profile, deficit, n.MinUnit)
-		if len(idle) == 0 {
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("take_returned_zero").Inc()
-		} else {
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_idle").Inc()
-		}
-		for _, m := range idle {
+		// Existing-supply credit is the OCC pre-pass; nothing to emit.
+		// Idle commits become Bootstrap actions.
+		for _, mid := range r.BootstrapMachines {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindBootstrap,
-				MachineID:     m.ID,
-				Cluster:       n.ClusterID,
+				MachineID:     mid,
+				Cluster:       r.Need.ClusterID,
 				SourceProfile: &profile,
 				Reason:        "phase1.idle",
 			})
-			deficit = needs.SubResources(deficit, needs.ResourceQtysFromMap(m.EffectiveAllocatable()))
 		}
-		if needs.IsZero(deficit) {
-			continue
-		}
-
-		// Fall back to speculative: pick by lowest effective_cost.
-		spec := alloc.take(machine.StateSpeculative, profile, deficit, n.MinUnit)
-		if len(spec) > 0 {
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
-		}
-		for _, m := range spec {
+		// Speculative commits become Provision actions.
+		for _, mid := range r.ProvisionMachines {
 			result.Actions = append(result.Actions, Action{
 				Kind:          ActionKindProvision,
-				MachineID:     m.ID,
-				Cluster:       n.ClusterID,
+				MachineID:     mid,
+				Cluster:       r.Need.ClusterID,
 				SourceProfile: &profile,
 				Reason:        "phase1.speculative",
 			})
-			deficit = needs.SubResources(deficit, needs.ResourceQtysFromMap(m.EffectiveAllocatable()))
-		}
-		if needs.IsZero(deficit) {
-			continue
 		}
 
-		metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
-		result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
-			Need:    n,
-			Deficit: deficit,
-		})
+		// Outcome counter classification matches the pre-OCC
+		// allocator's categories so existing dashboards keep
+		// working.
+		switch {
+		case r.Unsatisfied:
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
+			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
+				Need:    *r.Need,
+				Deficit: r.Deficit,
+			})
+		case len(r.BootstrapMachines) == 0 && len(r.ProvisionMachines) == 0:
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()
+		case len(r.ProvisionMachines) > 0:
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
+		default:
+			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_idle").Inc()
+		}
 	}
 
 	metrics.ShardPhase1EmitsPerCycle.Observe(float64(len(result.Actions)))
-
 	return result
-}
-
-// creditExistingSupply credits the Configured and Configuring machines
-// in cluster that match profile's requirements and can host one minUnit
-// against deficit, claiming each so a peer Need doesn't double-count it.
-// It returns the remaining deficit vector.
-//
-// ADR-0027: supply is the sum of matching machines' EffectiveAllocatable,
-// counted once per machine via the global claimed set — not a
-// per-fingerprint Pod count. Configuring machines count too: their
-// Bootstrap is in flight and committed to this demand, so crediting them
-// here is what stops Phase 1 re-emitting on the next cycle (Drop H).
-func (a *phase1Allocator) creditExistingSupply(
-	cluster machine.ClusterID,
-	profile needs.Profile,
-	demand, minUnit []needs.ResourceQty,
-) []needs.ResourceQty {
-	remaining := demand
-	for _, state := range []machine.State{machine.StateConfigured, machine.StateConfiguring} {
-		for _, m := range a.snap.ListByClusterState(cluster, state) {
-			if needs.IsZero(remaining) {
-				return remaining
-			}
-			if _, claimed := a.claimed[m.ID]; claimed {
-				continue
-			}
-			if !MatchProfile(profile, m) {
-				continue
-			}
-			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-			if !needs.Covers(alloc, minUnit) {
-				continue
-			}
-			a.claimed[m.ID] = struct{}{}
-			remaining = needs.SubResources(remaining, alloc)
-		}
-	}
-	return remaining
 }
 
 // pinnedInstanceTypes returns the explicit instance-type values from
 // a Profile's `node.kubernetes.io/instance-type In [...]` requirement,
 // or nil if the Profile doesn't pin to a finite set we can index on.
+// Used by Phase 2 / Phase 3 for inventory bucket lookups; occ has its
+// own copy (occ/poolcache.go) to avoid a decision↔occ import cycle.
 func pinnedInstanceTypes(p needs.Profile) []string {
 	for _, r := range p.RequirementsRO() {
 		if r.Key != "node.kubernetes.io/instance-type" {
@@ -170,24 +113,4 @@ func pinnedInstanceTypes(p needs.Profile) []string {
 		return nil
 	}
 	return nil
-}
-
-func sortIdleCandidates(s []machine.Machine) {
-	sort.SliceStable(s, func(i, j int) bool {
-		if s[i].PricePerHour != s[j].PricePerHour {
-			return s[i].PricePerHour < s[j].PricePerHour
-		}
-		return s[i].ID < s[j].ID
-	})
-}
-
-func sortSpeculativeCandidates(s []machine.Machine, interruptionPenaltyDollars float64) {
-	sort.SliceStable(s, func(i, j int) bool {
-		ai := EffectiveCost(s[i], interruptionPenaltyDollars)
-		aj := EffectiveCost(s[j], interruptionPenaltyDollars)
-		if ai != aj {
-			return ai < aj
-		}
-		return s[i].ID < s[j].ID
-	})
 }

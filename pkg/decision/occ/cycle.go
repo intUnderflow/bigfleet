@@ -168,18 +168,30 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 // incumbents are re-queued via push (with their own retry budgets
 // pre-decremented by the broker).
 //
+// Topology-constrained Needs (Same or Spread) get one Find+Propose
+// attempt per state — their candidate-finders' bucket selection
+// (or skew accounting) restarts from a clean slate on each call,
+// so a second call in the same state after a partial commit can
+// re-pick differently and violate the constraint. The basic path
+// retries-on-commit because each retry sees a fresh claimed-set
+// and can pick the next-cheapest unclaimed machine.
+//
 // processNeed never writes to NeedResult — barrier-time post-
 // processing in RunCycle reconstructs the outcomes from the
 // final claimed-set.
 func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolCache, push func(QueuedNeed)) {
+	prec := PrecedenceFromProfile(qn.Need.Profile)
+	mode := modeFor(qn.Need)
+	topologyConstrained := hasTopologyConstraint(qn.Need.Profile)
+
 	for _, st := range []machine.State{machine.StateIdle, machine.StateSpeculative} {
+		committedThisState := false
 		for qn.RetriesLeft > 0 {
 			deficit := computeDeficit(qn.Need, state)
 			if needs.IsZero(deficit) {
 				return
 			}
 			pool := cache.Get(st, qn.Need.Profile)
-			prec := PrecedenceFromProfile(qn.Need.Profile)
 			cands := findCandidatesFor(pool, state, st, prec, qn.Need, deficit)
 			if len(cands.Machines) == 0 {
 				break
@@ -192,13 +204,10 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 				Machines:    cands.Machines,
 				ObservedSeq: seq,
 				Precedence:  prec,
-				Mode:        modeFor(qn.Need),
+				Mode:        mode,
 				RetriesLeft: qn.RetriesLeft,
 			})
 
-			// Re-queue displaced incumbents with budget > 0. Those at
-			// zero retries are picked up by barrier-time post-
-			// processing as Unsatisfied.
 			for _, d := range r.Displaced {
 				if d.RetriesLeft > 0 {
 					push(d)
@@ -206,14 +215,35 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 			}
 
 			if r.Status == StatusCommitted {
-				// Committed something; loop again to see whether the
-				// deficit is now zero. If still positive, try the
-				// next state.
+				committedThisState = true
+				// Topology-constrained Needs: don't retry in this
+				// state. The constraint's bucket / skew accounting
+				// is per-call; a second call after partial commit
+				// can re-pick into a different bucket or domain
+				// distribution and violate the constraint.
+				if topologyConstrained {
+					break
+				}
 				continue
 			}
 			qn.RetriesLeft--
 		}
+		_ = committedThisState
 	}
+}
+
+// hasTopologyConstraint reports whether p carries a Same operator or
+// a DoNotSchedule TopologySpread — either makes Find* per-call state-
+// sensitive and unsafe to retry within the same state after a partial
+// commit.
+func hasTopologyConstraint(p needs.Profile) bool {
+	if _, ok := SameRequirementKey(p); ok {
+		return true
+	}
+	if _, _, ok := StrictSpread(p); ok {
+		return true
+	}
+	return false
 }
 
 // computeDeficit returns the residual demand vector for n after
