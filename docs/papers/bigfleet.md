@@ -71,6 +71,8 @@ Six methods. All transitions async, all idempotent. `List` returns machines in a
 
 **Phase 1**: walk needs top-down by priority. Prefer Idle (one bootstrap). Fall back to Speculative (Create + bootstrap). Within idle: tiebreak by reclamation_penalty. Within speculative: tiebreak by effective_cost.
 
+> **Refined by [ADR-0029](../adr/0029-phase1-omega-style-occ.md) (2026-05-17):** the implementation realises "top-down by priority" as commit-time enforcement, not as a strict-pass outer loop. Workers race over a shared queue of Needs and submit proposals to a commit broker that arbitrates conflicts on `(priority, interruption_penalty, reclamation_penalty)` precedence. The result is identical to a priority-sorted single pass at the level of "what got assigned" — priority remains the sole throttling mechanism per §16 — but the cycle parallelises across `GOMAXPROCS` workers, dropping uber-50k cycle p99 from minutes to milliseconds.
+
 **Phase 2**: resolve priority inversions via victim scoring:
 ```
 score = priorityGap*wp + (1/drainTime)*ws + (1/interruptionPenalty)*wpen + (1/reclamationPenalty)*wrec
