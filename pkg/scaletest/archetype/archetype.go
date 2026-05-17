@@ -117,6 +117,38 @@ type Archetype struct {
 	// realistic CR fan-out for the operator's aggregate-resource
 	// rollup path.
 	LabelAxes []LabelAxis `yaml:"labelAxes"`
+
+	// AllowPartial (scale-test review) — when true, marks an archetype
+	// as "co-located but not gang." Such archetypes carry a `Same()`
+	// requirement (rack affinity for replication latency) but the
+	// workload tolerates partial fills: 3 of 5 requested machines
+	// start, the operator re-requests the missing 2 next cycle. This
+	// is the dominant production rack-affinity pattern (databases,
+	// in-memory caches with peer chatter).
+	//
+	// Distinct from gang scheduling (gpu-training-*), where partial
+	// fills are failure (MPI all-reduce needs every worker to start
+	// simultaneously). The current proto carries no atomic-gang flag;
+	// AllowPartial is documentation/forward-compat for a future ADR
+	// that adds explicit gang semantics. At present every Need is
+	// partial-fill-tolerant by default — AllowPartial just records
+	// authorial intent so the future opt-in field can be derived.
+	AllowPartial bool `yaml:"allowPartial"`
+
+	// SpreadConstraintProb (scale-test review) — probability that a
+	// per-CR draw carries the SpreadConstraint below. Models the
+	// industry pattern that not every Pod in a Deployment carries
+	// topologySpreadConstraints; the default-spread-from-template
+	// pattern means ~45% of tiny services do, ~75% of medium ones,
+	// 100% of HA-critical workloads. 0.0 = never; 1.0 = always.
+	SpreadConstraintProb float64 `yaml:"spreadConstraintProb"`
+
+	// SpreadConstraint (scale-test review) — the topology spread
+	// constraint emitted on Pods drawn from this archetype, with
+	// probability SpreadConstraintProb. The load-driver sets the
+	// constraint's LabelSelector to the Pod's own labels so each
+	// Pod participates in the spread group for its archetype.
+	SpreadConstraint *SpreadConstraint `yaml:"spreadConstraint"`
 }
 
 // LabelAxis is one production-style label dimension.
@@ -131,6 +163,32 @@ type LabelAxis struct {
 type SizeBucket struct {
 	Weight    int               `yaml:"weight"`
 	Resources map[string]string `yaml:"resources"`
+}
+
+// SpreadConstraint mirrors the autoscaler-relevant subset of
+// Kubernetes' TopologySpreadConstraint. The load-driver emits this
+// on a per-Pod basis when its archetype's SpreadConstraintProb roll
+// hits; UPC's pod→CR translation carries it through to
+// CapacityRequest.Spec.TopologySpread, and operator rollup folds it
+// into the Need's Profile.Spread.
+type SpreadConstraint struct {
+	// TopologyKey is the Node label the spread is computed over.
+	// Industry pattern (scale-test review): ~80% spread on
+	// `topology.kubernetes.io/zone`, ~15% on `kubernetes.io/hostname`
+	// (forces 1 Pod per Node — strict anti-affinity for replication),
+	// ~5% custom keys.
+	TopologyKey string `yaml:"topologyKey"`
+
+	// MaxSkew is the maximum permitted difference between the number
+	// of matching Pods in any two topology domains. 1 = strict (each
+	// domain within 1 of the others); higher = more permissive.
+	MaxSkew int32 `yaml:"maxSkew"`
+
+	// WhenUnsatisfiable is one of "DoNotSchedule" (strict; Phase 1
+	// must respect or shortfall) or "ScheduleAnyway" (best-effort).
+	// Production mix (scale-test review): ~35% DoNotSchedule, ~65%
+	// ScheduleAnyway.
+	WhenUnsatisfiable string `yaml:"whenUnsatisfiable"`
 }
 
 // LoadCatalog reads + parses the archetype catalog at path. Returns
@@ -166,6 +224,22 @@ func validateArchetypes(field string, arches []Archetype) error {
 		}
 		if a.Weight < 0 {
 			return fmt.Errorf("%s[%d] %q: weight must be ≥ 0", field, i, a.Name)
+		}
+		if a.SpreadConstraintProb < 0 || a.SpreadConstraintProb > 1 {
+			return fmt.Errorf("%s[%d] %q: spreadConstraintProb must be in [0, 1]", field, i, a.Name)
+		}
+		if a.SpreadConstraint != nil {
+			if a.SpreadConstraint.TopologyKey == "" {
+				return fmt.Errorf("%s[%d] %q: spreadConstraint.topologyKey required when spreadConstraint is set", field, i, a.Name)
+			}
+			if a.SpreadConstraint.MaxSkew < 1 {
+				return fmt.Errorf("%s[%d] %q: spreadConstraint.maxSkew must be ≥ 1", field, i, a.Name)
+			}
+			switch a.SpreadConstraint.WhenUnsatisfiable {
+			case "DoNotSchedule", "ScheduleAnyway":
+			default:
+				return fmt.Errorf("%s[%d] %q: spreadConstraint.whenUnsatisfiable must be DoNotSchedule or ScheduleAnyway", field, i, a.Name)
+			}
 		}
 	}
 	return nil
@@ -294,4 +368,22 @@ func (a *Archetype) PickGroupSize(rng *rand.Rand) int {
 		return lo
 	}
 	return lo + rng.Intn(hi-lo+1)
+}
+
+// PickSpread returns the archetype's SpreadConstraint with probability
+// SpreadConstraintProb, or nil otherwise. Models the industry pattern
+// that not every Pod in a Deployment carries spread (default-spread-
+// from-template templates produce ~45% adoption on tiny services and
+// ~75% on medium services, per scale-test review).
+func (a *Archetype) PickSpread(rng *rand.Rand) *SpreadConstraint {
+	if a.SpreadConstraint == nil || a.SpreadConstraintProb <= 0 {
+		return nil
+	}
+	if a.SpreadConstraintProb >= 1.0 {
+		return a.SpreadConstraint
+	}
+	if rng.Float64() < a.SpreadConstraintProb {
+		return a.SpreadConstraint
+	}
+	return nil
 }

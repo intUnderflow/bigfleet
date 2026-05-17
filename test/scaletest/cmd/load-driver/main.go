@@ -854,6 +854,23 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 			}},
 		}
 	}
+	// the scale-test review: topology spread, probabilistically per the
+	// archetype's SpreadConstraintProb. The selector matches the
+	// archetype label so each Pod participates in the spread group for
+	// its archetype. UPC's pod→CR translator carries this through to
+	// CapacityRequest.Spec.TopologySpread; operator rollup folds it
+	// into the Need's Profile.Spread.
+	var topologySpread []corev1.TopologySpreadConstraint
+	if sc := a.PickSpread(d.rng); sc != nil {
+		topologySpread = []corev1.TopologySpreadConstraint{{
+			TopologyKey:       sc.TopologyKey,
+			MaxSkew:           sc.MaxSkew,
+			WhenUnsatisfiable: corev1.UnsatisfiableConstraintAction(sc.WhenUnsatisfiable),
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"scaletest.bigfleet/archetype": a.Name},
+			},
+		}}
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: meta,
 		Spec: corev1.PodSpec{
@@ -871,7 +888,8 @@ func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.
 					Limits:   resources,
 				},
 			}},
-			Affinity: affinity,
+			Affinity:                  affinity,
+			TopologySpreadConstraints: topologySpread,
 		},
 	}
 	return pod
@@ -1025,6 +1043,17 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 			TopologyKey: topologyKeyRack,
 		}
 	}
+	// the scale-test review: topology spread, probabilistically. Mirrors
+	// the Pod-mode wiring above — sets the CR's TopologySpread field
+	// directly (same shape UPC produces from Pod.Spec.TopologySpreadConstraints).
+	var spread []bfv1alpha1.TopologySpreadConstraint
+	if sc := a.PickSpread(d.rng); sc != nil {
+		spread = []bfv1alpha1.TopologySpreadConstraint{{
+			TopologyKey:       sc.TopologyKey,
+			MaxSkew:           sc.MaxSkew,
+			WhenUnsatisfiable: corev1.UnsatisfiableConstraintAction(sc.WhenUnsatisfiable),
+		}}
+	}
 	return &bfv1alpha1.CapacityRequest{
 		ObjectMeta: meta,
 		Spec: bfv1alpha1.CapacityRequestSpec{
@@ -1032,6 +1061,7 @@ func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alph
 			Resources:           resources,
 			Priority:            pri,
 			CoLocation:          coLocation,
+			TopologySpread:      spread,
 			InterruptionPenalty: &intr,
 			ReclamationPenalty:  &recl,
 		},

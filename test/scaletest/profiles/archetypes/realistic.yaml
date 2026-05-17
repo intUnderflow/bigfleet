@@ -1,143 +1,274 @@
-# Production-realistic workload archetypes for the scaletest harness
-# (ADR-0015). Each archetype represents a recurring workload pattern
-# observed in real fleets (Borg, Twine, Kubernetes-on-everything-else):
-# GPU training, GPU inference, CPU batch, CPU service, memory-bound
-# DBs, critical realtime. Weights are rough fleet-frequency estimates.
+# Production-realistic workload archetypes for the scaletest harness.
+# Calibrated against industry production workload patterns: bottom-
+# heavy long tail of tiny stateless services, smaller "interesting"
+# tier of GPU / stateful / critical work.
 #
-# Both the load-driver (which creates CRs) and the shard's Configured
-# seed read this same file so the seeded inventory matches the demand
-# the load-driver creates. Drift between the two = Phase 3 reclaims
-# the seed every cycle and the test measures reprovisioning, not
-# steady-state.
+# Both the load-driver (which creates CRs / Pods) and the shard's
+# Configured seed read this same file so the seeded inventory
+# matches the demand the load-driver creates. Drift between the two
+# = Phase 3 reclaims the seed every cycle and the test measures
+# reprovisioning, not steady-state.
 #
-# ADR-0022 → ADR-0027: per-archetype fingerprint cardinality is
-# deliberately bounded — most archetypes carry a single sizeBucket and
-# a single priorityClass, so each archetype contributes 1-2 distinct
-# Profile fingerprints per cluster. Total fleet target is ~8-10 fp
-# per cluster; with 1000 Pods/cluster (scaleway-50k) that's ~100 Pods
-# per Profile, which is what makes the aggregate-demand model actually
-# aggregate. Under ADR-0027 the Profile fingerprint no longer includes
-# resource shape (only requirements + priority + spread + penalty
-# buckets), so cardinality is driven entirely by requirements
-# (instanceType, zone, labels) and by labelAxes below. Earlier
-# revisions ran with 4-bucket × 2-prio expansions (~30 fp/cluster)
-# which collapsed Need.Count to ~1 everywhere and hid the M45
-# vector-math bug; the same discipline matters under ADR-0027 because
-# bounded cardinality is what exercises the operator's aggregate-
-# resource rollup at production-realistic Pods-per-Profile ratios.
+# Calibration history:
+#
+#   * ADR-0015 (M33) introduced the catalog with six archetypes
+#     biased toward "interesting" workloads (GPU, batch, critical).
+#   * the scale-test review (2026-05-17) re-calibrated against
+#     industry production workload patterns. Findings:
+#     - Long-tail tiny services (200m-500m CPU, 256Mi-512Mi) are
+#       ~60-70% of production Pods, not 0% as the original catalog
+#       had. The "modal Pod" is small and stateless. Now modelled
+#       by `tiny-stateless` at 70% weight.
+#     - Sidecars are containers within a Pod, not separate Pods.
+#       Their resource overhead (~150-200m CPU, ~200-300Mi) is
+#       inflated into the archetype's per-Pod request, not modelled
+#       as a separate archetype.
+#     - True atomic gang scheduling (where partial fills are
+#       failure) is rare: ~1-3% by Pod count, dominated by ML
+#       training. Most other "co-located" workloads (DBs, caches)
+#       tolerate partial fills — they want rack affinity for
+#       replication latency but replicas join independently. The
+#       new `allowPartial` flag distinguishes these.
+#     - GPU training has three realistic gang-size tiers
+#       (hyperparameter sweeps 2-8, standard training 16-32,
+#       foundation models 64-256), not one.
+#     - Topology spread is missing entirely from the prior catalog
+#       even though it's on ~30-50% of production Pods. Added as
+#       a probabilistic per-archetype field.
+#     - Priority distribution skews heavily to default (~85%);
+#       the prior catalog's "everything at 1000+" was wrong.
+#     - Profile fingerprint cardinality is ~30-60/cluster in
+#       steady state (vs prior ~8-10). Long-tail label variety
+#       drives this.
 #
 # Schema (per-archetype):
-#   name                : human-readable label
-#   weight              : relative fleet frequency (any int > 0)
-#   instanceTypes       : `node.kubernetes.io/instance-type In [...]`
-#   zones               : `topology.kubernetes.io/zone In [...]`
-#   sizeBuckets         : ADR-0015 §1 — per-CR resources picked
-#                         weighted-random from this list. When set,
-#                         the flat `resources:` field is ignored.
-#   resources           : flat fallback when sizeBuckets is empty
-#   priorityClasses     : driver picks one uniformly per CR
-#   interruptionPenalty : float64 dollars
-#   reclamationPenalty  : float64 dollars
-#   meanLifetimeSeconds : ADR-0015 §2 — exponential-mean lifetime.
-#                         0 = effectively immortal (services). Short-
-#                         lived archetypes (batch, CI) carry positive
-#                         values; the load-driver ages them
-#                         independently.
-#   sameRack            : ADR-0015 §4 — when true, CR carries an
-#                         `Exists` requirement on
-#                         `topology.bigfleet/rack` (operator
-#                         translates to `Same` during roll-up).
-#                         Models tightly-coupled training / DB jobs.
-#   groupSizeRange      : [min, max] machines per Same-rack group.
+#   name                  : human-readable label
+#   weight                : relative fleet frequency by Pod count
+#   instanceTypes         : `node.kubernetes.io/instance-type In [...]`
+#   zones                 : `topology.kubernetes.io/zone In [...]`
+#   sizeBuckets           : per-CR resources picked weighted-random.
+#                           Resource shape includes typical sidecar
+#                           overhead for archetypes that carry them
+#                           (everything except cpu-batch and gpu-*).
+#   priorityClasses       : driver picks one uniformly per CR
+#   interruptionPenalty   : float64 dollars
+#   reclamationPenalty    : float64 dollars
+#   meanLifetimeSeconds   : exponential-mean lifetime. 0 = immortal.
+#   sameRack              : when true, CR carries co-location term
+#                           on `topology.bigfleet/rack` (per ADR-0024)
+#   allowPartial          : when true, the archetype is "co-located
+#                           but not gang" — workload tolerates partial
+#                           fills. Memory caches and stateful DBs
+#                           carry this; GPU training does not. (Forward-
+#                           compat for ADR-0029's mode classifier; today
+#                           every Need is partial-fill-tolerant by
+#                           default.)
+#   groupSizeRange        : [min, max] machines per Same-rack group
+#   labelAxes             : per-CR label dimensions that multiply
+#                           fingerprint cardinality (M35)
+#   spreadConstraintProb  : probability that a per-CR draw carries
+#                           the SpreadConstraint below. 0.0 = never.
+#   spreadConstraint      : topologyKey + maxSkew + whenUnsatisfiable.
 
 archetypes:
-  - name: gpu-training
-    # Long-running multi-GPU training jobs. Tightly coupled (`Same`
-    # rack), high penalty to interrupt — production keeps these above
-    # the bulk of work. Days-long lifetimes ⇒ effectively immortal at
-    # scaletest timescales.
-    weight: 5
-    instanceTypes: [a3-highgpu-8g]
+  # ===== Long tail: tiny stateless services =====
+  # Modal production Pod. Tiny resource shape (app container ~200m /
+  # 256Mi plus ~150-200m / ~200-300Mi of typical mesh+observability
+  # sidecars baked in). Default priority, no co-location. Default-
+  # spread-from-template templates apply zone-spread to ~45% of
+  # them — best-effort spread, since these are commodity replicas.
+  - name: tiny-stateless
+    weight: 70
+    instanceTypes: [m6i.large, m6i.xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 100, resources: { nvidia.com/gpu: "8" } }
-    priorityClasses: [1000]
-    interruptionPenalty: 65536
-    reclamationPenalty: 65536
-    meanLifetimeSeconds: 0
-    sameRack: true
-    groupSizeRange: [2, 8]
-
-  - name: gpu-inference
-    # Latency-sensitive single-GPU inference. Long-lived deployments
-    # (replica sets), no rack pinning.
-    weight: 15
-    instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
-    zones: [zone-a, zone-b, zone-c]
-    sizeBuckets:
-      - { weight: 100, resources: { nvidia.com/gpu: "1" } }
-    priorityClasses: [1000]
-    interruptionPenalty: 4096
-    reclamationPenalty: 8192
-    meanLifetimeSeconds: 0
-
-  - name: cpu-batch
-    # Resumable batch jobs. Biggest population by churn rate;
-    # shortest lifetime; cheapest to interrupt. Two size buckets
-    # preserve a small amount of fingerprint variety so the test
-    # exercises mixed-Profile aggregation rather than collapsing to
-    # one global fingerprint.
-    weight: 35
-    instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
-    zones: [zone-a, zone-b, zone-c]
-    sizeBuckets:
-      - { weight: 60, resources: { cpu: "4",  memory: "8Gi"  } }
-      - { weight: 40, resources: { cpu: "8",  memory: "16Gi" } }
+      - { weight: 60, resources: { cpu: "400m", memory: "500Mi" } }
+      - { weight: 40, resources: { cpu: "300m", memory: "384Mi" } }
     priorityClasses: [100]
-    interruptionPenalty: 64
-    reclamationPenalty: 256
-    meanLifetimeSeconds: 600  # ~10-min batch
+    interruptionPenalty: 32
+    reclamationPenalty: 64
+    meanLifetimeSeconds: 0
+    labelAxes:
+      - { key: "scaletest.bigfleet/team", count: 40 }
+      - { key: "scaletest.bigfleet/app", count: 20 }
+    spreadConstraintProb: 0.45
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
 
+  # ===== Medium services =====
+  # HPA-driven and fixed-replica deployments at meaningful but not
+  # critical priority. Per-Pod request includes sidecar overhead but
+  # the overhead is a smaller relative bump on a 2-CPU app container.
+  # Spread on 75% — most production services explicitly spread for HA.
   - name: cpu-service
-    # User-facing services with HPAs / fixed-replica deployments.
-    # Mid priority, long-lived, biggest steady-state population by
-    # count. Two size buckets — same rationale as cpu-batch.
-    weight: 30
-    instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
+    weight: 12
+    instanceTypes: [m6i.xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 65, resources: { cpu: "2",  memory: "8Gi"  } }
-      - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
+      - { weight: 70, resources: { cpu: "2200m", memory: "8500Mi" } }
+      - { weight: 30, resources: { cpu: "4200m", memory: "16500Mi" } }
     priorityClasses: [1000]
     interruptionPenalty: 1024
     reclamationPenalty: 8192
     meanLifetimeSeconds: 0
+    labelAxes:
+      - { key: "scaletest.bigfleet/team", count: 10 }
+    spreadConstraintProb: 0.75
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
 
-  - name: memory-db
-    # In-memory caches / DBs with persistent disk attached. Same-rack
-    # for replication coupling. Long-lived.
-    weight: 10
-    instanceTypes: [r6i.xlarge, r6i.2xlarge]
-    zones: [zone-a, zone-b]
+  # ===== Batch jobs =====
+  # Resumable, short-lived, low priority. Don't run the mesh/
+  # observability sidecar stack typical of long-lived services — so
+  # no sidecar inflation on their resource shape. Only ~15% carry
+  # spread; most batch is spread-tolerant.
+  - name: cpu-batch
+    weight: 6
+    instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
+    zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 100, resources: { cpu: "4", memory: "32Gi" } }
+      - { weight: 60, resources: { cpu: "4", memory: "8Gi" } }
+      - { weight: 40, resources: { cpu: "8", memory: "16Gi" } }
+    priorityClasses: [100]
+    interruptionPenalty: 64
+    reclamationPenalty: 256
+    meanLifetimeSeconds: 600  # ~10-min batch
+    spreadConstraintProb: 0.15
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+
+  # ===== Stateful: memory-bound caches =====
+  # In-memory caches with peer chatter (gossip, replication). Want
+  # rack affinity for latency, but tolerate partial fills: 3 of 5
+  # replicas start and the cache rebalances incrementally. Hence
+  # allowPartial: true. Spread is N/A because Same(rack) and
+  # zone-spread on the same key are contradictory per bigfleet.md §8.
+  - name: memory-cache
+    weight: 3
+    instanceTypes: [r6i.xlarge, r6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "2", memory: "16Gi" } }
     priorityClasses: [1000]
     interruptionPenalty: 4096
+    reclamationPenalty: 16384
+    meanLifetimeSeconds: 0
+    sameRack: true
+    allowPartial: true
+    groupSizeRange: [3, 5]
+
+  # ===== Stateful: databases =====
+  # Persistent-storage-backed databases. Same rack-affinity reasoning
+  # as memory-cache; replicas can join an existing cluster
+  # incrementally. (Cross-shard spread is operator-emergent — the
+  # operator picks different anchor racks per shard during emission;
+  # we don't model that here, see scale-test follow-on.)
+  - name: stateful-db
+    weight: 3
+    instanceTypes: [r6i.2xlarge, r6i.4xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "8", memory: "32Gi" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 8192
     reclamationPenalty: 32768
     meanLifetimeSeconds: 0
     sameRack: true
-    groupSizeRange: [3, 5]   # typical replication factor
+    allowPartial: true
+    groupSizeRange: [3, 5]
 
+  # ===== GPU inference =====
+  # Latency-sensitive single-GPU inference servers. Long-lived. ~50%
+  # carry zone-spread (replicas distributed for capacity-zone
+  # resilience).
+  - name: gpu-inference
+    weight: 2
+    instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "8", memory: "32Gi", nvidia.com/gpu: "1" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 4096
+    reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.5
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+
+  # ===== GPU training: small (hyperparameter sweeps) =====
+  # Atomic gang. Small-scale experiments and parameter sweeps —
+  # 2-8 GPUs is the dominant gang size for ad-hoc training. Not
+  # marked allowPartial: partial fills break gang scheduling.
+  - name: gpu-training-small
+    weight: 2
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "64", memory: "256Gi", nvidia.com/gpu: "8" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 16384
+    reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [2, 8]
+
+  # ===== GPU training: medium (standard training jobs) =====
+  # Atomic gang, larger. Median realistic-production gang size is
+  # 16-32. Disproportionate impact on conflict rate under OCC because
+  # any single-machine conflict aborts the entire 16-32-machine
+  # proposal.
+  - name: gpu-training-medium
+    weight: 2  # rounded from 1.5%
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "64", memory: "256Gi", nvidia.com/gpu: "8" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 32768
+    reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [16, 32]
+
+  # ===== GPU training: large (foundation models) =====
+  # Atomic gang, very large. Rare but high-impact. A single 64-256-
+  # machine gang dominates Phase 1's worst-case conflict cost.
+  - name: gpu-training-large
+    weight: 1  # rounded from 0.3%; minimum representable at integer weights
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "128", memory: "512Gi", nvidia.com/gpu: "8" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 65536
+    reclamationPenalty: 131072
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [64, 256]
+
+  # ===== Critical realtime =====
+  # Top priority — control plane, telemetry hot path, safety-critical
+  # services. Always carries strict zone-spread (HA-critical).
   - name: critical-realtime
-    # Top-priority workloads (control plane, telemetry hot path,
-    # safety-critical services). Small population; can preempt
-    # everything else.
-    weight: 5
+    weight: 1  # rounded from 0.2%; minimum representable
     instanceTypes: [c6i.4xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
-      - { weight: 100, resources: { cpu: "8",  memory: "16Gi" } }
+      - { weight: 100, resources: { cpu: "4", memory: "8Gi" } }
     priorityClasses: [1000000]
     interruptionPenalty: 65536
     reclamationPenalty: 65536
     meanLifetimeSeconds: 0
+    spreadConstraintProb: 1.0
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
