@@ -95,6 +95,24 @@ type Proposal struct {
 	ObservedSeq uint64
 	Precedence  Precedence
 	Mode        ProposalMode
+
+	// RetriesLeft is the proposer's remaining retry budget when this
+	// proposal is submitted. The broker stores it in the claim
+	// record if the proposal commits, so a later displacement can
+	// emit a Displaced QueuedNeed with the right (decremented)
+	// budget. RetriesLeft ≤ 0 means "don't requeue on displacement —
+	// emit shortfall instead" (encoded by the caller's read of
+	// Result.Displaced).
+	RetriesLeft int
+}
+
+// QueuedNeed wraps a Need with its cycle-local retry budget. The
+// worker pool pulls QueuedNeed values off the queue, runs the
+// proposer's retry loop, and on displacement re-queues the
+// QueuedNeeds the broker returns via Result.Displaced.
+type QueuedNeed struct {
+	Need        *needs.Need
+	RetriesLeft int
 }
 
 // ResultStatus is the broker's verdict on a Proposal.
@@ -112,15 +130,29 @@ const (
 	StatusConflict
 )
 
-// Result is what Propose returns. Committed is the set of machines the
-// proposal owns post-commit; Conflicted is the set the proposal could
-// not claim (empty for ModeAllOrNothing successes, possibly non-empty
-// for ModeIncremental). NewSeq is the bucket's seqno after the commit
-// (or the current seqno on conflict) — the worker uses it as the
-// ObservedSeq for any retry.
+// Result is what Propose returns.
+//
+//   - Committed: machines now owned by the proposing Need (subset of
+//     Proposal.Machines for ModeIncremental; exactly Proposal.Machines
+//     for ModeAllOrNothing successes).
+//
+//   - Conflicted: machines whose incumbent claim is at least as high
+//     precedence as the proposer — immovable. Empty for ModeAllOrNothing
+//     successes; possibly non-empty for ModeIncremental.
+//
+//   - Displaced: incumbent Needs whose claims this commit evicted.
+//     The broker has already released the underlying machine claims;
+//     the proposer's worker is responsible for re-queueing each
+//     QueuedNeed (or emitting it as shortfall if RetriesLeft ≤ 0).
+//     Always empty on StatusConflict.
+//
+//   - NewSeq: the bucket's seqno after the commit (or the current
+//     seqno on conflict). The worker uses it as the ObservedSeq for
+//     any retry.
 type Result struct {
 	Status     ResultStatus
 	Committed  []machine.ID
 	Conflicted []machine.ID
+	Displaced  []QueuedNeed
 	NewSeq     uint64
 }

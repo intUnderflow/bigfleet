@@ -26,12 +26,16 @@ type SharedState struct {
 	bucketSeq map[BucketKey]uint64
 }
 
-// claim is the per-machine record retained for precedence comparison
-// on conflict (M46.2 displacement uses precedence; M46.1 only stores
-// it so the structure is stable across the milestone boundary).
+// claim is the per-machine record the broker stores when it
+// commits a proposal. The fields support displacement: precedence
+// determines whether a later, higher-precedence proposal may evict
+// this claim, and retriesLeft is forwarded to the Displaced
+// QueuedNeed (decremented by one) so the evicted incumbent's
+// worker can re-process it with a smaller budget.
 type claim struct {
-	need       *needs.Need
-	precedence Precedence
+	need        *needs.Need
+	precedence  Precedence
+	retriesLeft int
 }
 
 // NewSharedState builds a fresh per-cycle SharedState wrapping snap.
@@ -74,4 +78,35 @@ func (s *SharedState) IsClaimed(mid machine.ID) bool {
 	defer s.mu.Unlock()
 	_, ok := s.claimedBy[mid]
 	return ok
+}
+
+// PrecedenceAt reports whether mid is claimed by an incumbent with
+// precedence ≥ prec — i.e. the incumbent is immovable from a
+// prec-priority proposer. Returns false if mid is unclaimed.
+//
+// Workers use this to short-circuit retries: a machine held by an
+// incumbent that the worker cannot displace is a permanent local
+// loss (until the cycle ends), so further retries on that machine
+// would only burn budget.
+func (s *SharedState) PrecedenceAt(mid machine.ID, prec Precedence) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	inc, ok := s.claimedBy[mid]
+	if !ok {
+		return false
+	}
+	return !inc.precedence.Less(prec)
+}
+
+// OwnersForTest returns a snapshot of the claimed-set as a
+// machine→Precedence map. Test-only inspection helper; not on any
+// hot path.
+func (s *SharedState) OwnersForTest() map[machine.ID]Precedence {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[machine.ID]Precedence, len(s.claimedBy))
+	for k, v := range s.claimedBy {
+		out[k] = v.precedence
+	}
+	return out
 }
