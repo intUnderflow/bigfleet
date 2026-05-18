@@ -107,6 +107,104 @@ type runnerAction struct {
 	Action    string `yaml:"action"`
 }
 
+// substrateFile is the runtime-side half of ADR-0034: it describes the
+// hosts the scale test will run on, the per-cluster apiserver operating
+// point, and the kwok-pod resource budget. Orthogonal to profileFile,
+// which describes the test itself (scale, catalog, density, ramp). The
+// runner merges the two into Helm values; the profile YAML stays
+// substrate-agnostic.
+//
+// Validation lives on `validate()`; nonsense values (zero capacity,
+// unknown storage backend, etc.) are caught before any helm install
+// touches the cluster.
+type substrateFile struct {
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	Metadata   struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	} `yaml:"metadata"`
+	Host struct {
+		VCPU      int `yaml:"vCPU"`
+		MemoryGiB int `yaml:"memoryGiB"`
+	} `yaml:"host"`
+	Cluster struct {
+		// PodsPerCluster is the substrate's "comfortable Pod ceiling"
+		// per kwok apiserver. Past this point bind throughput tails off
+		// (kine WAL, etcd watch, kube-scheduler list-watch).
+		PodsPerCluster           int    `yaml:"podsPerCluster"`
+		ClustersPerHost          int    `yaml:"clustersPerHost"`
+		Storage                  string `yaml:"storage"` // "etcd" or "kine"
+		BindThroughputPodsPerSec int    `yaml:"bindThroughputPodsPerSec"`
+	} `yaml:"cluster"`
+	KwokPod struct {
+		Requests              substrateResourceMap `yaml:"requests"`
+		Limits                substrateResourceMap `yaml:"limits"`
+		SharedVolumeSizeLimit string               `yaml:"sharedVolumeSizeLimit"`
+	} `yaml:"kwokPod"`
+	APIServer struct {
+		ExtraFlags []string `yaml:"extraFlags"`
+	} `yaml:"apiserver"`
+	CostEstimate struct {
+		PerHostUSDPerHour float64 `yaml:"perHostUsdPerHour"`
+		Notes             string  `yaml:"notes"`
+	} `yaml:"costEstimate"`
+	Provisioning string `yaml:"provisioning"`
+}
+
+type substrateResourceMap struct {
+	CPU    string `yaml:"cpu"`
+	Memory string `yaml:"memory"`
+}
+
+// validate returns nil if the substrate is well-formed. Field errors
+// are wrapped with the substrate's metadata.name (or "<unnamed>" if
+// not set) so the runner's --substrate validation failure points at
+// the file the user passed.
+func (s substrateFile) validate() error {
+	name := s.Metadata.Name
+	if name == "" {
+		name = "<unnamed>"
+	}
+	if s.Host.VCPU <= 0 {
+		return fmt.Errorf("substrate %q: host.vCPU must be > 0 (got %d)", name, s.Host.VCPU)
+	}
+	if s.Host.MemoryGiB <= 0 {
+		return fmt.Errorf("substrate %q: host.memoryGiB must be > 0 (got %d)", name, s.Host.MemoryGiB)
+	}
+	if s.Cluster.PodsPerCluster <= 0 {
+		return fmt.Errorf("substrate %q: cluster.podsPerCluster must be > 0 (got %d)", name, s.Cluster.PodsPerCluster)
+	}
+	if s.Cluster.ClustersPerHost <= 0 {
+		return fmt.Errorf("substrate %q: cluster.clustersPerHost must be > 0 (got %d)", name, s.Cluster.ClustersPerHost)
+	}
+	switch s.Cluster.Storage {
+	case "etcd", "kine":
+		// ok
+	default:
+		return fmt.Errorf("substrate %q: cluster.storage must be \"etcd\" or \"kine\" (got %q)", name, s.Cluster.Storage)
+	}
+	if s.Cluster.BindThroughputPodsPerSec <= 0 {
+		return fmt.Errorf("substrate %q: cluster.bindThroughputPodsPerSec must be > 0 (got %d)", name, s.Cluster.BindThroughputPodsPerSec)
+	}
+	if s.KwokPod.Requests.CPU == "" {
+		return fmt.Errorf("substrate %q: kwokPod.requests.cpu is required", name)
+	}
+	if s.KwokPod.Requests.Memory == "" {
+		return fmt.Errorf("substrate %q: kwokPod.requests.memory is required", name)
+	}
+	if s.KwokPod.Limits.CPU == "" {
+		return fmt.Errorf("substrate %q: kwokPod.limits.cpu is required", name)
+	}
+	if s.KwokPod.Limits.Memory == "" {
+		return fmt.Errorf("substrate %q: kwokPod.limits.memory is required", name)
+	}
+	if s.CostEstimate.PerHostUSDPerHour < 0 {
+		return fmt.Errorf("substrate %q: costEstimate.perHostUsdPerHour must be ≥ 0 (got %g)", name, s.CostEstimate.PerHostUSDPerHour)
+	}
+	return nil
+}
+
 type runResult struct {
 	RunID   string `json:"runId"`
 	Profile string `json:"profile"`
@@ -434,6 +532,24 @@ func readProfile(path string) (profileFile, error) {
 		return profileFile{}, err
 	}
 	return p, nil
+}
+
+// readSubstrate parses a BYO-substrate YAML file (ADR-0034) and
+// returns it validated. nil-error is the only success path; callers
+// pass the returned value straight to the merge logic.
+func readSubstrate(path string) (substrateFile, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return substrateFile{}, err
+	}
+	var s substrateFile
+	if err := yaml.Unmarshal(b, &s); err != nil {
+		return substrateFile{}, fmt.Errorf("substrate %s: %w", path, err)
+	}
+	if err := s.validate(); err != nil {
+		return substrateFile{}, err
+	}
+	return s, nil
 }
 
 // classifyTarget is best-effort: looks at the kubeconfig context name
