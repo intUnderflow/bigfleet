@@ -104,6 +104,21 @@ func (s *Shard) reconcileIncremental(ctx context.Context) error {
 // dominated the cycle whenever execute had just fanned out a burst.
 // Trust the provider boundary; drop the round-trip.
 func (s *Shard) applyReconciledMachine(dm machine.Machine) {
+	// Skip in-flight machines (bigfleet-uber #23 fix). A worker is
+	// driving this machine through its provider RPC(s); its local
+	// `applyTransition`-ed state (e.g. Configuring while
+	// provider.Configure is in flight) is the authoritative
+	// snapshot for the duration of the action. The provider's
+	// List view lags the in-flight RPC and will report a pre-RPC
+	// state — applying it here overwrites Configuring → Idle and
+	// causes the post-Configure transition to fail with
+	// "invalid state transition: Idle → Configured" (the
+	// errProvisionRacedToIdle path in execute.go). When the
+	// worker completes, the next reconcile will see a state-match
+	// (M11.24a fast path) and skip.
+	if s.isPending(dm.ID) {
+		return
+	}
 	if existing, getErr := s.inv.Get(dm.ID); getErr == nil {
 		if existing.State == dm.State {
 			return

@@ -363,6 +363,21 @@ func (s *Shard) executeWorker(ctx context.Context) {
 	}
 }
 
+// isPending reports whether the machine currently has an action
+// enqueued or in flight. Used by applyReconciledMachine to skip
+// machines whose local state is being driven by a worker — the
+// provider's List view lags any in-flight RPC and would otherwise
+// overwrite the worker's transitional state with a stale read.
+// bigfleet-uber #23 root-caused 17–26% Provision failures to this
+// race; pendingActions was already maintained for action dedup at
+// enqueue time, this is just a second reader.
+func (s *Shard) isPending(id machine.ID) bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	_, ok := s.pendingActions[id]
+	return ok
+}
+
 // actionStillApplicable re-checks the live inventory at emit time
 // to confirm the action's required starting state still holds. The
 // cycle's snapshot can be milliseconds-to-cycles old; the worker
