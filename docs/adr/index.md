@@ -39,3 +39,4 @@
 | [31](/adr/0031-parsync-partitioned-sync/) | Proposed | ParSync-style partitioned synchronization — conditional follow-on for raised per-shard ceilings |
 | [32](/adr/0032-realistic-catalog-production-calibration/) | Accepted | Realistic catalog production-calibrated workload distribution |
 | [33](/adr/0033-phase1-supply-credit-respects-bind-readiness/) | Proposed | Phase 1 supply-credit must respect bind readiness, not just provider state |
+| [34](/adr/0034-scaletest-byo-substrate/) | Accepted | Scaletest is bring-your-own-substrate |
