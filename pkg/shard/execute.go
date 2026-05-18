@@ -14,6 +14,29 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/provider"
 )
 
+// errProvisionRacedToIdle marks the specific race where a Bootstrap
+// (called from Provision after Provider.Create + Provider.Configure,
+// or directly) finds the machine at Idle at post-Configure-transition
+// time instead of Configuring. The provider's Configure has already
+// committed; a parallel actor (reconcile observing the provider's
+// view, a competing Reclaim, a stale-snapshot duplicate emission)
+// has flipped Configuring → Idle in the window between the
+// Idle→Configuring transition and the post-Configure transition.
+//
+// Recovery is natural: the machine is at Idle in the inventory,
+// next cycle's Phase 1 will see it and re-claim. The wasted
+// Configure call costs one provider round-trip per fire; we accept
+// that in exchange for not racing the FSM further inside one
+// execute call (which would risk a tight retry loop if the
+// flip-back keeps recurring).
+//
+// Surfaced by bigfleet-uber #23: 17–26% of Provision actions hit
+// this race at uber-5k under the realistic catalog. Tracked
+// separately from real state-machine violations via the
+// transition_raced_to_idle outcome label so alerting on
+// transition_error stays meaningful.
+var errProvisionRacedToIdle = errors.New("post-Configure transition: machine raced from Configuring to Idle")
+
 // execute dispatches an Action to the appropriate handler. Each handler
 // drives the machine through its state-machine transitions and the
 // matching provider RPC. Errors are returned to the caller (the cycle)
@@ -76,6 +99,16 @@ func classifyExecuteError(ctx context.Context, err error) string {
 	switch {
 	case strings.Contains(msg, "no active operator session"):
 		return "no_session"
+	case errors.Is(err, errProvisionRacedToIdle):
+		// Provision/Bootstrap race: the post-Configure transition saw
+		// the machine at Idle instead of Configuring. The provider's
+		// Configure already succeeded; next cycle re-claims the
+		// (now-Idle) machine and re-drives. Distinct outcome label so
+		// the rate is visible separately from real state-machine
+		// violations. See executeBootstrap below for the detection
+		// site and bigfleet-uber #23 for the diagnostic that
+		// surfaced this race at 17–26% of Provision actions.
+		return "transition_raced_to_idle"
 	case strings.Contains(msg, "→ Configuring"),
 		strings.Contains(msg, "→ Creating"),
 		strings.Contains(msg, "→ Draining"),
@@ -276,6 +309,16 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		m.AssignedReclamationPenaltyDollars = recPen
 		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
 	}); err != nil {
+		// Detect the Configuring→Idle race (see errProvisionRacedToIdle
+		// above). If the FSM rejected the transition AND the machine
+		// is now at Idle, a parallel actor flipped it back between
+		// our Idle→Configuring transition and this post-Configure
+		// commit. Recovery happens naturally next cycle.
+		if errors.Is(err, machine.ErrInvalidTransition) {
+			if cur, getErr := s.inv.Get(a.MachineID); getErr == nil && cur.State == machine.StateIdle {
+				return errProvisionRacedToIdle
+			}
+		}
 		return formatErr("bootstrap: post-Configure transition", err)
 	}
 	// Drop R: configure-phase timer ends at the post-Configure
