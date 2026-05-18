@@ -1,0 +1,184 @@
+package main
+
+import (
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+// fixtureMerged is a helper that returns (profile, substrate,
+// mergedConfig) for a canonical 50K-machine run on the fat-host
+// example substrate.
+func fixtureMerged(t *testing.T) (profileV2, substrateFile, mergedConfig) {
+	t.Helper()
+	p := fixtureProfile(t)
+	s := fixtureSubstrate(t)
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge fixtures: %v", err)
+	}
+	return p, s, cfg
+}
+
+func TestRenderHelmValues_CanonicalShape(t *testing.T) {
+	t.Parallel()
+	p, s, cfg := fixtureMerged(t)
+	values := renderHelmValues(p, s, cfg)
+
+	// kwok block — geometry + substrate kwokPod.
+	kwok, ok := values["kwok"].(map[string]any)
+	if !ok {
+		t.Fatalf("kwok block missing or wrong type: %T", values["kwok"])
+	}
+	if got, want := kwok["clusterCount"], 200; got != want {
+		t.Errorf("kwok.clusterCount = %v, want %d", got, want)
+	}
+	if got, want := kwok["storage"], "etcd"; got != want {
+		t.Errorf("kwok.storage = %v, want %q", got, want)
+	}
+	if got, want := kwok["sharedVolumeSizeLimit"], "2Gi"; got != want {
+		t.Errorf("kwok.sharedVolumeSizeLimit = %v, want %q", got, want)
+	}
+
+	apiserver, _ := kwok["apiserverResources"].(map[string]any)
+	apiReqs, _ := apiserver["requests"].(map[string]string)
+	if apiReqs["cpu"] != "2" || apiReqs["memory"] != "4Gi" {
+		t.Errorf("apiserver.requests = %v, want cpu=2 memory=4Gi", apiReqs)
+	}
+
+	workload, _ := kwok["workloadResources"].(map[string]any)
+	workReqs, _ := workload["requests"].(map[string]string)
+	if workReqs["cpu"] != "2" || workReqs["memory"] != "4Gi" {
+		t.Errorf("workload.requests = %v, want cpu=2 memory=4Gi (identical to apiserver per substrate semantics)", workReqs)
+	}
+
+	// shard block — derived from profile.scale × headroom + per-shard ceiling.
+	shard, _ := values["shard"].(map[string]any)
+	// 50K machines / 500K ceiling = 1 shard.
+	if got, want := shard["replicas"], 1; got != want {
+		t.Errorf("shard.replicas = %v, want %d", got, want)
+	}
+	// 50000 × 1.2 / 1 = 60000.
+	if got, want := shard["seedMachines"], 60000; got != want {
+		t.Errorf("shard.seedMachines = %v, want %d (machines × (1 + idleHeadroom) / replicas)", got, want)
+	}
+	if got, want := shard["seedDensityMultiplier"], 100; got != want {
+		t.Errorf("shard.seedDensityMultiplier = %v, want %d", got, want)
+	}
+	if got, want := shard["incrementalReconcile"], true; got != want {
+		t.Errorf("shard.incrementalReconcile = %v, want %v (clusterCount=200 ≥ 100)", got, want)
+	}
+
+	// loadProfile.target == substrate's per-cluster Pod ceiling.
+	loadProfile, _ := values["loadProfile"].(map[string]any)
+	if got, want := loadProfile["target"], 25000; got != want {
+		t.Errorf("loadProfile.target = %v, want %d", got, want)
+	}
+	if got, want := loadProfile["durationSeconds"], 1800; got != want {
+		t.Errorf("loadProfile.durationSeconds = %v, want %d (== profile.loadProfile.soakSeconds)", got, want)
+	}
+
+	// costEstimate carries geometry × per-host cost.
+	cost, _ := values["costEstimate"].(map[string]any)
+	if got := cost["vCPU"]; got != 80*21 {
+		t.Errorf("costEstimate.vCPU = %v, want %d (host vCPU × hostsNeeded)", got, 80*21)
+	}
+}
+
+func TestRenderHelmValues_MultiShard(t *testing.T) {
+	t.Parallel()
+	p, s, _ := fixtureMerged(t)
+	// 1M machines triggers 2 shards (500K ceiling × 2).
+	p.Scale.Machines = 1_000_000
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg)
+	shard, _ := values["shard"].(map[string]any)
+	if got, want := shard["replicas"], 2; got != want {
+		t.Errorf("shard.replicas = %v, want %d (1M machines / 500K ceiling = 2 shards)", got, want)
+	}
+	// seedMachines per shard = 1M × 1.2 / 2 = 600K.
+	if got, want := shard["seedMachines"], 600_000; got != want {
+		t.Errorf("shard.seedMachines = %v, want %d", got, want)
+	}
+}
+
+func TestRenderHelmValues_TinyScalePrometheusFootprint(t *testing.T) {
+	t.Parallel()
+	p, s, _ := fixtureMerged(t)
+	p.Scale.Machines = 50 // dev-50 territory
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg)
+	prom, _ := values["prometheus"].(map[string]any)
+	res, _ := prom["resources"].(map[string]any)
+	reqs, _ := res["requests"].(map[string]string)
+	// Small cluster count → tier-1 Prometheus footprint.
+	if reqs["cpu"] != "1" || reqs["memory"] != "4Gi" {
+		t.Errorf("prometheus.resources.requests = %v, want cpu=1 memory=4Gi for tiny cluster", reqs)
+	}
+}
+
+// TestRenderHelmValues_YAMLRoundTrip confirms the rendered values
+// round-trip through gopkg.in/yaml.v3 cleanly — i.e. helm will
+// accept the output without parse errors. Helm-template smoke test
+// runs separately in TestRenderHelmValues_HelmTemplate.
+func TestRenderHelmValues_YAMLRoundTrip(t *testing.T) {
+	t.Parallel()
+	p, s, cfg := fixtureMerged(t)
+	values := renderHelmValues(p, s, cfg)
+	b, err := yaml.Marshal(values)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), "clusterCount: 200") {
+		t.Errorf("rendered YAML missing kwok.clusterCount=200:\n%s", string(b))
+	}
+	var back map[string]any
+	if err := yaml.Unmarshal(b, &back); err != nil {
+		t.Errorf("unmarshal round-trip: %v", err)
+	}
+}
+
+// TestRenderHelmValues_HelmTemplate is the integration smoke test:
+// render values, write to a temp file, and run `helm template`
+// against the chart. A passing template means the BYO values shape
+// is structurally compatible with the chart. Skipped if helm isn't
+// on PATH (e.g. local dev without the kubectl/helm stack).
+func TestRenderHelmValues_HelmTemplate(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not on PATH; skipping integration smoke")
+	}
+	t.Parallel()
+
+	p, s, cfg := fixtureMerged(t)
+	values := renderHelmValues(p, s, cfg)
+	path, err := writeRenderedValues(values, t.TempDir())
+	if err != nil {
+		t.Fatalf("writeRenderedValues: %v", err)
+	}
+
+	// Resolve repo root via git rev-parse so the chart path works
+	// regardless of test cwd.
+	rootBytes, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	repoRoot := strings.TrimSpace(string(rootBytes))
+	chart := filepath.Join(repoRoot, "test", "scaletest", "chart")
+
+	out, err := exec.Command("helm", "template", "scaletest", chart, "-f", path, "--set", "runId=test").CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm template: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "kind: ") {
+		t.Errorf("helm template output missing 'kind:' lines:\n%s", out)
+	}
+}

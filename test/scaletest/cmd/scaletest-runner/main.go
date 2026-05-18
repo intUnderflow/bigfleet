@@ -138,6 +138,12 @@ type substrateFile struct {
 		BindThroughputPodsPerSec int    `yaml:"bindThroughputPodsPerSec"`
 	} `yaml:"cluster"`
 	KwokPod struct {
+		// Requests and Limits are **per-container** budgets. The chart
+		// applies them identically to both containers in the kwok pod
+		// (apiserver + workload). Per-Pod totals are 2× these values.
+		// The substrate's host.vCPU/memoryGiB should be calibrated
+		// against `2 × kwokPod.requests × cluster.clustersPerHost` plus
+		// system-under-test overhead.
 		Requests              substrateResourceMap `yaml:"requests"`
 		Limits                substrateResourceMap `yaml:"limits"`
 		SharedVolumeSizeLimit string               `yaml:"sharedVolumeSizeLimit"`
@@ -316,6 +322,139 @@ func ceilDiv(a, b int) int {
 	return (a + b - 1) / b
 }
 
+// perShardMachineCeiling is the documented per-shard inventory cap
+// (bigfleet.md §16, M11.x). One shard handles ≤ 500K machines under
+// management; renderHelmValues uses this to derive the shard
+// replica count from profile.scale.machines.
+const perShardMachineCeiling = 500_000
+
+func shardReplicas(machines int) int {
+	r := ceilDiv(machines, perShardMachineCeiling)
+	if r < 1 {
+		return 1
+	}
+	return r
+}
+
+// renderHelmValues turns a (profile, substrate, mergedConfig) triple
+// into the values map the scaletest chart consumes. Geometry comes
+// from mergedConfig; per-Pod resources come from the substrate;
+// scale + load knobs come from the profile.
+//
+// Substrate.kwokPod.requests/limits are per-container budgets
+// applied identically to the kwok pod's apiserver and workload
+// containers. The host budget should be calibrated against 2 ×
+// requests × clustersPerHost.
+//
+// Operational tuning knobs (executeConcurrency, podShim
+// concurrency, etc.) use values that match today's `uber-*`
+// shape. Production substrates beyond the documented ceilings may
+// need to override via `--set` at install time; that's deferred
+// follow-up.
+func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]any {
+	resourceMap := func(r substrateResourceMap) map[string]string {
+		return map[string]string{"cpu": r.CPU, "memory": r.Memory}
+	}
+	prometheusReqs := map[string]string{"cpu": "1", "memory": "4Gi"}
+	prometheusLims := map[string]string{"cpu": "4", "memory": "12Gi"}
+	if m.ClusterCount >= 100 {
+		prometheusReqs = map[string]string{"cpu": "4", "memory": "16Gi"}
+		prometheusLims = map[string]string{"cpu": "8", "memory": "32Gi"}
+	}
+
+	replicas := shardReplicas(p.Scale.Machines)
+	headroom := 1.0 + p.Seed.IdleHeadroomFraction
+	seedPerShard := int(float64(p.Scale.Machines) * headroom / float64(replicas))
+
+	values := map[string]any{
+		"namespace": "bigfleet-scaletest",
+		"kwok": map[string]any{
+			"storage":      s.Cluster.Storage,
+			"clusterCount": m.ClusterCount,
+			"apiserverResources": map[string]any{
+				"requests": resourceMap(s.KwokPod.Requests),
+				"limits":   resourceMap(s.KwokPod.Limits),
+			},
+			"workloadResources": map[string]any{
+				"requests": resourceMap(s.KwokPod.Requests),
+				"limits":   resourceMap(s.KwokPod.Limits),
+			},
+			"sharedVolumeSizeLimit": s.KwokPod.SharedVolumeSizeLimit,
+		},
+		"podShim": map[string]any{
+			"binderConcurrency":       256,
+			"upcomingNodeConcurrency": 32,
+		},
+		"shard": map[string]any{
+			"replicas":              replicas,
+			"seedMachines":          seedPerShard,
+			"seedDensityMultiplier": p.Scale.Density,
+			"maxActionsPerCycle":    4096,
+			"executeConcurrency":    256,
+			"incrementalReconcile":  m.ClusterCount >= 100,
+			"metricsWarmupCycles":   5,
+		},
+		"coordinator": map[string]any{
+			"enabled":  true,
+			"replicas": 1,
+		},
+		"harness": map[string]any{
+			"scheduler": "kube-scheduler",
+		},
+		"loadProfile": map[string]any{
+			"target":              s.Cluster.PodsPerCluster,
+			"churnPerMinute":      p.LoadProfile.ChurnPerMinute,
+			"durationSeconds":     p.LoadProfile.SoakSeconds,
+			"reconcilePerTickCap": 200,
+		},
+		"operator": map[string]any{
+			"qps":            200,
+			"burst":          400,
+			"ackConcurrency": 64,
+			"rollupInterval": "0s",
+		},
+		"prometheus": map[string]any{
+			"resources": map[string]any{
+				"requests": prometheusReqs,
+				"limits":   prometheusLims,
+			},
+		},
+		"costEstimate": map[string]any{
+			"vCPU":              s.Host.VCPU * m.HostsNeeded,
+			"memoryGB":          s.Host.MemoryGiB * m.HostsNeeded,
+			"awsSpotUsdPerHour": s.CostEstimate.PerHostUSDPerHour * float64(m.HostsNeeded),
+			"notes": fmt.Sprintf("BYO: profile %q × substrate %q = %d hosts of %dvCPU/%dGiB",
+				p.Metadata.Name, s.Metadata.Name, m.HostsNeeded, s.Host.VCPU, s.Host.MemoryGiB),
+		},
+	}
+
+	if p.RampBudget != "" {
+		values["rampBudget"] = p.RampBudget
+	}
+	if len(p.RunnerActions) > 0 {
+		values["runnerActions"] = p.RunnerActions
+	}
+	if p.SLO != (sloOverrides{}) {
+		values["slo"] = p.SLO
+	}
+	return values
+}
+
+// writeRenderedValues marshals the values map to YAML and writes it
+// to a temp file in the output directory. Returns the file path the
+// caller passes to helm install.
+func writeRenderedValues(values map[string]any, outputDir string) (string, error) {
+	b, err := yaml.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("marshal values: %w", err)
+	}
+	path := filepath.Join(outputDir, "rendered-values.yaml")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return "", fmt.Errorf("write rendered values: %w", err)
+	}
+	return path, nil
+}
+
 // validate returns nil if the substrate is well-formed. Field errors
 // are wrapped with the substrate's metadata.name (or "<unnamed>" if
 // not set) so the runner's --substrate validation failure points at
@@ -422,6 +561,7 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	kubeconfig := fs.String("kubeconfig", os.Getenv("KUBECONFIG"), "kubeconfig path")
 	profilePath := fs.String("profile", "", "profile YAML (test/scaletest/profiles/*.yaml)")
+	substratePath := fs.String("substrate", "", "substrate YAML (ADR-0034 BYO). When set, profile is read as substrate-agnostic profileV2 + substrate is merged at install time. Omit to use the legacy profile-direct-to-helm path.")
 	chartPath := fs.String("chart", "test/scaletest/chart", "path to the harness chart")
 	duration := fs.Duration("duration", 0, "how long to soak after steady state (defaults to profile.loadProfile.durationSeconds)")
 	maxDuration := fs.Duration("max-duration", 2*time.Hour, "hard cap; teardown if not done")
@@ -438,10 +578,61 @@ func run(args []string) error {
 		return errors.New("--output required")
 	}
 
-	prof, err := readProfile(*profilePath)
-	if err != nil {
-		return err
+	// ADR-0034: BYO substrate path. When --substrate is set, read the
+	// profile as substrate-agnostic profileV2, merge with the
+	// substrate, render to helm values, and install with those.
+	// Without --substrate, fall through to the legacy
+	// profile-as-values path.
+	var (
+		prof         profileFile
+		mergedValues string // rendered values file path; "" if legacy path
+		mergedCfg    mergedConfig
+		mergedActive bool
+	)
+	if *substratePath != "" {
+		pv2, err := readProfileV2(*profilePath)
+		if err != nil {
+			return err
+		}
+		sub, err := readSubstrate(*substratePath)
+		if err != nil {
+			return err
+		}
+		cfg, err := merge(pv2, sub)
+		if err != nil {
+			return err
+		}
+		mergedCfg = cfg
+		mergedActive = true
+		// Convert profileV2 fields the rest of the runner still reads
+		// off `prof` (ramp-budget resolver, runnerActions firing, SLO
+		// overrides). The legacy profileFile is the runner's internal
+		// "view" of the run; mergedValues is what helm sees.
+		prof.KWOK.ClusterCount = cfg.ClusterCount
+		prof.LoadProfile.Target = cfg.PodsPerCluster
+		prof.LoadProfile.DurationSeconds = pv2.LoadProfile.SoakSeconds
+		prof.RampBudget = pv2.RampBudget
+		prof.RunnerActions = pv2.RunnerActions
+		prof.SLO = pv2.SLO
+		prof.CostEstimate.AWSSpotUSDPerHour = sub.CostEstimate.PerHostUSDPerHour * float64(cfg.HostsNeeded)
+		prof.CostEstimate.VCPU = sub.Host.VCPU * cfg.HostsNeeded
+		prof.CostEstimate.MemoryGB = sub.Host.MemoryGiB * cfg.HostsNeeded
+
+		if err := os.MkdirAll(*output, 0o755); err != nil {
+			return fmt.Errorf("output dir: %w", err)
+		}
+		mergedValues, err = writeRenderedValues(renderHelmValues(pv2, sub, cfg), *output)
+		if err != nil {
+			return err
+		}
+	} else {
+		p, err := readProfile(*profilePath)
+		if err != nil {
+			return err
+		}
+		prof = p
 	}
+
 	name := strings.TrimSuffix(filepath.Base(*profilePath), ".yaml")
 	runID := fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102-150405"), name)
 
@@ -465,16 +656,31 @@ func run(args []string) error {
 	}
 	tgtKind := classifyTarget(contextName)
 	estCost := prof.CostEstimate.AWSSpotUSDPerHour * duration.Hours()
-	fmt.Fprintf(os.Stderr,
-		"profile %s on context %s (kind=%s)\n"+
-			"  scale: %d clusters × %d CRs = %d total\n"+
-			"  duration: %s\n"+
-			"  estimated cost (cloud baseline): $%.2f\n",
-		name, contextName, tgtKind,
-		prof.KWOK.ClusterCount, prof.LoadProfile.Target,
-		prof.KWOK.ClusterCount*prof.LoadProfile.Target,
-		duration, estCost,
-	)
+	if mergedActive {
+		fmt.Fprintf(os.Stderr,
+			"profile %s + substrate %s on context %s (kind=%s)\n"+
+				"  scale: %d clusters × %d Pods = %d total\n"+
+				"  hosts needed: %d (%dvCPU/%dGiB each)\n"+
+				"  duration: %s\n"+
+				"  estimated cost: $%.2f\n"+
+				"  ramp feasibility: %s\n",
+			mergedCfg.ProfileName, mergedCfg.SubstrateName, contextName, tgtKind,
+			mergedCfg.ClusterCount, mergedCfg.PodsPerCluster, mergedCfg.TotalPods,
+			mergedCfg.HostsNeeded, prof.CostEstimate.VCPU/mergedCfg.HostsNeeded, prof.CostEstimate.MemoryGB/mergedCfg.HostsNeeded,
+			duration, estCost, mergedCfg.RampFeasibleNote,
+		)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"profile %s on context %s (kind=%s)\n"+
+				"  scale: %d clusters × %d CRs = %d total\n"+
+				"  duration: %s\n"+
+				"  estimated cost (cloud baseline): $%.2f\n",
+			name, contextName, tgtKind,
+			prof.KWOK.ClusterCount, prof.LoadProfile.Target,
+			prof.KWOK.ClusterCount*prof.LoadProfile.Target,
+			duration, estCost,
+		)
+	}
 	if !*yes && tgtKind == "cloud" && estCost >= 5.00 {
 		if err := confirm("proceed with this paid run? [y/N]: "); err != nil {
 			return err
@@ -488,7 +694,11 @@ func run(args []string) error {
 	// Install and arrange teardown.
 	releaseName := "scaletest"
 	namespace := "bigfleet-scaletest"
-	if err := helmInstall(ctx, *kubeconfig, *chartPath, *profilePath, releaseName, namespace, runID); err != nil {
+	valuesForHelm := *profilePath
+	if mergedActive {
+		valuesForHelm = mergedValues
+	}
+	if err := helmInstall(ctx, *kubeconfig, *chartPath, valuesForHelm, releaseName, namespace, runID); err != nil {
 		return fmt.Errorf("helm install: %w", err)
 	}
 	defer func() {
