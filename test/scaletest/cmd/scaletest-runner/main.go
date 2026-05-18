@@ -157,6 +157,165 @@ type substrateResourceMap struct {
 	Memory string `yaml:"memory"`
 }
 
+// profileV2 is the substrate-agnostic test definition introduced by
+// ADR-0034. It is the second half of the BYO-substrate split:
+// profileV2 + substrateFile compose into a runnable scale test. Pure
+// test description — no clusterCount, no kwokPod resources, no
+// per-host cost. Those live on substrateFile.
+//
+// The legacy `profileFile` struct stays in place until Stage 7 of the
+// ADR-0034 migration deletes the legacy YAMLs.
+type profileV2 struct {
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	Metadata   struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	} `yaml:"metadata"`
+	Scale struct {
+		Machines int `yaml:"machines"`
+		Density  int `yaml:"density"` // Pods per machine
+	} `yaml:"scale"`
+	Catalog struct {
+		Archetypes string `yaml:"archetypes"` // "realistic" or "uniform"
+	} `yaml:"catalog"`
+	Seed struct {
+		ConfiguredFraction    float64 `yaml:"configuredFraction"`
+		SpeculativeMultiplier int     `yaml:"speculativeMultiplier"`
+		IdleHeadroomFraction  float64 `yaml:"idleHeadroomFraction"`
+	} `yaml:"seed"`
+	LoadProfile struct {
+		RampSeconds    int     `yaml:"rampSeconds"`
+		SoakSeconds    int     `yaml:"soakSeconds"`
+		ChurnPerMinute float64 `yaml:"churnPerMinute"`
+	} `yaml:"loadProfile"`
+	// RampBudget overrides the rampSeconds-derived deadline. Same
+	// semantics as profileFile.RampBudget (M22). Empty → use
+	// rampSeconds; non-empty → time.ParseDuration string wins.
+	RampBudget    string         `yaml:"rampBudget"`
+	RunnerActions []runnerAction `yaml:"runnerActions"`
+	SLO           sloOverrides   `yaml:"slo"`
+}
+
+// validate returns nil if the profile is well-formed.
+func (p profileV2) validate() error {
+	name := p.Metadata.Name
+	if name == "" {
+		name = "<unnamed>"
+	}
+	if p.Scale.Machines <= 0 {
+		return fmt.Errorf("profile %q: scale.machines must be > 0 (got %d)", name, p.Scale.Machines)
+	}
+	if p.Scale.Density <= 0 {
+		return fmt.Errorf("profile %q: scale.density must be > 0 (got %d)", name, p.Scale.Density)
+	}
+	if p.LoadProfile.RampSeconds <= 0 {
+		return fmt.Errorf("profile %q: loadProfile.rampSeconds must be > 0 (got %d)", name, p.LoadProfile.RampSeconds)
+	}
+	if p.LoadProfile.SoakSeconds < 0 {
+		return fmt.Errorf("profile %q: loadProfile.soakSeconds must be ≥ 0 (got %d)", name, p.LoadProfile.SoakSeconds)
+	}
+	if p.LoadProfile.ChurnPerMinute < 0 {
+		return fmt.Errorf("profile %q: loadProfile.churnPerMinute must be ≥ 0 (got %g)", name, p.LoadProfile.ChurnPerMinute)
+	}
+	if p.Seed.ConfiguredFraction < 0 || p.Seed.ConfiguredFraction > 1 {
+		return fmt.Errorf("profile %q: seed.configuredFraction must be in [0, 1] (got %g)", name, p.Seed.ConfiguredFraction)
+	}
+	if p.Seed.IdleHeadroomFraction < 0 {
+		return fmt.Errorf("profile %q: seed.idleHeadroomFraction must be ≥ 0 (got %g)", name, p.Seed.IdleHeadroomFraction)
+	}
+	return nil
+}
+
+// mergedConfig is the derived view produced by merge(profile,
+// substrate). It carries everything Stage 3 needs to render Helm
+// values: cluster geometry, host count, cost estimate, and the
+// ramp-feasibility verdict.
+type mergedConfig struct {
+	ProfileName    string
+	SubstrateName  string
+	TotalPods      int
+	PodsPerCluster int
+	ClusterCount   int
+	HostsNeeded    int
+
+	// EstimatedUSD = HostsNeeded × perHostUsdPerHour × duration-hours.
+	// Duration includes a 10 min teardown allowance on top of ramp +
+	// soak. Zero for free substrates.
+	EstimatedUSD  float64
+	DurationHours float64
+
+	// RampFeasible reports whether the substrate's declared bind
+	// throughput can sustain the profile's ramp demand. False ≠
+	// fatal; ramp-tail-off is sometimes the regime we want to
+	// exercise. The note explains the comparison either way.
+	RampFeasible     bool
+	RampFeasibleNote string
+}
+
+// merge composes profile + substrate into a mergedConfig. Both inputs
+// must be pre-validated (readProfileV2 / readSubstrate handle that);
+// merge itself is pure arithmetic + feasibility comparison.
+//
+// Geometry: clusterCount = ceil(totalPods / podsPerCluster).
+// hostsNeeded = ceil(clusterCount / clustersPerHost) + 1, the +1
+// covers the system-under-test pods (shard, coordinator, prometheus).
+//
+// Ramp feasibility: profile asks for totalPods/rampSeconds Pods bound
+// per second; substrate can supply clusterCount ×
+// bindThroughputPodsPerSec. Demand ≤ supply → feasible.
+func merge(p profileV2, s substrateFile) (mergedConfig, error) {
+	totalPods := p.Scale.Machines * p.Scale.Density
+	if totalPods <= 0 {
+		return mergedConfig{}, fmt.Errorf("merge: scale.machines × scale.density = %d (must be > 0)", totalPods)
+	}
+
+	podsPerCluster := s.Cluster.PodsPerCluster
+	clusterCount := ceilDiv(totalPods, podsPerCluster)
+	hostsNeeded := ceilDiv(clusterCount, s.Cluster.ClustersPerHost) + 1
+
+	rampSeconds := p.LoadProfile.RampSeconds
+	demand := float64(totalPods) / float64(rampSeconds)
+	supply := float64(clusterCount) * float64(s.Cluster.BindThroughputPodsPerSec)
+	rampFeasible := demand <= supply
+	var rampNote string
+	switch {
+	case rampFeasible:
+		rampNote = fmt.Sprintf("ramp demand %.1f Pods/s ≤ substrate supply %.1f Pods/s (%d clusters × %d Pods/s/cluster)",
+			demand, supply, clusterCount, s.Cluster.BindThroughputPodsPerSec)
+	default:
+		rampNote = fmt.Sprintf("ramp demand %.1f Pods/s > substrate supply %.1f Pods/s — ramp will tail off (run anyway to exercise that regime)",
+			demand, supply)
+	}
+
+	durationSeconds := p.LoadProfile.RampSeconds + p.LoadProfile.SoakSeconds + 600 // +10min teardown
+	durationHours := float64(durationSeconds) / 3600.0
+	estimatedUSD := float64(hostsNeeded) * s.CostEstimate.PerHostUSDPerHour * durationHours
+
+	return mergedConfig{
+		ProfileName:      p.Metadata.Name,
+		SubstrateName:    s.Metadata.Name,
+		TotalPods:        totalPods,
+		PodsPerCluster:   podsPerCluster,
+		ClusterCount:     clusterCount,
+		HostsNeeded:      hostsNeeded,
+		EstimatedUSD:     estimatedUSD,
+		DurationHours:    durationHours,
+		RampFeasible:     rampFeasible,
+		RampFeasibleNote: rampNote,
+	}, nil
+}
+
+// ceilDiv returns ceil(a / b) for positive integers. Panics if b <= 0;
+// callers must pre-validate (substrateFile.validate() rules out the
+// zero case for podsPerCluster + clustersPerHost).
+func ceilDiv(a, b int) int {
+	if b <= 0 {
+		panic(fmt.Sprintf("ceilDiv: divisor %d must be positive", b))
+	}
+	return (a + b - 1) / b
+}
+
 // validate returns nil if the substrate is well-formed. Field errors
 // are wrapped with the substrate's metadata.name (or "<unnamed>" if
 // not set) so the runner's --substrate validation failure points at
@@ -530,6 +689,23 @@ func readProfile(path string) (profileFile, error) {
 	var p profileFile
 	if err := yaml.Unmarshal(b, &p); err != nil {
 		return profileFile{}, err
+	}
+	return p, nil
+}
+
+// readProfileV2 parses a substrate-agnostic profile YAML (ADR-0034)
+// and returns it validated.
+func readProfileV2(path string) (profileV2, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return profileV2{}, err
+	}
+	var p profileV2
+	if err := yaml.Unmarshal(b, &p); err != nil {
+		return profileV2{}, fmt.Errorf("profile %s: %w", path, err)
+	}
+	if err := p.validate(); err != nil {
+		return profileV2{}, err
 	}
 	return p, nil
 }
