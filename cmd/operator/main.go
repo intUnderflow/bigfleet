@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -100,6 +101,16 @@ func run(args []string) error {
 	if *metricsAddr != "0" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
+		// pprof endpoints, mirroring the shard's surface
+		// (cmd/bigfleet/shard.go). Used by scaletest diagnostics
+		// to capture live CPU/heap/goroutine profiles when a
+		// rollup-cost question can't be answered with the
+		// Prometheus surface alone (bigfleet-uber #21).
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		logger.Info("metrics serving", "addr", *metricsAddr)
 		go func() { _ = metricsSrv.ListenAndServe() }()
