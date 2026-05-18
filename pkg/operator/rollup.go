@@ -50,20 +50,28 @@ func (o *Operator) rollupLoop(ctx context.Context, sess *session) error {
 // runRollup performs one rollup cycle.
 func (o *Operator) runRollup(ctx context.Context, sess *session) error {
 	rollupStart := time.Now()
+	listStart := rollupStart
 	crs, err := o.listCapacityRequests(ctx)
+	metrics.OperatorRollupPhaseDuration.WithLabelValues("list").Observe(time.Since(listStart).Seconds())
 	if err != nil {
 		metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
 		return fmt.Errorf("list CapacityRequests: %w", err)
 	}
+	metrics.OperatorRollupCRCount.Observe(float64(len(crs)))
 
+	buildStart := time.Now()
 	rollup, pending := o.buildRollup(crs)
+	metrics.OperatorRollupPhaseDuration.WithLabelValues("build").Observe(time.Since(buildStart).Seconds())
+
 	// enqueueRollup atomically replaces any pending older rollup (each
 	// rollup is full replacement per paper §3.1) so the operator never
 	// queues two rollups behind a slow stream. Never errors — the
 	// pending slot always accepts.
+	enqueueStart := time.Now()
 	sess.enqueueRollup(&pb.OperatorMessage{
 		Payload: &pb.OperatorMessage_Rollup{Rollup: rollup},
 	})
+	metrics.OperatorRollupPhaseDuration.WithLabelValues("enqueue").Observe(time.Since(enqueueStart).Seconds())
 	// Rollup hot path is done. Record before the (potentially long)
 	// acknowledgement batch — its duration is exposed separately.
 	metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())

@@ -339,6 +339,37 @@ var (
 		Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
 	})
 
+	// OperatorRollupPhaseDuration breaks the rollup's wall-clock into
+	// the three phases that compose OperatorRollupDuration:
+	//
+	//   - list:    cfg.KubeClient.List(CapacityRequestList) round-
+	//              trip. Dominated by deep-copy from the controller-
+	//              runtime cache + per-object proto decode.
+	//   - build:   buildRollup() — aggregate CRs by (Profile, Group)
+	//              and marshal into ClusterCapacityNeeds.
+	//   - enqueue: stream-session enqueue (slot replacement; should
+	//              be near-zero unless the stream send is stuck).
+	//
+	// Added to diagnose the rollup-p99 breach seen at uber-5k under
+	// the realistic-catalog regime (bigfleet-uber #20). Local
+	// benchmarks at 10K CRs report ~50 ms aggregate; production
+	// observed ~1.16 s p99 at 25K CRs — a ~10× gap the phase
+	// breakdown should localise.
+	OperatorRollupPhaseDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bigfleet_operator_rollup_phase_duration_seconds",
+		Help:    "Per-phase wall-clock duration within one operator rollup. phase ∈ {list, build, enqueue}. Sums to OperatorRollupDuration.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
+	}, []string{"phase"})
+
+	// OperatorRollupCRCount tracks how many CapacityRequests the
+	// rollup observed in this iteration. Pair with the phase
+	// duration histograms to compute per-CR cost trends.
+	OperatorRollupCRCount = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_operator_rollup_cr_count",
+		Help:    "Number of CapacityRequests included in a single rollup. Pair with OperatorRollupPhaseDuration to compute per-CR processing cost.",
+		Buckets: []float64{0, 10, 100, 1000, 10000, 25000, 50000, 100000, 250000},
+	})
+
 	// OperatorAcknowledgeDuration is the time spent transitioning a
 	// rollup's batch of Pending CRs to Acknowledged. Bounded by
 	// AcknowledgeConcurrency × per-status-write latency, so this can
