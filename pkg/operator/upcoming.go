@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
@@ -108,11 +109,24 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		// latest labels/resources/taints. The shard always sends them
 		// (or empty maps for pre-host-binding states); we always
 		// write them through.
+		//
+		// M48.4: use Patch with MergeFrom instead of Update. Update
+		// requires resourceVersion match against the apiserver's
+		// current version, which produces ~26% conflict rate under
+		// burst (bigfleet-uber #25) because controller-runtime's
+		// cached Get returns a stale resourceVersion while the real
+		// apiserver has moved on. MergeFrom-based Patch produces a
+		// JSON merge patch that apiserver applies field-by-field
+		// without resourceVersion guard — eliminates the conflict at
+		// the source, drops the RetryOnConflict tail latency. The
+		// surrounding RetryOnConflict stays as a safety net for the
+		// rare case where another controller actually races us on
+		// the same field.
 		freshSpec := upcomingNodeSpecFromUpdate(u)
 		if !upcomingSpecEqual(existing.Spec, freshSpec) {
 			specPatched := existing.DeepCopy()
 			specPatched.Spec = freshSpec
-			updErr := o.cfg.KubeClient.Update(ctx, specPatched)
+			updErr := o.cfg.KubeClient.Patch(ctx, specPatched, client.MergeFrom(&existing))
 			metrics.OperatorUpcomingNodeWrites.WithLabelValues("spec_update", classifyWriteErr(updErr)).Inc()
 			if updErr != nil {
 				return fmt.Errorf("update UpcomingNode spec: %w", updErr)
@@ -184,6 +198,11 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		return nil
 	}
 
+	// M48.4: Patch with MergeFrom (see spec path above for rationale).
+	// 26% conflict rate on Status().Update was the dominant tail-
+	// latency driver; MergeFrom side-steps the resourceVersion check
+	// that produces those conflicts.
+	statusOriginal := existing.DeepCopy()
 	existing.Status.Phase = phase
 	existing.Status.NodeRef = newNodeRef
 	existing.Status.ProviderID = newProviderID
@@ -193,7 +212,7 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		now := metav1.Now()
 		existing.Status.ProvisioningStartTime = &now
 	}
-	statusErr := o.cfg.KubeClient.Status().Update(ctx, &existing)
+	statusErr := o.cfg.KubeClient.Status().Patch(ctx, &existing, client.MergeFrom(statusOriginal))
 	metrics.OperatorUpcomingNodeWrites.WithLabelValues("status_update", classifyWriteErr(statusErr)).Inc()
 	if statusErr != nil {
 		return fmt.Errorf("update UpcomingNode status: %w", statusErr)
