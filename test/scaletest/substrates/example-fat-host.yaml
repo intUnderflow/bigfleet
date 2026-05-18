@@ -1,0 +1,59 @@
+# example-fat-host — a "fat host" substrate example.
+#
+# 64 vCPU / 128 GiB per host. 10 KWOK clusters per host at 25K
+# Pods/cluster (the 25K-objects-per-apiserver knee — see
+# kube-scheduler / etcd watch-cache scaling). Per-cluster bind
+# throughput is empirical from a real run on hosts of this shape.
+#
+# Adapt:
+#   - host.vCPU / host.memoryGiB to your hardware
+#   - cluster.clustersPerHost to fit (2 × kwokPod.requests ×
+#     clustersPerHost ≤ host.vCPU, with headroom for SUT pods)
+#   - cluster.bindThroughputPodsPerSec to a number you measured
+#     (not the chart default)
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Substrate
+
+metadata:
+  name: example-fat-host
+  description: "Fat-host substrate example — 64 vCPU / 128 GiB, etcd-backed kwok, 25K Pods/cluster."
+
+host:
+  vCPU: 64
+  memoryGiB: 128
+
+cluster:
+  podsPerCluster: 25000
+  clustersPerHost: 8
+  storage: etcd
+  bindThroughputPodsPerSec: 30
+
+kwokPod:
+  # Per-container budget (the kwok pod has two containers:
+  # apiserver and workload). The chart applies these to both.
+  # Per-Pod totals: 2 × requests = 4 vCPU / 8 GiB requested,
+  # 2 × limits = 16 vCPU / 16 GiB burst limit.
+  requests:
+    cpu: "2"
+    memory: "4Gi"
+  limits:
+    cpu: "8"
+    memory: "8Gi"
+  sharedVolumeSizeLimit: "2Gi"
+
+costEstimate:
+  # Set this to the per-hour rate your provider charges per host.
+  # AWS c6i.16xlarge (64 vCPU) spot ≈ $0.85/hr; GCP n2-standard-64
+  # spot ≈ $0.70/hr.
+  perHostUsdPerHour: 0.85
+  notes: "AWS c6i.16xlarge spot pricing (us-west-2, 2026 levels). Adjust for your provider."
+
+provisioning: |
+  Generic fat-host setup:
+  1. Provision N hosts of (vCPU, memoryGiB) shape, where N is
+     computed by the scaletest-runner from your profile.
+  2. Install kubelet + kubeadm; join them to one cluster (the
+     scaletest chart will then deploy bigfleet + KWOK pods).
+  3. Ensure etcd is the storage backend on the host's apiserver
+     (the kwok pods inside use whatever cluster.storage says).

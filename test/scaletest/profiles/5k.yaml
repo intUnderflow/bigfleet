@@ -1,0 +1,44 @@
+# 5k — 5K machines, 500K aggregated Pods at density-100.
+#
+# Substrate-agnostic test definition (ADR-0034). Pair with any
+# substrate from test/scaletest/substrates/ (or your own) via:
+#
+#   scaletest-runner --profile=test/scaletest/profiles/5k.yaml \
+#                    --substrate=<your-substrate>.yaml \
+#                    --output=...
+#
+# The runner derives clusterCount, kwokPod resources, host count,
+# and cost from the substrate.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "5k"
+  description: "5K machines, 500K aggregated Pods at density=100."
+
+scale:
+  machines: 5000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 0.0
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 1800
+  soakSeconds: 1800
+  churnPerMinute: 0.02
+
+# 60m hard ceiling on the ramp-to-steady-state wait. The actual
+# expected ramp depends on substrate.cluster.bindThroughputPodsPerSec;
+# the runner warns if rampSeconds × supply < demand.
+rampBudget: 60m
+
+slo:
+  internalBindingLatencyP99Seconds: 15
+  shardCycleDurationP99Seconds: 5

@@ -1,0 +1,33 @@
+# 50k — 50K machines, 5M aggregated Pods at density-100.
+#
+# Substrate-agnostic. See 5k.yaml for the runner invocation.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "50k"
+  description: "50K machines, 5M aggregated Pods at density=100."
+
+scale:
+  machines: 50000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 0.0
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 3600
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+
+rampBudget: 120m
+
+slo:
+  internalBindingLatencyP99Seconds: 25
+  shardCycleDurationP99Seconds: 25

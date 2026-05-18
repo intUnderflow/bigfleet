@@ -1,0 +1,34 @@
+# 500k — 500K machines, 50M aggregated Pods at density-100.
+# Single-shard ceiling test (bigfleet.md §16; per-shard cap = 500K).
+#
+# Substrate-agnostic. See 5k.yaml for the runner invocation.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "500k"
+  description: "500K machines, 50M aggregated Pods at density=100 (single-shard ceiling)."
+
+scale:
+  machines: 500000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 0.0
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 7200
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+
+rampBudget: 240m
+
+slo:
+  internalBindingLatencyP99Seconds: 60
+  shardCycleDurationP99Seconds: 100

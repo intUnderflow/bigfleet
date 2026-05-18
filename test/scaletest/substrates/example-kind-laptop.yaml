@@ -1,0 +1,43 @@
+# example-kind-laptop — a laptop substrate example for kind.
+#
+# Docker Desktop on a developer laptop. The "hosts" are the
+# kind nodes (Docker containers); for a single-node kind cluster
+# the host count is 1. Lower per-cluster Pod ceiling than
+# server-class substrates because kine + sqlite + apiserver share
+# laptop CPU.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Substrate
+
+metadata:
+  name: example-kind-laptop
+  description: "Laptop kind substrate — for dev-50 / dev-500 / failover-* / 5k correctness rehearsals."
+
+host:
+  vCPU: 16
+  memoryGiB: 32
+
+cluster:
+  podsPerCluster: 10000
+  clustersPerHost: 5
+  storage: kine
+  bindThroughputPodsPerSec: 15
+
+kwokPod:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+  # 1Gi tmpfs (chart default). dev-* scale doesn't need more.
+  sharedVolumeSizeLimit: "1Gi"
+
+costEstimate:
+  perHostUsdPerHour: 0
+  notes: "Laptop kind; free."
+
+provisioning: |
+  kind create cluster --image kindest/node:v1.31.0
+  make scaletest-images
+  kind load docker-image bigfleet:dev bigfleet-scaletest:dev

@@ -1,0 +1,44 @@
+# example-mid-host — a "mid host" substrate example.
+#
+# 32 vCPU / 128 GiB per host. One large KWOK cluster per host at
+# 100K Pods/cluster — the operating point that suits a single
+# fat-cluster shape where the per-cluster bind throughput is higher
+# (no contention with neighbour clusters on the same host).
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Substrate
+
+metadata:
+  name: example-mid-host
+  description: "Mid-host substrate example — 32 vCPU / 128 GiB, one cluster per host, 100K Pods/cluster, kine."
+
+host:
+  vCPU: 32
+  memoryGiB: 128
+
+cluster:
+  podsPerCluster: 100000
+  clustersPerHost: 1
+  storage: kine
+  bindThroughputPodsPerSec: 110
+
+kwokPod:
+  # Per-container; chart applies to both apiserver and workload.
+  requests:
+    cpu: "2"
+    memory: "4Gi"
+  limits:
+    cpu: "4"
+    memory: "8Gi"
+  sharedVolumeSizeLimit: "2Gi"
+
+costEstimate:
+  perHostUsdPerHour: 0.42
+  notes: "Scaleway PRO2-L (32 vCPU / 128 GiB) at fr-par/nl-ams Kapsule pricing, 2026 levels."
+
+provisioning: |
+  Scaleway Kapsule (an example mid-host substrate):
+    scw k8s cluster create version=1.35.3 cni=cilium type=kapsule \
+      pools.0.node-type=PRO2-L pools.0.size=<N> \
+      project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6
+  Use the count the scaletest-runner prints at --dry-run for <N>.
