@@ -404,6 +404,11 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					// archetypes don't see it.
 					rackName := fmt.Sprintf("%s-rack-%d", z, idx%racksPerZone)
 					labels["topology.bigfleet/rack"] = rackName
+					// M52.B (ADR-0035): tag every seeded machine with
+					// its archetype so the load-driver's pre-bind phase
+					// can look up the archetype from the fake-Node's
+					// labels and build a matching Pod.
+					labels["scaletest.bigfleet/archetype"] = a.Name
 					// M35 / Item 2: per-axis label values matching the
 					// archetype's LabelAxes spec. The load-driver emits
 					// CRs with `In [value]` requirements drawn from the

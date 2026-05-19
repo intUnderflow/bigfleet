@@ -189,6 +189,12 @@ type profileV2 struct {
 		ConfiguredFraction    float64 `yaml:"configuredFraction"`
 		SpeculativeMultiplier int     `yaml:"speculativeMultiplier"`
 		IdleHeadroomFraction  float64 `yaml:"idleHeadroomFraction"`
+		// PreBindFraction (M52.B, ADR-0035): fraction of target Pods
+		// the load-driver pre-binds to existing fake-Nodes at install
+		// (Spec.NodeName set, scheduler bypassed). 1.0 puts the
+		// cluster in steady state at install; 0.0 keeps the legacy
+		// scheduler-bound ramp. Default 0.0 if unset.
+		PreBindFraction float64 `yaml:"preBindFraction"`
 	} `yaml:"seed"`
 	LoadProfile struct {
 		RampSeconds    int     `yaml:"rampSeconds"`
@@ -229,6 +235,9 @@ func (p profileV2) validate() error {
 	}
 	if p.Seed.IdleHeadroomFraction < 0 {
 		return fmt.Errorf("profile %q: seed.idleHeadroomFraction must be ≥ 0 (got %g)", name, p.Seed.IdleHeadroomFraction)
+	}
+	if p.Seed.PreBindFraction < 0 || p.Seed.PreBindFraction > 1 {
+		return fmt.Errorf("profile %q: seed.preBindFraction must be in [0, 1] (got %g)", name, p.Seed.PreBindFraction)
 	}
 	return nil
 }
@@ -363,8 +372,30 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]a
 	}
 
 	replicas := shardReplicas(p.Scale.Machines)
-	headroom := 1.0 + p.Seed.IdleHeadroomFraction
-	seedPerShard := int(float64(p.Scale.Machines) * headroom / float64(replicas))
+	// ADR-0035 seed math. Three tiers cooperate to put the cluster in
+	// steady state at install:
+	//   - Configured: machines bound to clusters, sized to cover the
+	//     full Pod demand at install (seed.configuredFraction × machines,
+	//     split per-cluster).
+	//   - Idle: per-shard buffer for churn-driven replacement
+	//     (seed.idleHeadroomFraction × machines).
+	//   - Speculative: elastic procurement quota (seed.speculativeMultiplier
+	//     × machines, ADR-0026 — the harness must model the whole
+	//     capacity model).
+	//
+	// Sizing per-cluster vs per-shard mirrors the shard binary's CLI:
+	//   --seed-configured-per-cluster is per-cluster (the harness's
+	//   N % stride == ordinal mapping fans the cluster IDs to shards).
+	//   --seed-machines + --seed-speculative are per-shard totals.
+	configuredPerCluster := 0
+	if p.Seed.ConfiguredFraction > 0 {
+		configuredPerCluster = int(float64(p.Scale.Machines) * p.Seed.ConfiguredFraction / float64(m.ClusterCount))
+	}
+	idlePerShard := int(float64(p.Scale.Machines) * p.Seed.IdleHeadroomFraction / float64(replicas))
+	speculativePerShard := 0
+	if p.Seed.SpeculativeMultiplier > 0 {
+		speculativePerShard = p.Scale.Machines * p.Seed.SpeculativeMultiplier / replicas
+	}
 
 	values := map[string]any{
 		"namespace": "bigfleet-scaletest",
@@ -386,13 +417,15 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]a
 			"upcomingNodeConcurrency": 32,
 		},
 		"shard": map[string]any{
-			"replicas":              replicas,
-			"seedMachines":          seedPerShard,
-			"seedDensityMultiplier": p.Scale.Density,
-			"maxActionsPerCycle":    4096,
-			"executeConcurrency":    256,
-			"incrementalReconcile":  m.ClusterCount >= 100,
-			"metricsWarmupCycles":   5,
+			"replicas":                 replicas,
+			"seedMachines":             idlePerShard,
+			"seedSpeculative":          speculativePerShard,
+			"seedConfiguredPerCluster": configuredPerCluster,
+			"seedDensityMultiplier":    p.Scale.Density,
+			"maxActionsPerCycle":       4096,
+			"executeConcurrency":       256,
+			"incrementalReconcile":     m.ClusterCount >= 100,
+			"metricsWarmupCycles":      5,
 		},
 		"coordinator": map[string]any{
 			"enabled":  true,
@@ -406,6 +439,7 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]a
 			"churnPerMinute":      p.LoadProfile.ChurnPerMinute,
 			"durationSeconds":     p.LoadProfile.SoakSeconds,
 			"reconcilePerTickCap": 200,
+			"preBindFraction":     p.Seed.PreBindFraction,
 		},
 		"operator": map[string]any{
 			"qps":            200,

@@ -55,15 +55,25 @@ func TestRenderHelmValues_CanonicalShape(t *testing.T) {
 		t.Errorf("workload.requests = %v, want cpu=2 memory=4Gi (identical to apiserver per substrate semantics)", workReqs)
 	}
 
-	// shard block — derived from profile.scale × headroom + per-shard ceiling.
+	// shard block — derived from profile.scale + seed tiers (ADR-0035).
+	// Fixture has configuredFraction=0, idleHeadroomFraction=0.2,
+	// speculativeMultiplier=3.
 	shard, _ := values["shard"].(map[string]any)
 	// 50K machines / 500K ceiling = 1 shard.
 	if got, want := shard["replicas"], 1; got != want {
 		t.Errorf("shard.replicas = %v, want %d", got, want)
 	}
-	// 50000 × 1.2 / 1 = 60000.
-	if got, want := shard["seedMachines"], 60000; got != want {
-		t.Errorf("shard.seedMachines = %v, want %d (machines × (1 + idleHeadroom) / replicas)", got, want)
+	// idle = 50000 × 0.2 / 1 = 10000.
+	if got, want := shard["seedMachines"], 10000; got != want {
+		t.Errorf("shard.seedMachines = %v, want %d (machines × idleHeadroom / replicas)", got, want)
+	}
+	// speculative = 50000 × 3 / 1 = 150000.
+	if got, want := shard["seedSpeculative"], 150000; got != want {
+		t.Errorf("shard.seedSpeculative = %v, want %d (machines × speculativeMultiplier / replicas)", got, want)
+	}
+	// configured = 0 (fixture has configuredFraction: 0).
+	if got, want := shard["seedConfiguredPerCluster"], 0; got != want {
+		t.Errorf("shard.seedConfiguredPerCluster = %v, want %d (configuredFraction=0 fixture)", got, want)
 	}
 	if got, want := shard["seedDensityMultiplier"], 100; got != want {
 		t.Errorf("shard.seedDensityMultiplier = %v, want %d", got, want)
@@ -102,8 +112,33 @@ func TestRenderHelmValues_MultiShard(t *testing.T) {
 	if got, want := shard["replicas"], 2; got != want {
 		t.Errorf("shard.replicas = %v, want %d (1M machines / 500K ceiling = 2 shards)", got, want)
 	}
-	// seedMachines per shard = 1M × 1.2 / 2 = 600K.
-	if got, want := shard["seedMachines"], 600_000; got != want {
+	// idle = 1M × 0.2 / 2 = 100K per shard.
+	if got, want := shard["seedMachines"], 100_000; got != want {
+		t.Errorf("shard.seedMachines = %v, want %d (machines × idleHeadroom / replicas)", got, want)
+	}
+}
+
+// TestRenderHelmValues_SteadyStateSeed asserts the ADR-0035 shape:
+// when configuredFraction=1.0 the Configured tier covers the full
+// demand pre-bound at install, with Idle headroom + Speculative
+// elasticity layered on top.
+func TestRenderHelmValues_SteadyStateSeed(t *testing.T) {
+	t.Parallel()
+	p, s, _ := fixtureMerged(t)
+	p.Seed.ConfiguredFraction = 1.0 // ADR-0035 default
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg)
+	shard, _ := values["shard"].(map[string]any)
+
+	// configured per-cluster = 50000 × 1.0 / 200 clusters = 250.
+	if got, want := shard["seedConfiguredPerCluster"], 250; got != want {
+		t.Errorf("shard.seedConfiguredPerCluster = %v, want %d (machines × configuredFraction / clusters)", got, want)
+	}
+	// idle headroom unchanged from the prior test (50000 × 0.2 / 1 = 10000).
+	if got, want := shard["seedMachines"], 10000; got != want {
 		t.Errorf("shard.seedMachines = %v, want %d", got, want)
 	}
 }
