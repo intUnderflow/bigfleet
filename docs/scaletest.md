@@ -13,107 +13,109 @@ make scaletest-images
 # Side-load into kind (for local runs); push to your registry otherwise.
 kind load docker-image bigfleet:dev bigfleet-scaletest:dev
 
-# Run the smallest profile.
+# Run the integration gate on laptop.
 go run ./test/scaletest/cmd/scaletest-runner \
     --profile=test/scaletest/profiles/dev-50.yaml \
     --duration=5m \
     --output=./test/scaletest/results/$(date +%Y%m%d-%H%M%S)-dev-50/
+
+# Run a scale test against your own substrate (ADR-0034).
+go run ./test/scaletest/cmd/scaletest-runner \
+    --profile=test/scaletest/profiles/5k.yaml \
+    --substrate=test/scaletest/substrates/example-fat-host.yaml \
+    --output=./test/scaletest/results/$(date +%Y%m%d-%H%M%S)-5k/
 ```
 
-The runner prints scale and cost upfront, prompts before any paid run, and tears down on Ctrl-C.
+The runner prints scale, host count, and cost upfront; prompts before any paid run; and tears down on Ctrl-C.
+
+## Bring-your-own substrate
+
+ADR-0034 splits the scale test into two orthogonal halves:
+
+- **Profile** (`test/scaletest/profiles/<scale>.yaml`) — the test definition: scale, density, catalog, ramp, soak, churn. Substrate-agnostic.
+- **Substrate** (`test/scaletest/substrates/<your-shape>.yaml`) — your runtime: per-host capacity, per-cluster apiserver operating point, kwok-pod resources, storage backend, cost. User-supplied.
+
+The runner takes both, derives geometry (`clusterCount = ceil(totalPods / podsPerCluster)`, host count, cost), validates ramp-feasibility against your substrate's declared bind throughput, and installs.
 
 ## Profiles
 
-All profiles run in Pod-mode + the realistic 6-archetype catalog by default (M44, ADR-0032). The profile naming convention is **`<substrate>-<N>` where `N` is the machine count** at density-100 (M45.5). The aggregated Pod count is roughly `N × 100`.
+All profiles run in Pod-mode + the realistic 6-archetype catalog by default (M44, ADR-0032).
 
-### Laptop tier — correctness + small-scale rehearsal
+### Substrate-agnostic scale ladder
 
-| Profile | KWOK clusters × Pods | Machines (@ density=100) | Cluster vCPU req | Cluster mem req | Cost |
-|---|---|---|---|---|---|
-| `dev-50` | 2 × 2.5K = **5K Pods** | 50 | ~5 | ~14 GiB | $0 (kind on M5 Max) |
-| `dev-500` | 5 × 10K = **50K Pods** | 500 | ~8 | ~19 GiB | $0 (kind on M5 Max) |
+| Profile | Total Pods | Machines | Notes |
+|---|---|---|---|
+| `5k` | 500K | 5K | Smallest scale tier; per-shard inventory fits trivially. |
+| `50k` | 5M | 50K | Mid-tier; exercises operator-rollup at meaningful Pod cardinality. |
+| `500k` | 50M | 500K | Single-shard ceiling (bigfleet.md §16). |
+| `1m` | 100M | 1M | 2 shards × 500K. |
+| `5m` | 500M | 5M | 10 shards × 500K. |
 
-`dev-50` is the **fast integration gate** (~5 min wall-clock, no churn) — proves the real Pod → kube-scheduler → CR → operator → shard → fake-Node → bind chain converges to 100 %. `dev-500` is the larger laptop rehearsal; runs in ~30 min but is kine-throughput-bound, not a clean BigFleet scale measurement.
+Geometry — number of KWOK clusters, hosts needed, cost — is *derived from your substrate*, not baked into the profile.
 
-### Scaleway-substrate scale ladder
+### Laptop tier (legacy bundled shape)
 
-| Profile | Total Pods | Machines | Cluster vCPU req | Cluster mem req | Substrate (Scaleway PRO2-L: 32 vCPU / 128 GiB) | Cost / run (full ramp+soak) |
-|---|---|---|---|---|---|---|
-| `scaleway-5k` | 500K | 5K | 32 | 128 GiB | 1× PRO2-L | ~$0.30 (~45 min) |
-| `scaleway-50k` | 5M | 50K | 256 | 1024 GiB | 8× PRO2-L | ~$5.50 (~90 min) |
-| `scaleway-500k` | 50M | 500K | 2240 | 8960 GiB | 70× PRO2-L (quota bump likely) | ~$52 (~100 min) |
-| `scaleway-1m` | 100M | 1M | 4320 | 17280 GiB | 135× PRO2-L (quota bump certain) | ~$120 (~2 h) |
-| `scaleway-5m` | 500M | 5M | 20480 | 81920 GiB | 640× PRO2-L (multi-region; explicit approval) | ~$1000 (~2.5 h) |
+| Profile | KWOK clusters × Pods | Machines | Best target |
+|---|---|---|---|
+| `dev-50` | 2 × 2.5K = **5K Pods** | 50 | M5 Max kind, integration gate |
+| `dev-500` | 5 × 10K = **50K Pods** | 500 | M5 Max kind, larger rehearsal |
 
-Each profile's YAML carries the exact `scw k8s cluster create` invocation (pool sizing, version pin, project ID). Always pass `project-id=3150379f-d66f-414d-8ca7-3d7d28fbeef6` — the dedicated BigFleet project.
-
-### Private-substrate scale ladder (`uber-*`)
-
-The `uber-*` ladder targets a different operating point than the Scaleway ladder: **fewer, larger Pod-per-cluster shape** (25K Pods × N clusters, vs Scaleway's 100K × N/10 clusters), sized for a per-cluster bind throughput of ~30 Pods/s. The names and YAMLs are public; the substrate is a private compute pool sized as below. Anyone with equivalent infrastructure (or willing to pay AWS/GCP rates for those shapes) can run them; cost-at-run is provider-specific.
-
-| Profile | KWOK clusters × Pods | Machines | Hosts × per-host vCPU / mem | Aggregate vCPU / mem |
-|---|---|---|---|---|
-| `uber-5k` | 20 × 25K = 500K | 5K | 2 × (80 / 160 GiB) | 160 vCPU / 320 GiB |
-| `uber-50k` | 200 × 25K = 5M | 50K | 20 × (80 / 160 GiB) | 1600 vCPU / 3200 GiB |
-| `uber-500k` | 2000 × 25K = 50M | 500K | 200 × (80 / 160 GiB) | 16000 vCPU / 32000 GiB |
-| `uber-1m` | 4000 × 25K = 100M | 1M | 400 × (80 / 160 GiB) | 32000 vCPU / 64000 GiB |
-| `uber-5m` | 20000 × 25K = 500M | 5M | 2000 × (80 / 160 GiB) | 160000 vCPU / 320000 GiB |
-
-`uber-500k` and above need explicit approval from the substrate provider before each run.
+`dev-50` is the fast integration gate (~5 min, no churn) — proves the real Pod → kube-scheduler → CR → operator → shard → fake-Node → bind chain converges to 100 %. Both are pre-BYO bundled profiles (carry their own substrate inline); pair `5k.yaml + example-kind-laptop.yaml` for the BYO equivalent of `dev-500`.
 
 ### Failover scenarios — static stability
 
-50 KWOK clusters × 1K Pods = 50K Pods total, distinct purpose: exercise the **"static stability is non-negotiable"** hard rule under coordinator/shard/network disturbance mid-soak. The data plane (shards + operators) must hold its SLOs throughout.
+50 KWOK clusters × 1K Pods = 50K Pods total, distinct purpose: exercise the **"static stability is non-negotiable"** hard rule under coordinator/shard/network disturbance mid-soak. Pre-BYO bundled shape.
 
-| Profile | What it disturbs | Substrate | Aggregate vCPU / mem | Cost / run |
-|---|---|---|---|---|
-| `failover-leader-kill` | one coordinator-leader-pod, t=10min | 2× PRO2-L | 64 / 256 GiB | ~$0.74 (~50 min) |
-| `failover-shard-kill` | one shard-pod, t=10min | 2× PRO2-L | 64 / 256 GiB | ~$0.74 (~50 min) |
-| `failover-partition` | 60 s control-plane network partition at t=10min | 2× PRO2-L | 64 / 256 GiB | ~$0.74 (~50 min) |
-| `failover-soak` | 2 leader-kills + 1 shard-kill across a 60-min soak | 2× PRO2-L | 64 / 256 GiB | ~$0.90 (~75 min) |
+| Profile | What it disturbs |
+|---|---|
+| `failover-leader-kill` | one coordinator-leader-pod, t=10min |
+| `failover-shard-kill` | one shard-pod, t=10min |
+| `failover-partition` | 60 s control-plane network partition at t=10min |
+| `failover-soak` | 2 leader-kills + 1 shard-kill across a 60-min soak |
 
-Cost numbers assume the substrate in the table column × the resources declared in each profile's `costEstimate` block. Laptop runs are free. `uber-*` runs are free at run-time on the private substrate; replicating them on a public cloud would cost roughly `aggregate-vCPU × ($0.02–0.03/vCPU-hr on spot) × duration`.
+## Substrates
 
-## Picking a target
+Three example substrates ship under `test/scaletest/substrates/`. Each is a starting point — copy one, tune to your actual hardware, and commit it to your own repo.
 
-Resource budget rule (M44 Pod-mode floor): **each KWOK pod needs 1 vCPU + 2 GiB combined** at the dev-50 / failover-* / dev-500 shape, scaling up to **4 vCPU + 8 GiB at the scaleway-50k+ shape** (which packs 100 K Pods per KWOK apiserver and runs against real etcd). The runner's confirmation prompt shows the estimated cost based on your selected profile's `costEstimate.awsSpotUsdPerHour × duration`; you can override duration with `--duration=` and skip the prompt with `--yes`.
+| Substrate | Shape | Per-cluster operating point | Best for |
+|---|---|---|---|
+| `example-fat-host` | 64 vCPU / 128 GiB hosts, 10 clusters/host | etcd, 25K Pods/cluster, ~30 Pods/s | AWS c6i.16xlarge, GCP n2-standard-64 — multi-cluster fat hosts |
+| `example-mid-host` | 32 vCPU / 128 GiB hosts, 1 cluster/host | kine, 100K Pods/cluster, ~110 Pods/s | Scaleway PRO2-L — single-cluster mid hosts |
+| `example-kind-laptop` | Laptop Docker Desktop | kine on tmpfs, 10K Pods/cluster | Local dev / failover-* rehearsals |
 
-| Target | What works there | What it costs |
-|---|---|---|
-| Laptop / M5 Max kind | `dev-50`, `dev-500` | $0 |
-| 1× PRO2-L Kapsule | `scaleway-5k` | ~$0.30/run |
-| 2× PRO2-L Kapsule | `failover-*` | ~$0.74–0.90/run |
-| 8× PRO2-L Kapsule | `scaleway-50k` | ~$5.50/run |
-| 70× PRO2-L Kapsule | `scaleway-500k` | ~$52/run (quota bump) |
-| 135× PRO2-L Kapsule | `scaleway-1m` | ~$120/run (quota bump) |
-| 640× PRO2-L Kapsule | `scaleway-5m` | ~$1000/run (explicit approval) |
-| 2–2000 80/160 GiB hosts | `uber-5k`…`uber-5m` | substrate-dependent |
+Substrate YAMLs document the fields. The pattern: edit `host.vCPU`, `host.memoryGiB`, `cluster.podsPerCluster`, `cluster.bindThroughputPodsPerSec` (an empirical value from a short test on your hardware), and `costEstimate.perHostUsdPerHour`.
 
-**Scaleway Kapsule** is the cheapest cloud option that's still a real Kubernetes cluster: free control plane on the Essential tier, per-second billing, ~€0.42/hr on PRO2-L (≈ $0.45/hr). See each profile YAML for the `scw` CLI commands to provision and tear down a cluster.
+## Picking a substrate
+
+Resource budget rule (M44 Pod-mode floor): each kwok pod needs at least `2 × kwokPod.requests` aggregated. Pack `clustersPerHost` of them onto each host alongside the system-under-test (shard + coordinator + prometheus).
+
+| Your situation | Try this substrate first |
+|---|---|
+| Laptop / kind | `example-kind-laptop` |
+| Scaleway Kapsule (PRO2-L) | `example-mid-host` |
+| AWS / GCP fat spot instances | `example-fat-host` |
+| Anything else | Copy the closest example; tweak `host.*` |
+
+Cost is computed as `hostsNeeded × substrate.costEstimate.perHostUsdPerHour × hours`. The runner's confirmation prompt shows the estimate based on the merged geometry; override duration with `--duration=` and skip the prompt with `--yes`.
 
 Nothing in the harness assumes a specific distro; pure Helm + standard Kubernetes APIs. GKE Autopilot is OK because the combined image runs as non-root and declares its ports.
 
 ## Cost-model assumptions
 
 - **Coordinator**: 500m vCPU / 1 GiB (emptyDir for stress runs; HA + persistence is a separate test).
-- **Shard**: 1 vCPU / 2 GiB at ≤500K machines under management (per-shard ceiling). Add a shard replica per additional 500K — `scaleway-1m` runs `replicas: 2`, `scaleway-5m` runs `replicas: 10`, etc.
-- **KWOK pod** (kine or etcd + apiserver + kwok-controller + operator + load-driver):
-  - dev-* / failover-* shape (1K Pods/cluster): 500m vCPU / 1 GiB request, 1 vCPU / 2 GiB limit (the M44 floor).
-  - scaleway-* shape (100K Pods/cluster): 2 vCPU / 4 GiB request, 4 vCPU / 8 GiB limit.
-  - `uber-*` shape (25K Pods/cluster, 10 clusters per host): host packs 10 KWOK pods of ~8 vCPU / 16 GiB each.
-- **Prometheus**:
-  - dev-* / failover-* / scaleway-{5k,50k}: 1 vCPU / 4 GiB / 20 GiB ephemeral.
-  - scaleway-{500k,1m,5m}: 4 vCPU / 16 GiB / 100+ GiB ephemeral (100M+ Pod-bind histograms + 1M+ UpcomingNode series).
-- **Scaleway PRO2-L**: 32 vCPU / 128 GiB at ~€0.42/hr (Kapsule, fr-par/nl-ams). Free control plane on the Essential tier. Per-second billing.
-- **AWS spot c6i.4xlarge** (16 vCPU / 32 GiB): $0.02–0.03/vCPU-hr varies by region; `us-west-2` is cheapest. Use this to estimate cost of running the `uber-*` ladder on a public cloud — multiply aggregate vCPU × hours × spot rate.
+- **Shard**: 1 vCPU / 2 GiB at ≤500K machines under management (per-shard ceiling). One shard replica per 500K of profile's `scale.machines` — derived automatically.
+- **KWOK pod**: from `substrate.kwokPod.requests/limits` (per-container, applied to apiserver + workload). Per-Pod totals are 2× these values.
+- **Prometheus**: scales with clusterCount — 1 vCPU / 4 GiB at small scale, 4 vCPU / 16 GiB once clusterCount ≥ 100.
 - **EKS control plane**: $0.10/hr fixed (charged regardless of node count).
 - **Egress** (snapshot download): TSDB tarballs are 50–500 MB; first 100 GB/month outbound free, then $0.09/GB. Effectively zero at this volume.
+
+See each example substrate's `costEstimate.notes` for provider-specific pricing benchmarks.
 
 ## Cost guardrails
 
 The runner will:
 
-1. **Estimate cost up front**. `--profile=scaleway-50k --duration=90m → ~$5.50 estimated`.
+1. **Estimate cost up front**. `--profile=50k.yaml --substrate=example-fat-host.yaml --duration=90m → ~$26 estimated` (21 hosts × $0.85/hr × ~1.5h).
 2. **Prompt for confirmation** when the target context name suggests a cloud (`eks`, `gke`, `aks`, `aws`, `gcp`, `azure` substring) and the estimated cost ≥ $5. Skipped with `--yes`.
 3. **Hard-cap runtime** with `--max-duration` (default 2h). Auto-teardown if the soak hangs.
 4. **Always run teardown**, even on Ctrl-C, via `defer helm uninstall`.
@@ -172,29 +174,38 @@ The runner marks a run failed if any of these p99 thresholds are exceeded. Each 
 
 | Metric | Threshold | Best observed | Notes |
 |---|---|---|---|
-| `bigfleet_shard_cycle_duration_seconds` | **100 ms** | 1.8 ms (scaleway-50k) | Decision engine; large headroom intentional. |
-| `bigfleet_operator_rollup_duration_seconds` | **1 s** | 122 ms (scaleway-50k) | One rollup pipeline turn must finish well within the 10 s rollup interval. |
-| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (scaleway-50k) | Bounded by operator status-write QPS against the apiserver. 1 K-CR ramp at QPS=50/Burst=100 needs ~10 s of writes; 12 s allows ~20 % run-to-run variance. Tightens when the operator gains batched status writes or higher per-profile QPS. |
+| `bigfleet_shard_cycle_duration_seconds` | **100 ms** | 1.8 ms (50k tier) | Decision engine; large headroom intentional. |
+| `bigfleet_operator_rollup_duration_seconds` | **1 s** | 122 ms (50k tier) | One rollup pipeline turn must finish well within the 10 s rollup interval. |
+| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (50k tier) | Bounded by operator status-write QPS against the apiserver. 1 K-CR ramp at QPS=50/Burst=100 needs ~10 s of writes; 12 s allows ~20 % run-to-run variance. Tightens when the operator gains batched status writes or higher per-profile QPS. |
 
 Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
 
 ## Recommended cadence
 
-| Cadence | Profile | Cost/run | Where |
+| Cadence | Profile | Substrate | Where |
 |---|---|---|---|
-| Per-milestone integration gate | `dev-50` | $0 | M5 Max kind |
-| Weekly | `scaleway-5k` | ~$0.30 | 1× PRO2-L Kapsule |
-| Monthly | `scaleway-50k` | ~$5.50 | 8× PRO2-L Kapsule |
-| Quarterly | `scaleway-500k` | ~$52 | 70× PRO2-L Kapsule (quota bump) |
-| Annual / pre-release | `scaleway-1m` and `failover-soak` | ~$120 + ~$0.90 | 135× + 2× PRO2-L Kapsule |
+| Per-milestone integration gate | `dev-50` | (bundled) | M5 Max kind |
+| Weekly | `5k` | `example-mid-host` | 1 host |
+| Monthly | `50k` | `example-mid-host` or `example-fat-host` | 8–21 hosts |
+| Quarterly | `500k` | `example-fat-host` | ~200 hosts |
+| Annual / pre-release | `1m` + `failover-soak` | `example-fat-host` + (bundled) | ~400 hosts + 2 hosts |
 
-Annual budget at this cadence: **~$300/yr** (52 × scaleway-5k + 12 × scaleway-50k + 4 × scaleway-500k + 1 × scaleway-1m + 4 × failover-soak). `scaleway-5m` is reserved for once-per-release-major validation given its ~$1000 substrate cost; the `uber-*` ladder is the routine path for that scale when the private substrate is available.
+Actual costs depend on your substrate's `perHostUsdPerHour`. The runner prints the estimate before installing.
 
-## Adding a new profile
+## Adding a new profile or substrate
 
-1. Drop a `test/scaletest/profiles/<name>.yaml` with `kwok.clusterCount`, a `loadProfile`, and a `costEstimate` block.
-2. Run it: `scaletest-runner --profile=test/scaletest/profiles/<name>.yaml ...`.
+**New profile** (a new scale tier — uncommon):
+
+1. Drop a `test/scaletest/profiles/<name>.yaml` with `scale`, `catalog`, `seed`, `loadProfile`, and an `slo` block. See `5k.yaml` for the shape.
+2. Run it against any substrate: `scaletest-runner --profile=...<name>.yaml --substrate=...<substrate>.yaml ...`.
 3. If it deserves a baseline number, capture the resulting `summary.json` under `test/scaletest/results/baseline-<name>.json` and reference it in [`scaling-guide.md`](scaling-guide.md).
+
+**New substrate** (a different runtime — common):
+
+1. Copy the closest example under `test/scaletest/substrates/` to a name describing your shape (e.g. `my-cloud.yaml`).
+2. Adjust `host.*`, `cluster.*`, `kwokPod.*`, and `costEstimate.*` to match your hardware.
+3. Measure `bindThroughputPodsPerSec` from a short test run on one cluster; update the field.
+4. Commit to your own repo (or keep local) — substrates are user-side configuration.
 
 ## Troubleshooting
 
