@@ -38,5 +38,6 @@
 | [30](/adr/0030-incremental-phase1/) | Proposed | Incremental Phase 1 — delta-only processing as a layered optimization |
 | [31](/adr/0031-parsync-partitioned-sync/) | Proposed | ParSync-style partitioned synchronization — conditional follow-on for raised per-shard ceilings |
 | [32](/adr/0032-realistic-catalog-production-calibration/) | Accepted | Realistic catalog production-calibrated workload distribution |
-| [33](/adr/0033-phase1-supply-credit-respects-bind-readiness/) | Proposed | Phase 1 supply-credit must respect bind readiness, not just provider state |
+| [33](/adr/0033-phase1-supply-credit-respects-bind-readiness/) | Rejected | Phase 1 supply-credit must respect bind readiness, not just provider state — superseded by ADR-0035 |
 | [34](/adr/0034-scaletest-byo-substrate/) | Accepted | Scaletest is bring-your-own-substrate |
+| [35](/adr/0035-scaletest-slos-at-steady-state/) | Accepted | Scaletest SLOs are measured at steady state under churn, not at ramp |

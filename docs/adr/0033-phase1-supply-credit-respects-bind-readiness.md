@@ -2,7 +2,47 @@
 
 ## Status
 
-Proposed, 2026-05-18.
+**Rejected**, 2026-05-19. Superseded by [ADR-0035].
+
+This ADR was Proposed on 2026-05-18 under the framing that Phase 1's aggregate-supply credit produces a measurable bind plateau under the realistic catalog. Subsequent diagnostic work (see Postmortem below) established that:
+
+1. The bind plateau is a kube-scheduler property under high label-cardinality workloads, not a BigFleet behaviour.
+2. The plateau only manifests during **ramp**, not steady state.
+3. The scaletest harness was treating ramp percentage as a pass/fail SLO, which was the actual problem — ramp behaviour is not an SLO under [ADR-0014] / [ADR-0017] / [ADR-0028].
+
+The fix is therefore in the harness ([ADR-0035] reshapes the scaletest to measure steady-state SLOs under churn, with pre-seeded inventory removing the ramp entirely), not in Phase 1 or its supply-credit math. No code from this ADR was shipped.
+
+The Context, Goals, Decision, and Migration sections below are preserved unedited for the historical record.
+
+## Postmortem
+
+The misdiagnosis chain that produced this ADR is worth recording so the same pattern is recognised faster next time.
+
+**Trigger**: the canonical uber-5k scale-test reported a 43 % bind ramp ceiling, dropped from a previously-recorded 99 % pass. The drop was treated as a regression.
+
+**First misdiagnosis**: the regression was attributed to a Configuring → Idle race in `pkg/shard/reconcile.go` (commit `10986a6`) that had been masking the "real" Phase 1 behaviour by accidentally over-provisioning. After the race was fixed, the plateau settled at ~43 %. This was treated as the regression's true magnitude and the next thread sought to recover the missing throughput.
+
+**Second misdiagnosis (this ADR's OC1 framing)**: I proposed that Phase 1's aggregate-supply credit was over-counting because Configured machines absorb demand at the bind path's pace, not instantaneously — and that a bind-ready signal from the operator would correctly throttle credit. ADR-0033 captured this, with OC2 (time-gated) and OC3 (static slack) as alternatives.
+
+**Third misdiagnosis (the apiserver-CPU thread)**: a diagnostic ran and named the kwok apiserver REST handler at 8 vCPU as the gate. A CPU-bump test (8 → 16 → 32) followed and produced no change. The apiserver had never been CPU-saturated; the diagnosis was wrong in a way the original brief's pre-committed decision matrix had biased toward.
+
+**Fourth (correct) diagnosis**: a higher-agency follow-up profiled the actual scheduler. The gate was kube-scheduler's serial per-Pod scheduling cycle, with 85 % NodeAffinity rejection rate against the realistic catalog's label cardinality. This is a property of kube-scheduler under any K8s deployment, not specific to kwok or BigFleet. OC3's apparent benefit (recorded during the investigation) came from over-provisioning reducing scheduler preemption-walk overhead — a kwok-substrate quirk, not a BigFleet algorithmic gap.
+
+**The real question — never asked until late**: "Is this bind plateau an SLO regression, or just a ramp behaviour we shouldn't be gating on?" Treating ramp percentage as if it were a per-CR binding-latency SLO led to weeks of substrate / algorithm investigation that wouldn't have happened if the methodology question came first.
+
+**Lessons**:
+
+1. **Ramp behaviour is not an SLO.** Capacity-exploration metrics and SLO metrics serve different purposes; conflating them produces investigation rabbit holes that don't serve the user. [ADR-0035] establishes the discipline.
+2. **High-agency briefs disambiguate faster than over-specified ones.** The first three diagnostic briefs in the chain over-specified what to capture and pre-committed decision matrices, which biased the data collection. The fourth brief gave the operator free choice of tools and matrices, and it landed the correct diagnosis in one round-trip.
+3. **The "what should this code be solving?" question should precede "how should this code solve it?".** OC1, OC2, OC3 were all clever answers to a wrong question.
+
+No further work on Phase 1 supply-credit is planned. Phase 1's existing aggregate-supply math (per [ADR-0027]) is correct in steady state, which is what [ADR-0035] requires the test to measure.
+
+[ADR-0035]: ./0035-scaletest-slos-at-steady-state.md
+
+---
+
+(Original ADR content preserved below for the record. Originally Proposed on 2026-05-18.)
 
 ## Context
 
