@@ -89,7 +89,7 @@ func BenchmarkPhase3_HighDemand(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, allNeeds)
+		_ = decision.Phase3(snap, allNeeds, decision.AlwaysReady)
 	}
 }
 
@@ -162,6 +162,6 @@ func BenchmarkPhase3_M29Shape(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, allNeeds)
+		_ = decision.Phase3(snap, allNeeds, decision.AlwaysReady)
 	}
 }

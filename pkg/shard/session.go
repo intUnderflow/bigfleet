@@ -247,6 +247,11 @@ func (sess *operatorSession) rollupWorker(ctx context.Context, sh *Shard) {
 				continue
 			}
 			sh.needs.Replace(sess.cluster, domainNeeds)
+			// ADR-0036: any rollup arrival — including an empty
+			// one — unblocks Phase 3 reclaim for this cluster.
+			// Set the flag *before* triggerCycle so the next
+			// Phase 3 cycle sees the gate cleared.
+			sh.markFirstRollupReceived(sess.cluster)
 			sh.observeRolledUpDemand(sess.cluster, domainNeeds)
 			sh.triggerCycle()
 			_ = sess.send(&pb.ShardMessage{

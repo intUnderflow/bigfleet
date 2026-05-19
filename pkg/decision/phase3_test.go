@@ -16,7 +16,7 @@ func TestPhase3_AllExcessWhenNoNeeds(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
-	r := decision.Phase3(inv.Snapshot(), nil)
+	r := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(r.Actions); got != 4 {
 		t.Fatalf("reclaim actions = %d, want 4", got)
 	}
@@ -35,8 +35,7 @@ func TestPhase3_NoOpWhenExactlyMet(t *testing.T) {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 0 {
 		t.Errorf("expected zero reclaim actions, got %d", got)
 	}
@@ -62,8 +61,7 @@ func TestPhase3_ReclaimsCheapestFirst(t *testing.T) {
 		_ = inv.Insert(m)
 	}
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 2 {
 		t.Fatalf("reclaim actions = %d, want 2", got)
 	}
@@ -91,8 +89,7 @@ func TestPhase3_TiebreakByReclamationPenalty(t *testing.T) {
 	_ = inv.Insert(high)
 
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("reclaim actions = %d, want 1", got)
 	}
@@ -127,8 +124,7 @@ func TestPhase3_KeepsByMatchProfileNotFingerprint(t *testing.T) {
 	// Pre-ADR-0027 keep-by-fingerprint would have reclaimed it (stale
 	// stamp); the MatchProfile mirror keeps it — it genuinely serves pfB.
 	kept := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", pfB, 1)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", pfB, 1)}, decision.AlwaysReady)
 	if got := len(kept.Actions); got != 0 {
 		t.Fatalf("reclaim actions = %d, want 0 (machine MatchProfiles the live Need)", got)
 	}
@@ -136,7 +132,7 @@ func TestPhase3_KeepsByMatchProfileNotFingerprint(t *testing.T) {
 	// With no live Need claiming it, the same machine is reclaimed —
 	// the Drop F inventory-bloat failure mode is still prevented, just
 	// by "claimed by a live Need" rather than fingerprint equality.
-	gone := decision.Phase3(inv.Snapshot(), nil)
+	gone := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(gone.Actions); got != 1 || gone.Actions[0].MachineID != "victim-stale" {
 		t.Fatalf("with no Needs: reclaim = %+v, want [victim-stale]", gone.Actions)
 	}
@@ -154,8 +150,7 @@ func TestPhase3_PerProfileMatching(t *testing.T) {
 	}
 	// Roll-up says: only 1 GPU need remains (training mostly done).
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 3 {
 		t.Errorf("reclaim actions = %d, want 3", got)
 	}
@@ -172,8 +167,7 @@ func TestPhase3_Conservation(t *testing.T) {
 	}
 	totalConfigured := 10
 	r := decision.Phase3(inv.Snapshot(),
-		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 4)},
-	)
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 4)}, decision.AlwaysReady)
 	reclaim := len(r.Actions)
 	keep := totalConfigured - reclaim
 	if keep != 4 {
@@ -243,12 +237,76 @@ func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
 		AggregateResources: needs.ScaleResources(unit, 8),
 		MinUnit:            unit,
 	}
-	res := decision.Phase3(snap, []needs.Need{need})
+	res := decision.Phase3(snap, []needs.Need{need}, decision.AlwaysReady)
 
 	if len(res.Actions) != 1 {
 		t.Fatalf("expected 1 Reclaim (second dense machine has no Pod budget left after first absorbs 8), got %d actions: %#v", len(res.Actions), res.Actions)
 	}
 	if res.Actions[0].Kind != decision.ActionKindReclaim {
 		t.Errorf("action kind = %v, want Reclaim", res.Actions[0].Kind)
+	}
+}
+
+// ADR-0036: when the cluster hasn't yet reported (firstRollupReceived
+// gate fails) Phase 3 must skip reclaim, even if the NeedsTable slice
+// for that cluster is empty. Brief #36 traced the install-time
+// fleet-drain bug here: seeded Configured supply with no rollup yet
+// shouldn't be reclaimed.
+func TestPhase3_GateSkipsReclaimWhenClusterNotReady(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 100; i++ {
+		_ = inv.Insert(configuredVictim(idN(i), "cluster-not-yet-reporting", 100, 0, 0))
+	}
+	// No Needs and the gate says the cluster hasn't reported.
+	clusterReady := func(machine.ClusterID) bool { return false }
+	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	if got := len(r.Actions); got != 0 {
+		t.Fatalf("Phase 3 reclaimed %d machines for a cluster that hasn't reported; ADR-0036 requires zero", got)
+	}
+}
+
+// Once a cluster has reported (even with zero Needs in the rollup),
+// Phase 3 should resume normal reclaim — empty rollup is now "I have
+// no demand right now," not "I haven't told you yet."
+func TestPhase3_GateAllowsReclaimAfterEmptyRollup(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 50; i++ {
+		_ = inv.Insert(configuredVictim(idN(i), "cluster-reported-empty", 100, 0, 0))
+	}
+	// Cluster has reported but its rollup is empty.
+	clusterReady := func(c machine.ClusterID) bool {
+		return c == "cluster-reported-empty"
+	}
+	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	if got := len(r.Actions); got != 50 {
+		t.Fatalf("Phase 3 reclaimed %d after empty rollup; want 50 (cluster has reported, supply is excess)", got)
+	}
+}
+
+// Per-cluster isolation: only the cluster that has reported gets its
+// excess reclaimed; another cluster pending its first rollup is
+// untouched.
+func TestPhase3_GateIsPerCluster(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 10; i++ {
+		_ = inv.Insert(configuredVictim(idN(i), "cluster-reported", 100, 0, 0))
+	}
+	for i := 10; i < 20; i++ {
+		_ = inv.Insert(configuredVictim(idN(i), "cluster-pending", 100, 0, 0))
+	}
+	clusterReady := func(c machine.ClusterID) bool {
+		return c == "cluster-reported"
+	}
+	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	if got := len(r.Actions); got != 10 {
+		t.Fatalf("expected 10 reclaim actions (cluster-reported only); got %d", got)
+	}
+	for _, a := range r.Actions {
+		if a.Cluster != "cluster-reported" {
+			t.Errorf("Phase 3 reclaimed in %q; gate should have skipped non-reported clusters", a.Cluster)
+		}
 	}
 }

@@ -227,6 +227,15 @@ type Shard struct {
 	pendingMu      sync.Mutex
 	pendingActions map[machine.ID]struct{}
 
+	// firstRollupReceived gates Phase 3 reclaim per cluster
+	// (ADR-0036). Set true the first time any rollup arrives for a
+	// cluster — including a rollup with zero Needs. Phase 3 skips
+	// reclaim for any cluster whose entry is false, so the install /
+	// shard-restart window doesn't drain Configured supply before
+	// operators have had a chance to report demand.
+	firstRollupMu       sync.RWMutex
+	firstRollupReceived map[machine.ClusterID]bool
+
 	log *slog.Logger
 }
 
@@ -274,19 +283,54 @@ func New(cfg Config) (*Shard, error) {
 		log = slog.New(slog.NewTextHandler(discardWriter{}, &slog.HandlerOptions{Level: slog.LevelError}))
 	}
 	return &Shard{
-		cfg:               cfg,
-		needs:             needs.NewTable(),
-		inv:               inventory.New(),
-		term:              fencing.NewCoordinatorTerm(),
-		sessionsByCluster: make(map[machine.ClusterID]*operatorSession),
-		wakeup:            make(chan struct{}, 1),
-		shortfalls:        make(map[string]*shortfallEntry),
-		assignedDomains:   make(map[domainKey]struct{}),
-		acCache:           newAvailableCapacityCache(cfg.AvailableCapacityInterval),
-		demandObservedAt:  make(map[machine.ClusterID]map[string]time.Time),
-		pendingActions:    make(map[machine.ID]struct{}),
-		log:               log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
+		cfg:                 cfg,
+		needs:               needs.NewTable(),
+		inv:                 inventory.New(),
+		term:                fencing.NewCoordinatorTerm(),
+		sessionsByCluster:   make(map[machine.ClusterID]*operatorSession),
+		wakeup:              make(chan struct{}, 1),
+		shortfalls:          make(map[string]*shortfallEntry),
+		assignedDomains:     make(map[domainKey]struct{}),
+		acCache:             newAvailableCapacityCache(cfg.AvailableCapacityInterval),
+		demandObservedAt:    make(map[machine.ClusterID]map[string]time.Time),
+		pendingActions:      make(map[machine.ID]struct{}),
+		firstRollupReceived: make(map[machine.ClusterID]bool),
+		log:                 log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
+}
+
+// FirstRollupReceived reports whether the cluster has sent at least
+// one rollup since this shard process started. ADR-0036: Phase 3
+// uses this as a per-cluster gate to skip reclaim during the
+// install / shard-restart window where an empty NeedsTable would
+// otherwise trigger fleet-drain (the operator hasn't yet had a
+// chance to report demand, so empty Needs is "unknown demand",
+// not "zero demand").
+//
+// Set true by the session loop when any RollupReport — including
+// one with zero Needs — arrives. Stays true for the cluster's
+// lifetime within this shard process; only cleared on shard
+// restart (because the map is in-memory).
+func (s *Shard) FirstRollupReceived(c machine.ClusterID) bool {
+	s.firstRollupMu.RLock()
+	defer s.firstRollupMu.RUnlock()
+	return s.firstRollupReceived[c]
+}
+
+func (s *Shard) markFirstRollupReceived(c machine.ClusterID) {
+	s.firstRollupMu.Lock()
+	defer s.firstRollupMu.Unlock()
+	s.firstRollupReceived[c] = true
+}
+
+// ApplyRollup replaces the cluster's NeedsTable slice and marks the
+// cluster as having reported (ADR-0036). The standard session loop
+// uses this path implicitly via direct field updates; tests / sim
+// runners that bypass the session loop call this method to keep the
+// rollup-received gate in sync with the NeedsTable.
+func (s *Shard) ApplyRollup(c machine.ClusterID, ns []needs.Need) {
+	s.needs.Replace(c, ns)
+	s.markFirstRollupReceived(c)
 }
 
 // ID returns the shard's identifier.
@@ -489,7 +533,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	}
 
 	p3Start := time.Now()
-	p3 := decision.Phase3(snap, demand)
+	p3 := decision.Phase3(snap, demand, s.FirstRollupReceived)
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 	}

@@ -41,3 +41,4 @@
 | [33](/adr/0033-phase1-supply-credit-respects-bind-readiness/) | Rejected | Phase 1 supply-credit must respect bind readiness, not just provider state — superseded by ADR-0035 |
 | [34](/adr/0034-scaletest-byo-substrate/) | Accepted | Scaletest is bring-your-own-substrate |
 | [35](/adr/0035-scaletest-slos-at-steady-state/) | Accepted | Scaletest SLOs are measured at steady state under churn, not at ramp |
+| [36](/adr/0036-phase3-gated-by-first-rollup/) | Accepted | Phase 3 reclaim must not fire before a cluster's first rollup has arrived |

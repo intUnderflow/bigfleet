@@ -228,7 +228,7 @@ func Run(ctx context.Context, sc Scenario) (*Result, error) {
 	for _, ev := range sc.Events {
 		step++
 		// Apply the rollup.
-		sh.NeedsTable().Replace(ev.Cluster, ev.Needs)
+		sh.ApplyRollup(ev.Cluster, ev.Needs)
 		trace = append(trace, TraceEvent{
 			Step:    step,
 			Kind:    "rollup",

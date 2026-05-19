@@ -40,7 +40,25 @@ type Phase3Result struct {
 // cluster Configured bucket is pre-sorted in keep-priority order
 // (highest-value first), so claimMatching keeps the high-value machines
 // and the leftover — reclaimed — is the low-value tail.
-func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
+// clusterReady reports whether the named cluster has been heard from
+// (first rollup received) since this shard process started.
+// ADR-0036: Phase 3 must skip reclaim for clusters that haven't yet
+// reported, because their NeedsTable slice is empty for the trivial
+// "I haven't told you anything yet" reason, not for the meaningful
+// "I have no demand right now" reason. Without the gate, the
+// install / shard-restart window drains every Configured machine
+// before the operator pipeline catches up.
+//
+// Callers in tests that don't care about the gate (most decision-
+// package unit tests) pass `AlwaysReady`. Callers in tests that
+// specifically exercise the gate's behaviour pass a stub.
+type ClusterReadyFn func(machine.ClusterID) bool
+
+// AlwaysReady is a ClusterReadyFn that always returns true. Used by
+// tests that don't exercise the ADR-0036 gate.
+func AlwaysReady(machine.ClusterID) bool { return true }
+
+func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady ClusterReadyFn) Phase3Result {
 	out := Phase3Result{}
 
 	needsByCluster := make(map[machine.ClusterID][]needs.Need)
@@ -49,6 +67,13 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need) Phase3Result {
 	}
 
 	for cluster := range clustersWithConfigured(snap) {
+		// ADR-0036 gate: skip clusters that haven't yet reported.
+		// Their empty NeedsTable slice is "haven't told me yet",
+		// not "have no demand"; reclaiming on that signal would
+		// drain seeded supply during install / restart windows.
+		if !clusterReady(cluster) {
+			continue
+		}
 		configured := snap.SortedClusterStateBucket(cluster, machine.StateConfigured)
 		if len(configured) == 0 {
 			continue

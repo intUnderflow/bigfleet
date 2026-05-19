@@ -100,7 +100,7 @@ func TestIntegration_Withdrawal(t *testing.T) {
 	executeActions(t, prov, inv, pf, r.Actions)
 
 	// Now training finishes — roll-up has no needs. Phase 3 reclaims all.
-	r3 := decision.Phase3(inv.Snapshot(), nil)
+	r3 := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(r3.Actions); got != 64 {
 		t.Fatalf("phase3: reclaim = %d, want 64", got)
 	}
