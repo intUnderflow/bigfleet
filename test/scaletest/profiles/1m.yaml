@@ -18,7 +18,8 @@ catalog:
   archetypes: realistic
 
 seed:
-  configuredFraction: 0.0
+  configuredFraction: 1.0
+  preBindFraction: 1.0
   speculativeMultiplier: 3
   idleHeadroomFraction: 0.2
 

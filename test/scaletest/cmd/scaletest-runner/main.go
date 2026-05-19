@@ -748,14 +748,24 @@ func run(args []string) error {
 		}
 	}()
 
-	// Wait for steady state: every kwok pod's load-driver must reach
-	// the per-cluster target. Runs that ramp short of target are
-	// invalid (they measure the SLO against an under-loaded shard);
-	// the runner requires the full target and fails the run if the
-	// budget elapses without reaching it.
+	// Wait for steady state. Per ADR-0035, this is a *sanity check*
+	// — the actual pass/fail signal is the steady-state SLO histograms
+	// over the soak window (see pass(), which gates on per-CR binding
+	// latency, cycle p99, rollup p99, ack p99). The "must reach the
+	// per-cluster target" rule still applies: SLO measurement against
+	// an under-loaded shard isn't meaningful. The budget elapsing
+	// produces a "didn't reach steady state" error, not an SLO failure;
+	// the post-mortem distinction matters for diagnosing harness vs
+	// system-under-test regressions.
+	//
+	// With seed.preBindFraction=1.0 (the ADR-0035 default for new
+	// profiles), the load-driver pre-binds the entire target at install
+	// and this wait is near-instant. Legacy profiles with
+	// preBindFraction=0 still pay for a scheduler-bound ramp; the
+	// budget formula (M22) accounts for those.
 	totalCRs := prof.KWOK.ClusterCount * prof.LoadProfile.Target
 	rampBudget, rampSource := resolveRampBudget(prof, totalCRs)
-	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s)\n", rampBudget, rampSource)
+	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s) [sanity check; SLO gating runs over the soak window per ADR-0035]\n", rampBudget, rampSource)
 	pfArgs := strings.Join(kArgs(*kubeconfig, "-n", namespace, "port-forward", "svc/grafana", "3000:3000"), " ")
 	fmt.Fprintf(os.Stderr, "live dashboard: kubectl %s  →  http://localhost:3000/d/bigfleet-scaletest\n", pfArgs)
 	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
@@ -1541,6 +1551,16 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // Cycle wall-clock and per-phase histograms remain in summary.json as
 // informational metrics; they're alerted on by the operator's
 // monitoring stack but no longer block a release.
+// pass evaluates the run's steady-state SLO histograms against the
+// profile's thresholds. Per ADR-0035: SLOs are measured over the soak
+// window with continuous churn, not from ramp behaviour. The headline
+// signals are internal binding latency p99, shard cycle p99, operator
+// rollup p99, and operator ack p99 — all per-CR / per-cycle measures of
+// what a customer feels in steady state.
+//
+// Reaching steady state is a prerequisite for pass() to be called at
+// all (the runner gates on it before soak starts). Ramp throughput is
+// captured in the summary but does not gate pass/fail.
 func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
 	internalBindingLatencyTarget := 15.0 // ADR-0020: ~10 s rollupInterval ceiling + ~5 s chain headroom
 	if slo.InternalBindingLatencyP99Seconds > 0 {

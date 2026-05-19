@@ -170,15 +170,20 @@ Disable with `--set grafana.enabled=false` if you don't want the deployment (e.g
 
 ## Pass/fail SLOs
 
-The runner marks a run failed if any of these p99 thresholds are exceeded. Each one is the best observed value from a passing baseline run plus a small variance margin — they detect regressions, they're not aspirational targets.
+Per ADR-0035, the runner gates on **steady-state SLO histograms over the soak window**, not on ramp behaviour. With `seed.preBindFraction: 1.0` (the default for the BYO scale profiles) the cluster reaches steady state at install — the load-driver pre-binds the entire target Pod count to Configured-tier fake-Nodes by setting `Spec.NodeName` at create time. The soak window then measures per-CR binding latency for churn replacements, which is what a customer feels.
+
+Ramp time and ramp throughput are still captured in `summary.json` for capacity exploration, but they don't gate pass/fail. The runner does still time out if steady state isn't reached at all (`waitForSteadyState` budget) — that's a sanity check that the harness installed correctly, not an SLO.
 
 | Metric | Threshold | Best observed | Notes |
 |---|---|---|---|
 | `bigfleet_shard_cycle_duration_seconds` | **100 ms** | 1.8 ms (50k tier) | Decision engine; large headroom intentional. |
 | `bigfleet_operator_rollup_duration_seconds` | **1 s** | 122 ms (50k tier) | One rollup pipeline turn must finish well within the 10 s rollup interval. |
-| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (50k tier) | Bounded by operator status-write QPS against the apiserver. 1 K-CR ramp at QPS=50/Burst=100 needs ~10 s of writes; 12 s allows ~20 % run-to-run variance. Tightens when the operator gains batched status writes or higher per-profile QPS. |
+| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (50k tier) | Bounded by operator status-write QPS against the apiserver. Tightens when the operator gains batched status writes. |
+| `bigfleet_scaletest_pod_bind_latency_steady_seconds` | per-profile (default 15 s) | tier-dependent | Per-CR binding latency under churn replacement. ADR-0014 / ADR-0017. The headline customer-facing signal. |
 
 Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
+
+A run that doesn't reach steady state fails with `steady state: ramp budget elapsed without reaching target`. That's a harness-side or system-bring-up issue, not an SLO violation — typically meaning the substrate is under-resourced or some chart-side install step hung.
 
 ## Recommended cadence
 
