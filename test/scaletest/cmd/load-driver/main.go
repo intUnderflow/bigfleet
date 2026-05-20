@@ -822,7 +822,11 @@ const preBindConcurrency = 64
 
 func (d *driver) preBindInitialPods(ctx context.Context) {
 	d.log.Info("pre-bind: binding initial Pods to fake-Nodes as they appear")
-	deadline := time.Now().Add(15 * time.Minute)
+	// Safety valve only — the loop exits as soon as every initial Pod is
+	// bound. 15 min was too short: a 500K-Pod fleet fills in ~25-30 min
+	// at the observed pre-bind rate (bigfleet-uber #43), so a short
+	// deadline quit mid-fill and left the tail to the slow scheduler.
+	deadline := time.Now().Add(45 * time.Minute)
 	for {
 		if ctx.Err() != nil {
 			return
