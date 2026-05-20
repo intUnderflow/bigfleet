@@ -42,3 +42,4 @@
 | [34](/adr/0034-scaletest-byo-substrate/) | Accepted | Scaletest is bring-your-own-substrate |
 | [35](/adr/0035-scaletest-slos-at-steady-state/) | Accepted | Scaletest SLOs are measured at steady state under churn, not at ramp |
 | [36](/adr/0036-phase3-gated-by-first-rollup/) | Accepted | Phase 3 reclaim must not fire before a cluster's first rollup has arrived |
+| [37](/adr/0037-scaletest-node-affinity-dimensions-are-realistic/) | Accepted | Scaletest catalog node-affinity dimensions must be realistic — drop synthetic team/app label axes |

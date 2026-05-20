@@ -64,8 +64,6 @@
 #                           every Need is partial-fill-tolerant by
 #                           default.)
 #   groupSizeRange        : [min, max] machines per Same-rack group
-#   labelAxes             : per-CR label dimensions that multiply
-#                           fingerprint cardinality (M35)
 #   spreadConstraintProb  : probability that a per-CR draw carries
 #                           the SpreadConstraint below. 0.0 = never.
 #   spreadConstraint      : topologyKey + maxSkew + whenUnsatisfiable.
@@ -88,9 +86,6 @@ archetypes:
     interruptionPenalty: 32
     reclamationPenalty: 64
     meanLifetimeSeconds: 0
-    labelAxes:
-      - { key: "scaletest.bigfleet/team", count: 40 }
-      - { key: "scaletest.bigfleet/app", count: 20 }
     spreadConstraintProb: 0.45
     spreadConstraint:
       topologyKey: topology.kubernetes.io/zone
@@ -113,8 +108,6 @@ archetypes:
     interruptionPenalty: 1024
     reclamationPenalty: 8192
     meanLifetimeSeconds: 0
-    labelAxes:
-      - { key: "scaletest.bigfleet/team", count: 10 }
     spreadConstraintProb: 0.75
     spreadConstraint:
       topologyKey: topology.kubernetes.io/zone
