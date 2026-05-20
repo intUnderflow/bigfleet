@@ -815,6 +815,11 @@ const labelArchetype = "scaletest.bigfleet/archetype"
 // fires. Soak churn Pods created after this returns are NOT pre-bound
 // — they go through kube-scheduler, which is the path the steady-state
 // SLO must measure.
+// preBindConcurrency caps in-flight Bind calls per sweep. A single
+// goroutine was the M52.B initial-fill bottleneck; the apiserver
+// handles this fan-out comfortably.
+const preBindConcurrency = 64
+
 func (d *driver) preBindInitialPods(ctx context.Context) {
 	d.log.Info("pre-bind: binding initial Pods to fake-Nodes as they appear")
 	deadline := time.Now().Add(15 * time.Minute)
@@ -842,45 +847,119 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 			time.Sleep(2 * time.Second)
 			continue
 		}
-		// A Node already hosting a Pod is claimed for this sweep — one
-		// Pod per fake-Node, mirroring the density the seed assumes.
 		var allPods corev1.PodList
-		claimed := make(map[string]struct{})
-		if err := d.k.List(ctx, &allPods, client.InNamespace("default")); err == nil {
-			for i := range allPods.Items {
-				if n := allPods.Items[i].Spec.NodeName; n != "" {
-					claimed[n] = struct{}{}
-				}
+		if err := d.k.List(ctx, &allPods, client.InNamespace("default")); err != nil {
+			d.log.Warn("pre-bind: list pods", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		// Fake-Nodes are seeded density-100, so a Node hosts many Pods.
+		// Track per-Node remaining capacity = Allocatable − Σ(requests of
+		// Pods already bound there) and bin-pack against it; index Nodes
+		// by archetype so a Pod only considers Nodes it actually matches.
+		remaining := make(map[string]corev1.ResourceList, len(nodes.Items))
+		byArchetype := make(map[string][]*corev1.Node)
+		for j := range nodes.Items {
+			n := &nodes.Items[j]
+			arch, ok := n.Labels[labelArchetype]
+			if !ok {
+				continue
+			}
+			rl := corev1.ResourceList{}
+			for k, v := range n.Status.Allocatable {
+				rl[k] = v.DeepCopy()
+			}
+			remaining[n.Name] = rl
+			byArchetype[arch] = append(byArchetype[arch], n)
+		}
+		for i := range allPods.Items {
+			p := &allPods.Items[i]
+			if p.Spec.NodeName == "" {
+				continue
+			}
+			if rem, ok := remaining[p.Spec.NodeName]; ok {
+				subtractRequests(rem, podRequests(p))
 			}
 		}
-		bound := 0
+		// Plan assignments against the local remaining-capacity map, then
+		// execute the Bind calls in parallel.
+		type assignment struct {
+			pod  *corev1.Pod
+			node string
+		}
+		plan := make([]assignment, 0, len(unbound.Items))
 		for i := range unbound.Items {
 			pod := &unbound.Items[i]
-			for j := range nodes.Items {
-				n := &nodes.Items[j]
-				if _, taken := claimed[n.Name]; taken {
+			req := podRequests(pod)
+			for _, n := range byArchetype[pod.Labels[labelArchetype]] {
+				rem := remaining[n.Name]
+				if !fitsRequests(rem, req) {
 					continue
 				}
-				if _, ok := n.Labels[labelArchetype]; !ok || !nodeFitsPod(n, pod) {
-					continue
-				}
-				if err := d.bindPod(ctx, pod, n.Name); err != nil {
-					d.log.Warn("pre-bind: bind failed", "pod", pod.Name, "node", n.Name, "err", err)
-					continue
-				}
-				claimed[n.Name] = struct{}{}
-				bound++
+				subtractRequests(rem, req)
+				plan = append(plan, assignment{pod: pod, node: n.Name})
 				break
 			}
 		}
-		if bound > 0 {
-			d.log.Info("pre-bind progress", "bound_this_pass", bound, "still_unbound", len(unbound.Items)-bound)
+		var bound atomic.Int64
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, preBindConcurrency)
+		for _, a := range plan {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(a assignment) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				if err := d.bindPod(ctx, a.pod, a.node); err != nil {
+					d.log.Warn("pre-bind: bind failed", "pod", a.pod.Name, "node", a.node, "err", err)
+					return
+				}
+				bound.Add(1)
+			}(a)
+		}
+		wg.Wait()
+		if b := bound.Load(); b > 0 {
+			d.log.Info("pre-bind progress", "bound_this_pass", b, "still_unbound", int64(len(unbound.Items))-b)
 		}
 		if time.Now().After(deadline) {
-			d.log.Warn("pre-bind: deadline reached with Pods still unbound", "still_unbound", len(unbound.Items)-bound)
+			d.log.Warn("pre-bind: deadline reached with Pods still unbound")
 			return
 		}
 		time.Sleep(2 * time.Second)
+	}
+}
+
+// podRequests sums container resource requests across a Pod.
+func podRequests(pod *corev1.Pod) corev1.ResourceList {
+	out := corev1.ResourceList{}
+	for _, c := range pod.Spec.Containers {
+		for k, v := range c.Resources.Requests {
+			cur := out[k]
+			cur.Add(v)
+			out[k] = cur
+		}
+	}
+	return out
+}
+
+// fitsRequests reports whether `remaining` covers `req` on every resource.
+func fitsRequests(remaining, req corev1.ResourceList) bool {
+	for k, q := range req {
+		have, ok := remaining[k]
+		if !ok || have.Cmp(q) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// subtractRequests decrements `remaining` by `req` in place.
+func subtractRequests(remaining, req corev1.ResourceList) {
+	for k, q := range req {
+		if have, ok := remaining[k]; ok {
+			have.Sub(q)
+			remaining[k] = have
+		}
 	}
 }
 
