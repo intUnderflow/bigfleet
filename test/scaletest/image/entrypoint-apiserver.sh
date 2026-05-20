@@ -263,6 +263,7 @@ EOF
     --config="$WORK/scheduler-config.yaml" \
     --bind-address=127.0.0.1 \
     --secure-port=10259 \
+    --authorization-always-allow-paths=/healthz,/readyz,/metrics,/debug/pprof,/debug/pprof/* \
     >"$WORK/logs/scheduler.log" 2>&1 &
   SCHEDULER_PID=$!
 fi

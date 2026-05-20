@@ -314,6 +314,12 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			labels := map[string]string{
 				"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%specRacksPerZone),
 			}
+			// Mirror the Configured seed (M52.B): tag the Speculative
+			// slot with its archetype so a fake-Node minted from a
+			// Provisioned slot is categorisable by the same label the
+			// Configured seed uses. Without it, Provision output lands
+			// in a `<no value>` archetype bucket for any diagnostic.
+			labels["scaletest.bigfleet/archetype"] = a.Name
 			for k, v := range a.PickLabels(specRng) {
 				labels[k] = v
 			}
