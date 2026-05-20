@@ -19,7 +19,7 @@ catalog:
 
 seed:
   configuredFraction: 1.0
-  preBindFraction: 1.0
+  preBind: true
   speculativeMultiplier: 3
   idleHeadroomFraction: 0.2
 

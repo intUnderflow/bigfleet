@@ -147,21 +147,19 @@ type profile struct {
 	// per-cluster Pod targets should bump this proportionally.
 	ReconcilePerTickCap int `yaml:"reconcilePerTickCap"`
 
-	// PreBindFraction (M52.B, ADR-0035): fraction of the target Pod
-	// count to pre-bind at install. At install, the load-driver lists
-	// the kwok fake-Nodes already in the apiserver (placed there by
-	// the operator + node-creator pipeline from the shard's Configured
-	// seed) and creates that many Pods with Spec.NodeName set to a
-	// matching Node. Pods bypass kube-scheduler entirely; binding is
-	// effectively instant. The remaining 1-fraction is created via
-	// the usual rampTo path (scheduler-bound, exercising the user-
-	// facing path).
+	// PreBind (M52.B, ADR-0035): when true, the load-driver binds the
+	// initial Pod fill to fake-Nodes via the Bind API after rampTo,
+	// bypassing kube-scheduler's slow filter/score cycle. The Pods
+	// still go through the realistic Unschedulable → UPC →
+	// CapacityRequest path first (rampTo creates them without
+	// Spec.NodeName); only the binding is fast-pathed. Soak churn
+	// Pods are never pre-bound — they go through kube-scheduler, the
+	// path the steady-state SLO measures.
 	//
-	// Default 0.0 = legacy behaviour, all Pods scheduler-bound.
-	// ADR-0035's steady-state methodology sets this to 1.0 so the
-	// soak window measures steady-state SLOs under churn rather than
-	// the bulk-bind ramp regime.
-	PreBindFraction float64 `yaml:"preBindFraction"`
+	// Default false = scheduler-bound ramp. ADR-0035's steady-state
+	// methodology sets this true so the install reaches steady state
+	// without paying the kube-scheduler bulk-bind ramp.
+	PreBind bool `yaml:"preBind"`
 }
 
 func (p *profile) reconcilePerTickCap() int {
@@ -264,6 +262,7 @@ func run(args []string) error {
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig")
 	profilePath := fs.String("profile", "", "path to load profile YAML")
 	metricsAddr := fs.String("metrics-addr", ":8771", "/metrics endpoint")
+	demandReadyFile := fs.String("demand-ready-file", "", "path to touch once the initial Pod fill completes; the harness blocks the BigFleet operator's start on this file (ADR-0036)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -339,15 +338,16 @@ func run(args []string) error {
 	phaseStartedAt.WithLabelValues("ramp").Set(float64(time.Now().Unix()))
 
 	d := &driver{
-		clusterID:  *clusterID,
-		log:        logger,
-		k:          kc,
-		cs:         cs,
-		prof:       prof,
-		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
-		known:      make(map[string]crMeta, prof.Target),
-		picker:     archetype.NewPicker(prof.demandArchetypes()),
-		archByName: indexArchetypes(prof.demandArchetypes()),
+		clusterID:       *clusterID,
+		log:             logger,
+		k:               kc,
+		cs:              cs,
+		prof:            prof,
+		rng:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		known:           make(map[string]crMeta, prof.Target),
+		picker:          archetype.NewPicker(prof.demandArchetypes()),
+		archByName:      indexArchetypes(prof.demandArchetypes()),
+		demandReadyFile: *demandReadyFile,
 	}
 	if d.picker != nil {
 		logger.Info("archetypes loaded", "count", len(prof.Archetypes))
@@ -381,6 +381,15 @@ type driver struct {
 	// not representative of production; isolating the post-fill churn
 	// in its own metric keeps the SLO honest.
 	steadyState atomic.Bool
+
+	// demandReadyFile, when non-empty, is touched once the initial
+	// Pod fill (rampTo) completes — i.e. once the cluster's demand is
+	// established as CapacityRequests via UPC. The harness entrypoint
+	// blocks the BigFleet operator's startup on this file so the
+	// operator's first rollup reflects real demand (ADR-0036): a
+	// production operator joins a cluster that already has workloads,
+	// and the harness must mirror that ordering.
+	demandReadyFile string
 }
 
 // driverGroup is a per-archetype Same-rack group. Stays open until
@@ -500,25 +509,40 @@ func (d *driver) run(ctx context.Context) error {
 	// across ramp and steady-state churn.
 	go d.anchorSameRackGroups(ctx)
 
-	// M52.B (ADR-0035): pre-bind a fraction of the target to existing
-	// fake-Nodes. Pods bypass kube-scheduler entirely, so the cluster
-	// reaches steady state without paying for a scheduler-bound ramp.
-	// PreBindFraction=0 (legacy default) skips this phase.
-	if d.prof.PreBindFraction > 0 {
-		preBindWant := int(float64(d.prof.Target) * d.prof.PreBindFraction)
-		d.log.Info("pre-binding to fake-Nodes", "want", preBindWant, "fraction", d.prof.PreBindFraction)
-		bound, err := d.preBindToNodes(ctx, preBindWant)
-		if err != nil {
-			return fmt.Errorf("pre-bind: %w", err)
-		}
-		d.log.Info("pre-bind complete", "bound", bound, "of", preBindWant)
-	}
-
-	// Phase 1: ramp to target. activeCount already includes pre-bound
-	// Pods (if any), so rampTo only creates the remainder.
+	// Phase 1: ramp to target — create the Pods. They are created
+	// WITHOUT Spec.NodeName, so they go Unschedulable → UPC →
+	// CapacityRequest. This establishes the cluster's demand before
+	// the BigFleet operator starts: the harness entrypoint blocks the
+	// operator on the demand-ready file written below, so the
+	// operator's first rollup reflects real demand and ADR-0036's
+	// Phase 3 gate releases on a genuine (non-empty) rollup.
 	d.log.Info("ramping to target", "count", d.prof.Target)
 	if err := d.rampTo(ctx, d.prof.Target); err != nil {
 		return fmt.Errorf("ramp: %w", err)
+	}
+
+	// Signal demand saturation. Every target Pod now exists; UPC has
+	// had the rampTo duration to CR-ify them. The entrypoint unblocks
+	// the BigFleet operator once it sees this file.
+	if d.demandReadyFile != "" {
+		if err := os.WriteFile(d.demandReadyFile, []byte("ready\n"), 0o644); err != nil {
+			d.log.Warn("demand-ready-file write failed", "path", d.demandReadyFile, "err", err)
+		} else {
+			d.log.Info("demand saturated; wrote demand-ready file", "path", d.demandReadyFile)
+		}
+	}
+
+	// M52.B (ADR-0035): pre-bind the initial Pods to fake-Nodes,
+	// bypassing the slow kube-scheduler ramp. Patient retry — fake-
+	// Nodes only materialise after the operator starts (which the
+	// entrypoint did once it saw the demand-ready file) and the
+	// shard → UpcomingNode → node-creator pipeline runs. Soak churn
+	// Pods are NOT pre-bound; they go through kube-scheduler so the
+	// steady-state SLO measures the production path. PreBind=false
+	// skips this — the cluster then reaches steady state via the
+	// scheduler-bound ramp.
+	if d.prof.PreBind {
+		d.preBindInitialPods(ctx)
 	}
 
 	// Phase 2: optional initial burst (above target, then drain back).
@@ -774,106 +798,90 @@ func (d *driver) createOnePod(ctx context.Context) error {
 }
 
 // labelArchetype is set on every seeded Configured machine (and so on
-// every kwok fake-Node derived from one) so the load-driver's
-// pre-bind phase can look up the archetype from the Node's labels
-// and build a matching Pod. Mirrored on the Pod itself via the
-// existing `scaletest.bigfleet/archetype` Pod label.
+// every kwok fake-Node derived from one). The load-driver's pre-bind
+// phase uses it to recognise BigFleet-managed fake-Nodes.
 const labelArchetype = "scaletest.bigfleet/archetype"
 
-// preBindToNodes pre-binds Pods to existing fake-Nodes by setting
-// Spec.NodeName at create time, bypassing the scheduler entirely.
-// One Pod per matching fake-Node, up to `want`. Each Pod carries
-// the archetype shape inferred from the Node's labelArchetype
-// label, so the steady-state inventory mirrors what scheduler-bound
-// Pods would have produced. M52.B (ADR-0035).
+// preBindInitialPods binds the initial Pod fill to fake-Nodes via the
+// Bind API, bypassing kube-scheduler's slow filter/score cycle. M52.B
+// (ADR-0035). The Pods were already created by rampTo *without*
+// Spec.NodeName — so they went Unschedulable → UPC → CapacityRequest,
+// keeping the demand path realistic — and this step just binds them
+// fast once supply (fake-Nodes) materialises.
 //
-// Waits up to 5 minutes for the fake-Node pipeline (shard's
-// Configured seed → operator UpcomingNode → node-creator fake-Node)
-// to produce at least `want` Nodes. If fewer Nodes exist when the
-// deadline fires, pre-binds what's available and returns; the
-// remainder falls through to scheduler-bound rampTo.
-func (d *driver) preBindToNodes(ctx context.Context, want int) (int, error) {
-	if want <= 0 {
-		return 0, nil
-	}
-
-	arches := d.prof.Archetypes
-	if len(d.prof.DemandArchetypes) > 0 {
-		arches = d.prof.DemandArchetypes
-	}
-	archByName := make(map[string]*archetype.Archetype, len(arches))
-	for i := range arches {
-		archByName[arches[i].Name] = &arches[i]
-	}
-
-	deadline := time.Now().Add(5 * time.Minute)
-	var nodes corev1.NodeList
+// Patient retry: fake-Nodes appear only after the operator starts and
+// the shard → UpcomingNode → node-creator pipeline runs, so the loop
+// keeps sweeping until every initial Pod is bound or the deadline
+// fires. Soak churn Pods created after this returns are NOT pre-bound
+// — they go through kube-scheduler, which is the path the steady-state
+// SLO must measure.
+func (d *driver) preBindInitialPods(ctx context.Context) {
+	d.log.Info("pre-bind: binding initial Pods to fake-Nodes as they appear")
+	deadline := time.Now().Add(15 * time.Minute)
 	for {
-		if err := d.k.List(ctx, &nodes); err != nil {
-			return 0, fmt.Errorf("list nodes: %w", err)
+		if ctx.Err() != nil {
+			return
 		}
-		bigfleetNodes := 0
-		for _, n := range nodes.Items {
-			if _, ok := n.Labels[labelArchetype]; ok {
-				bigfleetNodes++
+		// Unbound Pods only — server-side field selector, so the list
+		// shrinks as binding progresses.
+		unbound, err := d.cs.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
+			FieldSelector: "spec.nodeName=",
+		})
+		if err != nil {
+			d.log.Warn("pre-bind: list unbound pods", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		if len(unbound.Items) == 0 {
+			d.log.Info("pre-bind: all initial Pods bound")
+			return
+		}
+		var nodes corev1.NodeList
+		if err := d.k.List(ctx, &nodes); err != nil {
+			d.log.Warn("pre-bind: list nodes", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		// A Node already hosting a Pod is claimed for this sweep — one
+		// Pod per fake-Node, mirroring the density the seed assumes.
+		var allPods corev1.PodList
+		claimed := make(map[string]struct{})
+		if err := d.k.List(ctx, &allPods, client.InNamespace("default")); err == nil {
+			for i := range allPods.Items {
+				if n := allPods.Items[i].Spec.NodeName; n != "" {
+					claimed[n] = struct{}{}
+				}
 			}
 		}
-		if bigfleetNodes >= want {
-			break
+		bound := 0
+		for i := range unbound.Items {
+			pod := &unbound.Items[i]
+			for j := range nodes.Items {
+				n := &nodes.Items[j]
+				if _, taken := claimed[n.Name]; taken {
+					continue
+				}
+				if _, ok := n.Labels[labelArchetype]; !ok || !nodeFitsPod(n, pod) {
+					continue
+				}
+				if err := d.bindPod(ctx, pod, n.Name); err != nil {
+					d.log.Warn("pre-bind: bind failed", "pod", pod.Name, "node", n.Name, "err", err)
+					continue
+				}
+				claimed[n.Name] = struct{}{}
+				bound++
+				break
+			}
+		}
+		if bound > 0 {
+			d.log.Info("pre-bind progress", "bound_this_pass", bound, "still_unbound", len(unbound.Items)-bound)
 		}
 		if time.Now().After(deadline) {
-			d.log.Warn("pre-bind: fewer Nodes than requested at deadline",
-				"want", want, "have", bigfleetNodes)
-			break
+			d.log.Warn("pre-bind: deadline reached with Pods still unbound", "still_unbound", len(unbound.Items)-bound)
+			return
 		}
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+		time.Sleep(2 * time.Second)
 	}
-
-	bound := 0
-	for i := range nodes.Items {
-		if bound >= want {
-			break
-		}
-		n := &nodes.Items[i]
-		archName := n.Labels[labelArchetype]
-		if archName == "" {
-			continue
-		}
-		arch, ok := archByName[archName]
-		if !ok {
-			// Node's archetype isn't in this driver's catalog —
-			// possibly a Node seeded by a sibling cluster's shard.
-			// Skip; the scheduler-bound ramp can still bind to it.
-			continue
-		}
-		d.mu.Lock()
-		d.seq++
-		seq := d.seq
-		d.mu.Unlock()
-		name := fmt.Sprintf("%s-prebind-%06d", d.clusterID, seq)
-		pod := d.buildArchetypePod(name, arch)
-		pod.Spec.NodeName = n.Name
-		if err := d.k.Create(ctx, pod); err != nil {
-			d.log.Warn("pre-bind create failed", "pod", name, "node", n.Name, "err", err)
-			continue
-		}
-		d.mu.Lock()
-		d.known[name] = crMeta{archetype: archName}
-		d.mu.Unlock()
-		created.Inc()
-		bound++
-	}
-
-	active.Set(float64(d.activeCount()))
-	if d.prof.Target > 0 && bound >= d.prof.Target && !d.steadyState.Swap(true) {
-		steadyStateMetric.Set(1)
-		phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
-	}
-	return bound, nil
 }
 
 const (

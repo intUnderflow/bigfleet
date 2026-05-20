@@ -68,7 +68,17 @@ log entrypoint "apiserver-side ready"
 
 mkdir -p "$WORK/logs"
 
-# ---- 2. start bigfleet-operator ----
+# ---- 2. bigfleet-operator deferred ----
+# ADR-0036: the BigFleet operator must NOT start until the cluster's
+# demand is established. A production operator joins a cluster that
+# already runs workloads, so its first rollup reflects real demand
+# and Phase 3's first-rollup gate releases on genuine state. The
+# harness mirrors this: operator startup is deferred to step 5,
+# after the load-driver has filled the cluster and signalled the
+# demand-ready file. op_args is assembled here; the process starts
+# below.
+DEMAND_READY_FILE="$WORK/demand-ready"
+rm -f "$DEMAND_READY_FILE"
 op_args=(
   --cluster-id="$CLUSTER_ID"
   --shard-addr="$BIGFLEET_SHARD_ADDR"
@@ -79,9 +89,6 @@ op_args=(
 [[ -n "${OPERATOR_BURST:-}"           ]] && op_args+=(--burst="$OPERATOR_BURST")
 [[ -n "${OPERATOR_ACK_CONCURRENCY:-}" ]] && op_args+=(--ack-concurrency="$OPERATOR_ACK_CONCURRENCY")
 [[ -n "${OPERATOR_ROLLUP_INTERVAL:-}" && "$OPERATOR_ROLLUP_INTERVAL" != "0s" ]] && op_args+=(--rollup-interval="$OPERATOR_ROLLUP_INTERVAL")
-log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPERATOR_QPS:-default} ack=${OPERATOR_ACK_CONCURRENCY:-default})"
-bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
-OPERATOR_PID=$!
 
 # ---- 3. (M43b / ADR-0023) start the scheduler-side daemons.
 # Two paths:
@@ -187,8 +194,34 @@ load-driver \
   --cluster-id="$CLUSTER_ID" \
   --profile="$LOAD_PROFILE" \
   --metrics-addr="0.0.0.0:8771" \
+  --demand-ready-file="$DEMAND_READY_FILE" \
   >"$WORK/logs/loadgen.log" 2>&1 &
 LOADGEN_PID=$!
+
+# ---- 5. start bigfleet-operator once demand is established ----
+# ADR-0036: wait for the load-driver to finish its initial Pod fill
+# (→ UPC → CapacityRequests) before starting the operator. The
+# operator's first rollup then carries real demand, so Phase 3's
+# first-rollup gate doesn't reclaim the seeded Configured supply.
+# Generous 30-min cap: rampTo is object-creation only, so this is
+# normally minutes; the cap just bounds a wedged load-driver.
+log entrypoint "waiting for demand-ready signal before starting operator"
+wait_deadline=$((SECONDS + 1800))
+while [[ ! -f "$DEMAND_READY_FILE" ]]; do
+  if ! kill -0 "$LOADGEN_PID" 2>/dev/null; then
+    log entrypoint "load-driver exited before signalling demand-ready; tailing loadgen.log and exiting"
+    tail -n 50 "$WORK/logs/loadgen.log" || true
+    exit 1
+  fi
+  if (( SECONDS >= wait_deadline )); then
+    log entrypoint "demand-ready signal did not appear within 30m; starting operator anyway"
+    break
+  fi
+  sleep 2
+done
+log operator "starting (cluster=$CLUSTER_ID shard=$BIGFLEET_SHARD_ADDR qps=${OPERATOR_QPS:-default} ack=${OPERATOR_ACK_CONCURRENCY:-default})"
+bigfleet-operator "${op_args[@]}" >"$WORK/logs/operator.log" 2>&1 &
+OPERATOR_PID=$!
 
 log entrypoint "workload-side up"
 

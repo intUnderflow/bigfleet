@@ -189,12 +189,13 @@ type profileV2 struct {
 		ConfiguredFraction    float64 `yaml:"configuredFraction"`
 		SpeculativeMultiplier int     `yaml:"speculativeMultiplier"`
 		IdleHeadroomFraction  float64 `yaml:"idleHeadroomFraction"`
-		// PreBindFraction (M52.B, ADR-0035): fraction of target Pods
-		// the load-driver pre-binds to existing fake-Nodes at install
-		// (Spec.NodeName set, scheduler bypassed). 1.0 puts the
-		// cluster in steady state at install; 0.0 keeps the legacy
-		// scheduler-bound ramp. Default 0.0 if unset.
-		PreBindFraction float64 `yaml:"preBindFraction"`
+		// PreBind (M52.B, ADR-0035): when true, the load-driver
+		// fast-binds the initial Pod fill to fake-Nodes via the Bind
+		// API (after the Pods have gone through the realistic
+		// Unschedulable → UPC → CapacityRequest path), bypassing the
+		// slow kube-scheduler bulk-bind ramp. Default false keeps the
+		// scheduler-bound ramp.
+		PreBind bool `yaml:"preBind"`
 	} `yaml:"seed"`
 	LoadProfile struct {
 		RampSeconds    int     `yaml:"rampSeconds"`
@@ -235,9 +236,6 @@ func (p profileV2) validate() error {
 	}
 	if p.Seed.IdleHeadroomFraction < 0 {
 		return fmt.Errorf("profile %q: seed.idleHeadroomFraction must be ≥ 0 (got %g)", name, p.Seed.IdleHeadroomFraction)
-	}
-	if p.Seed.PreBindFraction < 0 || p.Seed.PreBindFraction > 1 {
-		return fmt.Errorf("profile %q: seed.preBindFraction must be in [0, 1] (got %g)", name, p.Seed.PreBindFraction)
 	}
 	return nil
 }
@@ -439,7 +437,7 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]a
 			"churnPerMinute":      p.LoadProfile.ChurnPerMinute,
 			"durationSeconds":     p.LoadProfile.SoakSeconds,
 			"reconcilePerTickCap": 200,
-			"preBindFraction":     p.Seed.PreBindFraction,
+			"preBind":             p.Seed.PreBind,
 		},
 		"operator": map[string]any{
 			"qps":            200,
@@ -758,11 +756,12 @@ func run(args []string) error {
 	// the post-mortem distinction matters for diagnosing harness vs
 	// system-under-test regressions.
 	//
-	// With seed.preBindFraction=1.0 (the ADR-0035 default for new
-	// profiles), the load-driver pre-binds the entire target at install
-	// and this wait is near-instant. Legacy profiles with
-	// preBindFraction=0 still pay for a scheduler-bound ramp; the
-	// budget formula (M22) accounts for those.
+	// With seed.preBind=true (the ADR-0035 default for new profiles),
+	// the load-driver fast-binds the initial fill to fake-Nodes as
+	// they appear, so steady state is reached without the kube-
+	// scheduler bulk-bind ramp. Legacy profiles with preBind=false
+	// still pay for a scheduler-bound ramp; the budget formula (M22)
+	// accounts for those.
 	totalCRs := prof.KWOK.ClusterCount * prof.LoadProfile.Target
 	rampBudget, rampSource := resolveRampBudget(prof, totalCRs)
 	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s) [sanity check; SLO gating runs over the soak window per ADR-0035]\n", rampBudget, rampSource)

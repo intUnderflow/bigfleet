@@ -32,6 +32,8 @@ This violates the hard rule [`static-stability`](../papers/bigfleet.md): "Cluste
 
 This is latent since M29 (commit `895f1cf`, 2026-05-05, four days before M44.4 Drop F arrived). It was masked in earlier scaletests by the load-driver shape — CRs arrived at ~60-90s and the post-rollup Bootstrap activity hid the install-time reclaim spike. ADR-0035's pre-bind path made the spike visible because pre-bound Pods don't generate CRs (UPC only watches Unschedulable Pods), so the rollup-driven Bootstrap activity that masked the install spike stayed low.
 
+**Why first-rollup is the correct signal.** A production BigFleet operator is deployed *into a cluster that already runs workloads* — its first rollup reflects the cluster's pre-existing CapacityRequest state. CRs persist for the lifetime of their Pod and the rollup is the cluster's *total* desired capacity, not a delta (`bigfleet.md`: roll-ups are full replacement). So a production operator's first rollup is non-empty whenever the cluster has demand; an empty first rollup genuinely means "this cluster has no demand," and reclaiming its excess Configured supply is the correct response. The gate-release-on-first-rollup design relies on this assumption. A test harness that starts the operator *before* establishing the cluster's demand violates the assumption — the harness must fix its own ordering (start the operator once the cluster is saturated with demand), not ask BigFleet to special-case empty rollups. The scaletest harness's operator-startup gate exists for exactly this reason.
+
 ## Goals
 
 1. **Static stability holds across shard restart.** Configured supply across the fleet does not reclaim merely because the shard's worker pool started running before operators reported.
