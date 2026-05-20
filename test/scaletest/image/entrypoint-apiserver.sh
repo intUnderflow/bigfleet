@@ -185,26 +185,27 @@ kwok \
   >"$WORK/logs/kwok.log" 2>&1 &
 KWOK_PID=$!
 
-# ---- 7. start kube-controller-manager (garbage-collector only) ----
+# ---- 7. start kube-controller-manager ----
 #
-# Stock Kubernetes runs many controllers (replication, deployment, GC,
-# TTL, etc.). For the harness we only need garbage-collector — it's the
-# controller that walks ownerRef chains and cascade-deletes owned
-# objects when their owner is deleted. UPC creates each CR with the
-# owning Pod as its sole ownerRef; without GC the CRs accumulate as
-# orphans on every churn cycle.
-#
-# --controllers=garbage-collector,namespace disables every other
-# controller, so we don't pay CPU for replicaset / endpoint / etc.
-# work the harness has no use for. (namespace stays on so the empty
-# default namespace continues to exist.)
-log kcm "starting (garbage-collector only)"
+# Controllers enabled, and why each is needed:
+#  - garbage-collector  : walks ownerRef chains and cascade-deletes owned
+#                         objects. UPC owner-refs each CR to its Pod, so
+#                         GC removes the CR when the Pod is deleted.
+#  - namespace          : keeps the `default` namespace alive.
+#  - deployment / replicaset / statefulset : ADR-0038 — the load-driver
+#                         creates workloads as Deployments / StatefulSets,
+#                         not bare Pods, so an evicted Pod is recreated by
+#                         its controller and demand is conserved across a
+#                         Phase 3 drain (bigfleet-uber #45 cascade fix).
+# Every other stock controller stays off so the harness pays no CPU for
+# work it has no use for (endpoints, node lifecycle, etc.).
+log kcm "starting (gc + namespace + deployment/replicaset/statefulset)"
 kube-controller-manager \
   --kubeconfig="$KCFG" \
   --authentication-kubeconfig="$KCFG" \
   --authorization-kubeconfig="$KCFG" \
   --leader-elect=false \
-  --controllers=garbage-collector-controller,namespace-controller \
+  --controllers=garbage-collector-controller,namespace-controller,deployment-controller,replicaset-controller,statefulset-controller \
   --root-ca-file="$WORK/certs/ca.crt" \
   --service-account-private-key-file="$WORK/certs/sa.key" \
   --use-service-account-credentials=false \
