@@ -1,19 +1,26 @@
-// Command load-driver emits realistic CapacityRequest churn against a
-// KWOK-backed apiserver inside a scaletest pod.
+// Command load-driver emits realistic, controller-managed workload churn
+// against a KWOK-backed apiserver inside a scaletest pod.
 //
-// One load-driver per simulated cluster. It maintains a target
-// population of CapacityRequests (count from the profile), then churns
-// at a configured rate: every churn tick a fraction of CRs are deleted
-// and recreated with new names. Deletion → recreation models pod
-// completion + resubmission, which is the dominant CR lifecycle in
-// production.
+// One load-driver per simulated cluster. It creates real
+// controller-managed workload objects (Deployment / StatefulSet) until
+// the per-cluster Pod target is met, then churns at a configured rate:
+// every churn tick a fraction of Pods are deleted — and their owning
+// controller recreates them. Deletion → recreation models pod completion
+// + resubmission, which is the dominant Pod lifecycle in production.
+//
+// ADR-0038: workloads are controller-managed objects, not bare Pods. A
+// bare Pod, once evicted by a Phase 3 drain, is gone forever — that made
+// every reclaim permanently destroy demand and produced an unbounded
+// supply-thrash cascade. Deployment/StatefulSet controllers recreate
+// evicted Pods, so demand is conserved and Phase 3 self-arrests at the
+// true surplus.
 //
 // Profiles are YAML, mounted from a ConfigMap by the harness chart:
 //
-//	target: 1000              # steady-state CR count
-//	churnPerMinute: 0.05      # 5% of CRs replaced per minute
-//	burstAtStart: 0           # extra CRs created at t=0 then drained
-//	priorityClasses: [100, 1000, 1000000]   # round-robin per CR
+//	target: 1000              # steady-state Pod count
+//	churnPerMinute: 0.05      # 5% of Pods replaced per minute
+//	burstAtStart: 0           # extra Pods created at t=0 then drained
+//	priorityClasses: [100, 1000, 1000000]   # round-robin per workload
 //	durationSeconds: 1800     # how long to keep churning; 0 = forever
 //
 // Metrics:
@@ -45,6 +52,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gopkg.in/yaml.v3"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -55,7 +63,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 )
 
@@ -67,12 +74,12 @@ type profile struct {
 	DurationSeconds int     `yaml:"durationSeconds"`
 
 	// Archetypes: a list of workload templates, weighted-picked on every
-	// createOne. When non-empty, the GPU-only single-shape fallback
-	// below is bypassed and CRs are emitted from the chosen archetype.
-	// Both the load-driver and the shard's Configured seed read this
-	// list (M31). When empty, behaviour is identical to pre-M31:
-	// instance-type=a3-highgpu-8g, nvidia.com/gpu=8, priority from
-	// PriorityClasses (or 1000), penalties 8192/65536. See
+	// workload-object creation. When non-empty, the GPU-only single-shape
+	// fallback below is bypassed and workloads are emitted from the
+	// chosen archetype. Both the load-driver and the shard's Configured
+	// seed read this list (M31). When empty, behaviour is identical to
+	// pre-M31: instance-type=a3-highgpu-8g, nvidia.com/gpu=8, priority
+	// from PriorityClasses (or 1000), penalties 8192/65536. See
 	// test/scaletest/profiles/archetypes/realistic.yaml for the
 	// production-realistic catalog.
 	Archetypes []archetype.Archetype `yaml:"archetypes"`
@@ -124,49 +131,27 @@ type profile struct {
 	MicroBurstRatePerMinute float64 `yaml:"microBurstRatePerMinute"`
 	MicroBurstFactor        float64 `yaml:"microBurstFactor"`
 
-	// Mode (M43a / Item 10, M44 default flip): "" or "pods" emit
-	// Pods with archetype-shaped nodeAffinity + resources, leaving
-	// the rest of the production loop (mark-Unschedulable,
-	// bigfleet-unschedulable-pod-controller, Node creation, Pod
-	// binding) to the bigfleet-scaletest-pod-shim (M43b/c). This is
-	// the realistic shape — what users actually feel — so it's the
-	// default. "cr" is the opt-in legacy shape that bypasses the
-	// Pod layer entirely (cheap, but doesn't exercise the user-
-	// facing binding-latency path; bindingLatencyP99 gate skipped
-	// via -1 sentinel per ADR-0017).
-	Mode string `yaml:"mode"`
-
-	// ReconcilePerTickCap (M45.5): per-tick limit on creates/deletes
-	// applied by `reconcileTarget`. The 20/tick default was sized
-	// for ~1000-Pod-per-cluster targets where a 50-Pod drift catches
-	// up in 2-3 sec. At 100K-Pod-per-cluster targets (density=100 →
-	// 50K machines fleet-wide), 33 Pods/sec is the minimum ramp-rate
-	// per cluster to fill in under an hour — the cap has to scale or
-	// `loadgenCRsActive` plateaus arbitrarily far below target.
-	// 0 falls back to the historical default of 20. Profiles bumping
-	// per-cluster Pod targets should bump this proportionally.
+	// ReconcilePerTickCap is parsed-but-unused (ADR-0038): the
+	// per-tick reconcile loop it bounded was a hand-rolled
+	// pseudo-ReplicaSet, now replaced by real Deployment/StatefulSet
+	// controllers. The field is kept so mounted ConfigMaps that still
+	// set it don't fail unmarshal; remove it once no profile carries
+	// it.
 	ReconcilePerTickCap int `yaml:"reconcilePerTickCap"`
 
 	// PreBind (M52.B, ADR-0035): when true, the load-driver binds the
 	// initial Pod fill to fake-Nodes via the Bind API after rampTo,
 	// bypassing kube-scheduler's slow filter/score cycle. The Pods
 	// still go through the realistic Unschedulable → UPC →
-	// CapacityRequest path first (rampTo creates them without
-	// Spec.NodeName); only the binding is fast-pathed. Soak churn
-	// Pods are never pre-bound — they go through kube-scheduler, the
-	// path the steady-state SLO measures.
+	// CapacityRequest path first (the workload controllers create them
+	// without Spec.NodeName); only the binding is fast-pathed. Soak
+	// churn Pods are never pre-bound — they go through kube-scheduler,
+	// the path the steady-state SLO measures.
 	//
 	// Default false = scheduler-bound ramp. ADR-0035's steady-state
 	// methodology sets this true so the install reaches steady state
 	// without paying the kube-scheduler bulk-bind ramp.
 	PreBind bool `yaml:"preBind"`
-}
-
-func (p *profile) reconcilePerTickCap() int {
-	if p.ReconcilePerTickCap > 0 {
-		return p.ReconcilePerTickCap
-	}
-	return 20
 }
 
 type burstSpec struct {
@@ -190,6 +175,74 @@ func (p profile) demandArchetypes() []archetype.Archetype {
 		return p.DemandArchetypes
 	}
 	return p.Archetypes
+}
+
+// statefulArchetypes is the hardcoded set of archetype names whose
+// workloads need stable identity / ordered semantics — these become
+// StatefulSets; everything else becomes a Deployment. ADR-0038: the
+// classification is intentionally a small in-code set, not a profile
+// knob (YAGNI).
+var statefulArchetypes = map[string]bool{
+	"stateful-db":  true,
+	"memory-cache": true,
+}
+
+// isStateful reports whether an archetype's workload should be modelled
+// as a StatefulSet rather than a Deployment. ADR-0038.
+func isStateful(archName string) bool {
+	return statefulArchetypes[archName]
+}
+
+// replicaBucket is one band of the hardcoded service-size distribution.
+// A workload object's replica count is a uniform draw within the
+// weighted-picked bucket's [lo, hi] range.
+type replicaBucket struct {
+	weight int
+	lo, hi int
+}
+
+// replicaDistribution is the hardcoded heavy-tailed service-size
+// distribution: most services are small, a few are large. ADR-0038
+// fixes this in code on purpose — it is a modelling decision, not a
+// per-profile knob (YAGNI).
+var replicaDistribution = []replicaBucket{
+	{weight: 55, lo: 1, hi: 5},
+	{weight: 30, lo: 6, hi: 25},
+	{weight: 12, lo: 26, hi: 100},
+	{weight: 3, lo: 101, hi: 400},
+}
+
+// statefulReplicaCap clamps StatefulSet replica draws. StatefulSets
+// create Pods ordinally/serially, so a large one bottlenecks the ramp;
+// stateful workloads are kept small.
+const statefulReplicaCap = 25
+
+// pickReplicas draws a workload object's replica count from the
+// hardcoded service-size distribution. Stateful workloads are clamped to
+// statefulReplicaCap.
+func pickReplicas(rng *rand.Rand, stateful bool) int {
+	full := 0
+	for _, b := range replicaDistribution {
+		full += b.weight
+	}
+	r := rng.Intn(full)
+	cum := 0
+	var chosen replicaBucket
+	for _, b := range replicaDistribution {
+		cum += b.weight
+		if r < cum {
+			chosen = b
+			break
+		}
+	}
+	n := chosen.lo
+	if chosen.hi > chosen.lo {
+		n = chosen.lo + rng.Intn(chosen.hi-chosen.lo+1)
+	}
+	if stateful && n > statefulReplicaCap {
+		n = statefulReplicaCap
+	}
+	return n
 }
 
 var (
@@ -258,7 +311,7 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("load-driver", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	clusterID := fs.String("cluster-id", "", "stable cluster ID; used as a CR name prefix")
+	clusterID := fs.String("cluster-id", "", "stable cluster ID; used as a workload-object name prefix")
 	kubeconfig := fs.String("kubeconfig", "", "path to kubeconfig")
 	profilePath := fs.String("profile", "", "path to load profile YAML")
 	metricsAddr := fs.String("metrics-addr", ":8771", "/metrics endpoint")
@@ -344,7 +397,7 @@ func run(args []string) error {
 		cs:              cs,
 		prof:            prof,
 		rng:             rand.New(rand.NewSource(time.Now().UnixNano())),
-		known:           make(map[string]crMeta, prof.Target),
+		workloads:       make(map[string]workloadMeta),
 		picker:          archetype.NewPicker(prof.demandArchetypes()),
 		archByName:      indexArchetypes(prof.demandArchetypes()),
 		demandReadyFile: *demandReadyFile,
@@ -368,19 +421,20 @@ type driver struct {
 	picker     *archetype.Picker
 	archByName map[string]*archetype.Archetype
 
-	mu     sync.Mutex
-	known  map[string]crMeta
-	seq    uint64
-	groups map[string]*driverGroup // archetype name → current group
-
-	// steadyState flips true the first time the driver's active count
-	// reaches the profile target. Pods created after that point carry
-	// the bigfleet.lucy.sh/steady-state=true label so pod-shim's binder
-	// can record their latency in the *steady-state* histogram. The
-	// initial fill produces a thundering-herd binding pattern that's
-	// not representative of production; isolating the post-fill churn
-	// in its own metric keeps the SLO honest.
-	steadyState atomic.Bool
+	mu  sync.Mutex
+	seq uint64
+	// workloads tracks every controller-managed workload object this
+	// driver has created. Keyed by object name. activeCount() returns
+	// Σreplicas across this map — the Pod target the gauges report.
+	workloads map[string]workloadMeta
+	// steadyMarked flips true the first time the cluster reaches its
+	// target Pod count. Pod templates built after that point carry the
+	// scaletest.bigfleet/state="steady" label so the binder records
+	// their latency in the steady-state histogram. The initial fill
+	// produces a thundering-herd binding pattern that's not
+	// representative of production; isolating post-fill churn in its
+	// own metric keeps the SLO honest.
+	steadyMarked bool
 
 	// demandReadyFile, when non-empty, is touched once the initial
 	// Pod fill (rampTo) completes — i.e. once the cluster's demand is
@@ -392,18 +446,25 @@ type driver struct {
 	demandReadyFile string
 }
 
-// driverGroup is a per-archetype Same-rack group. Stays open until
-// `remaining` CRs have been allocated, then a fresh group is minted.
-type driverGroup struct {
-	uid       string
-	remaining int
-}
+// workloadKind distinguishes the two controller-managed object kinds the
+// load-driver creates.
+type workloadKind int
 
-// crMeta records per-CR bookkeeping needed for ADR-0015 §2 lifetime
-// aging. The archetype name keys back into archByName when picking
-// which CRs to age out.
-type crMeta struct {
+const (
+	kindDeployment workloadKind = iota
+	kindStatefulSet
+)
+
+// workloadMeta records per-workload-object bookkeeping. ADR-0038
+// replaces the per-Pod `known`/`crMeta` map with one entry per workload
+// object; the Pod population is owned by the object's controller.
+type workloadMeta struct {
+	kind      workloadKind
 	archetype string
+	replicas  int
+	// burst marks an object created by a burst event, so drain can
+	// delete exactly the burst objects again.
+	burst bool
 }
 
 // poissonInt samples an integer from Poisson(mean) via the Knuth
@@ -509,15 +570,15 @@ func (d *driver) run(ctx context.Context) error {
 	// across ramp and steady-state churn.
 	go d.anchorSameRackGroups(ctx)
 
-	// Phase 1: ramp to target — create the Pods. They are created
-	// WITHOUT Spec.NodeName, so they go Unschedulable → UPC →
-	// CapacityRequest. This establishes the cluster's demand before
-	// the BigFleet operator starts: the harness entrypoint blocks the
-	// operator on the demand-ready file written below, so the
-	// operator's first rollup reflects real demand and ADR-0036's
-	// Phase 3 gate releases on a genuine (non-empty) rollup.
+	// Phase 1: ramp to target — create the workload objects. Their
+	// controllers create Pods WITHOUT Spec.NodeName, so each Pod goes
+	// Unschedulable → UPC → CapacityRequest. This establishes the
+	// cluster's demand before the BigFleet operator starts: the harness
+	// entrypoint blocks the operator on the demand-ready file written
+	// below, so the operator's first rollup reflects real demand and
+	// ADR-0036's Phase 3 gate releases on a genuine (non-empty) rollup.
 	d.log.Info("ramping to target", "count", d.prof.Target)
-	if err := d.rampTo(ctx, d.prof.Target); err != nil {
+	if err := d.rampTo(ctx, d.prof.Target, false); err != nil {
 		return fmt.Errorf("ramp: %w", err)
 	}
 
@@ -548,7 +609,7 @@ func (d *driver) run(ctx context.Context) error {
 	// Phase 2: optional initial burst (above target, then drain back).
 	if d.prof.BurstAtStart > 0 {
 		d.log.Info("burst", "extra", d.prof.BurstAtStart)
-		if err := d.rampTo(ctx, d.prof.Target+d.prof.BurstAtStart); err != nil {
+		if err := d.rampTo(ctx, d.prof.Target+d.prof.BurstAtStart, true); err != nil {
 			return fmt.Errorf("burst: %w", err)
 		}
 	}
@@ -561,13 +622,10 @@ func (d *driver) run(ctx context.Context) error {
 	// post-soak metrics. profile.durationSeconds is now consumed only
 	// by the runner for the soak budget.
 
-	// Churn tick fires once per second. Replace a fraction of CRs sized
-	// to hit churnPerMinute averaged over each minute. Drop X: keep
-	// perTick as a float so churnPerMinute below 0.06 still represents
-	// faithfully. The previous int(target*churn/60) with a `<1 → 1`
-	// floor pinned per-cluster churn to 1 Pod/sec for any churn ≤ 1/min,
-	// so e.g. churnPerMinute=0.02 produced the same 50/sec fleet churn
-	// as 0.05 — a constant 50 Pods/sec across 50 clusters. The
+	// Churn tick fires once per second. Delete a fraction of Pods sized
+	// to hit churnPerMinute averaged over each minute; their owning
+	// controllers recreate them. Drop X: keep perTick as a float so
+	// churnPerMinute below 0.06 still represents faithfully. The
 	// accumulator below emits 1 churn when the running fractional
 	// remainder crosses 1, so the tick rate matches the configured
 	// per-minute target down to arbitrarily small rates.
@@ -630,37 +688,36 @@ func (d *driver) run(ctx context.Context) error {
 			}
 			// ADR-0015 §2: per-archetype lifetime aging.
 			d.ageByLifetime(ctx)
-			// ADR-0015 §3: ramp / drain bursts. extraOn flips the
-			// pod's effective target up while the burst is active.
+			// ADR-0015 §3: ramp / drain bursts. extraOn flips while
+			// the burst is active; the burst's extra workload objects
+			// are created on the rising edge and deleted on the
+			// falling edge.
 			for _, pb := range bursts {
 				if !pb.extraOn && !now.Before(pb.fireAt) && now.Before(pb.drainAt) {
 					pb.extraOn = true
 					d.log.Info("burst firing", "archetype", pb.spec.Archetype, "extra", pb.spec.ExtraTarget)
+					if err := d.rampExtra(ctx, pb.spec.ExtraTarget); err != nil {
+						d.log.Warn("burst ramp failed", "err", err)
+					}
 				}
 				if pb.extraOn && !now.Before(pb.drainAt) {
 					pb.extraOn = false
 					d.log.Info("burst drained", "archetype", pb.spec.Archetype)
+					d.drainBurst(ctx)
 				}
 			}
-			extra := 0
-			for _, pb := range bursts {
-				if pb.extraOn {
-					extra += pb.spec.ExtraTarget
-				}
-			}
-			// Reconcile actual count back toward target+burst-extra.
-			d.reconcileTarget(ctx, d.prof.Target+extra)
 		}
 	}
 }
 
-// ageByLifetime replaces a fraction of CRs proportional to each
-// archetype's mean lifetime. Run once per tick (1s).
+// ageByLifetime deletes a Poisson-rate fraction of Pods for each
+// finite-lifetime archetype; the Pods' owning controllers recreate them
+// — modelling a fresh batch run. Run once per tick (1s). ADR-0015 §2.
 func (d *driver) ageByLifetime(ctx context.Context) {
 	if d.archByName == nil {
 		return
 	}
-	counts := d.activeCountByArchetype()
+	counts := d.replicasByArchetype()
 	for name, n := range counts {
 		a := d.archByName[name]
 		if a == nil || a.MeanLifetimeSeconds <= 0 {
@@ -675,158 +732,426 @@ func (d *driver) ageByLifetime(ctx context.Context) {
 		if d.rng.Float64() < rate-float64(nReplace) {
 			nReplace++
 		}
-		for i := 0; i < nReplace; i++ {
-			old, ok := d.popRandomFromArchetype(name)
-			if !ok {
-				break
-			}
-			if err := d.deleteOne(ctx, old); err != nil {
-				errs.WithLabelValues("delete").Inc()
-			}
-			if err := d.createOne(ctx); err != nil {
-				errs.WithLabelValues("create").Inc()
-			}
+		if nReplace > 0 {
+			// Delete-only: the ReplicaSet / StatefulSet controller
+			// recreates each deleted Pod, which is the fresh batch run.
+			d.deletePods(ctx, nReplace, name)
 		}
 	}
 }
 
-func (d *driver) rampTo(ctx context.Context, want int) error {
+// rampTo creates workload objects until the sum of their replica counts
+// reaches `want`. ADR-0038: demand is established by controller-managed
+// objects, not bare Pods — once an object exists its controller owns the
+// Pod population. burst marks the created objects so a later drain can
+// remove exactly them.
+func (d *driver) rampTo(ctx context.Context, want int, burst bool) error {
 	for d.activeCount() < want {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := d.createOne(ctx); err != nil {
+		remaining := want - d.activeCount()
+		if err := d.createWorkload(ctx, burst, remaining); err != nil {
 			errs.WithLabelValues("create").Inc()
 			d.log.Warn("create failed", "err", err)
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	if !d.steadyState.Swap(true) {
-		steadyStateMetric.Set(1)
-		phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
+	if burst {
+		return nil
+	}
+	d.markSteadyState()
+	return nil
+}
+
+// rampExtra creates burst workload objects whose replica counts sum to
+// at least `extra`. They are tagged burst=true so drainBurst removes
+// exactly them.
+func (d *driver) rampExtra(ctx context.Context, extra int) error {
+	added := 0
+	for added < extra {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		before := d.activeCount()
+		if err := d.createWorkload(ctx, true, extra-added); err != nil {
+			errs.WithLabelValues("create").Inc()
+			d.log.Warn("burst create failed", "err", err)
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		added += d.activeCount() - before
 	}
 	return nil
 }
 
-func (d *driver) churn(ctx context.Context, n int) {
-	for i := 0; i < n; i++ {
-		name, ok := d.popRandom()
-		if !ok {
-			return
+// drainBurst deletes every workload object created by a burst. The
+// objects' controllers tear down their Pods, returning demand to the
+// pre-burst target.
+func (d *driver) drainBurst(ctx context.Context) {
+	d.mu.Lock()
+	var names []string
+	for name, m := range d.workloads {
+		if m.burst {
+			names = append(names, name)
 		}
-		if err := d.deleteOne(ctx, name); err != nil {
+	}
+	d.mu.Unlock()
+	for _, name := range names {
+		if err := d.deleteWorkload(ctx, name); err != nil {
 			errs.WithLabelValues("delete").Inc()
 		}
-		if err := d.createOne(ctx); err != nil {
-			errs.WithLabelValues("create").Inc()
-		}
 	}
 }
 
-// reconcileTarget drives the active count toward the given target,
-// up to a per-tick budget of 20 ops in either direction. Used both
-// by the legacy reconcile loop and by ADR-0015 §3's burst-aware tick
-// (which passes Target + extra burst capacity).
-func (d *driver) reconcileTarget(ctx context.Context, target int) {
-	got := d.activeCount()
-	cap := d.prof.reconcilePerTickCap()
-	switch {
-	case got < target:
-		for i := 0; i < target-got && i < cap; i++ {
-			_ = d.createOne(ctx)
-		}
-	case got > target:
-		extra := got - target
-		for i := 0; i < extra && i < cap; i++ {
-			if name, ok := d.popRandom(); ok {
-				_ = d.deleteOne(ctx, name)
-			}
-		}
+// markSteadyState flips the steady-state metric the first time the
+// cluster reaches its target Pod count.
+func (d *driver) markSteadyState() {
+	d.mu.Lock()
+	already := d.steadyMarked
+	d.steadyMarked = true
+	d.mu.Unlock()
+	if already {
+		return
 	}
+	steadyStateMetric.Set(1)
+	phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
 }
 
-func (d *driver) createOne(ctx context.Context) error {
+// churn deletes n random Pods (label-selected by archetype); each Pod's
+// owning Deployment/StatefulSet controller recreates it. ADR-0038: churn
+// is "delete a Pod, its controller recreates it" — not delete+recreate
+// of a bare object.
+func (d *driver) churn(ctx context.Context, n int) {
+	d.deletePods(ctx, n, "")
+}
+
+// createWorkload builds and creates one controller-managed workload
+// object (Deployment or StatefulSet, by archetype classification),
+// records it in the workloads map, and updates gauges. `remaining`, when
+// positive, caps the replica count so the ramp doesn't badly overshoot
+// the target on its final object; 0 means no cap.
+func (d *driver) createWorkload(ctx context.Context, burst bool, remaining int) error {
 	d.mu.Lock()
 	d.seq++
+	seq := d.seq
 	d.mu.Unlock()
 
-	if d.prof.Mode == "pods" {
-		return d.createOnePod(ctx)
+	a := d.picker.Pick(d.rng)
+	archName := ""
+	if a != nil {
+		archName = a.Name
+	}
+	stateful := isStateful(archName)
+	replicas := pickReplicas(d.rng, stateful)
+	// Cap the final object so a heavy-tailed draw doesn't overshoot the
+	// target by hundreds of Pods. Keep at least 1 replica.
+	if remaining > 0 && replicas > remaining {
+		replicas = remaining
+	}
+	if replicas < 1 {
+		replicas = 1
 	}
 
-	name := fmt.Sprintf("%s-cr-%06d", d.clusterID, d.seq)
-	cr, archName := d.buildCRWithArchetype(name)
-	if err := d.k.Create(ctx, cr); err != nil {
+	name := fmt.Sprintf("%s-%s-%d", d.clusterID, archetypeNameOrLegacy(archName), seq)
+	tmpl := d.buildPodTemplate(a)
+
+	var obj client.Object
+	kind := kindDeployment
+	if stateful {
+		kind = kindStatefulSet
+		obj = buildStatefulSet(name, int32(replicas), tmpl)
+	} else {
+		obj = buildDeployment(name, int32(replicas), tmpl)
+	}
+	if err := d.k.Create(ctx, obj); err != nil {
 		return err
 	}
 	d.mu.Lock()
-	d.known[name] = crMeta{archetype: archName}
+	d.workloads[name] = workloadMeta{kind: kind, archetype: archName, replicas: replicas, burst: burst}
 	d.mu.Unlock()
 	created.Inc()
 	active.Set(float64(d.activeCount()))
 	return nil
 }
 
-// createOnePod is the M43a path: emit a Pod (not a CR) with archetype-
-// shaped affinity + resources + annotations. Pods stay Pending until
-// M43b wires the bigfleet-scaletest-pod-shim that marks them
-// Unschedulable and lets bigfleet-unschedulable-pod-controller emit
-// CRs from there.
-func (d *driver) createOnePod(ctx context.Context) error {
-	name := fmt.Sprintf("%s-pod-%06d", d.clusterID, d.seq)
-	pod, archName := d.buildPodWithArchetype(name)
-	if err := d.k.Create(ctx, pod); err != nil {
-		return err
+// archetypeNameOrLegacy returns the archetype name for object naming,
+// substituting "legacy" when no archetype catalog is configured.
+func archetypeNameOrLegacy(archName string) string {
+	if archName == "" {
+		return "legacy"
 	}
-	d.mu.Lock()
-	d.known[name] = crMeta{archetype: archName}
-	now := len(d.known)
-	d.mu.Unlock()
-	created.Inc()
-	active.Set(float64(now))
-	// Flip steady-state once the cluster has reached its target Pod
-	// count. Subsequent Pods (churn replacements) carry the
-	// scaletest.bigfleet/state="steady" label so pod-shim can record
-	// their bind latency in the steady-state histogram. Idempotent —
-	// the atomic stays true once flipped, even if churn briefly drops
-	// the count below target.
-	if d.prof.Target > 0 && now >= d.prof.Target && !d.steadyState.Swap(true) {
-		steadyStateMetric.Set(1)
-		phaseStartedAt.WithLabelValues("steady").Set(float64(time.Now().Unix()))
-	}
-	return nil
+	return archName
 }
 
-// labelArchetype is set on every seeded Configured machine (and so on
-// every kwok fake-Node derived from one). The load-driver's pre-bind
-// phase uses it to recognise BigFleet-managed fake-Nodes.
-const labelArchetype = "scaletest.bigfleet/archetype"
+const (
+	// labelWorkload is the per-object unique label that ties a
+	// Deployment/StatefulSet to exactly its own Pods. It is the
+	// controller's Selector and is also on the Pod template.
+	labelWorkload = "scaletest.bigfleet/workload"
+	// labelArchetype is set on every seeded Configured machine (and so
+	// on every kwok fake-Node derived from one), and on every Pod
+	// template the load-driver builds. churn/aging label-select Pods by
+	// it; the pre-bind phase uses it to recognise BigFleet-managed
+	// fake-Nodes.
+	labelArchetype = "scaletest.bigfleet/archetype"
+)
 
-// preBindInitialPods binds the initial Pod fill to fake-Nodes via the
-// Bind API, bypassing kube-scheduler's slow filter/score cycle. M52.B
-// (ADR-0035). The Pods were already created by rampTo *without*
-// Spec.NodeName — so they went Unschedulable → UPC → CapacityRequest,
-// keeping the demand path realistic — and this step just binds them
-// fast once supply (fake-Nodes) materialises.
-//
-// Patient retry: fake-Nodes appear only after the operator starts and
-// the shard → UpcomingNode → node-creator pipeline runs, so the loop
-// keeps sweeping until every initial Pod is bound or the deadline
-// fires. Soak churn Pods created after this returns are NOT pre-bound
-// — they go through kube-scheduler, which is the path the steady-state
-// SLO must measure.
+// buildDeployment wraps a pod template in a Deployment. ADR-0038:
+// stateless archetypes are controller-managed via Deployment so an
+// evicted Pod is recreated by its ReplicaSet.
+func buildDeployment(name string, replicas int32, tmpl corev1.PodTemplateSpec) *appsv1.Deployment {
+	tmpl.Labels[labelWorkload] = name
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{labelWorkload: name},
+			},
+			Template: tmpl,
+		},
+	}
+}
+
+// buildStatefulSet wraps a pod template in a StatefulSet. ADR-0038:
+// stateful archetypes use StatefulSet for stable-identity / ordered
+// semantics only — no volumeClaimTemplates, the harness does not model
+// storage.
+func buildStatefulSet(name string, replicas int32, tmpl corev1.PodTemplateSpec) *appsv1.StatefulSet {
+	tmpl.Labels[labelWorkload] = name
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    &replicas,
+			ServiceName: name,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{labelWorkload: name},
+			},
+			Template: tmpl,
+		},
+	}
+}
+
+const (
+	// labelCoLocationGroup tags every Pod of one sameRack group with a
+	// shared, group-unique value. The Pod's podAffinity selects it; the
+	// operator aggregates CRs carrying an equal CoLocation term into one
+	// Need. ADR-0024.
+	labelCoLocationGroup = "scaletest.bigfleet/co-location-group"
+	// topologyKeyRack is the node-label key sameRack archetypes
+	// co-locate on — the TopologyKey of their podAffinity term, which
+	// the operator turns into a Same(rack) requirement.
+	topologyKeyRack = "topology.bigfleet/rack"
+)
+
+// buildPodTemplate constructs the pod template for one workload object.
+// ADR-0038: a workload object's replicas all share ONE shape — one
+// PickSize, one PickLabels, one priority, one spread draw, one
+// co-location group label. Both buildDeployment and buildStatefulSet
+// embed this. The template carries every field the unschedulable-pod
+// controller reads (labels, penalty annotations, Affinity,
+// TopologySpreadConstraints) so the Unschedulable → UPC →
+// CapacityRequest chain is unchanged.
+func (d *driver) buildPodTemplate(a *archetype.Archetype) corev1.PodTemplateSpec {
+	if a == nil {
+		return d.buildLegacyPodTemplate()
+	}
+	terms := []corev1.NodeSelectorRequirement{}
+	if len(a.InstanceTypes) > 0 {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      "node.kubernetes.io/instance-type",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.InstanceTypes...),
+		})
+	}
+	if len(a.Zones) > 0 {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   append([]string(nil), a.Zones...),
+		})
+	}
+	for k, v := range a.PickLabels(d.rng) {
+		terms = append(terms, corev1.NodeSelectorRequirement{
+			Key:      k,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{v},
+		})
+	}
+	resources := corev1.ResourceList{}
+	for k, v := range a.PickSize(d.rng) {
+		resources[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	pri := int32(1000)
+	if len(a.PriorityClasses) > 0 {
+		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
+	}
+	labels := map[string]string{labelArchetype: a.Name}
+	if d.steadyState() {
+		// M44.4: marker for the binder to record steady-state binding
+		// latency in a separate histogram. Pods created during the
+		// initial fill (cluster ramping from 0 → target) are excluded
+		// — that thundering-herd binding pattern isn't representative
+		// of production and shouldn't dominate the SLO.
+		labels["scaletest.bigfleet/state"] = "steady"
+	}
+	affinity := &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: terms,
+				}},
+			},
+		},
+	}
+	if a.SameRack {
+		// ADR-0024: co-location is a real podAffinity term. Every Pod
+		// of this workload object carries one group-unique label and
+		// requires co-scheduling with peers carrying it on
+		// topology.bigfleet/rack. The UPC projects this into
+		// CR.Spec.CoLocation; the operator aggregates equal terms into
+		// one Need with a Same(rack) requirement. ADR-0038: one
+		// workload object IS one co-location group — every replica
+		// shares the group label — so the group size is the object's
+		// replica count.
+		gid := fmt.Sprintf("%s-%s-grp-%d", d.clusterID, a.Name, d.nextSeq())
+		labels[labelCoLocationGroup] = gid
+		affinity.PodAffinity = &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{labelCoLocationGroup: gid},
+				},
+				TopologyKey: topologyKeyRack,
+			}},
+		}
+	}
+	// scale-test review: topology spread, probabilistically per the
+	// archetype's SpreadConstraintProb. The selector matches the
+	// archetype label so each Pod participates in the spread group for
+	// its archetype. UPC's pod→CR translator carries this through to
+	// CapacityRequest.Spec.TopologySpread; operator rollup folds it
+	// into the Need's Profile.Spread.
+	var topologySpread []corev1.TopologySpreadConstraint
+	if sc := a.PickSpread(d.rng); sc != nil {
+		topologySpread = []corev1.TopologySpreadConstraint{{
+			TopologyKey:       sc.TopologyKey,
+			MaxSkew:           sc.MaxSkew,
+			WhenUnsatisfiable: corev1.UnsatisfiableConstraintAction(sc.WhenUnsatisfiable),
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{labelArchetype: a.Name},
+			},
+		}}
+	}
+	return corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: labels,
+			// Penalty annotations the unschedulable-pod-controller reads
+			// per pkg/controller/cr (M16 — bigfleet.lucy.sh/{interruption,
+			// reclamation}-penalty).
+			Annotations: map[string]string{
+				"bigfleet.lucy.sh/interruption-penalty": formatDollars(a.InterruptionPenalty),
+				"bigfleet.lucy.sh/reclamation-penalty":  formatDollars(a.ReclamationPenalty),
+			},
+		},
+		Spec: corev1.PodSpec{
+			Priority: &pri,
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "registry.k8s.io/pause:3.10",
+				Resources: corev1.ResourceRequirements{
+					// Extended resources (nvidia.com/gpu and any
+					// custom resource we model) are non-overcommitable
+					// in Kubernetes and require Limits to equal
+					// Requests. Mirror it for every resource so the
+					// apiserver doesn't reject the Pod.
+					Requests: resources,
+					Limits:   resources,
+				},
+			}},
+			Affinity:                  affinity,
+			TopologySpreadConstraints: topologySpread,
+		},
+	}
+}
+
+// buildLegacyPodTemplate is the pre-M31 single-shape fallback used when
+// no archetype catalog is configured: a3-highgpu-8g GPU Pods.
+func (d *driver) buildLegacyPodTemplate() corev1.PodTemplateSpec {
+	pri := int32(1000)
+	if len(d.prof.PriorityClasses) > 0 {
+		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
+	}
+	resources := corev1.ResourceList{
+		"nvidia.com/gpu": resource.MustParse("8"),
+	}
+	return corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{},
+			Annotations: map[string]string{
+				"bigfleet.lucy.sh/interruption-penalty": "8192",
+				"bigfleet.lucy.sh/reclamation-penalty":  "65536",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Priority: &pri,
+			Containers: []corev1.Container{{
+				Name:  "workload",
+				Image: "registry.k8s.io/pause:3.10",
+				Resources: corev1.ResourceRequirements{
+					Requests: resources,
+					Limits:   resources,
+				},
+			}},
+			Affinity: &corev1.Affinity{
+				NodeAffinity: &corev1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+							MatchExpressions: []corev1.NodeSelectorRequirement{{
+								Key:      "node.kubernetes.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"a3-highgpu-8g"},
+							}},
+						}},
+					},
+				},
+			},
+		},
+	}
+}
+
+// nextSeq returns a fresh monotonic sequence number under the lock.
+func (d *driver) nextSeq() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.seq++
+	return d.seq
+}
+
 // preBindConcurrency caps in-flight Bind calls per sweep. A single
 // goroutine was the M52.B initial-fill bottleneck; the apiserver
 // handles this fan-out comfortably.
 const preBindConcurrency = 64
 
+// preBindInitialPods binds the initial Pod fill to fake-Nodes via the
+// Bind API, bypassing kube-scheduler's slow filter/score cycle. M52.B
+// (ADR-0035). The Pods were created by the workload controllers
+// *without* Spec.NodeName — so they went Unschedulable → UPC →
+// CapacityRequest, keeping the demand path realistic — and this step
+// just binds them fast once supply (fake-Nodes) materialises.
+//
+// ADR-0038 guard: workload controllers create Pods asynchronously,
+// slightly after the workload objects exist, so the loop does not
+// declare done on "0 unbound" until the live Pod count has reached the
+// target — otherwise it could exit before the controllers have created
+// every Pod.
 func (d *driver) preBindInitialPods(ctx context.Context) {
 	d.log.Info("pre-bind: binding initial Pods to fake-Nodes as they appear")
 	// Safety valve only — the loop exits as soon as every initial Pod is
-	// bound. 15 min was too short: a 500K-Pod fleet fills in ~25-30 min
-	// at the observed pre-bind rate (bigfleet-uber #43), so a short
-	// deadline quit mid-fill and left the tail to the slow scheduler.
+	// bound. 45 min covers a 500K-Pod fleet's fill at the observed
+	// pre-bind rate (bigfleet-uber #43).
 	deadline := time.Now().Add(45 * time.Minute)
+	want := d.activeCount()
 	for {
 		if ctx.Err() != nil {
 			return
@@ -841,19 +1166,28 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		var allPods corev1.PodList
+		if err := d.k.List(ctx, &allPods, client.InNamespace("default")); err != nil {
+			d.log.Warn("pre-bind: list pods", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
 		if len(unbound.Items) == 0 {
-			d.log.Info("pre-bind: all initial Pods bound")
-			return
+			// ADR-0038: don't declare done until the workload
+			// controllers have actually created every Pod. A
+			// momentary "0 unbound" early in the ramp just means the
+			// controllers haven't created the Pods yet.
+			if len(allPods.Items) >= want {
+				d.log.Info("pre-bind: all initial Pods bound", "pods", len(allPods.Items))
+				return
+			}
+			d.log.Info("pre-bind: waiting for controllers to create Pods", "live", len(allPods.Items), "want", want)
+			time.Sleep(2 * time.Second)
+			continue
 		}
 		var nodes corev1.NodeList
 		if err := d.k.List(ctx, &nodes); err != nil {
 			d.log.Warn("pre-bind: list nodes", "err", err)
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		var allPods corev1.PodList
-		if err := d.k.List(ctx, &allPods, client.InNamespace("default")); err != nil {
-			d.log.Warn("pre-bind: list pods", "err", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
@@ -967,356 +1301,6 @@ func subtractRequests(remaining, req corev1.ResourceList) {
 	}
 }
 
-const (
-	// labelCoLocationGroup tags every Pod / CR of one sameRack group
-	// with a shared, group-unique value. The Pod's podAffinity selects
-	// it; the operator aggregates CRs carrying an equal CoLocation term
-	// into one Need. ADR-0024.
-	labelCoLocationGroup = "scaletest.bigfleet/co-location-group"
-	// topologyKeyRack is the node-label key sameRack archetypes
-	// co-locate on — the TopologyKey of their podAffinity term, which
-	// the operator turns into a Same(rack) requirement.
-	topologyKeyRack = "topology.bigfleet/rack"
-)
-
-// buildPodWithArchetype mirrors buildCRWithArchetype but emits a Pod.
-// Returns the Pod plus the archetype name (or "" for the legacy
-// single-shape fallback).
-func (d *driver) buildPodWithArchetype(name string) (*corev1.Pod, string) {
-	if a := d.picker.Pick(d.rng); a != nil {
-		return d.buildArchetypePod(name, a), a.Name
-	}
-	return d.buildLegacyPod(name), ""
-}
-
-// buildArchetypePod constructs a Pod with the archetype's affinity
-// terms, resources, priority, penalty annotations, and (for sameRack
-// archetypes) a real podAffinity term — the co-location signal the
-// UPC translates into CR.Spec.CoLocation and the operator turns into
-// a Same requirement at roll-up (ADR-0024).
-func (d *driver) buildArchetypePod(name string, a *archetype.Archetype) *corev1.Pod {
-	terms := []corev1.NodeSelectorRequirement{}
-	if len(a.InstanceTypes) > 0 {
-		terms = append(terms, corev1.NodeSelectorRequirement{
-			Key:      "node.kubernetes.io/instance-type",
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   append([]string(nil), a.InstanceTypes...),
-		})
-	}
-	if len(a.Zones) > 0 {
-		terms = append(terms, corev1.NodeSelectorRequirement{
-			Key:      "topology.kubernetes.io/zone",
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   append([]string(nil), a.Zones...),
-		})
-	}
-	for k, v := range a.PickLabels(d.rng) {
-		terms = append(terms, corev1.NodeSelectorRequirement{
-			Key:      k,
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   []string{v},
-		})
-	}
-	resources := corev1.ResourceList{}
-	for k, v := range a.PickSize(d.rng) {
-		resources[corev1.ResourceName(k)] = resource.MustParse(v)
-	}
-	pri := int32(1000)
-	if len(a.PriorityClasses) > 0 {
-		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
-	}
-	labels := map[string]string{"scaletest.bigfleet/archetype": a.Name}
-	if d.steadyState.Load() {
-		// M44.4: marker for pod-shim to record steady-state binding
-		// latency in a separate histogram. Pods created during the
-		// initial fill (cluster ramping from 0 → target) are excluded
-		// — that thundering-herd binding pattern isn't representative
-		// of production and shouldn't dominate the SLO. The "state"
-		// suffix leaves room for additional values later (e.g. "burst").
-		// Uses the harness-specific scaletest.bigfleet/* prefix so it
-		// can't be mistaken for a production-bigfleet label.
-		labels["scaletest.bigfleet/state"] = "steady"
-	}
-	meta := metav1.ObjectMeta{
-		Name:      name,
-		Namespace: "default",
-		Labels:    labels,
-		// Penalty annotations the unschedulable-pod-controller reads
-		// per pkg/controller/cr (M16 — bigfleet.lucy.sh/{interruption,
-		// reclamation}-penalty). Using the archetype values directly
-		// keeps the harness's CR shape identical between Mode=cr and
-		// Mode=pods.
-		Annotations: map[string]string{
-			"bigfleet.lucy.sh/interruption-penalty": formatDollars(a.InterruptionPenalty),
-			"bigfleet.lucy.sh/reclamation-penalty":  formatDollars(a.ReclamationPenalty),
-		},
-	}
-	affinity := &corev1.Affinity{
-		NodeAffinity: &corev1.NodeAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-					MatchExpressions: terms,
-				}},
-			},
-		},
-	}
-	if a.SameRack {
-		// ADR-0024: co-location is a real podAffinity term. The Pod
-		// carries a group-unique label and requires co-scheduling with
-		// peers carrying it on topology.bigfleet/rack. The UPC projects
-		// this into CR.Spec.CoLocation; the operator aggregates equal
-		// terms into one Need with a Same(rack) requirement. A fresh
-		// group label every PickGroupSize pods keeps each training-job-
-		// shaped group distinct.
-		gid := d.allocateOrGetGroupUID(a)
-		labels[labelCoLocationGroup] = gid
-		affinity.PodAffinity = &corev1.PodAffinity{
-			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
-				LabelSelector: &metav1.LabelSelector{
-					MatchLabels: map[string]string{labelCoLocationGroup: gid},
-				},
-				TopologyKey: topologyKeyRack,
-			}},
-		}
-	}
-	// the scale-test review: topology spread, probabilistically per the
-	// archetype's SpreadConstraintProb. The selector matches the
-	// archetype label so each Pod participates in the spread group for
-	// its archetype. UPC's pod→CR translator carries this through to
-	// CapacityRequest.Spec.TopologySpread; operator rollup folds it
-	// into the Need's Profile.Spread.
-	var topologySpread []corev1.TopologySpreadConstraint
-	if sc := a.PickSpread(d.rng); sc != nil {
-		topologySpread = []corev1.TopologySpreadConstraint{{
-			TopologyKey:       sc.TopologyKey,
-			MaxSkew:           sc.MaxSkew,
-			WhenUnsatisfiable: corev1.UnsatisfiableConstraintAction(sc.WhenUnsatisfiable),
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"scaletest.bigfleet/archetype": a.Name},
-			},
-		}}
-	}
-	pod := &corev1.Pod{
-		ObjectMeta: meta,
-		Spec: corev1.PodSpec{
-			Priority: &pri,
-			Containers: []corev1.Container{{
-				Name:  "workload",
-				Image: "registry.k8s.io/pause:3.10",
-				Resources: corev1.ResourceRequirements{
-					// Extended resources (nvidia.com/gpu and any
-					// custom resource we model) are non-overcommitable
-					// in Kubernetes and require Limits to equal
-					// Requests. Mirror it for every resource so the
-					// apiserver doesn't reject the Pod.
-					Requests: resources,
-					Limits:   resources,
-				},
-			}},
-			Affinity:                  affinity,
-			TopologySpreadConstraints: topologySpread,
-		},
-	}
-	return pod
-}
-
-func (d *driver) buildLegacyPod(name string) *corev1.Pod {
-	pri := int32(1000)
-	if len(d.prof.PriorityClasses) > 0 {
-		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
-	}
-	resources := corev1.ResourceList{
-		"nvidia.com/gpu": resource.MustParse("8"),
-	}
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "default",
-			Annotations: map[string]string{
-				"bigfleet.lucy.sh/interruption-penalty": "8192",
-				"bigfleet.lucy.sh/reclamation-penalty":  "65536",
-			},
-		},
-		Spec: corev1.PodSpec{
-			Priority: &pri,
-			Containers: []corev1.Container{{
-				Name:  "workload",
-				Image: "registry.k8s.io/pause:3.10",
-				Resources: corev1.ResourceRequirements{
-					Requests: resources,
-					Limits:   resources,
-				},
-			}},
-			Affinity: &corev1.Affinity{
-				NodeAffinity: &corev1.NodeAffinity{
-					RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-						NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-							MatchExpressions: []corev1.NodeSelectorRequirement{{
-								Key:      "node.kubernetes.io/instance-type",
-								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"a3-highgpu-8g"},
-							}},
-						}},
-					},
-				},
-			},
-		},
-	}
-}
-
-// buildCRWithArchetype is buildCR plus the archetype name (or "" for
-// the legacy single-shape path) so per-CR aging knows which archetype
-// to attribute the CR to.
-func (d *driver) buildCRWithArchetype(name string) (*bfv1alpha1.CapacityRequest, string) {
-	if a := d.picker.Pick(d.rng); a != nil {
-		return d.buildArchetypeCR(name, a), a.Name
-	}
-	return d.buildCR(name), ""
-}
-
-// buildCR constructs the CapacityRequest spec for a single CR. When
-// archetypes are configured the picker chooses one weighted-random;
-// otherwise the legacy single-shape (a3-highgpu-8g GPU) is emitted
-// for compatibility with pre-M31 profiles.
-func (d *driver) buildCR(name string) *bfv1alpha1.CapacityRequest {
-	if a := d.picker.Pick(d.rng); a != nil {
-		return d.buildArchetypeCR(name, a)
-	}
-	pri := int32(1000)
-	if len(d.prof.PriorityClasses) > 0 {
-		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
-	}
-	intr := resource.MustParse("8192")
-	recl := resource.MustParse("65536")
-	return &bfv1alpha1.CapacityRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec: bfv1alpha1.CapacityRequestSpec{
-			Requirements: []corev1.NodeSelectorRequirement{{
-				Key:      "node.kubernetes.io/instance-type",
-				Operator: corev1.NodeSelectorOpIn,
-				Values:   []string{"a3-highgpu-8g"},
-			}},
-			Resources: corev1.ResourceList{
-				"nvidia.com/gpu": resource.MustParse("8"),
-			},
-			Priority:            pri,
-			InterruptionPenalty: &intr,
-			ReclamationPenalty:  &recl,
-		},
-	}
-}
-
-func (d *driver) buildArchetypeCR(name string, a *archetype.Archetype) *bfv1alpha1.CapacityRequest {
-	reqs := []corev1.NodeSelectorRequirement{}
-	if len(a.InstanceTypes) > 0 {
-		reqs = append(reqs, corev1.NodeSelectorRequirement{
-			Key:      "node.kubernetes.io/instance-type",
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   append([]string(nil), a.InstanceTypes...),
-		})
-	}
-	if len(a.Zones) > 0 {
-		reqs = append(reqs, corev1.NodeSelectorRequirement{
-			Key:      "topology.kubernetes.io/zone",
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   append([]string(nil), a.Zones...),
-		})
-	}
-	// ADR-0015 §1: per-CR resources picked weighted-random from
-	// SizeBuckets when present; falls back to the flat Resources
-	// map otherwise.
-	resources := corev1.ResourceList{}
-	for k, v := range a.PickSize(d.rng) {
-		resources[corev1.ResourceName(k)] = resource.MustParse(v)
-	}
-	// M35 / Item 2: per-axis label requirements. PickLabels draws a
-	// random value per axis (e.g. "team-7", "app-42") and we emit
-	// `In [value]` for each. Multiplies per-CR fingerprint
-	// cardinality into the production range.
-	for k, v := range a.PickLabels(d.rng) {
-		reqs = append(reqs, corev1.NodeSelectorRequirement{
-			Key:      k,
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   []string{v},
-		})
-	}
-	pri := int32(1000)
-	if len(a.PriorityClasses) > 0 {
-		pri = a.PriorityClasses[d.rng.Intn(len(a.PriorityClasses))]
-	}
-	intr := resource.MustParse(formatDollars(a.InterruptionPenalty))
-	recl := resource.MustParse(formatDollars(a.ReclamationPenalty))
-	meta := metav1.ObjectMeta{
-		Name:      name,
-		Namespace: "default",
-		Labels:    map[string]string{"scaletest.bigfleet/archetype": a.Name},
-	}
-	var coLocation *bfv1alpha1.CoLocationTerm
-	if a.SameRack {
-		// ADR-0024: Mode=cr sets the structured CoLocation field
-		// directly — the same shape the UPC produces from a Pod's
-		// podAffinity in Mode=pods. A fresh group label every
-		// PickGroupSize CRs keeps each training-job-shaped group
-		// distinct; the operator aggregates equal CoLocation terms
-		// into one Need with a Same(rack) requirement.
-		gid := d.allocateOrGetGroupUID(a)
-		meta.Labels[labelCoLocationGroup] = gid
-		coLocation = &bfv1alpha1.CoLocationTerm{
-			LabelSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{labelCoLocationGroup: gid},
-			},
-			TopologyKey: topologyKeyRack,
-		}
-	}
-	// the scale-test review: topology spread, probabilistically. Mirrors
-	// the Pod-mode wiring above — sets the CR's TopologySpread field
-	// directly (same shape UPC produces from Pod.Spec.TopologySpreadConstraints).
-	var spread []bfv1alpha1.TopologySpreadConstraint
-	if sc := a.PickSpread(d.rng); sc != nil {
-		spread = []bfv1alpha1.TopologySpreadConstraint{{
-			TopologyKey:       sc.TopologyKey,
-			MaxSkew:           sc.MaxSkew,
-			WhenUnsatisfiable: corev1.UnsatisfiableConstraintAction(sc.WhenUnsatisfiable),
-		}}
-	}
-	return &bfv1alpha1.CapacityRequest{
-		ObjectMeta: meta,
-		Spec: bfv1alpha1.CapacityRequestSpec{
-			Requirements:        reqs,
-			Resources:           resources,
-			Priority:            pri,
-			CoLocation:          coLocation,
-			TopologySpread:      spread,
-			InterruptionPenalty: &intr,
-			ReclamationPenalty:  &recl,
-		},
-	}
-}
-
-// allocateOrGetGroupUID returns a stable per-group UID for the
-// archetype. The driver tracks how many CRs of this archetype have
-// been emitted into the current group; once the group is full
-// (per archetype.PickGroupSize) a fresh UID is generated. M37 / ADR-
-// 0015 §4: this UID is the operator's co-location signal — every
-// CR sharing it gets a Same constraint after rollup.
-func (d *driver) allocateOrGetGroupUID(a *archetype.Archetype) string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.groups == nil {
-		d.groups = map[string]*driverGroup{}
-	}
-	g, ok := d.groups[a.Name]
-	if !ok || g.remaining <= 0 {
-		g = &driverGroup{
-			uid:       fmt.Sprintf("%s-%s-grp-%d", d.clusterID, a.Name, d.seq),
-			remaining: a.PickGroupSize(d.rng),
-		}
-		d.groups[a.Name] = g
-	}
-	g.remaining--
-	return g.uid
-}
-
 // formatDollars renders a float-dollar penalty as a fixed-point
 // resource.Quantity-parseable string. resource.MustParse rejects "0"
 // in some contexts but accepts integer strings like "8192", so we
@@ -1328,76 +1312,115 @@ func formatDollars(v float64) string {
 	return fmt.Sprintf("%f", v)
 }
 
-func (d *driver) deleteOne(ctx context.Context, name string) error {
-	var obj client.Object
-	if d.prof.Mode == "pods" {
-		obj = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
-	} else {
-		obj = &bfv1alpha1.CapacityRequest{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+// deleteWorkload deletes a tracked workload object (Deployment or
+// StatefulSet). The controller tears down its Pods. Used by burst drain.
+func (d *driver) deleteWorkload(ctx context.Context, name string) error {
+	d.mu.Lock()
+	m, ok := d.workloads[name]
+	d.mu.Unlock()
+	if !ok {
+		return nil
 	}
-	if err := d.k.Delete(ctx, obj); err != nil && !errIsNotFound(err) {
+	var obj client.Object
+	switch m.kind {
+	case kindStatefulSet:
+		obj = &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	default:
+		obj = &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	}
+	// Foreground deletion so the controller's Pods are GC'd with it.
+	policy := metav1.DeletePropagationForeground
+	if err := d.k.Delete(ctx, obj, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !errIsNotFound(err) {
 		return err
 	}
 	d.mu.Lock()
-	delete(d.known, name)
+	delete(d.workloads, name)
 	d.mu.Unlock()
 	deleted.Inc()
 	active.Set(float64(d.activeCount()))
 	return nil
 }
 
-func (d *driver) popRandom() (string, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.known) == 0 {
-		return "", false
+// deletePods deletes up to n random Pods, restricted to archetype
+// archName when non-empty. The Pods' owning Deployment/StatefulSet
+// controllers recreate them — ADR-0038's churn / aging primitive.
+// Pod selection is by label, not by an in-memory map: the load-driver
+// tracks workload objects, not individual Pods.
+func (d *driver) deletePods(ctx context.Context, n int, archName string) {
+	if n <= 0 {
+		return
 	}
-	idx := d.rng.Intn(len(d.known))
-	i := 0
-	for name := range d.known {
-		if i == idx {
-			return name, true
+	opts := []client.ListOption{client.InNamespace("default")}
+	if archName != "" {
+		opts = append(opts, client.MatchingLabels{labelArchetype: archName})
+	} else {
+		// Only delete Pods the load-driver's workloads own — the
+		// archetype label is on every workload Pod template.
+		opts = append(opts, client.HasLabels{labelArchetype})
+	}
+	var pods corev1.PodList
+	if err := d.k.List(ctx, &pods, opts...); err != nil {
+		errs.WithLabelValues("delete").Inc()
+		d.log.Warn("churn: list pods", "err", err)
+		return
+	}
+	if len(pods.Items) == 0 {
+		return
+	}
+	// Random sample without replacement via a partial Fisher-Yates
+	// shuffle over the index space.
+	idx := make([]int, len(pods.Items))
+	for i := range idx {
+		idx[i] = i
+	}
+	if n > len(idx) {
+		n = len(idx)
+	}
+	for i := 0; i < n; i++ {
+		j := i + d.rng.Intn(len(idx)-i)
+		idx[i], idx[j] = idx[j], idx[i]
+		p := &pods.Items[idx[i]]
+		if err := d.k.Delete(ctx, p); err != nil && !errIsNotFound(err) {
+			errs.WithLabelValues("delete").Inc()
+			continue
 		}
-		i++
+		deleted.Inc()
 	}
-	return "", false
 }
 
-// popRandomFromArchetype picks a random known CR whose archetype
-// matches archName. Returns ("", false) if none exists. Used by the
-// lifetime-aging path so deletes are attributed to the correct
-// archetype's churn rate.
-func (d *driver) popRandomFromArchetype(archName string) (string, bool) {
+// activeCount returns Σreplicas across every tracked workload object —
+// the cluster's Pod target. ADR-0038: the gauge that meant "active Pod
+// target" still means that, now computed as the sum of workload-object
+// replica counts rather than a per-Pod map size.
+func (d *driver) activeCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	matches := make([]string, 0, len(d.known))
-	for name, meta := range d.known {
-		if meta.archetype == archName {
-			matches = append(matches, name)
-		}
+	sum := 0
+	for _, m := range d.workloads {
+		sum += m.replicas
 	}
-	if len(matches) == 0 {
-		return "", false
-	}
-	return matches[d.rng.Intn(len(matches))], true
+	return sum
 }
 
-// activeCountByArchetype returns a map of archetype-name to count of
-// active CRs. Used by the lifetime-aging tick.
-func (d *driver) activeCountByArchetype() map[string]int {
+// replicasByArchetype returns Σreplicas grouped by archetype name. Used
+// by the lifetime-aging tick to size per-archetype Pod deletions.
+func (d *driver) replicasByArchetype() map[string]int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := map[string]int{}
-	for _, meta := range d.known {
-		out[meta.archetype]++
+	for _, m := range d.workloads {
+		out[m.archetype] += m.replicas
 	}
 	return out
 }
 
-func (d *driver) activeCount() int {
+// steadyState reports whether the cluster has reached its target Pod
+// count. Pods built after this point carry the
+// scaletest.bigfleet/state="steady" label.
+func (d *driver) steadyState() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return len(d.known)
+	return d.steadyMarked
 }
 
 func loadProfile(path string) (profile, error) {
@@ -1411,12 +1434,6 @@ func loadProfile(path string) (profile, error) {
 	}
 	if p.Target <= 0 {
 		return profile{}, errors.New("profile.target must be > 0")
-	}
-	// M44: Pod-mode is the default. Empty Mode normalises to "pods"
-	// so every profile exercises the user-facing Pod → bound chain
-	// unless it explicitly opts into the legacy "cr" shape.
-	if p.Mode == "" {
-		p.Mode = "pods"
 	}
 	return p, nil
 }
@@ -1436,7 +1453,11 @@ func newKubeClient(explicit string) (client.Client, *kubernetes.Clientset, error
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(bfv1alpha1.AddToScheme(scheme))
+	// ADR-0038: workloads are Deployments / StatefulSets; register the
+	// apps/v1 types so the controller-runtime client can create them.
+	// clientgoscheme already carries apps/v1, but register it
+	// explicitly so the dependency is visible.
+	utilruntime.Must(appsv1.AddToScheme(scheme))
 	k, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		return nil, nil, err
