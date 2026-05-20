@@ -271,92 +271,16 @@ loadProfile:
   # that opt in must pick a distribution whose weighted-mean
   # multiplier ≈ 1.0, or accept gate-cleared shifts. M44 follow-up
   # to teach the runner to compute the weighted total.
-  # M44 default: production-realistic archetype catalog (M31/ADR-0015).
-  # Six archetypes (GPU training, GPU inference, CPU batch, CPU service,
-  # memory-DB, critical-realtime) with multi-instance-type pools, zone
-  # spreads, priority diversity, sameRack groups, and short-lived batch
-  # mixed with long-lived services. Profiles that want a simpler shape
-  # (dev-5k-pods-loopback uses one cpu-small archetype for deterministic
-  # binding-loopback validation) override this list.
-  #
-  # Mirrors test/scaletest/profiles/archetypes/realistic.yaml. Inlined
-  # so the chart's ConfigMap renders without a separate -f file.
-  archetypes:
-    - name: gpu-training
-      weight: 5
-      instanceTypes: [a3-highgpu-8g]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 70, resources: { nvidia.com/gpu: "8" } }
-        - { weight: 30, resources: { nvidia.com/gpu: "16" } }
-      priorityClasses: [1000]
-      interruptionPenalty: 65536
-      reclamationPenalty: 65536
-      meanLifetimeSeconds: 0
-      sameRack: true
-      groupSizeRange: [2, 8]
-    - name: gpu-inference
-      weight: 15
-      instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 60, resources: { nvidia.com/gpu: "1" } }
-        - { weight: 40, resources: { nvidia.com/gpu: "2" } }
-      priorityClasses: [100, 1000]
-      interruptionPenalty: 4096
-      reclamationPenalty: 8192
-      meanLifetimeSeconds: 0
-    - name: cpu-batch
-      weight: 35
-      instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 30, resources: { cpu: "4",  memory: "8Gi"  } }
-        - { weight: 35, resources: { cpu: "8",  memory: "16Gi" } }
-        - { weight: 25, resources: { cpu: "16", memory: "32Gi" } }
-        - { weight: 10, resources: { cpu: "32", memory: "64Gi" } }
-      priorityClasses: [100]
-      interruptionPenalty: 64
-      reclamationPenalty: 256
-      meanLifetimeSeconds: 600
-    - name: cpu-service
-      weight: 30
-      instanceTypes: [m6i.large, m6i.xlarge, m6i.2xlarge]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 40, resources: { cpu: "2",  memory: "8Gi"  } }
-        - { weight: 35, resources: { cpu: "4",  memory: "16Gi" } }
-        - { weight: 20, resources: { cpu: "8",  memory: "32Gi" } }
-        - { weight: 5,  resources: { cpu: "16", memory: "64Gi" } }
-      priorityClasses: [1000]
-      interruptionPenalty: 1024
-      reclamationPenalty: 8192
-      meanLifetimeSeconds: 0
-    - name: memory-db
-      weight: 10
-      instanceTypes: [r6i.xlarge, r6i.2xlarge]
-      zones: [zone-a, zone-b]
-      sizeBuckets:
-        - { weight: 50, resources: { cpu: "4", memory: "32Gi"  } }
-        - { weight: 30, resources: { cpu: "4", memory: "64Gi"  } }
-        - { weight: 20, resources: { cpu: "8", memory: "128Gi" } }
-      priorityClasses: [1000]
-      interruptionPenalty: 4096
-      reclamationPenalty: 32768
-      meanLifetimeSeconds: 0
-      sameRack: true
-      groupSizeRange: [3, 5]
-    - name: critical-realtime
-      weight: 5
-      instanceTypes: [c6i.4xlarge, m6i.2xlarge]
-      zones: [zone-a, zone-b, zone-c]
-      sizeBuckets:
-        - { weight: 70, resources: { cpu: "8",  memory: "16Gi" } }
-        - { weight: 30, resources: { cpu: "16", memory: "32Gi" } }
-      priorityClasses: [1000000]
-      interruptionPenalty: 65536
-      reclamationPenalty: 65536
-      meanLifetimeSeconds: 0
+  # The workload-archetype catalog is intentionally NOT inlined here.
+  # scaletest-runner injects loadProfile.archetypes from the catalog the
+  # profile names (profile.catalog.archetypes →
+  # test/scaletest/profiles/archetypes/<name>.yaml), so that standalone
+  # file is the single source of truth. An inlined chart copy drifted
+  # from it once (the chart kept a pre-recalibration catalog while the
+  # standalone file moved on) and a whole scale run measured the wrong
+  # workload mix — hence no copy lives here. A bare `helm install`
+  # without the runner must pass the catalog itself (-f / --set-file);
+  # absent it the shard falls back to its built-in single-archetype shape.
 
 prometheus:
   enabled: true

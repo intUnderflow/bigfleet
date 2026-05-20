@@ -253,7 +253,6 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 	if _, ok := resources[corev1.ResourcePods]; !ok {
 		resources[corev1.ResourcePods] = resource.MustParse("1100")
 	}
-	fakeNodesCreated.Inc()
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: cloneLabels(upn.Spec.Labels)},
 		Spec: corev1.NodeSpec{
@@ -270,8 +269,15 @@ func (r *upcomingNodeReconciler) Reconcile(ctx context.Context, req reconcile.Re
 			}},
 		},
 	}
-	if err := r.Create(ctx, node); err != nil && !apierrors.IsAlreadyExists(err) {
-		return reconcile.Result{}, fmt.Errorf("create node: %w", err)
+	if err := r.Create(ctx, node); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			// Count only genuine successful Creates: a Create that
+			// errors (e.g. an invalid label) re-reconciles, and
+			// counting here would inflate the metric on every retry.
+			return reconcile.Result{}, fmt.Errorf("create node: %w", err)
+		}
+	} else {
+		fakeNodesCreated.Inc()
 	}
 	if node.ResourceVersion != "" {
 		statusPatch := node.DeepCopy()

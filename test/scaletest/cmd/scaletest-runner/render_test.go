@@ -9,6 +9,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// testArchetypes is a minimal valid archetype list standing in for the
+// catalog the runner injects from profile.catalog.archetypes.
+var testArchetypes = []any{
+	map[string]any{
+		"name":          "test-archetype",
+		"weight":        1,
+		"instanceTypes": []any{"m6i.large"},
+	},
+}
+
 // fixtureMerged is a helper that returns (profile, substrate,
 // mergedConfig) for a canonical 50K-machine run on the fat-host
 // example substrate.
@@ -26,7 +36,7 @@ func fixtureMerged(t *testing.T) (profileV2, substrateFile, mergedConfig) {
 func TestRenderHelmValues_CanonicalShape(t *testing.T) {
 	t.Parallel()
 	p, s, cfg := fixtureMerged(t)
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 
 	// kwok block — geometry + substrate kwokPod.
 	kwok, ok := values["kwok"].(map[string]any)
@@ -107,7 +117,7 @@ func TestRenderHelmValues_MultiShard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 	shard, _ := values["shard"].(map[string]any)
 	if got, want := shard["replicas"], 2; got != want {
 		t.Errorf("shard.replicas = %v, want %d (1M machines / 500K ceiling = 2 shards)", got, want)
@@ -130,7 +140,7 @@ func TestRenderHelmValues_SteadyStateSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 	shard, _ := values["shard"].(map[string]any)
 
 	// configured per-cluster = 50000 × 1.0 / 200 clusters = 250.
@@ -151,7 +161,7 @@ func TestRenderHelmValues_TinyScalePrometheusFootprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 	prom, _ := values["prometheus"].(map[string]any)
 	res, _ := prom["resources"].(map[string]any)
 	reqs, _ := res["requests"].(map[string]string)
@@ -168,7 +178,7 @@ func TestRenderHelmValues_TinyScalePrometheusFootprint(t *testing.T) {
 func TestRenderHelmValues_YAMLRoundTrip(t *testing.T) {
 	t.Parallel()
 	p, s, cfg := fixtureMerged(t)
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 	b, err := yaml.Marshal(values)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -194,7 +204,7 @@ func TestRenderHelmValues_HelmTemplate(t *testing.T) {
 	t.Parallel()
 
 	p, s, cfg := fixtureMerged(t)
-	values := renderHelmValues(p, s, cfg)
+	values := renderHelmValues(p, s, cfg, testArchetypes)
 	path, err := writeRenderedValues(values, t.TempDir())
 	if err != nil {
 		t.Fatalf("writeRenderedValues: %v", err)

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 )
 
@@ -152,5 +154,26 @@ func TestArchetype_PickGroupSize(t *testing.T) {
 	zero := archetype.Archetype{}
 	if got := zero.PickGroupSize(rng); got != 1 {
 		t.Errorf("unset group size = %d, want 1", got)
+	}
+}
+
+func TestArchetype_PickLabels_ProducesValidLabelValues(t *testing.T) {
+	t.Parallel()
+	// Keys mirror the realistic catalog: prefixed (contain '/'), which
+	// is legal in a label *key* but must never leak into the *value*.
+	a := archetype.Archetype{
+		Name: "tiny-stateless",
+		LabelAxes: []archetype.LabelAxis{
+			{Key: "scaletest.bigfleet/team", Count: 40},
+			{Key: "scaletest.bigfleet/app", Count: 20},
+		},
+	}
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 2_000; i++ {
+		for k, v := range a.PickLabels(rng) {
+			if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+				t.Fatalf("PickLabels[%q] = %q is not a valid label value: %v", k, v, errs)
+			}
+		}
 	}
 }

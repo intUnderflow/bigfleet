@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -348,7 +349,16 @@ func (a *Archetype) PickLabels(rng *rand.Rand) map[string]string {
 		if count <= 0 {
 			count = 1
 		}
-		out[ax.Key] = fmt.Sprintf("%s-%d", ax.Key, rng.Intn(count))
+		// The value prefix is the key's last path segment, not the
+		// whole key: a key like "scaletest.bigfleet/app" would
+		// otherwise yield "scaletest.bigfleet/app-3", and a '/' is
+		// not a valid character in a Kubernetes label *value* — the
+		// apiserver rejects the Node/CR outright.
+		prefix := ax.Key
+		if i := strings.LastIndex(prefix, "/"); i >= 0 {
+			prefix = prefix[i+1:]
+		}
+		out[ax.Key] = fmt.Sprintf("%s-%d", prefix, rng.Intn(count))
 	}
 	return out
 }

@@ -343,6 +343,33 @@ func shardReplicas(machines int) int {
 	return r
 }
 
+// loadCatalogArchetypes resolves the workload-archetype catalog the
+// profile names (profile.catalog.archetypes) to the standalone YAML at
+// <profileDir>/archetypes/<name>.yaml and returns its archetype list
+// verbatim. The runner injects this into loadProfile.archetypes so the
+// standalone catalog file is the single source of truth — the chart no
+// longer carries its own (drift-prone) copy. Empty name → "realistic".
+func loadCatalogArchetypes(profilePath, catalogName string) ([]any, error) {
+	if catalogName == "" {
+		catalogName = "realistic"
+	}
+	path := filepath.Join(filepath.Dir(profilePath), "archetypes", catalogName+".yaml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read archetype catalog: %w", err)
+	}
+	var doc struct {
+		Archetypes []any `yaml:"archetypes"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("parse archetype catalog %s: %w", path, err)
+	}
+	if len(doc.Archetypes) == 0 {
+		return nil, fmt.Errorf("archetype catalog %s has no archetypes", path)
+	}
+	return doc.Archetypes, nil
+}
+
 // renderHelmValues turns a (profile, substrate, mergedConfig) triple
 // into the values map the scaletest chart consumes. Geometry comes
 // from mergedConfig; per-Pod resources come from the substrate;
@@ -358,7 +385,7 @@ func shardReplicas(machines int) int {
 // shape. Production substrates beyond the documented ceilings may
 // need to override via `--set` at install time; that's deferred
 // follow-up.
-func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]any {
+func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes []any) map[string]any {
 	resourceMap := func(r substrateResourceMap) map[string]string {
 		return map[string]string{"cpu": r.CPU, "memory": r.Memory}
 	}
@@ -438,6 +465,7 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig) map[string]a
 			"durationSeconds":     p.LoadProfile.SoakSeconds,
 			"reconcilePerTickCap": 200,
 			"preBind":             p.Seed.PreBind,
+			"archetypes":          archetypes,
 		},
 		"operator": map[string]any{
 			"qps":            200,
@@ -634,6 +662,10 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		archetypes, err := loadCatalogArchetypes(*profilePath, pv2.Catalog.Archetypes)
+		if err != nil {
+			return err
+		}
 		mergedCfg = cfg
 		mergedActive = true
 		// Convert profileV2 fields the rest of the runner still reads
@@ -653,7 +685,7 @@ func run(args []string) error {
 		if err := os.MkdirAll(*output, 0o755); err != nil {
 			return fmt.Errorf("output dir: %w", err)
 		}
-		mergedValues, err = writeRenderedValues(renderHelmValues(pv2, sub, cfg), *output)
+		mergedValues, err = writeRenderedValues(renderHelmValues(pv2, sub, cfg, archetypes), *output)
 		if err != nil {
 			return err
 		}

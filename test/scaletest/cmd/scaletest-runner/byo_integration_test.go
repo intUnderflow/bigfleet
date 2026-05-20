@@ -70,7 +70,7 @@ func TestBYO_ProfileSubstrateMatrix(t *testing.T) {
 					t.Errorf("merged HostsNeeded = %d (must be > 0)", cfg.HostsNeeded)
 				}
 
-				values := renderHelmValues(p, s, cfg)
+				values := renderHelmValues(p, s, cfg, testArchetypes)
 				if values == nil {
 					t.Fatal("renderHelmValues returned nil")
 				}
