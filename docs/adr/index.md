@@ -44,3 +44,4 @@
 | [36](/adr/0036-phase3-gated-by-first-rollup/) | Accepted | Phase 3 reclaim must not fire before a cluster's first rollup has arrived |
 | [37](/adr/0037-scaletest-node-affinity-dimensions-are-realistic/) | Accepted | Scaletest catalog node-affinity dimensions must be realistic — drop synthetic team/app label axes |
 | [38](/adr/0038-scaletest-workloads-are-controller-managed/) | Accepted | Scaletest workloads are controller-managed objects (Deployment / StatefulSet), not bare Pods |
+| [39](/adr/0039-capacityrequest-per-pod-not-per-unschedulable-pod/) | Accepted | One CapacityRequest per Pod — not per *unschedulable* Pod; the demand signal must be total, not unmet |

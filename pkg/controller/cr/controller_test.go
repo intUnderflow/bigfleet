@@ -220,7 +220,11 @@ func TestReconciler_Idempotent(t *testing.T) {
 	}
 }
 
-func TestReconciler_SkipsScheduledPods(t *testing.T) {
+// TestReconciler_CreatesCRForScheduledPod locks in ADR-0039: a CR is
+// created for every Pod, including already-scheduled ones. The roll-up
+// must carry the cluster's total desired capacity, not only its unmet
+// demand — otherwise Phase 3 sees a phantom surplus and thrashes.
+func TestReconciler_CreatesCRForScheduledPod(t *testing.T) {
 	t.Parallel()
 	pod := unschedulablePod("scheduled-0", true, 8)
 	pod.Status.Conditions[0].Status = corev1.ConditionTrue
@@ -234,8 +238,8 @@ func TestReconciler_SkipsScheduledPods(t *testing.T) {
 	if err := c.List(context.Background(), &list); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list.Items) != 0 {
-		t.Errorf("CRs created for scheduled pod = %d, want 0", len(list.Items))
+	if len(list.Items) != 1 {
+		t.Errorf("CRs created for scheduled pod = %d, want 1 (ADR-0039)", len(list.Items))
 	}
 }
 

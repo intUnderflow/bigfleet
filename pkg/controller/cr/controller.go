@@ -1,11 +1,15 @@
 // Package cr implements the optional per-pod CapacityRequest controller
-// — the agent users opt into when they want unschedulable pods to
-// trigger BigFleet capacity provisioning automatically.
+// — the agent users opt into when they want their Pods to drive
+// BigFleet capacity provisioning automatically.
 //
-// The controller watches Pods. When a Pod has PodScheduled=False with
-// reason=Unschedulable, the controller creates a CapacityRequest that
-// owns the pod via ownerRef (so deleting the pod garbage-collects the
-// CR — the paper's implicit-withdrawal contract).
+// The controller watches Pods and creates one CapacityRequest per Pod
+// (ADR-0039), owner-referenced to the Pod so deleting the Pod
+// garbage-collects the CR — the paper's implicit-withdrawal contract.
+// One CR per Pod (Fleet-Scale Kubernetes §6.1) is what makes the
+// roll-up the cluster's *total* desired capacity: Phase 1 reads it as
+// "what to provision", Phase 3 as "what is genuinely surplus". An
+// earlier revision created a CR only for Pods seen Unschedulable; that
+// undercounts total demand and breaks Phase 3 — see ADR-0039.
 //
 // This package is *optional*. Operators that drive CRs from their own
 // admission controller, from Kueue, or from any other source are
@@ -44,7 +48,7 @@ var (
 	upcReconciles = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_unschedulable_pod_controller_reconciles_total",
 		Help: "Count of Reconcile invocations by outcome.",
-	}, []string{"outcome"}) // outcome: cr_created, cr_exists, not_unschedulable, pod_gone, error
+	}, []string{"outcome"}) // outcome: cr_created, cr_exists, pod_gone, error
 )
 
 func init() {
@@ -145,8 +149,9 @@ func WithSetupOption(o SetupOption) AddOption {
 	return func(c *addOptions) { c.setup = append(c.setup, o) }
 }
 
-// Reconcile is called by controller-runtime for each pod event. We
-// only care about pods where PodScheduled=False, reason=Unschedulable.
+// Reconcile is called by controller-runtime for each pod event. ADR-0039:
+// every Pod gets one CapacityRequest — the roll-up must carry the
+// cluster's total desired capacity, not only its unmet demand.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pod", req.NamespacedName)
 
@@ -161,10 +166,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	if !isUnschedulable(&pod) {
-		upcReconciles.WithLabelValues("not_unschedulable").Inc()
-		return ctrl.Result{}, nil
-	}
 	// Idempotent: skip if a CR already exists for this pod.
 	exists, err := r.crExistsForPod(ctx, &pod)
 	if err != nil {
@@ -239,18 +240,6 @@ func AddToManager(mgr manager.Manager, opts ...AddOption) error {
 		PriorityClassDefaults: cfg.defaults,
 	}
 	return r.SetupWithManager(mgr, cfg.setup...)
-}
-
-// isUnschedulable reports whether the pod has PodScheduled=False with
-// reason=Unschedulable.
-func isUnschedulable(pod *corev1.Pod) bool {
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse &&
-			c.Reason == corev1.PodReasonUnschedulable {
-			return true
-		}
-	}
-	return false
 }
 
 // crExistsForPod returns whether the controller has already produced a
