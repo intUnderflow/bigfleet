@@ -97,6 +97,22 @@ scale: ## Run scale ceiling tests (slow; tagged "scale"). Designed for the M5 Ma
 soak: ## Run the simulator soak test (tagged "soak"). Long; nightly CI only.
 	$(GO) test -count=1 -tags=soak -timeout=10m ./sim/...
 
+.PHONY: bench-hot
+bench-hot: ## Run the hot-path benchmarks at measured uber-5k cardinality (~1 min). Pre-brief gate: a regression here is a starved shard in the cloud — see the #52-class ParseQuantity incident.
+	$(GO) test -run xxx -bench 'Phase1_Uber5K_CoLocated|Phase3_Uber5K_CoLocated|AcquirableTotals_Uber5KShape|BuildRollup_CoLocated25K' \
+		-benchtime=5x -count=1 ./pkg/decision/... ./pkg/operator/
+
+.PHONY: prevalidate
+prevalidate: ## The pre-brief gate: closed-loop sim + hot-path benches + dev-50 on kind (~10 min total). Every SHA bound for a cloud brief runs this first.
+	$(GO) test -count=1 -run ClosedLoop ./sim/...
+	$(MAKE) bench-hot
+	$(MAKE) scaletest-images
+	@command -v kind >/dev/null || { echo "kind not on PATH"; exit 1; }
+	@kind get clusters | grep -q '^bigfleet-prevalidate$$' || kind create cluster --name bigfleet-prevalidate
+	kind load docker-image bigfleet:dev bigfleet-scaletest:dev --name bigfleet-prevalidate
+	$(MAKE) scaletest PROFILE=dev-50 DURATION=5m
+	@echo "prevalidate green — SHA is brief-ready"
+
 .PHONY: conformance
 conformance: ## Run the provider conformance suite (TARGET=addr:port).
 	@if [ -z "$$TARGET" ]; then echo "TARGET=addr:port required"; exit 1; fi

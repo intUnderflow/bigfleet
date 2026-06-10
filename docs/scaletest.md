@@ -185,6 +185,42 @@ Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
 
 A run that doesn't reach steady state fails with `steady state: ramp budget elapsed without reaching target`. That's a harness-side or system-bring-up issue, not an SLO violation — typically meaning the substrate is under-resourced or some chart-side install step hung.
 
+## The validation ladder
+
+A cloud run is the **last** confirmation of a change, never the discovery
+instrument. The ladder, cheapest rung first — every change climbs as far
+as it needs and no further:
+
+| Rung | Command | Time | Catches |
+|---|---|---|---|
+| 1. Closed-loop sim | `go test -run ClosedLoop ./sim/...` | seconds | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures. The cascade class that historically cost a cloud run apiece. |
+| 2. Hot-path benches | `make bench-hot` | ~1 min | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
+| 3. Integration gate | `make prevalidate` (runs 1+2, then `dev-50` on kind) | ~10 min | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. |
+| 4. Cloud | a scale profile on a real substrate | hours | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
+
+**Every SHA bound for a cloud run passes `make prevalidate` first.** A
+cloud run that fails on something rungs 1–3 would have caught is a
+process bug, not just a code bug.
+
+### Mechanism runs vs SLO runs
+
+Cloud runs come in two intents — say which one in the run's notes,
+because they need different durations:
+
+- **Mechanism validation** ("did the fix change the behaviour?"):
+  `--duration=10m`. Behavioural signatures — action-rate slopes,
+  inventory drift, attribution probes — are visible within minutes of
+  fill completion. Don't spend a 30-minute soak proving a slope.
+- **SLO measurement** ("what are the numbers?"): the profile's full
+  soak (30 m+). Only worth running once the mechanism is already green.
+
+### The 10-minute abort checkpoint
+
+Every cloud run states an explicit checkpoint up front: one observable
+(e.g. "cycle time ≤ 5 s by +10 min", "fill ≥ 50 % by +15 min") and the
+instruction to **abort, capture a profile, and report** if it fails.
+A doomed run should cost 10 minutes, not its full budget.
+
 ## Recommended cadence
 
 | Cadence | Profile | Substrate | Where |

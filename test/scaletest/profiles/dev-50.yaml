@@ -1,0 +1,128 @@
+# dev-50 — the fast per-milestone laptop integration gate.
+#
+# Purpose: prove the *real* Pod-mode chain wires up end to end —
+#   Pod → kube-scheduler marks Unschedulable → unschedulable-pod-
+#   controller → CapacityRequest → operator roll-up → shard NeedsTable
+#   → Phase 1/2/3 → provider → Bootstrap → fake-Node → kube-scheduler
+#   binds the Pod.
+# This is a *correctness* gate, not a scale test. It is deliberately
+# small so it ramps to ~100 % in minutes and the gate is meaningful.
+#
+# Why not dev-500: dev-500 (5 clusters × 10K Pods = 50K, ~500 machines)
+# conflated integration correctness with a mini scale test. The scale
+# half made it kine-bound — one M5 Max running 5 kwok apiservers, each
+# with its own kine+sqlite, can't mark Pods Unschedulable fast enough
+# (instrumented run: kine 2.44 cores, kube-scheduler 0.08, ~69 % of
+# Pending Pods never even attempted by kube-scheduler). The kine sqlite
+# dir is already RAM-backed (chart `shared` emptyDir medium: Memory)
+# and runs `_sync=OFF` — the substrate is tuned as far as it goes, so
+# the only laptop lever is a smaller profile. See ADR-0027.
+#
+# What moved where:
+#   - logic / scenario correctness  → `make sim`   (pure Go, fast)
+#   - BigFleet-side scale ceilings  → `make scale` (pure Go, no kine)
+#   - integration correctness       → dev-50       (this file)
+#   - realistic-demand-path scale   → Uber infra / scaleway-* (real etcd)
+# dev-500 is kept for occasional bigger local checks, not the gate.
+#
+# Sizing math (M5 Max kind, Docker Desktop ~18 vCPU / 48 GiB cap):
+#   shard:        1 × 1 vCPU / 2 GiB                = 1 vCPU / 2 GiB
+#   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
+#   kwok pods:    2 × (500m + 500m) reqs            = 2 vCPU / 4 GiB
+#   total:       ~4.5 vCPU req — fits with wide headroom; limits stay
+#                generous so the (short) ramp burst has room and kine
+#                never has to compete for cores.
+
+# ADR-0023: the real kube-scheduler runs inside each kwok apiserver
+# container and does both "mark Unschedulable" and "bind". dev-50's
+# whole point is exercising that path, so this stays on.
+harness:
+  scheduler: kube-scheduler
+
+kwok:
+  # 2 clusters, not 1: still exercises multi-cluster operator fan-out
+  # and the shard handling more than one Session stream, at 2/5ths the
+  # kine pressure of dev-500.
+  clusterCount: 2
+  # Only 2 kwok apiservers here (vs dev-500's 5), so each gets a wide
+  # CPU limit — kine never has to compete, which is the whole point.
+  apiserverResources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 6,    memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 4,    memory: 8Gi }
+  # tmpfs-backed; 2500 Pods of kine state + logs fits comfortably in 1Gi.
+  sharedVolumeSizeLimit: "1Gi"
+
+podShim:
+  # pprof on for laptop debugging — port 8774 on each kwok pod.
+  pprofAddr: ":8774"
+
+shard:
+  replicas: 1
+  # 60 Idle × density-100 = 6000 Pod capacity vs 5000 demand (20 %
+  # headroom) — same density math and headroom ratio as dev-500, 10×
+  # smaller.
+  seedMachines: 60
+  # ADR-0026: the elastic-procurement tier. 180 Speculative slots
+  # (3× the Idle seed) — Phase 1 prefers the cheaper owned Idle pool
+  # and only Creates from Speculative for demand that drifts/fragments
+  # off the fixed Idle shapes. Same ratio as dev-500.
+  seedSpeculative: 180
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 2, memory: 4Gi }
+
+coordinator:
+  replicas: 1
+
+loadProfile:
+  # 2 clusters × 2500 Pods = 5000 Pods total → 50 machines at
+  # density=100. Small enough that no kwok apiserver's kine saturates.
+  target: 2500
+  # churn 0: dev-50 is a *correctness* gate — "does the real Pod→bind
+  # chain converge to 100 %?" needs a clean binary signal. Any churn
+  # keeps a working set of Pods perpetually mid-pipeline (marked
+  # Unschedulable → CR'd → capacity provisioned → awaiting kube-
+  # scheduler re-attempt), which sat ~7 % short of the 99 % gate in
+  # the first dev-50 run and is pure noise here. Churn / reclaim-path
+  # realism belongs in the soak profiles and on Uber infra, not in
+  # the fast per-milestone gate.
+  churnPerMinute: 0
+  # Short soak: this is a correctness gate, not an endurance test.
+  durationSeconds: 300
+  reconcilePerTickCap: 50
+
+# At 5000 Pods with kine no longer the wall, the ramp should clear in
+# a few minutes. 10m budget is generous headroom; if a run needs more
+# than that on a quiet laptop, something regressed.
+rampBudget: 10m
+
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 16
+  rollupInterval: 1s
+
+slo:
+  # Inherited from dev-500's laptop-loosened posture as a safe first
+  # cut. With kine no longer saturated these should comfortably beat
+  # the thresholds — tighten toward the runner defaults once dev-50
+  # has a few green baselines.
+  internalBindingLatencyP99Seconds: 30
+  operatorAckP99Seconds: 30
+  shardCycleDurationP99Seconds: 5
+  operatorRollupP99Seconds: 2
+
+costEstimate:
+  vCPU: 5
+  memoryGB: 14
+  awsSpotUsdPerHour: 0
+  notes: "Free on M5 Max kind. Fast per-milestone integration gate — 2 clusters, 5K Pods, density=100, ~50 machines. Expected wall-clock: ~3-5 min ramp + 5 min soak ≈ 10-min total run."
