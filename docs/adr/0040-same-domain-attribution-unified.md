@@ -101,3 +101,54 @@ any topology the harness runs.
 - `claimMatching`'s "identical attribution rules" comment becomes true,
   and `FindSame`'s stale reference to the pre-OCC allocator file is
   corrected with it.
+
+## Addendum (2026-05-24): the domain must be chosen once, jointly
+
+Validation of the decision above found the cascade reduced but not
+ended (~14/sec floor; Configured still +70 %). The attribution
+unification held — the per-cycle probe's
+`p3_reclaim_matches_unsatisfied` read zero throughout — but a second
+incoherence remained, one layer down: **the `Same` domain was still
+being chosen twice per cycle, independently.**
+
+- `SeedConfiguredSupply` chose the Need's domain over **creditable**
+  supply (the best Configured/Configuring bucket).
+- `findCandidatesFor` then called `FindSame` over **acquirable** supply
+  with only `(deficit, minUnit)` — no anchor to the credited domain —
+  so acquisition independently picked the best *Idle* bucket, typically
+  a different domain (per-domain supply being shallow). The proposal
+  commits (`ModeAllOrNothing` gates displacement conflicts, not
+  coverage), so **Phase 1 itself assembles a cross-domain group**: the
+  next cycle's credit re-picks a single bucket, Phase 3 — correctly
+  strict — reclaims the other domain's machines, and they re-bootstrap
+  scattered again. A reclaim↔re-bootstrap oscillation at cycle rate.
+
+The completion, approved by the author:
+
+1. **The `Same` domain is chosen once per Need per cycle, jointly** over
+   creditable supply (the Need's cluster's Configured + Configuring)
+   *and* acquirable supply (shard-wide unclaimed Idle + Speculative —
+   Idle has no cluster binding). The bucket-choice rule is unchanged;
+   what changes is the bucket totals it ranks: joint potential, not
+   creditable-only. The chosen domain is recorded for the cycle and
+   **credit and acquisition are both confined to it** — `FindSame`
+   filters to the chosen domain instead of re-picking.
+2. **Phase 3 mirrors the same joint scoring.** It still claims (keeps)
+   only Configured machines, but it ranks domains by the identical
+   joint potential — otherwise Phase 1 (joint) and Phase 3
+   (creditable-only) would choose different domains for the same Need
+   and resume fighting.
+3. Convergence under any topology follows: when the chosen domain's
+   acquirable supply is exhausted, acquisition returns nothing, no
+   off-domain bootstrap occurs, and the stable residual parks in the
+   aged shortfall buffer (paper §16/§9) — zero churn. No
+   "reserve-the-rack" placement primitive is added: for fixed capacity
+   a machine's domain is where the hardware sits; choosing placement is
+   not BigFleet's to do.
+4. **Harness companion:** the scaletest seed assigns racks to
+   `sameRack`-archetype machines in contiguous blocks (block size = the
+   archetype's maximum group size) instead of round-robin. Round-robin
+   left ~1–3 co-located machines per rack against gangs of 3–8 — demand
+   that is *physically* unsatisfiable regardless of attribution, which
+   real fleets avoid by procuring co-located capacity in rack units.
+   Non-co-located archetypes keep the round-robin spread.
