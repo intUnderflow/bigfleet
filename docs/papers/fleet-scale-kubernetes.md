@@ -74,6 +74,8 @@ status:
 
 One CR per pod. Roll-up aggregates. Withdrawal is implicit via ownerRef GC.
 
+> **Reinforced by [ADR-0039](../adr/0039-capacityrequest-per-pod-not-per-unschedulable-pod.md) (2026-05-21):** "one CR per pod" is unconditional and load-bearing — the CR exists for the Pod's entire lifetime, not only while the Pod is unschedulable. The roll-up is thereby the cluster's *total* desired capacity. Phase 3's surplus arithmetic depends on this: a CR source that produces CRs only for unmet demand makes the autoscaler see phantom surplus and thrash supply against stable demand.
+
 ### 6.2 AvailableCapacity
 
 An eventually-consistent hint from the autoscaler about what capacity could be provisioned. Confidence signal: High / Medium / Low / None.
@@ -155,6 +157,8 @@ Up to 100M nodes (~20K clusters × 5K nodes). Roll-up message ~2KB regardless of
 ## 12. Optional: per-pod capacity request controller
 
 Ships separately from the contract. Watches `PodScheduled=False, reason=Unschedulable` and creates one CR per pod. Not required if Kueue or a custom controller handles CR creation.
+
+> **Superseded by [ADR-0039](../adr/0039-capacityrequest-per-pod-not-per-unschedulable-pod.md) (2026-05-21):** the reference controller watches **all** Pods and creates one CR per Pod unconditionally. The `Unschedulable` filter yields one-CR-per-pod only while every Pod is unschedulable at birth; whenever a Pod binds without that transition (spare capacity, controller-recreated Pods rescheduling after a drain), the filter under-produces CRs and the roll-up degrades to unmet-demand-only — violating §6.1/§13 and breaking Phase 3. The "not required if Kueue or a custom controller handles CR creation" escape hatch stands, with the same contract obligation: any CR source must produce one CR per Pod for the Pod's lifetime.
 
 ## 13. What this doesn't specify (intentionally)
 
