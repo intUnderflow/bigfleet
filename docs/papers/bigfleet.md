@@ -109,6 +109,8 @@ Recommended backing: **embedded Raft (etcd/raft or hashicorp/raft) + BoltDB**.
 
 **Node join**: BigFleet calls `ClusterOperator.GenerateBootstrap(cluster, requirements) → BootstrapBlob`. Push-based, on-demand. Cluster operators generate kubelet config, join token, CA cert. BigFleet treats blob as opaque bytes.
 
+> **Revised at implementation (see [plan §2](../plan.md)):** there is no inbound RPC on the operator — operators are outbound-only. The shard sends `BootstrapRequest{request_id, requirements}` over the operator-initiated `Shard.Session` bidirectional stream and the operator answers with a `BootstrapBlobResponse`; same contract, multiplexed on the stream instead of a push-style `GenerateBootstrap` call.
+
 **Scale-down**: BigFleet does NOT watch pod events. CR garbage-collected via ownerRef → next roll-up has fewer needs → Phase 3 reclaims.
 
 ## 16. Design decisions
