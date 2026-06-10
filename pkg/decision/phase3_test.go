@@ -247,6 +247,120 @@ func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
 	}
 }
 
+// configuredGpuInZone returns a Configured a3-highgpu-8g machine bound
+// to cluster, in the given zone. Reuses the Phase 1 Same-test shape so
+// the two phases' Same-domain tests describe the same fleet.
+func configuredGpuInZone(id machine.ID, cluster machine.ClusterID, zone string) machine.Machine {
+	m := gpuMachineInZone(id, zone, 1.0)
+	m.State = machine.StateConfigured
+	m.Cluster = cluster
+	return m
+}
+
+// ADR-0040: Phase 3's claim for a Same-Profile Need is confined to the
+// single best Same-domain bucket, so off-domain scatter is reclaimed.
+// Pre-fix, the vacuous cross-domain claim kept scattered machines that
+// Phase 1 (strict) could never count toward the co-located Need — the
+// Bootstrap↔Reclaim equilibrium the ADR documents.
+func TestPhase3_Same_KeepsChosenDomainReclaimsScatter(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	// zone-a: 3 machines (satisfies the Need); zone-b: 2 (scatter).
+	for i := 0; i < 3; i++ {
+		_ = inv.Insert(configuredGpuInZone("a-"+idN(i), "cluster-x", "zone-a"))
+	}
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(configuredGpuInZone("b-"+idN(i), "cluster-x", "zone-b"))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		3,
+	)}, decision.AlwaysReady)
+
+	if got := len(r.Actions); got != 2 {
+		t.Fatalf("reclaim actions = %d, want 2 (the zone-b scatter)", got)
+	}
+	for _, a := range r.Actions {
+		m, _ := snap.Get(a.MachineID)
+		if m.Profile.Zone != "zone-b" {
+			t.Errorf("reclaimed %s in %s; the chosen zone-a domain must be kept whole", a.MachineID, m.Profile.Zone)
+		}
+	}
+}
+
+// No single domain covers the Need: Phase 3 keeps exactly the chosen
+// bucket and reclaims the rest — the residual is Phase 1's shortfall,
+// not a reason to keep cross-domain scatter. ADR-0040 §2.
+func TestPhase3_Same_NoSatisfiableDomainKeepsOneBucketOnly(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(configuredGpuInZone("a-"+idN(i), "cluster-x", "zone-a"))
+		_ = inv.Insert(configuredGpuInZone("b-"+idN(i), "cluster-x", "zone-b"))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		3,
+	)}, decision.AlwaysReady)
+
+	if got := len(r.Actions); got != 2 {
+		t.Fatalf("reclaim actions = %d, want 2 (one whole domain kept, the other reclaimed)", got)
+	}
+	zones := map[string]int{}
+	for _, a := range r.Actions {
+		m, _ := snap.Get(a.MachineID)
+		zones[m.Profile.Zone]++
+	}
+	if len(zones) != 1 {
+		t.Errorf("reclaims span %d zones, want 1 (claims must not split across domains): %+v", len(zones), zones)
+	}
+}
+
+// In-flight bootstraps anchor the domain choice: Configuring supply is
+// claimed first, and the residual's Configured claim lands in the
+// domain that best covers what's left — so Phase 3 keeps the domain
+// Phase 1 is building toward and reclaims the rest. This is the
+// per-cycle convergence step of ADR-0040 §2.
+func TestPhase3_Same_ConfiguringAnchorsTheDomain(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	// zone-a: 2 Configuring + 1 Configured. zone-b: 3 Configured.
+	for i := 0; i < 2; i++ {
+		m := configuredGpuInZone("a-cfg-"+idN(i), "cluster-x", "zone-a")
+		m.State = machine.StateConfiguring
+		_ = inv.Insert(m)
+	}
+	_ = inv.Insert(configuredGpuInZone("a-conf", "cluster-x", "zone-a"))
+	for i := 0; i < 3; i++ {
+		_ = inv.Insert(configuredGpuInZone("b-"+idN(i), "cluster-x", "zone-b"))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		3,
+	)}, decision.AlwaysReady)
+
+	// The 2 zone-a Configuring + 1 zone-a Configured cover the Need;
+	// zone-b's 3 Configured are off-domain and reclaimed.
+	if got := len(r.Actions); got != 3 {
+		t.Fatalf("reclaim actions = %d, want 3 (all of zone-b)", got)
+	}
+	for _, a := range r.Actions {
+		m, _ := snap.Get(a.MachineID)
+		if m.Profile.Zone != "zone-b" {
+			t.Errorf("reclaimed %s in %s; zone-a is anchored by its in-flight bootstraps", a.MachineID, m.Profile.Zone)
+		}
+	}
+}
+
 // ADR-0036: when the cluster hasn't yet reported (firstRollupReceived
 // gate fails) Phase 3 must skip reclaim, even if the NeedsTable slice
 // for that cluster is empty. Brief #36 traced the install-time

@@ -416,6 +416,127 @@ func TestSeedConfiguredSupply_OnlyCreditsMatchingMachines(t *testing.T) {
 	}
 }
 
+// clusterSameMachine constructs a cluster-bound machine (Configured or
+// Configuring) carrying a rack label, for the ADR-0040 Same-domain
+// seed tests. cpu=4 per machine.
+func clusterSameMachine(id machine.ID, st machine.State, cluster machine.ClusterID, rack string) machine.Machine {
+	return machine.Machine{
+		ID:    id,
+		State: st,
+		Profile: machine.Profile{
+			InstanceType: "m5.large",
+			Resources:    map[string]string{"cpu": "4"},
+			Labels:       map[string]string{"topology.kubernetes.io/rack": rack},
+		},
+		Cluster: cluster,
+		Host:    machine.HostRef{Provider: "fake", Ref: string(id)},
+	}
+}
+
+func sameNeed(cluster machine.ClusterID, pf needs.Profile, cpu string) needs.Need {
+	return needs.Need{
+		ClusterID:          cluster,
+		Profile:            pf,
+		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: cpu}},
+		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+	}
+}
+
+// ADR-0040: a Same-Profile's pre-pass credit is confined to the single
+// best Same-domain bucket. Pre-fix the walk credited across domains,
+// so Phase 1 believed scattered supply satisfied a co-located Need
+// that FindSame (strict) could never finish — the Bootstrap↔Reclaim
+// equilibrium the ADR documents.
+func TestSeedConfiguredSupply_SameCreditsSingleDomain(t *testing.T) {
+	t.Parallel()
+	// rack-a: 2 machines (cpu 8); rack-b: 3 machines (cpu 12). Demand
+	// cpu=12 — only rack-b is satisfiable.
+	state := freshStateWith(
+		clusterSameMachine("a-1", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("a-2", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("b-1", machine.StateConfigured, "c1", "rack-b"),
+		clusterSameMachine("b-2", machine.StateConfigured, "c1", "rack-b"),
+		clusterSameMachine("b-3", machine.StateConfigured, "c1", "rack-b"),
+	)
+	n := sameNeed("c1", sameProfile(100, "topology.kubernetes.io/rack"), "12")
+
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+	if !needs.IsZero(results[0].Deficit) {
+		t.Errorf("deficit = %v, want zero (rack-b covers the demand)", results[0].Deficit)
+	}
+	for _, id := range []machine.ID{"b-1", "b-2", "b-3"} {
+		if !state.IsClaimed(id) {
+			t.Errorf("rack-b machine %s not claimed", id)
+		}
+	}
+	for _, id := range []machine.ID{"a-1", "a-2"} {
+		if state.IsClaimed(id) {
+			t.Errorf("rack-a machine %s claimed; credit crossed the Same domain", id)
+		}
+	}
+}
+
+// When no single domain covers the demand, only the chosen (most-
+// covering; here count+value tiebreak → rack-a) bucket is credited and
+// the residual surfaces as the Need's deficit — a shortfall, not a
+// cross-domain credit. ADR-0040 §2.
+func TestSeedConfiguredSupply_SameUnsatisfiableCreditsOneDomainOnly(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		clusterSameMachine("a-1", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("a-2", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("b-1", machine.StateConfigured, "c1", "rack-b"),
+		clusterSameMachine("b-2", machine.StateConfigured, "c1", "rack-b"),
+	)
+	n := sameNeed("c1", sameProfile(100, "topology.kubernetes.io/rack"), "12")
+
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+	claimed := 0
+	for _, id := range []machine.ID{"a-1", "a-2", "b-1", "b-2"} {
+		if state.IsClaimed(id) {
+			claimed++
+		}
+	}
+	if claimed != 2 {
+		t.Errorf("claimed %d machines, want 2 (one domain's worth)", claimed)
+	}
+	if state.IsClaimed("a-1") != state.IsClaimed("a-2") || state.IsClaimed("b-1") != state.IsClaimed("b-2") {
+		t.Error("claims split across domains; must stay within one bucket")
+	}
+	if needs.IsZero(results[0].Deficit) {
+		t.Error("deficit zero despite no single domain covering the demand")
+	}
+}
+
+// Within the chosen bucket the Configured machines are credited before
+// Configuring ones — same preference order as the non-Same walk.
+func TestSeedConfiguredSupply_SameClaimsConfiguredBeforeConfiguring(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		clusterSameMachine("m-conf", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("m-cfg-1", machine.StateConfiguring, "c1", "rack-a"),
+		clusterSameMachine("m-cfg-2", machine.StateConfiguring, "c1", "rack-a"),
+	)
+	n := sameNeed("c1", sameProfile(100, "topology.kubernetes.io/rack"), "8")
+
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+	if !needs.IsZero(results[0].Deficit) {
+		t.Errorf("deficit = %v, want zero", results[0].Deficit)
+	}
+	if !state.IsClaimed("m-conf") {
+		t.Error("Configured machine skipped in favour of Configuring; order broken")
+	}
+	cfgClaims := 0
+	for _, id := range []machine.ID{"m-cfg-1", "m-cfg-2"} {
+		if state.IsClaimed(id) {
+			cfgClaims++
+		}
+	}
+	if cfgClaims != 1 {
+		t.Errorf("claimed %d Configuring machines, want 1 (demand is 2 machines total)", cfgClaims)
+	}
+}
+
 // sortedIDs is shared with displacement_test.go — define a local copy
 // because Go doesn't deduplicate across _test files of the same
 // package and we want this self-contained. Different name to avoid

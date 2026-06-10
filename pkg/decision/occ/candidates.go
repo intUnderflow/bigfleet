@@ -97,8 +97,12 @@ func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, 
 // FindSame returns candidates honouring a Profile's Same requirement:
 // all returned machines share one value for sameKey. Picks the best
 // single-value bucket — atomic-satisfiable preferred, then cheapest
-// head, then most-available — and takes from it. Mirrors
-// phase1Allocator.takeCoLocated at pkg/decision/phase1_allocator.go:184.
+// head, then most-available — and takes from it. (Successor of the
+// retired pre-OCC phase1Allocator.takeCoLocated.) ADR-0040 mirrors
+// this strict single-bucket semantics at the supply-crediting sites:
+// SeedConfiguredSupply and decision's claimMatching choose their
+// bucket via ChooseSameBucket, which ranks on coverage rather than
+// price because credited supply is already provisioned.
 //
 // Note: cross-bucket scoring re-walks the (claimed-filtered) bucket
 // each call. The legacy allocator's coLocatedBuilt cache + per-bucket
@@ -337,7 +341,13 @@ func (p *Pool) FindSpread(state *SharedState, st machine.State, prec Precedence,
 
 // SameRequirementKey returns the Same operator's key on the profile,
 // if any. Used by callers to route between FindBasic and FindSame
-// before constructing a proposal.
+// before constructing a proposal, and by the ADR-0040 domain-aware
+// crediting sites (seedSameProfile here, claimMatching in
+// pkg/decision).
+//
+// A Profile carries at most one Same requirement in v1 — the operator
+// takes the first co-location term during roll-up (ADR-0024) — so
+// returning the first match is exact, not a heuristic.
 func SameRequirementKey(p needs.Profile) (string, bool) {
 	for _, r := range p.Requirements() {
 		if r.Operator == needs.OperatorSame {

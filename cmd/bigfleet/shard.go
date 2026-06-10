@@ -494,6 +494,7 @@ func runShard(args []string) error {
 	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
 	availableCapacityInterval := fs.Duration("available-capacity-interval", 0, "minimum interval between AvailableCapacityUpdate emits per (cluster, fingerprint). 0 = use the shard's default (5s). Below the cycle interval is wasteful (operator-side apiserver writes); much above 30s starts to feel stale to humans watching `kubectl get availablecapacity`.")
 	metricsWarmupCycles := fs.Int("metrics-warmup-cycles", 0, "skip cycle-duration + per-phase histogram observations for the first N cycles. Cycle 1 of any shard does a one-time full provider.List that is not representative of steady-state cycle cost; skipping it lets p99 reflect what the SLO actually measures. Counters are not affected.")
+	phaseAttributionLog := fs.Bool("phase-attribution-log", false, "ADR-0040 diagnostic: every 20th cycle, log one line with Need counts split by co-location, Phase 1 unsatisfied split by co-location, Phase 3 reclaims, and how many reclaimed machines matched (and fit) a Need Phase 1 declared unsatisfied the same cycle — the probe that found the Same-domain crediting defect. Read-only; also enabled by BIGFLEET_PHASEDUMP=1. Off by default.")
 	coordinatorAddr := fs.String("coordinator-addr", "", "host:port of the coordinator's gRPC service. When set, the shard heartbeats to ReportShard so it appears in coordinator membership and can have domains assigned to it. Empty disables — single-shard / dev runs without a coordinator stay unaffected.")
 	advertiseAddr := fs.String("advertise-addr", "", "host:port the coordinator should record as this shard's dial address. Defaults to --listen; in StatefulSet deploys, set to the per-pod headless-Service DNS, e.g. bigfleet-shard-0.bigfleet-shard-headless:7780.")
 	heartbeatInterval := fs.Duration("coordinator-heartbeat-interval", 10*time.Second, "how often to send ReportShard to the coordinator. Below ~5s starts spamming Raft applies on registration churn; above ~30s makes coordinator-side LastHeartbeat staleness alarms fire on healthy shards.")
@@ -531,6 +532,7 @@ func runShard(args []string) error {
 		IncrementalReconcile:      *incrementalReconcile,
 		AvailableCapacityInterval: *availableCapacityInterval,
 		MetricsWarmupCycles:       *metricsWarmupCycles,
+		PhaseAttributionLog:       *phaseAttributionLog || os.Getenv("BIGFLEET_PHASEDUMP") == "1",
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {

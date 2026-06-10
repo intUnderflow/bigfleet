@@ -3,6 +3,7 @@ package decision
 import (
 	"sort"
 
+	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
@@ -125,9 +126,17 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 // the shared claimed set so a peer Need can't double-count them. Returns
 // the residual demand vector.
 //
-// This is the Phase 3 counterpart of phase1Allocator.creditExistingSupply
-// — identical attribution rules, so the two phases agree on which
-// machine serves which Need.
+// For a Same-Profile the walk is domain-aware (ADR-0040): the eligible
+// machines are bucketed by their value for the Same key, the single
+// best bucket is chosen via chooseSameBucket, and only machines inside
+// it are claimed — still in the input slice's keep-priority order.
+// Everything outside the chosen domain is scatter the Need cannot use
+// and falls through to reclaim.
+//
+// This is the Phase 3 counterpart of Phase 1's existing-supply credit
+// (occ.SeedConfiguredSupply) — identical attribution rules, including
+// the Same-domain rule, so the two phases agree on which machine
+// serves which Need.
 func claimMatching(
 	machines []machine.Machine,
 	profile needs.Profile,
@@ -135,6 +144,12 @@ func claimMatching(
 	claimed map[machine.ID]struct{},
 	remaining []needs.ResourceQty,
 ) []needs.ResourceQty {
+	if needs.IsZero(remaining) {
+		return remaining
+	}
+	if sameKey, ok := occ.SameRequirementKey(profile); ok {
+		return claimMatchingSame(machines, profile, minUnit, claimed, remaining, sameKey)
+	}
 	for _, m := range machines {
 		if needs.IsZero(remaining) {
 			return remaining
@@ -151,6 +166,66 @@ func claimMatching(
 		}
 		claimed[m.ID] = struct{}{}
 		remaining = needs.SubResources(remaining, alloc)
+	}
+	return remaining
+}
+
+// claimMatchingSame is claimMatching's Same-Profile arm (ADR-0040):
+// bucket the eligible machines by their value for the Same key, choose
+// the single best bucket against remaining, and claim within it only,
+// preserving the input slice's keep-priority order.
+func claimMatchingSame(
+	machines []machine.Machine,
+	profile needs.Profile,
+	minUnit []needs.ResourceQty,
+	claimed map[machine.ID]struct{},
+	remaining []needs.ResourceQty,
+	sameKey string,
+) []needs.ResourceQty {
+	type candidate struct {
+		id    machine.ID
+		alloc []needs.ResourceQty
+	}
+	index := make(map[string]int)
+	var buckets []sameBucket
+	var members [][]candidate
+	for i := range machines {
+		m := &machines[i]
+		if _, taken := claimed[m.ID]; taken {
+			continue
+		}
+		if !MatchProfile(profile, *m) {
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, minUnit) {
+			continue
+		}
+		v, ok := lookupAttribute(sameKey, *m)
+		if !ok {
+			continue
+		}
+		idx, exists := index[v]
+		if !exists {
+			idx = len(buckets)
+			index[v] = idx
+			buckets = append(buckets, sameBucket{value: v})
+			members = append(members, nil)
+		}
+		buckets[idx].count++
+		buckets[idx].total = needs.AddResources(buckets[idx].total, alloc)
+		members[idx] = append(members[idx], candidate{id: m.ID, alloc: alloc})
+	}
+	best := chooseSameBucket(buckets, remaining)
+	if best < 0 {
+		return remaining
+	}
+	for _, c := range members[best] {
+		if needs.IsZero(remaining) {
+			break
+		}
+		claimed[c.id] = struct{}{}
+		remaining = needs.SubResources(remaining, c.alloc)
 	}
 	return remaining
 }

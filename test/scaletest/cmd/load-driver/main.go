@@ -42,6 +42,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -216,6 +217,31 @@ var replicaDistribution = []replicaBucket{
 // create Pods ordinally/serially, so a large one bottlenecks the ramp;
 // stateful workloads are kept small.
 const statefulReplicaCap = 25
+
+// drawReplicas returns the replica count for one workload object.
+// sameRack archetypes draw from the archetype's GroupSizeRange
+// (ADR-0040 §3: one workload object is one co-location gang, and the
+// heavy-tailed service-size distribution produced gangs of up to ~400
+// whole machines — unsatisfiable in any topology the harness runs);
+// everything else draws from the service-size distribution via
+// pickReplicas. remaining > 0 caps the draw so the ramp lands on
+// target — a truncated final sameRack group is acceptable, every Need
+// is partial-fill-tolerant in v1 (ADR-0040 §2). Always ≥ 1.
+func drawReplicas(rng *rand.Rand, a *archetype.Archetype, stateful bool, remaining int) int {
+	var n int
+	if a != nil && a.SameRack {
+		n = a.PickGroupSize(rng)
+	} else {
+		n = pickReplicas(rng, stateful)
+	}
+	if remaining > 0 && n > remaining {
+		n = remaining
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
 
 // pickReplicas draws a workload object's replica count from the
 // hardcoded service-size distribution. Stateful workloads are clamped to
@@ -843,15 +869,7 @@ func (d *driver) createWorkload(ctx context.Context, burst bool, remaining int) 
 		archName = a.Name
 	}
 	stateful := isStateful(archName)
-	replicas := pickReplicas(d.rng, stateful)
-	// Cap the final object so a heavy-tailed draw doesn't overshoot the
-	// target by hundreds of Pods. Keep at least 1 replica.
-	if remaining > 0 && replicas > remaining {
-		replicas = remaining
-	}
-	if replicas < 1 {
-		replicas = 1
-	}
+	replicas := drawReplicas(d.rng, a, stateful, remaining)
 
 	name := fmt.Sprintf("%s-%s-%d", d.clusterID, archetypeNameOrLegacy(archName), seq)
 	tmpl := d.buildPodTemplate(a)
@@ -1014,7 +1032,8 @@ func (d *driver) buildPodTemplate(a *archetype.Archetype) corev1.PodTemplateSpec
 		// one Need with a Same(rack) requirement. ADR-0038: one
 		// workload object IS one co-location group — every replica
 		// shares the group label — so the group size is the object's
-		// replica count.
+		// replica count, drawn from the archetype's GroupSizeRange in
+		// createWorkload (ADR-0040 §3).
 		gid := fmt.Sprintf("%s-%s-grp-%d", d.clusterID, a.Name, d.nextSeq())
 		labels[labelCoLocationGroup] = gid
 		affinity.PodAffinity = &corev1.PodAffinity{
@@ -1219,26 +1238,38 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 				subtractRequests(rem, podRequests(p))
 			}
 		}
-		// Plan assignments against the local remaining-capacity map, then
-		// execute the Bind calls in parallel.
-		type assignment struct {
-			pod  *corev1.Pod
-			node string
-		}
-		plan := make([]assignment, 0, len(unbound.Items))
-		for i := range unbound.Items {
-			pod := &unbound.Items[i]
-			req := podRequests(pod)
-			for _, n := range byArchetype[pod.Labels[labelArchetype]] {
-				rem := remaining[n.Name]
-				if !fitsRequests(rem, req) {
-					continue
-				}
-				subtractRequests(rem, req)
-				plan = append(plan, assignment{pod: pod, node: n.Name})
-				break
+		// ADR-0040: a group with a member already bound (the ADR-0025
+		// anchor, or a previous sweep) is pinned to that member's rack —
+		// planning the remainder anywhere else would scatter the group.
+		nodeRack := make(map[string]string, len(nodes.Items))
+		for j := range nodes.Items {
+			if rack, ok := nodes.Items[j].Labels[topologyKeyRack]; ok {
+				nodeRack[nodes.Items[j].Name] = rack
 			}
 		}
+		pinnedRack := map[string]string{}
+		for i := range allPods.Items {
+			p := &allPods.Items[i]
+			if p.Spec.NodeName == "" {
+				continue
+			}
+			gid := p.Labels[labelCoLocationGroup]
+			if gid == "" {
+				continue
+			}
+			if rack, ok := nodeRack[p.Spec.NodeName]; ok {
+				pinnedRack[gid] = rack
+			}
+		}
+		// Plan assignments against the local remaining-capacity map, then
+		// execute the Bind calls in parallel. Co-located groups are
+		// planned whole-group onto a single rack (ADR-0040); see
+		// planPreBind.
+		unboundPtrs := make([]*corev1.Pod, 0, len(unbound.Items))
+		for i := range unbound.Items {
+			unboundPtrs = append(unboundPtrs, &unbound.Items[i])
+		}
+		plan := planPreBind(unboundPtrs, byArchetype, remaining, pinnedRack)
 		var bound atomic.Int64
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, preBindConcurrency)
@@ -1265,6 +1296,129 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// assignment is one planned Pod→Node binding within a pre-bind sweep.
+type assignment struct {
+	pod  *corev1.Pod
+	node string
+}
+
+// planPreBind is preBindInitialPods' planning step, factored pure for
+// unit tests. Pods carrying the co-location-group label are planned as
+// whole groups, rack-coherently (ADR-0040): the fast-path previously
+// bound groups scattered across racks — a placement a real scheduler
+// can never produce, since required podAffinity holds the group
+// pending instead. Groups are planned before non-group Pods so the
+// constrained placements aren't starved by greedy singles; non-group
+// Pods keep the original first-fit walk. Mutates remaining in place.
+func planPreBind(unbound []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, pinnedRack map[string]string) []assignment {
+	plan := make([]assignment, 0, len(unbound))
+
+	groups := map[string][]*corev1.Pod{}
+	var groupIDs []string
+	var singles []*corev1.Pod
+	for _, pod := range unbound {
+		gid := pod.Labels[labelCoLocationGroup]
+		if gid == "" {
+			singles = append(singles, pod)
+			continue
+		}
+		if _, seen := groups[gid]; !seen {
+			groupIDs = append(groupIDs, gid)
+		}
+		groups[gid] = append(groups[gid], pod)
+	}
+	sort.Strings(groupIDs)
+
+	for _, gid := range groupIDs {
+		plan = append(plan, planGroupOntoRack(groups[gid], byArchetype, remaining, pinnedRack[gid])...)
+	}
+
+	for _, pod := range singles {
+		req := podRequests(pod)
+		for _, n := range byArchetype[pod.Labels[labelArchetype]] {
+			rem := remaining[n.Name]
+			if !fitsRequests(rem, req) {
+				continue
+			}
+			subtractRequests(rem, req)
+			plan = append(plan, assignment{pod: pod, node: n.Name})
+			break
+		}
+	}
+	return plan
+}
+
+// planGroupOntoRack places one whole co-location group onto a single
+// rack, or nowhere. Candidate racks are the topology.bigfleet/rack
+// values among the group's archetype-matching nodes (just pinnedRack
+// when a member is already bound there); each is tried in name order
+// — deterministic across sweeps — by bin-packing the group against a
+// scratch copy of the rack's remaining capacity. The first rack that
+// fits every Pod wins and the scratch is committed. If none fits, the
+// group stays pending for a later sweep / kube-scheduler / the
+// ADR-0025 anchor — never scattered.
+func planGroupOntoRack(group []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, pinnedRack string) []assignment {
+	// One workload object is one co-location group, so every Pod shares
+	// the first Pod's archetype (ADR-0038).
+	arch := group[0].Labels[labelArchetype]
+	racks := map[string][]*corev1.Node{}
+	var rackNames []string
+	for _, n := range byArchetype[arch] {
+		rack, ok := n.Labels[topologyKeyRack]
+		if !ok || (pinnedRack != "" && rack != pinnedRack) {
+			continue
+		}
+		if _, seen := racks[rack]; !seen {
+			rackNames = append(rackNames, rack)
+		}
+		racks[rack] = append(racks[rack], n)
+	}
+	sort.Strings(rackNames)
+
+	for _, rack := range rackNames {
+		nodes := racks[rack]
+		scratch := make(map[string]corev1.ResourceList, len(nodes))
+		for _, n := range nodes {
+			scratch[n.Name] = copyResourceList(remaining[n.Name])
+		}
+		assignments := make([]assignment, 0, len(group))
+		fits := true
+		for _, pod := range group {
+			req := podRequests(pod)
+			placed := false
+			for _, n := range nodes {
+				if !fitsRequests(scratch[n.Name], req) {
+					continue
+				}
+				subtractRequests(scratch[n.Name], req)
+				assignments = append(assignments, assignment{pod: pod, node: n.Name})
+				placed = true
+				break
+			}
+			if !placed {
+				fits = false
+				break
+			}
+		}
+		if !fits {
+			continue
+		}
+		for name, rl := range scratch {
+			remaining[name] = rl
+		}
+		return assignments
+	}
+	return nil
+}
+
+func copyResourceList(in corev1.ResourceList) corev1.ResourceList {
+	out := make(corev1.ResourceList, len(in))
+	for k, v := range in {
+		out[k] = v.DeepCopy()
+	}
+	return out
 }
 
 // podRequests sums container resource requests across a Pod.

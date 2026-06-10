@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
@@ -273,13 +274,7 @@ func TestRampToTermination(t *testing.T) {
 		objects := 0
 		for sum < want {
 			remaining := want - sum
-			n := pickReplicas(rng, false)
-			if remaining > 0 && n > remaining {
-				n = remaining
-			}
-			if n < 1 {
-				n = 1
-			}
+			n := drawReplicas(rng, nil, false, remaining)
 			sum += n
 			objects++
 			if objects > want+1 {
@@ -290,4 +285,184 @@ func TestRampToTermination(t *testing.T) {
 			t.Fatalf("ramp to %d landed on Σreplicas=%d; remaining-cap should make it exact", want, sum)
 		}
 	}
+}
+
+// ADR-0040 §3: sameRack workload objects draw replicas (= co-location
+// gang size) from the archetype's GroupSizeRange, not the heavy-tailed
+// service-size distribution; the remaining-cap still applies so the
+// ramp lands on target (a truncated final group is fine — every Need
+// is partial-fill-tolerant in v1).
+func TestDrawReplicasSameRackUsesGroupSizeRange(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	a := &archetype.Archetype{
+		Name:           "gpu-training",
+		InstanceTypes:  []string{"a3-highgpu-8g"},
+		SameRack:       true,
+		GroupSizeRange: [2]int{3, 5},
+	}
+	for i := 0; i < 5000; i++ {
+		n := drawReplicas(rng, a, false, 0)
+		if n < 3 || n > 5 {
+			t.Fatalf("sameRack draw %d outside GroupSizeRange [3, 5]", n)
+		}
+	}
+	// remaining caps the final group below the range's minimum.
+	if n := drawReplicas(rng, a, false, 2); n != 2 {
+		t.Fatalf("sameRack draw with remaining=2 = %d, want 2 (truncated final group)", n)
+	}
+	// Non-sameRack archetypes keep the service-size distribution.
+	plain := &archetype.Archetype{Name: "cpu-service", InstanceTypes: []string{"m5.large"}, GroupSizeRange: [2]int{3, 5}}
+	sawOutsideRange := false
+	for i := 0; i < 5000 && !sawOutsideRange; i++ {
+		if n := drawReplicas(rng, plain, false, 0); n < 3 || n > 5 {
+			sawOutsideRange = true
+		}
+	}
+	if !sawOutsideRange {
+		t.Fatal("non-sameRack archetype never drew outside GroupSizeRange; PickGroupSize must not be consulted for it")
+	}
+}
+
+// ---- planPreBind (ADR-0040 rack-coherent pre-bind) ---------------------
+
+// planPod builds an unbound Pod for planPreBind tests. gid == "" means
+// a non-group Pod.
+func planPod(name, arch, gid, cpu string) *corev1.Pod {
+	labels := map[string]string{labelArchetype: arch}
+	if gid != "" {
+		labels[labelCoLocationGroup] = gid
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name: "workload",
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)},
+				},
+			}},
+		},
+	}
+}
+
+func planNode(name, rack string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name:   name,
+		Labels: map[string]string{labelArchetype: "cpu-service", topologyKeyRack: rack},
+	}}
+}
+
+func cpuList(cpu string) corev1.ResourceList {
+	return corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}
+}
+
+func TestPlanPreBind_GroupLandsOnOneRack(t *testing.T) {
+	// rack-a holds one cpu-8 node (fits 2 of the group's 3 Pods);
+	// rack-b holds two cpu-8 nodes (fits all 3). The group must land
+	// entirely within rack-b, bin-packed across its nodes.
+	n1 := planNode("n1", "rack-a")
+	n2 := planNode("n2", "rack-b")
+	n3 := planNode("n3", "rack-b")
+	byArchetype := map[string][]*corev1.Node{"cpu-service": {n1, n2, n3}}
+	remaining := map[string]corev1.ResourceList{
+		"n1": cpuList("8"), "n2": cpuList("8"), "n3": cpuList("8"),
+	}
+	group := []*corev1.Pod{
+		planPod("g-0", "cpu-service", "grp-1", "4"),
+		planPod("g-1", "cpu-service", "grp-1", "4"),
+		planPod("g-2", "cpu-service", "grp-1", "4"),
+	}
+
+	plan := planPreBind(group, byArchetype, remaining, nil)
+	if len(plan) != 3 {
+		t.Fatalf("planned %d of 3 group Pods", len(plan))
+	}
+	for _, a := range plan {
+		if a.node != "n2" && a.node != "n3" {
+			t.Errorf("pod %s planned onto %s; group must stay within rack-b", a.pod.Name, a.node)
+		}
+	}
+}
+
+func TestPlanPreBind_GroupNeverScatters(t *testing.T) {
+	// Two racks of one cpu-8 node each; the group needs cpu 12. No
+	// single rack fits → NONE of the group is planned and capacity is
+	// untouched, so the trailing single still binds.
+	n1 := planNode("n1", "rack-a")
+	n2 := planNode("n2", "rack-b")
+	byArchetype := map[string][]*corev1.Node{"cpu-service": {n1, n2}}
+	remaining := map[string]corev1.ResourceList{"n1": cpuList("8"), "n2": cpuList("8")}
+	pods := []*corev1.Pod{
+		planPod("g-0", "cpu-service", "grp-1", "4"),
+		planPod("g-1", "cpu-service", "grp-1", "4"),
+		planPod("g-2", "cpu-service", "grp-1", "4"),
+		planPod("single", "cpu-service", "", "4"),
+	}
+
+	plan := planPreBind(pods, byArchetype, remaining, nil)
+	if len(plan) != 1 || plan[0].pod.Name != "single" {
+		t.Fatalf("plan = %d assignments; want only the non-group Pod (groups are whole-rack or pending): %+v", len(plan), planNames(plan))
+	}
+}
+
+func TestPlanPreBind_SinglesKeepFirstFit(t *testing.T) {
+	// Non-group Pods keep the original first-fit walk and may span
+	// racks freely.
+	n1 := planNode("n1", "rack-a")
+	n2 := planNode("n2", "rack-b")
+	byArchetype := map[string][]*corev1.Node{"cpu-service": {n1, n2}}
+	remaining := map[string]corev1.ResourceList{"n1": cpuList("4"), "n2": cpuList("4")}
+	pods := []*corev1.Pod{
+		planPod("s-0", "cpu-service", "", "4"),
+		planPod("s-1", "cpu-service", "", "4"),
+	}
+
+	plan := planPreBind(pods, byArchetype, remaining, nil)
+	if len(plan) != 2 {
+		t.Fatalf("planned %d of 2 singles", len(plan))
+	}
+	if plan[0].node == plan[1].node {
+		t.Errorf("both singles on %s; capacity tracking broken", plan[0].node)
+	}
+}
+
+func TestPlanPreBind_PinnedRackConstrainsGroup(t *testing.T) {
+	// grp-1 has a member already bound on rack-b (e.g. the ADR-0025
+	// anchor): the unbound remainder must go to rack-b even though
+	// rack-a also fits — and must stay pending when rack-b lacks room.
+	n1 := planNode("n1", "rack-a")
+	n2 := planNode("n2", "rack-b")
+	byArchetype := map[string][]*corev1.Node{"cpu-service": {n1, n2}}
+	remaining := map[string]corev1.ResourceList{"n1": cpuList("8"), "n2": cpuList("8")}
+	group := []*corev1.Pod{
+		planPod("g-0", "cpu-service", "grp-1", "4"),
+		planPod("g-1", "cpu-service", "grp-1", "4"),
+	}
+	pinned := map[string]string{"grp-1": "rack-b"}
+
+	plan := planPreBind(group, byArchetype, remaining, pinned)
+	if len(plan) != 2 {
+		t.Fatalf("planned %d of 2 group Pods", len(plan))
+	}
+	for _, a := range plan {
+		if a.node != "n2" {
+			t.Errorf("pod %s planned onto %s; group is pinned to rack-b", a.pod.Name, a.node)
+		}
+	}
+
+	// Pinned rack out of capacity: the group waits rather than landing
+	// on the unpinned rack.
+	remaining = map[string]corev1.ResourceList{"n1": cpuList("8"), "n2": cpuList("4")}
+	plan = planPreBind(group, byArchetype, remaining, pinned)
+	if len(plan) != 0 {
+		t.Fatalf("planned %d Pods onto a full pinned rack; want 0 (never scatter): %+v", len(plan), planNames(plan))
+	}
+}
+
+func planNames(plan []assignment) []string {
+	out := make([]string, 0, len(plan))
+	for _, a := range plan {
+		out = append(out, a.pod.Name+"→"+a.node)
+	}
+	return out
 }

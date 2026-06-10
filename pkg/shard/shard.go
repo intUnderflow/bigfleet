@@ -30,6 +30,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
 	"github.com/intUnderflow/bigfleet/pkg/decision"
+	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
@@ -145,6 +146,16 @@ type Config struct {
 	// threshold" path; only enable for providers that honour
 	// since_revision.
 	IncrementalReconcile bool
+
+	// PhaseAttributionLog enables the ADR-0040 §4 diagnostic: every
+	// 20th cycle, one log line with Need counts split by co-location,
+	// Phase 1 unsatisfied split by co-location, Phase 3 reclaim count,
+	// and the reclaim-matches-unsatisfied probe that found the
+	// Same-domain crediting defect. Read-only over the cycle's own
+	// snapshot and phase results; zero hot-path cost when off (the
+	// default). The shard subcommand wires --phase-attribution-log and
+	// the BIGFLEET_PHASEDUMP=1 env var here.
+	PhaseAttributionLog bool
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -538,6 +549,22 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 	}
 
+	// ADR-0040 §4: flag-gated, read-only phase-attribution probe — the
+	// instrument that found the Same-domain crediting defect. The guard
+	// runs before any collection so the default-off path costs nothing.
+	if s.cfg.PhaseAttributionLog && cycleNum%20 == 0 {
+		pa := collectPhaseAttribution(snap, demand, p1, p3)
+		s.log.Info("phase attribution",
+			"needs_total", pa.needsTotal,
+			"needs_same", pa.needsSame,
+			"p1_unsatisfied", pa.p1Unsatisfied,
+			"p1_unsatisfied_same", pa.p1UnsatisfiedSame,
+			"p3_reclaim", pa.p3Reclaim,
+			"p3_reclaim_matches_unsatisfied", pa.p3ReclaimMatchesUnsatisfied,
+			"p3_reclaim_matches_and_fits", pa.p3ReclaimMatchesAndFits,
+		)
+	}
+
 	// Emit AvailableCapacity hints (paper §6.2). Eventually-consistent;
 	// runs after the decision phases so the snapshot view reflects any
 	// inventory mutations Phase 1/2/3 just made via execute (not yet
@@ -716,6 +743,70 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		s.cfg.OnActions(all)
 	}
 	return all
+}
+
+// phaseAttribution is the ADR-0040 §4 probe payload: per-cycle Need /
+// unsatisfied counts split by co-location, plus the discriminator that
+// found the Same-domain crediting defect — Phase 3 reclaiming a
+// machine that MatchProfiles (and fits) a Need Phase 1 declared
+// unsatisfied in the same cycle. Under correct attribution the
+// matches/fits counters read zero in steady state.
+type phaseAttribution struct {
+	needsTotal                  int
+	needsSame                   int
+	p1Unsatisfied               int
+	p1UnsatisfiedSame           int
+	p3Reclaim                   int
+	p3ReclaimMatchesUnsatisfied int
+	p3ReclaimMatchesAndFits     int
+}
+
+// collectPhaseAttribution computes the probe over the cycle's own
+// snapshot and phase results. Read-only; only runs on flag-gated
+// cycles, so the O(reclaims × unsatisfied) match walk is acceptable.
+func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 decision.Phase1Result, p3 decision.Phase3Result) phaseAttribution {
+	pa := phaseAttribution{
+		needsTotal: len(demand),
+		// Phase 3 emits Reclaim actions only.
+		p3Reclaim:     len(p3.Actions),
+		p1Unsatisfied: len(p1.Unsatisfied),
+	}
+	for i := range demand {
+		if _, ok := occ.SameRequirementKey(demand[i].Profile); ok {
+			pa.needsSame++
+		}
+	}
+	for i := range p1.Unsatisfied {
+		if _, ok := occ.SameRequirementKey(p1.Unsatisfied[i].Need.Profile); ok {
+			pa.p1UnsatisfiedSame++
+		}
+	}
+	for _, a := range p3.Actions {
+		m, ok := snap.Get(a.MachineID)
+		if !ok {
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		matched, fits := false, false
+		for i := range p1.Unsatisfied {
+			u := &p1.Unsatisfied[i]
+			if !decision.MatchProfile(u.Need.Profile, m) {
+				continue
+			}
+			matched = true
+			if needs.Covers(alloc, u.Need.MinUnit) {
+				fits = true
+				break
+			}
+		}
+		if matched {
+			pa.p3ReclaimMatchesUnsatisfied++
+		}
+		if fits {
+			pa.p3ReclaimMatchesAndFits++
+		}
+	}
+	return pa
 }
 
 // emitInventoryByCapacityAndPenalty walks the snapshot once and
