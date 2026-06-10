@@ -123,6 +123,10 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 		alloc []needs.ResourceQty
 	}
 	remaining := n.AggregateResources
+	// Bucket totals are the index's integer vectors (ParseVec) so the
+	// per-Need walk does no quantity parsing; candidates keep their
+	// []ResourceQty alloc for the claim loop's SubResources boundary.
+	minUnitVec := acquirable.ParseVec(n.MinUnit)
 	index := make(map[string]int)
 	var buckets []SameBucket
 	var members [][]candidate
@@ -135,7 +139,8 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 				continue
 			}
 			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-			if !needs.Covers(alloc, n.MinUnit) {
+			vec := acquirable.ParseVec(alloc)
+			if !VecCovers(vec, minUnitVec) {
 				continue
 			}
 			v, ok := lookupAttribute(sameKey, m)
@@ -150,7 +155,7 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 				members = append(members, nil)
 			}
 			buckets[i].Count++
-			buckets[i].Total = needs.AddResources(buckets[i].Total, alloc)
+			buckets[i].Total = VecAdd(buckets[i].Total, vec)
 			members[i] = append(members[i], candidate{id: m.ID, alloc: alloc})
 		}
 	}
@@ -167,9 +172,9 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 			members = append(members, nil)
 		}
 		buckets[i].Count += ab.Count
-		buckets[i].Total = needs.AddResources(buckets[i].Total, ab.Total)
+		buckets[i].Total = VecAdd(buckets[i].Total, ab.Total)
 	}
-	best := ChooseSameBucket(buckets, remaining)
+	best := ChooseSameBucket(buckets, acquirable.ParseVec(remaining))
 	if best < 0 {
 		return remaining
 	}

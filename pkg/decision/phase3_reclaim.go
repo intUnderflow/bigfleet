@@ -205,8 +205,12 @@ func claimMatchingSame(
 		id    machine.ID
 		alloc []needs.ResourceQty
 	}
+	// Bucket totals are the index's integer vectors (ParseVec) so the
+	// per-Need walk does no quantity parsing; candidates keep their
+	// []ResourceQty alloc for the claim loop's SubResources boundary.
+	minUnitVec := acquirable.ParseVec(minUnit)
 	index := make(map[string]int)
-	var buckets []sameBucket
+	var buckets []occ.SameBucket
 	var members [][]candidate
 	for i := range machines {
 		m := &machines[i]
@@ -217,7 +221,8 @@ func claimMatchingSame(
 			continue
 		}
 		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-		if !needs.Covers(alloc, minUnit) {
+		vec := acquirable.ParseVec(alloc)
+		if !occ.VecCovers(vec, minUnitVec) {
 			continue
 		}
 		v, ok := lookupAttribute(sameKey, *m)
@@ -228,11 +233,11 @@ func claimMatchingSame(
 		if !exists {
 			idx = len(buckets)
 			index[v] = idx
-			buckets = append(buckets, sameBucket{value: v})
+			buckets = append(buckets, occ.SameBucket{Value: v})
 			members = append(members, nil)
 		}
-		buckets[idx].count++
-		buckets[idx].total = needs.AddResources(buckets[idx].total, alloc)
+		buckets[idx].Count++
+		buckets[idx].Total = occ.VecAdd(buckets[idx].Total, vec)
 		members[idx] = append(members[idx], candidate{id: m.ID, alloc: alloc})
 	}
 	// Joint potential (ADR-0040 Addendum): fold in the acquirable
@@ -245,13 +250,13 @@ func claimMatchingSame(
 		if !exists {
 			idx = len(buckets)
 			index[v] = idx
-			buckets = append(buckets, sameBucket{value: v})
+			buckets = append(buckets, occ.SameBucket{Value: v})
 			members = append(members, nil)
 		}
-		buckets[idx].count += ab.Count
-		buckets[idx].total = needs.AddResources(buckets[idx].total, ab.Total)
+		buckets[idx].Count += ab.Count
+		buckets[idx].Total = occ.VecAdd(buckets[idx].Total, ab.Total)
 	}
-	best := chooseSameBucket(buckets, remaining)
+	best := occ.ChooseSameBucket(buckets, acquirable.ParseVec(remaining))
 	if best < 0 {
 		return remaining
 	}

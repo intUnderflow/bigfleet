@@ -1,18 +1,16 @@
 package occ
 
-import (
-	"k8s.io/apimachinery/pkg/api/resource"
-
-	"github.com/intUnderflow/bigfleet/pkg/needs"
-)
-
 // SameBucket aggregates one Same-domain's candidate supply for the
 // ADR-0040 single-best-bucket choice: the domain value, the candidate
-// machine count, and Σ EffectiveAllocatable across those candidates.
+// machine count, and Σ EffectiveAllocatable across those candidates as
+// a SameSupplyIndex dimension-interned milli-unit vector (ParseVec).
+// Integer vectors keep ChooseSameBucket free of quantity parsing — the
+// string-vector version of this machinery re-parsed resource.Quantity
+// per bucket per Need and starved the shard (see SameSupplyIndex).
 type SameBucket struct {
 	Value string
 	Count int
-	Total []needs.ResourceQty
+	Total []int64
 }
 
 // ChooseSameBucket returns the index of the single bucket a
@@ -25,10 +23,11 @@ type SameBucket struct {
 // ADR-0040 Addendum: callers feed it JOINT bucket totals — each
 // domain's creditable supply (the Need's cluster's Configured +
 // Configuring) plus its acquirable supply (shard-wide unclaimed Idle +
-// Speculative, via SameSupplyIndex). The rule below is unchanged;
-// only the totals it ranks changed. Choosing over creditable-only
-// totals here while acquisition re-picked the best Idle bucket chose
-// the domain twice per cycle and oscillated.
+// Speculative, via SameSupplyIndex). The choice is made once per Need
+// per cycle, and both phases rank with this same function on vectors
+// from the same index, so they agree by construction (Phase 3's
+// claimMatching imports it directly; the former pkg/decision twin is
+// gone).
 //
 // The rule — deterministic and cycle-stable, a strict total order over
 // distinct domain values:
@@ -42,11 +41,8 @@ type SameBucket struct {
 //
 // This is the crediting mirror of FindSame's acquisition scoring
 // (atomic-satisfiable preferred); it ranks on coverage rather than
-// price because credited supply is already provisioned. pkg/decision's
-// chooseSameBucket (Phase 3's claimMatching) duplicates this helper —
-// occ must not import decision — and TestChooseSameBucketParity keeps
-// the two aligned.
-func ChooseSameBucket(buckets []SameBucket, deficit []needs.ResourceQty) int {
+// price because credited supply is already provisioned.
+func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 	best := -1
 	bestSat := false
 	bestScore := 0.0
@@ -55,7 +51,7 @@ func ChooseSameBucket(buckets []SameBucket, deficit []needs.ResourceQty) int {
 		if b.Count == 0 {
 			continue
 		}
-		sat := needs.Covers(b.Total, deficit)
+		sat := VecCovers(b.Total, deficit)
 		score := sameBucketScore(b.Total, deficit, !sat)
 		better := false
 		switch {
@@ -93,20 +89,17 @@ func ChooseSameBucket(buckets []SameBucket, deficit []needs.ResourceQty) int {
 // buckets (overflowing one dimension must not mask a hole in another);
 // uncapped it is the over-commitment score minimised among satisfiable
 // buckets.
-func sameBucketScore(total, deficit []needs.ResourceQty, capped bool) float64 {
-	have := make(map[string]float64, len(total))
-	for _, r := range total {
-		q, _ := resource.ParseQuantity(r.Quantity)
-		have[r.Name] = q.AsApproximateFloat64()
-	}
+func sameBucketScore(total, deficit []int64, capped bool) float64 {
 	score := 0.0
-	for _, d := range deficit {
-		dq, _ := resource.ParseQuantity(d.Quantity)
-		want := dq.AsApproximateFloat64()
+	for i, want := range deficit {
 		if want <= 0 {
 			continue
 		}
-		ratio := have[d.Name] / want
+		have := int64(0)
+		if i < len(total) {
+			have = total[i]
+		}
+		ratio := float64(have) / float64(want)
 		if capped && ratio > 1 {
 			ratio = 1
 		}

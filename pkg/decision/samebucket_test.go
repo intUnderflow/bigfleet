@@ -10,40 +10,37 @@ import (
 )
 
 // synthSameMachine is one machine of a synthetic Same-domain pool: the
-// domain value it carries and its EffectiveAllocatable vector.
+// domain value it carries and its allocatable as a milli-unit vector
+// (dimension order fixed by the test case — the chooser is agnostic).
 type synthSameMachine struct {
 	domain string
-	alloc  []needs.ResourceQty
+	alloc  []int64
 }
 
-// foldSameMachines builds the per-domain bucket aggregates both
-// choosers rank, from one shared machine list — the same fold the two
-// crediting sites perform inline.
-func foldSameMachines(ms []synthSameMachine) ([]sameBucket, []occ.SameBucket) {
+// foldSameMachines builds the per-domain bucket aggregates the chooser
+// ranks, from one machine list — the same fold the two crediting sites
+// (occ.seedSameProfile, claimMatchingSame) perform inline.
+func foldSameMachines(ms []synthSameMachine) []occ.SameBucket {
 	index := map[string]int{}
-	var dec []sameBucket
-	var oc []occ.SameBucket
+	var out []occ.SameBucket
 	for _, m := range ms {
 		i, ok := index[m.domain]
 		if !ok {
-			i = len(dec)
+			i = len(out)
 			index[m.domain] = i
-			dec = append(dec, sameBucket{value: m.domain})
-			oc = append(oc, occ.SameBucket{Value: m.domain})
+			out = append(out, occ.SameBucket{Value: m.domain})
 		}
-		dec[i].count++
-		dec[i].total = needs.AddResources(dec[i].total, m.alloc)
-		oc[i].Count++
-		oc[i].Total = needs.AddResources(oc[i].Total, m.alloc)
+		out[i].Count++
+		out[i].Total = occ.VecAdd(out[i].Total, m.alloc)
 	}
-	return dec, oc
+	return out
 }
 
-func cpus(n string) []needs.ResourceQty {
-	return []needs.ResourceQty{{Name: "cpu", Quantity: n}}
-}
+// cpu quantities in milli-units; dimension 0 = cpu, dimension 1 =
+// memory where a case uses it.
+func cpus(n int64) []int64 { return []int64{n * 1000} }
 
-func rackMachines(domain string, n int, alloc []needs.ResourceQty) []synthSameMachine {
+func rackMachines(domain string, n int, alloc []int64) []synthSameMachine {
 	out := make([]synthSameMachine, 0, n)
 	for i := 0; i < n; i++ {
 		out = append(out, synthSameMachine{domain: domain, alloc: alloc})
@@ -51,67 +48,67 @@ func rackMachines(domain string, n int, alloc []needs.ResourceQty) []synthSameMa
 	return out
 }
 
-// TestChooseSameBucketParity feeds the decision- and occ-side ADR-0040
-// bucket choosers the same synthetic machine sets and asserts they
-// pick the same bucket. The helper is duplicated across the two
-// packages (occ must not import decision); this test is the guard that
-// keeps the duplication aligned, and it pins the documented rule:
-// satisfiable preferred, smallest satisfiable total, else most-
-// covering, tiebreak larger count then smallest value.
+// TestChooseSameBucket_Rule pins occ.ChooseSameBucket's documented
+// total order — satisfiable preferred, smallest satisfiable total,
+// else most-covering, tiebreak larger count then smallest value — from
+// the decision side, where claimMatchingSame consumes it. (The former
+// pkg/decision twin of the chooser is gone; Phase 3 imports occ's
+// directly, so a parity test is no longer needed — this keeps the rule
+// coverage the parity cases provided.)
 //
-// ADR-0040 Addendum: both callers now feed JOINT totals — creditable
-// (cluster Configured/Configuring) plus acquirable (shard-wide Idle +
-// Speculative) — folded into one SameBucket per domain. The chooser
-// is agnostic to which half a member came from, so the synthetic
-// machines here stand in for either; the "joint totals" cases mix
-// the two shapes inside one domain.
-func TestChooseSameBucketParity(t *testing.T) {
+// ADR-0040 Addendum: callers feed JOINT totals — creditable plus
+// acquirable — folded into one SameBucket per domain. The chooser is
+// agnostic to which half a member came from; the "joint totals" case
+// mixes the two shapes inside one domain.
+func TestChooseSameBucket_Rule(t *testing.T) {
 	t.Parallel()
+
+	gi := int64(1024 * 1024 * 1024) // 1Gi in bytes; ×1000 below for milli
 
 	cases := []struct {
 		name     string
 		machines []synthSameMachine
-		deficit  []needs.ResourceQty
+		deficit  []int64
 		want     string // expected domain value; "" = no bucket (-1)
 	}{
 		{
 			name: "satisfiable beats bigger unsatisfiable",
 			machines: append(
-				rackMachines("rack-a", 1, cpus("4")),
-				rackMachines("rack-b", 2, cpus("4"))...),
-			deficit: cpus("8"),
+				rackMachines("rack-a", 1, cpus(4)),
+				rackMachines("rack-b", 2, cpus(4))...),
+			deficit: cpus(8),
 			want:    "rack-b",
 		},
 		{
 			name: "smallest satisfiable total wins",
 			machines: append(
-				rackMachines("rack-a", 4, cpus("4")),     // total 16
-				rackMachines("rack-b", 3, cpus("4"))...), // total 12
-			deficit: cpus("10"),
+				rackMachines("rack-a", 4, cpus(4)),     // total 16
+				rackMachines("rack-b", 3, cpus(4))...), // total 12
+			deficit: cpus(10),
 			want:    "rack-b",
 		},
 		{
 			name: "none satisfiable: most covering wins",
 			machines: append(
-				rackMachines("rack-a", 1, cpus("4")),
-				rackMachines("rack-b", 3, cpus("4"))...),
-			deficit: cpus("20"),
+				rackMachines("rack-a", 1, cpus(4)),
+				rackMachines("rack-b", 3, cpus(4))...),
+			deficit: cpus(20),
 			want:    "rack-b",
 		},
 		{
 			name: "score tie: larger machine count wins",
 			machines: append(
-				rackMachines("rack-a", 1, cpus("8")),
-				rackMachines("rack-b", 2, cpus("4"))...), // both total 8
-			deficit: cpus("6"),
+				rackMachines("rack-a", 1, cpus(8)),
+				rackMachines("rack-b", 2, cpus(4))...), // both total 8
+			deficit: cpus(6),
 			want:    "rack-b",
 		},
 		{
 			name: "full tie: lexicographically smallest value",
 			machines: append(
-				rackMachines("rack-b", 2, cpus("4")),
-				rackMachines("rack-a", 2, cpus("4"))...),
-			deficit: cpus("8"),
+				rackMachines("rack-b", 2, cpus(4)),
+				rackMachines("rack-a", 2, cpus(4))...),
+			deficit: cpus(8),
 			want:    "rack-a",
 		},
 		{
@@ -121,14 +118,10 @@ func TestChooseSameBucketParity(t *testing.T) {
 				// coverage 1.0); rack-b covers cpu fully and half the
 				// memory (coverage 1.5). Uncapped, rack-a's cpu overflow
 				// would mask its memory hole and win.
-				rackMachines("rack-a", 2, []needs.ResourceQty{{Name: "cpu", Quantity: "32"}}),
-				rackMachines("rack-b", 2, []needs.ResourceQty{
-					{Name: "cpu", Quantity: "8"}, {Name: "memory", Quantity: "16Gi"},
-				})...),
-			deficit: []needs.ResourceQty{
-				{Name: "cpu", Quantity: "16"}, {Name: "memory", Quantity: "64Gi"},
-			},
-			want: "rack-b",
+				rackMachines("rack-a", 2, []int64{32 * 1000, 0}),
+				rackMachines("rack-b", 2, []int64{8 * 1000, 16 * gi * 1000})...),
+			deficit: []int64{16 * 1000, 64 * gi * 1000},
+			want:    "rack-b",
 		},
 		{
 			// ADR-0040 Addendum joint-total shape: rack-a is
@@ -139,20 +132,18 @@ func TestChooseSameBucketParity(t *testing.T) {
 			// smallest bucket.
 			name: "joint totals merge creditable and acquirable halves",
 			machines: append(
-				rackMachines("rack-a", 2, cpus("4")),
+				rackMachines("rack-a", 2, cpus(4)),
 				append(
-					rackMachines("rack-b", 1, cpus("4")),
-					rackMachines("rack-b", 2, []needs.ResourceQty{
-						{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "16Gi"},
-					})...,
+					rackMachines("rack-b", 1, cpus(4)),
+					rackMachines("rack-b", 2, []int64{4 * 1000, 16 * gi * 1000})...,
 				)...),
-			deficit: cpus("12"),
+			deficit: cpus(12),
 			want:    "rack-b",
 		},
 		{
 			name:     "no candidates",
 			machines: nil,
-			deficit:  cpus("8"),
+			deficit:  cpus(8),
 			want:     "",
 		},
 	}
@@ -164,22 +155,13 @@ func TestChooseSameBucketParity(t *testing.T) {
 			// domain values, so the pick must be order-independent.
 			orders := [][]synthSameMachine{tc.machines, reversed(tc.machines)}
 			for _, ms := range orders {
-				decBuckets, occBuckets := foldSameMachines(ms)
-				decIdx := chooseSameBucket(decBuckets, tc.deficit)
-				occIdx := occ.ChooseSameBucket(occBuckets, tc.deficit)
-
-				decVal, occVal := "", ""
-				if decIdx >= 0 {
-					decVal = decBuckets[decIdx].value
+				buckets := foldSameMachines(ms)
+				got := ""
+				if idx := occ.ChooseSameBucket(buckets, tc.deficit); idx >= 0 {
+					got = buckets[idx].Value
 				}
-				if occIdx >= 0 {
-					occVal = occBuckets[occIdx].Value
-				}
-				if decVal != occVal {
-					t.Fatalf("parity broken: decision chose %q, occ chose %q", decVal, occVal)
-				}
-				if decVal != tc.want {
-					t.Errorf("chose %q, want %q", decVal, tc.want)
+				if got != tc.want {
+					t.Errorf("chose %q, want %q", got, tc.want)
 				}
 			}
 		})
@@ -194,14 +176,13 @@ func reversed(in []synthSameMachine) []synthSameMachine {
 	return out
 }
 
-// TestSameDomainChoiceParity_Phase1VsPhase3 is the end-to-end mirror
-// of the chooser parity above: on one snapshot, the domain Phase 1's
-// pre-pass records for a Same Need must be the domain whose
-// Configured machines Phase 3 keeps. Both rank by the joint potential
-// (creditable + acquirable, ADR-0040 Addendum); if either side
-// regressed to creditable-only the two phases would pick different
-// domains for the same Need and resume the reclaim↔re-bootstrap
-// fight.
+// TestSameDomainChoiceParity_Phase1VsPhase3 is the end-to-end mirror:
+// on one snapshot, the domain Phase 1's pre-pass records for a Same
+// Need must be the domain whose Configured machines Phase 3 keeps.
+// Both rank by the joint potential (creditable + acquirable, ADR-0040
+// Addendum); if either side regressed to creditable-only the two
+// phases would pick different domains for the same Need and resume the
+// reclaim↔re-bootstrap fight.
 //
 // Shape: rack-a holds 1 Configured (creditable-only, total 4); rack-b
 // holds 1 Configured + 2 Idle (joint total 12, satisfiable for the
