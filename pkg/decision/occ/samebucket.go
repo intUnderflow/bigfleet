@@ -22,6 +22,14 @@ type SameBucket struct {
 // acquisition (FindSame) instead of walking machines linearly across
 // domains.
 //
+// ADR-0040 Addendum: callers feed it JOINT bucket totals — each
+// domain's creditable supply (the Need's cluster's Configured +
+// Configuring) plus its acquirable supply (shard-wide unclaimed Idle +
+// Speculative, via SameSupplyIndex). The rule below is unchanged;
+// only the totals it ranks changed. Choosing over creditable-only
+// totals here while acquisition re-picked the best Idle bucket chose
+// the domain twice per cycle and oscillated.
+//
 // The rule — deterministic and cycle-stable, a strict total order over
 // distinct domain values:
 //

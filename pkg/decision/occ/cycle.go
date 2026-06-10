@@ -283,10 +283,17 @@ func computeDeficit(n *needs.Need, state *SharedState) []needs.ResourceQty {
 // both are present (Same is the stronger constraint and the
 // pre-OCC allocator at pkg/decision/phase1_allocator.go:120-125
 // applies the same precedence).
+//
+// Same Needs acquire inside the domain the pre-pass chose jointly
+// over creditable + acquirable supply (ADR-0040 Addendum) — the
+// recorded domain survives displacement re-queues because the
+// QueuedNeed carries the same *needs.Need pointer the pre-pass keyed
+// it under. An empty recorded domain (no bucket existed anywhere)
+// leaves FindSame on its best-bucket fallback.
 func findCandidatesFor(pool *Pool, state *SharedState, st machine.State, prec Precedence, n *needs.Need, deficit []needs.ResourceQty) Candidates {
 	profile := n.Profile
 	if sameKey, ok := SameRequirementKey(profile); ok {
-		return pool.FindSame(state, st, prec, deficit, n.MinUnit, sameKey)
+		return pool.FindSame(state, st, prec, deficit, n.MinUnit, sameKey, state.SameDomainFor(n))
 	}
 	if topoKey, skew, ok := StrictSpread(profile); ok {
 		return pool.FindSpread(state, st, prec, deficit, n.MinUnit, topoKey, skew)

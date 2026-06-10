@@ -176,6 +176,107 @@ func TestIntegration_PriorityInversion(t *testing.T) {
 	}
 }
 
+// ADR-0040 Addendum no-oscillation regression. cluster-x has 2
+// Configured machines matching a Same Need in zone-a and the shard
+// has 3 Idle in zone-b; the gang's aggregate is 5 machines' worth
+// with a 1-machine MinUnit. The joint domain choice (creditable +
+// acquirable) must pick zone-b (most-covering: 3 > 2), acquisition
+// must stay confined there, Phase 3 — ranking by the identical joint
+// score — reclaims zone-a's 2 as off-domain scatter, and once the
+// supply settles (zone-b's 3 credited, zone-a's 2 drained back to
+// Idle) subsequent cycles are action-free: no bootstrap/reclaim
+// flip-flop between the domains.
+//
+// Pre-Addendum this exact shape oscillated at cycle rate (~14/sec at
+// uber-5k): the pre-pass chose the creditable zone-a, FindSame
+// independently chose the Idle-rich zone-b, Phase 1 assembled a
+// cross-domain group, and Phase 3 (strict since ADR-0040) reclaimed
+// the off-domain half every cycle.
+func TestIntegration_SameDomain_NoOscillation(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(configuredGpuInZone("a-"+idN(i), "cluster-x", "zone-a"))
+	}
+	for i := 0; i < 3; i++ {
+		_ = inv.Insert(gpuMachineInZone("b-"+idN(i), "zone-b", 1.0))
+	}
+	demand := []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		5,
+	)}
+
+	// applyCycle runs Phase 1 + Phase 3 on the current snapshot, then
+	// folds the actions back into the inventory: Bootstraps become
+	// Configured for the Need's cluster; Reclaims drain back to Idle
+	// (still in zone-a — live bait that a re-picking allocator would
+	// re-bootstrap).
+	applyCycle := func() (bootstraps, reclaims []decision.Action) {
+		t.Helper()
+		snap := inv.Snapshot()
+		p1 := decision.Phase1(snap, demand)
+		p3 := decision.Phase3(snap, demand, decision.AlwaysReady)
+		for _, a := range p1.Actions {
+			if a.Kind != decision.ActionKindBootstrap {
+				t.Fatalf("unexpected non-Bootstrap Phase 1 action: %+v", a)
+			}
+			bootstraps = append(bootstraps, a)
+			m, _ := snap.Get(a.MachineID)
+			stepInventory(t, inv, a.MachineID, machine.StateConfiguring, m.Host, a.Cluster)
+			stepInventory(t, inv, a.MachineID, machine.StateConfigured, m.Host, a.Cluster)
+		}
+		for _, a := range p3.Actions {
+			reclaims = append(reclaims, a)
+			m, err := inv.Get(a.MachineID)
+			if err != nil {
+				t.Fatalf("reclaimed machine %s not in inventory: %v", a.MachineID, err)
+			}
+			m.State = machine.StateDraining
+			if err := inv.Apply(m); err != nil {
+				t.Fatalf("drain %s: %v", a.MachineID, err)
+			}
+			m.State = machine.StateIdle
+			m.Cluster = ""
+			if err := inv.Apply(m); err != nil {
+				t.Fatalf("idle %s: %v", a.MachineID, err)
+			}
+		}
+		return bootstraps, reclaims
+	}
+
+	// Cycle 1: the joint choice concentrates on zone-b.
+	boots, recls := applyCycle()
+	if len(boots) != 3 {
+		t.Fatalf("cycle 1 bootstraps = %d, want 3 (all of zone-b's Idle)", len(boots))
+	}
+	for _, a := range boots {
+		m, _ := inv.Get(a.MachineID)
+		if m.Profile.Zone != "zone-b" {
+			t.Errorf("cycle 1 bootstrapped %s in %s; acquisition must be confined to the joint choice zone-b", a.MachineID, m.Profile.Zone)
+		}
+	}
+	if len(recls) != 2 {
+		t.Fatalf("cycle 1 reclaims = %d, want 2 (zone-a's off-domain Configured)", len(recls))
+	}
+	for _, a := range recls {
+		m, _ := inv.Get(a.MachineID)
+		if m.Profile.Zone != "zone-a" {
+			t.Errorf("cycle 1 reclaimed %s in %s, want only zone-a scatter", a.MachineID, m.Profile.Zone)
+		}
+	}
+
+	// Cycles 2+: zone-b's 3 are credited, zone-a's 2 sit Idle, the
+	// 2-machine residual is a stable shortfall. Steady state = no
+	// further actions of either kind.
+	for cycle := 2; cycle <= 4; cycle++ {
+		boots, recls = applyCycle()
+		if len(boots) != 0 || len(recls) != 0 {
+			t.Fatalf("cycle %d: bootstraps = %d, reclaims = %d, want 0/0 — reclaim↔re-bootstrap oscillation is back", cycle, len(boots), len(recls))
+		}
+	}
+}
+
 // executeActions applies Phase 1 actions through the fake provider and
 // mirrors the resulting state into the in-memory inventory. Models the
 // shard's "ack action → record state change" half of the loop without

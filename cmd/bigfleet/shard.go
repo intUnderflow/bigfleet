@@ -192,6 +192,43 @@ func cloneResourceMap(in map[string]string) map[string]string {
 	return out
 }
 
+// seedZoneRack returns the zone and the topology.bigfleet/rack label
+// for one seeded machine. a may be nil (the legacy no-catalog seed
+// shape); idx is a per-archetype running counter within one seed loop
+// for archetype machines, or the loop index for the nil-archetype
+// fallback; zones is the candidate zone list (the archetype's, or the
+// harness default), with "zone-a" as the empty-list fallback.
+//
+// Non-sameRack machines round-robin both zone and rack — the spread
+// that gives the per-fingerprint pool cache real diversity.
+//
+// sameRack archetypes are placed in contiguous rack blocks instead
+// (ADR-0040 Addendum §4): block size = the archetype's max group size
+// (GroupSizeRange[1], fallback 8 when unset), and the whole block
+// shares one (zone, rack) so a single rack can host a whole
+// co-location gang. The zone is derived from the block — not the
+// per-machine index — because the rack label embeds the zone;
+// rotating zones per machine would fragment a block into per-zone
+// slivers. Round-robin left ~1-3 co-located machines per rack against
+// gangs of 3-8: demand that is physically unsatisfiable regardless of
+// attribution, which real fleets avoid by procuring co-located
+// capacity in rack units.
+func seedZoneRack(a *archetype.Archetype, idx, racksPerZone int, zones []string) (string, string) {
+	slot := idx
+	if a != nil && a.SameRack {
+		block := a.GroupSizeRange[1]
+		if block <= 0 {
+			block = 8
+		}
+		slot = idx / block
+	}
+	zone := "zone-a"
+	if len(zones) > 0 {
+		zone = zones[slot%len(zones)]
+	}
+	return zone, fmt.Sprintf("%s-rack-%d", zone, slot%racksPerZone)
+}
+
 func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
 	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
 	zones := []string{"zone-a", "zone-b", "zone-c"}
@@ -227,18 +264,19 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	// from the source pod's podAffinity, so only sameRack Pods carry it
 	// — but rack-labelled Idle machines are still needed as their
 	// candidates, else those Needs never emit a Bootstrap. 10 racks per
-	// zone matches the Configured seed.
+	// zone matches the Configured seed. Rack assignment is per-archetype
+	// (seedZoneRack): sameRack archetypes in contiguous blocks, the
+	// rest round-robin (ADR-0040 Addendum §4).
 	const idleRacksPerZone = 10
+	idleRackCounters := map[string]int{}
 	for i := 0; i < nIdle; i++ {
 		var profile machine.Profile
 		if a := idlePicker.Pick(idleRng); a != nil {
 			it := a.InstanceTypes[i%len(a.InstanceTypes)]
-			z := "zone-a"
-			if len(a.Zones) > 0 {
-				z = a.Zones[i%len(a.Zones)]
-			}
+			z, rack := seedZoneRack(a, idleRackCounters[a.Name], idleRacksPerZone, a.Zones)
+			idleRackCounters[a.Name]++
 			labels := map[string]string{
-				"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%idleRacksPerZone),
+				"topology.bigfleet/rack": rack,
 			}
 			for k, v := range a.PickLabels(idleRng) {
 				labels[k] = v
@@ -252,14 +290,14 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			}
 		} else {
 			t := types[i%len(types)]
-			z := zones[i%len(zones)]
+			z, rack := seedZoneRack(nil, i, idleRacksPerZone, zones)
 			profile = machine.Profile{
 				InstanceType: t,
 				Zone:         z,
 				CapacityType: machine.CapacityTypeBareMetal,
 				Resources:    resources[t],
 				Labels: map[string]string{
-					"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%idleRacksPerZone),
+					"topology.bigfleet/rack": rack,
 				},
 			}
 		}
@@ -303,16 +341,15 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	}
 	specPicker := archetype.NewPicker(specArches)
 	specRng := rand.New(rand.NewSource(int64(shardOrdinal) + 31))
+	specRackCounters := map[string]int{}
 	for i := 0; i < nSpeculative; i++ {
 		var profile machine.Profile
 		if a := specPicker.Pick(specRng); a != nil {
 			it := a.InstanceTypes[i%len(a.InstanceTypes)]
-			z := "zone-a"
-			if len(a.Zones) > 0 {
-				z = a.Zones[i%len(a.Zones)]
-			}
+			z, rack := seedZoneRack(a, specRackCounters[a.Name], specRacksPerZone, a.Zones)
+			specRackCounters[a.Name]++
 			labels := map[string]string{
-				"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%specRacksPerZone),
+				"topology.bigfleet/rack": rack,
 			}
 			// Mirror the Configured seed (M52.B): tag the Speculative
 			// slot with its archetype so a fake-Node minted from a
@@ -332,14 +369,14 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			}
 		} else {
 			t := types[i%len(types)]
-			z := zones[i%len(zones)]
+			z, rack := seedZoneRack(nil, i, specRacksPerZone, zones)
 			profile = machine.Profile{
 				InstanceType: t,
 				Zone:         z,
 				CapacityType: machine.CapacityTypeOnDemand,
 				Resources:    resources[t],
 				Labels: map[string]string{
-					"topology.bigfleet/rack": fmt.Sprintf("%s-rack-%d", z, i%specRacksPerZone),
+					"topology.bigfleet/rack": rack,
 				},
 			}
 		}
@@ -384,8 +421,12 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		// 10 racks per zone matches a typical AZ-of-cells deployment.
 		// Configured machines get a deterministic rack label drawn
 		// from the pool so the load-driver's Same requirement has
-		// enough variety to schedule against.
+		// enough variety to schedule against. Rack assignment is
+		// per-archetype (seedZoneRack): sameRack archetypes in
+		// contiguous blocks, the rest round-robin (ADR-0040
+		// Addendum §4).
 		const racksPerZone = 10
+		rackCounters := map[string]int{}
 		idx := 0
 		for c := shardOrdinal; c < totalClusters; c += clusterStride {
 			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
@@ -395,10 +436,8 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 				var interruptionPenalty, reclamationPenalty float64
 				if a := picker.Pick(rng); a != nil {
 					it := a.InstanceTypes[idx%len(a.InstanceTypes)]
-					z := "zone-a"
-					if len(a.Zones) > 0 {
-						z = a.Zones[idx%len(a.Zones)]
-					}
+					z, rackName := seedZoneRack(a, rackCounters[a.Name], racksPerZone, a.Zones)
+					rackCounters[a.Name]++
 					// ADR-0015 §1: per-machine resources picked from
 					// SizeBuckets when present (production-shape
 					// fingerprint multiplicity); falls back to the
@@ -408,7 +447,6 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					// Every machine carries a rack label; Same-aware
 					// archetypes request it via Exists / Same. Other
 					// archetypes don't see it.
-					rackName := fmt.Sprintf("%s-rack-%d", z, idx%racksPerZone)
 					labels["topology.bigfleet/rack"] = rackName
 					// M52.B (ADR-0035): tag every seeded machine with
 					// its archetype so the load-driver's pre-bind phase

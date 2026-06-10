@@ -30,6 +30,7 @@ type SharedState struct {
 	claimedBy     map[machine.ID]claim
 	claimedByNeed map[*needs.Need]map[machine.ID]struct{}
 	bucketSeq     map[BucketKey]uint64
+	sameDomain    map[*needs.Need]string
 }
 
 // claim is the per-machine record the broker stores when it
@@ -53,7 +54,33 @@ func NewSharedState(snap *inventory.Snapshot) *SharedState {
 		claimedBy:     make(map[machine.ID]claim),
 		claimedByNeed: make(map[*needs.Need]map[machine.ID]struct{}),
 		bucketSeq:     make(map[BucketKey]uint64),
+		sameDomain:    make(map[*needs.Need]string),
 	}
+}
+
+// recordSameDomain stores the joint domain choice the pre-pass made
+// for a Same-Profile Need (ADR-0040 Addendum: the domain is chosen
+// once per Need per cycle; credit and acquisition are both confined
+// to it). Written only by the single-threaded pre-pass; mu still
+// guards it so worker reads need no ordering argument beyond the
+// lock.
+func (s *SharedState) recordSameDomain(n *needs.Need, domain string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sameDomain[n] = domain
+}
+
+// SameDomainFor returns the Same-domain the pre-pass chose for n, or
+// "" when no domain exists anywhere for the Need (no creditable and
+// no acquirable bucket — FindSame then keeps its best-bucket
+// behaviour as the fallback). Keyed by Need pointer like the rest of
+// the per-Need tracking; the pointers come from RunCycle's stable
+// needPtrs slice and survive displacement re-queues unchanged
+// (Broker.Propose round-trips claim.need into Result.Displaced).
+func (s *SharedState) SameDomainFor(n *needs.Need) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sameDomain[n]
 }
 
 // SeedClaim records an initial claim outside the broker's plan-then-

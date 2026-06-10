@@ -223,6 +223,9 @@ func TestFindBasic_ReturnsEmptyOnZeroDeficit(t *testing.T) {
 
 // ---- FindSame ---------------------------------------------------------
 
+// Empty domain: the pre-pass found no bucket anywhere, so FindSame
+// keeps its original best-bucket scoring as the fallback (ADR-0040
+// Addendum).
 func TestFindSame_PrefersAtomicSatisfiableBucket(t *testing.T) {
 	t.Parallel()
 	// Two racks. Rack A has 1 machine (capacity 4 cpu, can't atomically cover 8 cpu).
@@ -239,7 +242,7 @@ func TestFindSame_PrefersAtomicSatisfiableBucket(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "8"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack")
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack", "")
 	if c.Bucket.SameValue != "rack-b" {
 		t.Fatalf("FindSame chose %q, want rack-b (atomic)", c.Bucket.SameValue)
 	}
@@ -264,7 +267,7 @@ func TestFindSame_FallsBackToMostAvailableWhenNoAtomic(t *testing.T) {
 	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "20"}}
 	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
 
-	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack")
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack", "")
 	if c.Bucket.SameValue != "rack-b" {
 		t.Fatalf("FindSame chose %q, want rack-b (most available for partial fill)", c.Bucket.SameValue)
 	}
@@ -282,12 +285,62 @@ func TestFindSame_BucketKeyCarriesSameKeyAndValue(t *testing.T) {
 		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
 		"topology.kubernetes.io/rack",
+		"",
 	)
 	if c.Bucket.SameKey != "topology.kubernetes.io/rack" {
 		t.Errorf("Bucket.SameKey = %q, want topology.kubernetes.io/rack", c.Bucket.SameKey)
 	}
 	if c.Bucket.SameValue != "rack-a" {
 		t.Errorf("Bucket.SameValue = %q, want rack-a", c.Bucket.SameValue)
+	}
+}
+
+// ADR-0040 Addendum: a non-empty domain skips bucket scoring entirely
+// — acquisition is confined to the domain the pre-pass chose jointly,
+// even when another bucket would score better.
+func TestFindSame_DomainConfinesAcquisition(t *testing.T) {
+	t.Parallel()
+	// rack-b atomically covers the deficit and would win the scoring;
+	// the anchored domain rack-a must be honoured anyway.
+	mA := idleMachine("a-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-a"})
+	mB1 := idleMachine("b-1", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	mB2 := idleMachine("b-2", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	state := freshStateWith(mA, mB1, mB2)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := sameProfile(100, "topology.kubernetes.io/rack")
+	pool := cache.Get(machine.StateIdle, profile)
+
+	deficit := []needs.ResourceQty{{Name: "cpu", Quantity: "8"}}
+	minUnit := []needs.ResourceQty{{Name: "cpu", Quantity: "1"}}
+
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{}, deficit, minUnit, "topology.kubernetes.io/rack", "rack-a")
+	if c.Bucket.SameValue != "rack-a" {
+		t.Fatalf("FindSame chose %q, want the anchored rack-a", c.Bucket.SameValue)
+	}
+	if len(c.Machines) != 1 || c.Machines[0] != "a-1" {
+		t.Fatalf("FindSame Machines = %v, want [a-1] only (confined to rack-a)", c.Machines)
+	}
+}
+
+// A domain with no eligible machines yields no candidates — never a
+// silent re-pick of another domain (the off-domain bootstrap was the
+// oscillation source the Addendum closes).
+func TestFindSame_DomainWithNoCandidatesReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	mB := idleMachine("b-1", 2.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"})
+	state := freshStateWith(mB)
+	cache := occ.NewPoolCache(state.Snapshot())
+	profile := sameProfile(100, "topology.kubernetes.io/rack")
+	pool := cache.Get(machine.StateIdle, profile)
+
+	c := pool.FindSame(state, machine.StateIdle, occ.Precedence{},
+		[]needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+		[]needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+		"topology.kubernetes.io/rack",
+		"rack-a",
+	)
+	if len(c.Machines) != 0 {
+		t.Fatalf("FindSame = %v, want empty (rack-a has no machines; rack-b must not be re-picked)", c.Machines)
 	}
 }
 
@@ -534,6 +587,99 @@ func TestSeedConfiguredSupply_SameClaimsConfiguredBeforeConfiguring(t *testing.T
 	}
 	if cfgClaims != 1 {
 		t.Errorf("claimed %d Configuring machines, want 1 (demand is 2 machines total)", cfgClaims)
+	}
+}
+
+// ADR-0040 Addendum: the domain is ranked over JOINT potential. An
+// acquirable-rich domain (shard-wide Idle, no cluster binding)
+// outranks a creditable-only domain when it covers more — the credit
+// walk then claims nothing (the chosen domain has no creditable
+// members) and acquisition, confined to the recorded domain, fills
+// the deficit. Pre-Addendum the creditable-only rank chose rack-a
+// here while FindSame independently chose rack-b: a cross-domain
+// group Phase 3 reclaimed half of next cycle.
+func TestSeedConfiguredSupply_JointChoosesAcquirableRichDomain(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		clusterSameMachine("a-1", machine.StateConfigured, "c1", "rack-a"),
+		idleMachine("b-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+		idleMachine("b-2", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+	)
+	n := sameNeed("c1", sameProfile(100, "topology.kubernetes.io/rack"), "8")
+
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+	if got := state.SameDomainFor(&n); got != "rack-b" {
+		t.Fatalf("recorded domain = %q, want rack-b (joint total 8 covers; creditable-only rack-a totals 4)", got)
+	}
+	if state.IsClaimed("a-1") {
+		t.Error("rack-a Configured claimed; credit must be confined to the chosen rack-b domain")
+	}
+	for _, id := range []machine.ID{"b-1", "b-2"} {
+		if state.IsClaimed(id) {
+			t.Errorf("acquirable Idle %s claimed by the pre-pass; only creditable members are SeedClaimed", id)
+		}
+	}
+	if needs.IsZero(results[0].Deficit) {
+		t.Error("deficit zero; the chosen domain has no creditable supply so the full demand must remain for acquisition")
+	}
+}
+
+// Claimed Idle is excluded from the acquirable half: with rack-b's
+// Idle machines already claimed, rack-a's creditable supply is the
+// only joint potential left and wins.
+func TestSeedConfiguredSupply_JointExcludesClaimedIdle(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		clusterSameMachine("a-1", machine.StateConfigured, "c1", "rack-a"),
+		idleMachine("b-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+		idleMachine("b-2", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+	)
+	foreign := needs.Need{}
+	state.SeedClaim("b-1", &foreign, occ.Precedence{Priority: 999}, 10)
+	state.SeedClaim("b-2", &foreign, occ.Precedence{Priority: 999}, 10)
+
+	n := sameNeed("c1", sameProfile(100, "topology.kubernetes.io/rack"), "8")
+	occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+
+	if got := state.SameDomainFor(&n); got != "rack-a" {
+		t.Fatalf("recorded domain = %q, want rack-a (rack-b's Idle is claimed and contributes nothing)", got)
+	}
+	if !state.IsClaimed("a-1") {
+		t.Error("rack-a Configured not claimed despite rack-a being the chosen domain")
+	}
+}
+
+// Successive same-fingerprint Needs distribute across domains as
+// earlier choices claim supply: the first Need's SeedClaims empty a
+// domain's creditable half, so the next Need's joint rank moves to
+// the acquirable-rich domain.
+func TestSeedConfiguredSupply_JointProgressionAcrossNeeds(t *testing.T) {
+	t.Parallel()
+	state := freshStateWith(
+		clusterSameMachine("a-1", machine.StateConfigured, "c1", "rack-a"),
+		clusterSameMachine("a-2", machine.StateConfigured, "c1", "rack-a"),
+		idleMachine("b-1", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+		idleMachine("b-2", 1.0, map[string]string{"topology.kubernetes.io/rack": "rack-b"}),
+	)
+	pf := sameProfile(100, "topology.kubernetes.io/rack")
+	n1 := sameNeed("c1", pf, "8")
+	n1.Group = "owner-1"
+	n2 := sameNeed("c1", pf, "8")
+	n2.Group = "owner-2"
+
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n1, &n2}, 10)
+
+	if got := state.SameDomainFor(&n1); got != "rack-a" {
+		t.Fatalf("n1 domain = %q, want rack-a (satisfiable tie broken by smallest value)", got)
+	}
+	if got := state.SameDomainFor(&n2); got != "rack-b" {
+		t.Fatalf("n2 domain = %q, want rack-b (rack-a's creditable supply was claimed by n1)", got)
+	}
+	if !needs.IsZero(results[0].Deficit) {
+		t.Errorf("n1 deficit = %v, want zero (rack-a's 2 Configured cover it)", results[0].Deficit)
+	}
+	if needs.IsZero(results[1].Deficit) {
+		t.Error("n2 deficit zero; rack-b is acquirable-only so the pre-pass credits nothing")
 	}
 }
 

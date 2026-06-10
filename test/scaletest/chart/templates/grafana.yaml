@@ -77,7 +77,7 @@ spec:
     spec:
       containers:
         - name: grafana
-          image: {{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}
+          image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag | toString }}"
           ports:
             - { name: web, containerPort: 3000 }
           env:

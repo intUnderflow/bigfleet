@@ -84,7 +84,7 @@ spec:
     spec:
       containers:
         - name: apiserver
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | toString }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-apiserver.sh"]
           env:
@@ -104,7 +104,7 @@ spec:
           resources:
             {{- toYaml .Values.kwok.apiserverResources | nindent 12 }}
         - name: workload
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | toString }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint-workload.sh"]
           env:

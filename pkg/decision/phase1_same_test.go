@@ -208,8 +208,16 @@ func TestPhase1_Same_DensityAwareMachineCount(t *testing.T) {
 	}
 }
 
-// Two Needs with Same in the same cluster; first claims one zone fully,
-// the second must pick another zone (cross-Need claim coordination).
+// Two Needs with Same in the same cluster, both acquirable-only.
+// ADR-0040 Addendum: each Need's domain is chosen once in the
+// pre-pass over joint potential, and at pre-pass time neither zone is
+// claimed, so both anchor to the same (tie-broken) zone — the
+// higher-precedence Need wins it within the cycle and the other
+// parks as a shortfall instead of re-picking the free zone (the
+// re-pick is the cross-domain oscillation source the Addendum
+// closes). The next cycle's joint choice sees zone-a's supply
+// credited away and anchors the loser to zone-b: convergence at
+// cycle granularity, zero churn in between.
 func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 	t.Parallel()
 	inv := inventory.New()
@@ -217,25 +225,51 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 		_ = inv.Insert(gpuMachineInZone(machine.ID("a-"+strconv.Itoa(i)), "zone-a", 1.0))
 		_ = inv.Insert(gpuMachineInZone(machine.ID("b-"+strconv.Itoa(i)), "zone-b", 1.0))
 	}
-	snap := inv.Snapshot()
 
 	// Two distinct co-location groups; high-priority wins first.
 	hi := gpuProfileWithSame(2_000_000, "topology.kubernetes.io/zone")
 	lo := gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone")
-	r := decision.Phase1(snap, []needs.Need{
-		{ClusterID: "cluster-x", Profile: hi, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-A"},
-		{ClusterID: "cluster-x", Profile: lo, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-B"},
-	})
+	hiNeed := needs.Need{ClusterID: "cluster-x", Profile: hi, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-A"}
+	loNeed := needs.Need{ClusterID: "cluster-x", Profile: lo, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-B"}
 
-	if got := len(r.Actions); got != 6 {
-		t.Fatalf("actions = %d, want 6", got)
+	snap := inv.Snapshot()
+	r := decision.Phase1(snap, []needs.Need{hiNeed, loNeed})
+
+	// Cycle 1: both Needs anchored zone-a (joint totals tie; smallest
+	// value wins); hi outranks lo there. lo must NOT scatter into
+	// zone-b this cycle.
+	if got := len(r.Actions); got != 3 {
+		t.Fatalf("cycle 1 actions = %d, want 3 (hi's gang only)", got)
 	}
-	zonesByCount := map[string]int{}
 	for _, a := range r.Actions {
 		m, _ := snap.Get(a.MachineID)
-		zonesByCount[m.Profile.Zone]++
+		if m.Profile.Zone != "zone-a" {
+			t.Errorf("cycle 1 picked %s in %s, want zone-a only", a.MachineID, m.Profile.Zone)
+		}
 	}
-	if zonesByCount["zone-a"] != 3 || zonesByCount["zone-b"] != 3 {
-		t.Errorf("expected 3 in each zone, got %+v", zonesByCount)
+	if len(r.Unsatisfied) != 1 || len(r.Unsatisfied[0].Deficit) == 0 {
+		t.Fatalf("cycle 1 unsatisfied = %+v, want lo's full deficit parked as shortfall", r.Unsatisfied)
+	}
+
+	// Apply hi's bootstraps; cycle 2 anchors lo to zone-b and lands
+	// the second gang there.
+	for _, a := range r.Actions {
+		m, _ := snap.Get(a.MachineID)
+		stepInventory(t, inv, a.MachineID, machine.StateConfiguring, m.Host, a.Cluster)
+		stepInventory(t, inv, a.MachineID, machine.StateConfigured, m.Host, a.Cluster)
+	}
+	snap2 := inv.Snapshot()
+	r2 := decision.Phase1(snap2, []needs.Need{hiNeed, loNeed})
+	if got := len(r2.Actions); got != 3 {
+		t.Fatalf("cycle 2 actions = %d, want 3 (lo's gang)", got)
+	}
+	for _, a := range r2.Actions {
+		m, _ := snap2.Get(a.MachineID)
+		if m.Profile.Zone != "zone-b" {
+			t.Errorf("cycle 2 picked %s in %s, want zone-b (zone-a is credited to hi)", a.MachineID, m.Profile.Zone)
+		}
+	}
+	if len(r2.Unsatisfied) != 0 {
+		t.Errorf("cycle 2 unsatisfied = %+v, want none (both gangs placed)", r2.Unsatisfied)
 	}
 }

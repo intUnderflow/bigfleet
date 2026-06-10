@@ -7,7 +7,10 @@ namespace: bigfleet-scaletest
 # Built from test/scaletest/image/Dockerfile.
 image:
   repository: bigfleet-scaletest
-  tag: dev
+  # Keep quoted: an unquoted all-digit tag (e.g. commit SHA "8832140") is
+  # YAML-coerced to a number and renders as a float; `--set` overrides need
+  # `--set-string` for the same reason.
+  tag: "dev"
   pullPolicy: IfNotPresent
 
 # The bigfleet binary (cmd/bigfleet) image used for the coordinator,
@@ -16,7 +19,9 @@ image:
 bigfleet:
   image:
     repository: bigfleet
-    tag: dev
+    # Keep quoted: all-digit tags coerce to numbers unquoted; use --set-string
+    # for --set-style overrides.
+    tag: "dev"
     pullPolicy: IfNotPresent
 
 coordinator:
@@ -297,6 +302,7 @@ grafana:
   enabled: true
   image:
     repository: grafana/grafana
+    # Keep quoted — see the image.tag note above (numeric coercion).
     tag: "10.4.7"
   resources:
     requests: { cpu: 100m, memory: 128Mi }

@@ -60,7 +60,7 @@ spec:
     spec:
       containers:
         - name: shard
-          image: "{{ .Values.bigfleet.image.repository }}:{{ .Values.bigfleet.image.tag }}"
+          image: "{{ .Values.bigfleet.image.repository }}:{{ .Values.bigfleet.image.tag | toString }}"
           imagePullPolicy: {{ .Values.bigfleet.image.pullPolicy }}
           args:
             - shard

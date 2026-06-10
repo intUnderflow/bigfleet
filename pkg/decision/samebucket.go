@@ -18,11 +18,15 @@ type sameBucket struct {
 // chooseSameBucket mirrors occ.ChooseSameBucket — the ADR-0040
 // bucket-choice rule (satisfiable preferred; smallest satisfiable
 // total; else most-covering; tiebreak larger count, then smallest
-// value) is documented there. Duplicated because occ must not import
-// decision (decision.Phase1 calls occ.RunCycle); the two
-// implementations must stay aligned — TestChooseSameBucketParity
-// asserts they pick the same bucket over a shared synthetic machine
-// set.
+// value) is documented there. Per the ADR-0040 Addendum, callers feed
+// it JOINT totals: each domain's creditable supply plus its
+// shard-wide acquirable Idle + Speculative potential
+// (occ.SameSupplyIndex), so Phase 3 ranks domains exactly as Phase
+// 1's pre-pass does. Duplicated because occ must not import decision
+// (decision.Phase1 calls occ.RunCycle); the two implementations must
+// stay aligned — TestChooseSameBucketParity asserts they pick the
+// same bucket over a shared synthetic machine set, including
+// joint-shaped inputs.
 func chooseSameBucket(buckets []sameBucket, deficit []needs.ResourceQty) int {
 	best := -1
 	bestSat := false

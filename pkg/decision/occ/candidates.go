@@ -95,14 +95,29 @@ func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, 
 }
 
 // FindSame returns candidates honouring a Profile's Same requirement:
-// all returned machines share one value for sameKey. Picks the best
-// single-value bucket — atomic-satisfiable preferred, then cheapest
-// head, then most-available — and takes from it. (Successor of the
-// retired pre-OCC phase1Allocator.takeCoLocated.) ADR-0040 mirrors
-// this strict single-bucket semantics at the supply-crediting sites:
-// SeedConfiguredSupply and decision's claimMatching choose their
-// bucket via ChooseSameBucket, which ranks on coverage rather than
-// price because credited supply is already provisioned.
+// all returned machines share one value for sameKey.
+//
+// When domain is non-empty (ADR-0040 Addendum: the pre-pass chose the
+// Need's domain once, jointly over creditable + acquirable supply),
+// bucket scoring is skipped entirely: only machines whose Same-key
+// value equals domain are considered — still matchProfile-filtered,
+// claimed-filtered, and taken in the pool's head-sorted order.
+// Re-picking the best Idle bucket here was the second half of the
+// reclaim↔re-bootstrap oscillation: acquisition landed in a different
+// domain than the credited one, Phase 1 assembled a cross-domain
+// group, and Phase 3 (correctly strict) reclaimed half of it next
+// cycle.
+//
+// When domain is empty (a Same Need with no bucket anywhere — no
+// creditable and no acquirable supply), the original behaviour is the
+// fallback: pick the best single-value bucket — atomic-satisfiable
+// preferred, then cheapest head, then most-available — and take from
+// it. (Successor of the retired pre-OCC phase1Allocator.takeCoLocated.)
+// ADR-0040 mirrors this strict single-bucket semantics at the
+// supply-crediting sites: SeedConfiguredSupply and decision's
+// claimMatching choose their bucket via ChooseSameBucket, which ranks
+// on coverage rather than price because credited supply is already
+// provisioned.
 //
 // Note: cross-bucket scoring re-walks the (claimed-filtered) bucket
 // each call. The legacy allocator's coLocatedBuilt cache + per-bucket
@@ -110,9 +125,48 @@ func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, 
 // fresh via state.IsClaimed. For realistic-catalog scale (few-hundred-
 // machine pools, ~3% Same-carrying Needs) this stays under the
 // per-Need cost envelope.
-func (p *Pool) FindSame(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty, sameKey string) Candidates {
+func (p *Pool) FindSame(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty, sameKey, domain string) Candidates {
 	if needs.IsZero(deficit) {
 		return Candidates{}
+	}
+
+	if domain != "" {
+		out := make([]machine.ID, 0, 4)
+		remaining := deficit
+		for i := range p.src {
+			m := &p.src[i]
+			if !state.DisplaceableBy(m.ID, prec) {
+				continue
+			}
+			if !matchProfile(p.profile, *m) {
+				continue
+			}
+			v, ok := lookupAttribute(sameKey, *m)
+			if !ok || v != domain {
+				continue
+			}
+			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+			if !needs.Covers(alloc, minUnit) {
+				continue
+			}
+			out = append(out, m.ID)
+			remaining = needs.SubResources(remaining, alloc)
+			if needs.IsZero(remaining) {
+				break
+			}
+		}
+		if len(out) == 0 {
+			return Candidates{}
+		}
+		return Candidates{
+			Machines: out,
+			Bucket: BucketKey{
+				State:     st,
+				ProfileFP: p.profile.Fingerprint(),
+				SameKey:   sameKey,
+				SameValue: domain,
+			},
+		}
 	}
 
 	type sameBucket struct {
