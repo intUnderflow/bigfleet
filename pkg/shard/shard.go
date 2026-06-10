@@ -527,6 +527,11 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	snapStart := time.Now()
 	snap := s.inv.Snapshot()
 	demand := s.needs.Snapshot()
+	// ADR-0041: fold sub-machine Same-Needs into atomic plain
+	// aggregates against this cycle's snapshot, once, so Phase 1,
+	// Phase 2 (via Phase 1's residuals), Phase 3 and the attribution
+	// probe all reason over the same normalized demand.
+	demand = decision.NormalizeDemand(snap, demand)
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("snapread").Observe(time.Since(snapStart).Seconds())
 	}

@@ -75,7 +75,17 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 	// lists stay valid for the whole walk.
 	acquirable := occ.NewSameSupplyIndex(snap)
 
-	for cluster := range clustersWithConfigured(snap) {
+	// ADR-0041 rider: the per-cycle virtual-consumption ledger for
+	// acquirable machines. As each Same Need's chosen domain falls
+	// short of its creditable supply, the domain's acquirable members
+	// are consumed here, so a later Need ranks against what is actually
+	// left — Phase 1's workers consume the same supply via OCC claims.
+	// Shard-wide (the acquirable pool has no cluster binding), so the
+	// cluster walk below must be deterministic for the consumption
+	// order — and therefore the actions — to be reproducible.
+	consumed := make(map[machine.ID]struct{})
+
+	for _, cluster := range clustersWithConfigured(snap) {
 		// ADR-0036 gate: skip clusters that haven't yet reported.
 		// Their empty NeedsTable slice is "haven't told me yet",
 		// not "have no demand"; reclaiming on that signal would
@@ -99,14 +109,21 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 
 		claimed := make(map[machine.ID]struct{})
 		for _, n := range clusterNeeds {
+			if sameKey, ok := occ.SameRequirementKey(n.Profile); ok {
+				// One joint domain choice per Need per cycle over both
+				// creditable tiers at once, exactly like Phase 1's
+				// seedSameProfile — see claimMatchingSame.
+				claimMatchingSame(configuring, configured, n.Profile, n.MinUnit, claimed, n.AggregateResources, sameKey, acquirable, consumed)
+				continue
+			}
 			// Configuring supply first (claimed so it isn't double-counted
 			// across Needs; never reclaimed), then Configured — the
 			// machines Phase 3 keeps.
-			remaining := claimMatching(configuring, n.Profile, n.MinUnit, claimed, n.AggregateResources, acquirable)
+			remaining := claimMatching(configuring, n.Profile, n.MinUnit, claimed, n.AggregateResources)
 			if needs.IsZero(remaining) {
 				continue
 			}
-			claimMatching(configured, n.Profile, n.MinUnit, claimed, remaining, acquirable)
+			claimMatching(configured, n.Profile, n.MinUnit, claimed, remaining)
 		}
 
 		// Any Configured machine no Need claimed is excess → reclaim.
@@ -132,36 +149,21 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 // subtracting its EffectiveAllocatable from remaining, until remaining is
 // covered or the slice is exhausted. Claimed machines are recorded in
 // the shared claimed set so a peer Need can't double-count them. Returns
-// the residual demand vector.
-//
-// For a Same-Profile the walk is domain-aware (ADR-0040 + Addendum):
-// the eligible machines are bucketed by their value for the Same key,
-// the single best bucket is chosen via chooseSameBucket over JOINT
-// totals — the slice's creditable members plus each domain's
-// shard-wide acquirable Idle + Speculative potential from acquirable —
-// and only machines inside it are claimed, still in the input slice's
-// keep-priority order. Everything outside the chosen domain is scatter
-// the Need cannot use and falls through to reclaim.
+// the residual demand vector. Same-Profile Needs never reach here —
+// Phase3 routes them to claimMatchingSame.
 //
 // This is the Phase 3 counterpart of Phase 1's existing-supply credit
-// (occ.SeedConfiguredSupply) — identical attribution rules, including
-// the joint Same-domain rule, so the two phases agree on which machine
-// serves which Need. Ranking creditable-only here while Phase 1 ranked
-// jointly made the phases choose different domains for the same Need
-// and resume the reclaim↔re-bootstrap fight the Addendum closes.
+// (occ.SeedConfiguredSupply) — identical attribution rules, so the two
+// phases agree on which machine serves which Need.
 func claimMatching(
 	machines []machine.Machine,
 	profile needs.Profile,
 	minUnit []needs.ResourceQty,
 	claimed map[machine.ID]struct{},
 	remaining []needs.ResourceQty,
-	acquirable *occ.SameSupplyIndex,
 ) []needs.ResourceQty {
 	if needs.IsZero(remaining) {
 		return remaining
-	}
-	if sameKey, ok := occ.SameRequirementKey(profile); ok {
-		return claimMatchingSame(machines, profile, minUnit, claimed, remaining, sameKey, acquirable)
 	}
 	for _, m := range machines {
 		if needs.IsZero(remaining) {
@@ -183,24 +185,47 @@ func claimMatching(
 	return remaining
 }
 
-// claimMatchingSame is claimMatching's Same-Profile arm (ADR-0040 +
-// Addendum): bucket the eligible machines by their value for the Same
-// key, add each domain's acquirable potential (shard-wide Idle +
+// claimMatchingSame is the Same-Profile claim arm (ADR-0040 +
+// Addendum + ADR-0041 rider): bucket the cluster's eligible
+// Configuring and Configured machines by their value for the Same key,
+// add each domain's acquirable potential (shard-wide Idle +
 // Speculative — the same per-fingerprint index Phase 1's pre-pass
-// ranks with), choose the single best bucket against remaining over
-// those joint totals, and claim within it only, preserving the input
-// slice's keep-priority order. Only the slice's machines are ever
-// claimed — the acquirable half steers WHICH domain's Configured the
-// Need keeps, never what Phase 3 may keep.
+// ranks with), choose the single best bucket against the Need's whole
+// demand over those joint totals, and claim within it only —
+// Configuring members first (committed in-flight supply, never
+// reclaimed), then Configured in keep-priority order. Everything
+// outside the chosen domain is scatter the Need cannot use and falls
+// through to reclaim. Only creditable machines are ever claimed — the
+// acquirable half steers WHICH domain's Configured the Need keeps,
+// never what Phase 3 may keep.
+//
+// The domain is chosen ONCE per Need per cycle, over both creditable
+// tiers jointly — the exact bucket fold occ.seedSameProfile performs —
+// so the two phases agree by construction. (The earlier two-walk
+// structure chose per tier; an empty Configuring walk would have made
+// the ADR-0041 consumption below fire on the full demand before the
+// Configured walk ran.)
+//
+// ADR-0041 rider: the acquirable fold is consumption-aware (consumed
+// instead of the old nil view), and whatever part of the Need's demand
+// its creditable claims did not cover virtually consumes the chosen
+// domain's acquirable members. Phase 1's workers consume that same
+// supply sequentially via OCC claims; without the mirror, the moment
+// idle Same-capacity appeared every gang ranked the same fresh domain
+// best and Phase 3 mass-reclaimed healthy bound gangs.
 func claimMatchingSame(
-	machines []machine.Machine,
+	configuring, configured []machine.Machine,
 	profile needs.Profile,
 	minUnit []needs.ResourceQty,
 	claimed map[machine.ID]struct{},
 	remaining []needs.ResourceQty,
 	sameKey string,
 	acquirable *occ.SameSupplyIndex,
+	consumed map[machine.ID]struct{},
 ) []needs.ResourceQty {
+	if needs.IsZero(remaining) {
+		return remaining
+	}
 	type candidate struct {
 		id    machine.ID
 		alloc []needs.ResourceQty
@@ -212,40 +237,48 @@ func claimMatchingSame(
 	index := make(map[string]int)
 	var buckets []occ.SameBucket
 	var members [][]candidate
-	for i := range machines {
-		m := &machines[i]
-		if _, taken := claimed[m.ID]; taken {
-			continue
+	for _, machines := range [][]machine.Machine{configuring, configured} {
+		for i := range machines {
+			m := &machines[i]
+			if _, taken := claimed[m.ID]; taken {
+				continue
+			}
+			if !MatchProfile(profile, *m) {
+				continue
+			}
+			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+			vec := acquirable.ParseVec(alloc)
+			if !occ.VecCovers(vec, minUnitVec) {
+				continue
+			}
+			v, ok := lookupAttribute(sameKey, *m)
+			if !ok {
+				continue
+			}
+			idx, exists := index[v]
+			if !exists {
+				idx = len(buckets)
+				index[v] = idx
+				buckets = append(buckets, occ.SameBucket{Value: v})
+				members = append(members, nil)
+			}
+			buckets[idx].Count++
+			buckets[idx].CreditableCount++
+			buckets[idx].Total = occ.VecAdd(buckets[idx].Total, vec)
+			members[idx] = append(members[idx], candidate{id: m.ID, alloc: alloc})
 		}
-		if !MatchProfile(profile, *m) {
-			continue
-		}
-		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-		vec := acquirable.ParseVec(alloc)
-		if !occ.VecCovers(vec, minUnitVec) {
-			continue
-		}
-		v, ok := lookupAttribute(sameKey, *m)
-		if !ok {
-			continue
-		}
-		idx, exists := index[v]
-		if !exists {
-			idx = len(buckets)
-			index[v] = idx
-			buckets = append(buckets, occ.SameBucket{Value: v})
-			members = append(members, nil)
-		}
-		buckets[idx].Count++
-		buckets[idx].Total = occ.VecAdd(buckets[idx].Total, vec)
-		members[idx] = append(members[idx], candidate{id: m.ID, alloc: alloc})
 	}
 	// Joint potential (ADR-0040 Addendum): fold in the acquirable
-	// half. Acquirable-only domains get an empty members list — when
-	// one wins, this Need keeps no Configured machine and the
-	// off-domain scatter is reclaimed once, mirroring Phase 1's
-	// acquisition into that domain.
-	for v, ab := range acquirable.AcquirableTotals(profile, sameKey, minUnit, nil) {
+	// half, consumption-aware (ADR-0041 rider). Acquirable-only
+	// domains get an empty members list — when one wins, this Need
+	// keeps no Configured machine and the off-domain scatter is
+	// reclaimed once, mirroring Phase 1's acquisition into that
+	// domain. CreditableCount stays 0 for that half by construction.
+	isConsumed := func(id machine.ID) bool {
+		_, ok := consumed[id]
+		return ok
+	}
+	for v, ab := range acquirable.AcquirableTotals(profile, sameKey, minUnit, isConsumed) {
 		idx, exists := index[v]
 		if !exists {
 			idx = len(buckets)
@@ -267,19 +300,30 @@ func claimMatchingSame(
 		claimed[c.id] = struct{}{}
 		remaining = needs.SubResources(remaining, c.alloc)
 	}
+	// ADR-0041 rider: the creditable members didn't fully cover the
+	// Need — Phase 1 would fill the residual by acquiring the chosen
+	// domain's Idle/Speculative, so consume them from later Needs'
+	// joint view.
+	if !needs.IsZero(remaining) {
+		acquirable.ConsumeAcquirable(profile, sameKey, buckets[best].Value, minUnit, remaining, consumed)
+	}
 	return remaining
 }
 
-// clustersWithConfigured returns the set of cluster IDs that have at
-// least one Configured machine. M27: iterates the snapshot's per-
+// clustersWithConfigured returns the cluster IDs that have at least
+// one Configured machine, sorted. M27: iterates the snapshot's per-
 // cluster index keys instead of walking the full Configured slice
-// (which at 500K configured was ~9 % of Phase3's hot path).
-func clustersWithConfigured(snap *inventory.Snapshot) map[machine.ClusterID]struct{} {
-	out := make(map[machine.ClusterID]struct{})
+// (which at 500K configured was ~9 % of Phase3's hot path). Sorted
+// because the ADR-0041 consumption ledger is shard-wide: cluster walk
+// order affects which Need consumes contested acquirable supply, and
+// map-iteration order would make Phase 3's actions non-reproducible.
+func clustersWithConfigured(snap *inventory.Snapshot) []machine.ClusterID {
+	out := make([]machine.ClusterID, 0, len(snap.ClusterIDs()))
 	for cl := range snap.ClusterIDs() {
 		if snap.CountByClusterState(cl, machine.StateConfigured) > 0 {
-			out[cl] = struct{}{}
+			out = append(out, cl)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }

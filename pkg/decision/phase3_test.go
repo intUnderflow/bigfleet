@@ -361,6 +361,78 @@ func TestPhase3_Same_ConfiguringAnchorsTheDomain(t *testing.T) {
 	}
 }
 
+// ADR-0041 rider: Phase 3's acquirable fold consumes, mirroring
+// Phase 1's sequencing (workers consume acquirable supply via OCC
+// claims). Two same-fingerprint unfoldable gang Needs, each currently
+// served by one Configured machine in its own zone, and one idle zone
+// able to cover one whole gang: the first Need ranks the idle zone
+// best (only satisfiable bucket) and virtually consumes its members,
+// so the second Need's joint view no longer contains it and the second
+// keeps a creditable zone. Pre-rider, BOTH Needs ranked the fresh idle
+// zone best (nil claimed-view), claimed nothing creditable, and both
+// serving machines were mass-reclaimed — 20 of 24 healthy bound gangs
+// in the simulator's trace.
+func TestPhase3_Same_AcquirableFoldConsumes(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	_ = inv.Insert(configuredGpuInZone("a-0", "cluster-x", "zone-a"))
+	_ = inv.Insert(configuredGpuInZone("b-0", "cluster-x", "zone-b"))
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(gpuMachineInZone("c-"+idN(i), "zone-c", 1.0))
+	}
+	snap := inv.Snapshot()
+
+	pf := gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone")
+	// Two gangs of the same class, each 2 machines' worth — neither
+	// serving zone (1 machine) satisfies one, the idle zone-c (2
+	// machines) satisfies exactly one.
+	demand := []needs.Need{gpuNeed("cluster-x", pf, 2), gpuNeed("cluster-x", pf, 2)}
+
+	r := decision.Phase3(snap, demand, decision.AlwaysReady)
+	if got := len(r.Actions); got != 1 {
+		t.Fatalf("reclaim actions = %d, want 1 (no mass off-domain reclaim of both serving zones): %+v", got, r.Actions)
+	}
+	// The first Need consumed zone-c; the second kept the
+	// lexicographically-first creditable zone (zone-a). Only zone-b's
+	// machine is excess.
+	if r.Actions[0].MachineID != "b-0" {
+		t.Errorf("reclaimed %s, want b-0 (the one serving machine no Need kept)", r.Actions[0].MachineID)
+	}
+}
+
+// ADR-0041 rider 3 at Phase 3 level: a satisfiable serving (creditable)
+// domain beats a smaller satisfiable acquirable-only domain, so the
+// Need stays put — and the serving domain's genuine excess is still
+// reclaimed individually by the claim loop's stop-when-covered.
+// Pre-rider the smallest-satisfiable rule chose the fresh 2-Idle
+// zone-b and relocated the gang, reclaiming all three healthy zone-a
+// machines.
+func TestPhase3_Same_PrefersServingCreditableDomain(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 3; i++ {
+		_ = inv.Insert(configuredGpuInZone("a-"+idN(i), "cluster-x", "zone-a"))
+	}
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(gpuMachineInZone("b-"+idN(i), "zone-b", 1.0))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		2,
+	)}, decision.AlwaysReady)
+
+	if got := len(r.Actions); got != 1 {
+		t.Fatalf("reclaim actions = %d, want 1 (the serving zone's excess third machine only): %+v", got, r.Actions)
+	}
+	m, _ := snap.Get(r.Actions[0].MachineID)
+	if m.Profile.Zone != "zone-a" {
+		t.Errorf("reclaimed %s in %s, want the excess inside the kept zone-a", r.Actions[0].MachineID, m.Profile.Zone)
+	}
+}
+
 // ADR-0036: when the cluster hasn't yet reported (firstRollupReceived
 // gate fails) Phase 3 must skip reclaim, even if the NeedsTable slice
 // for that cluster is empty. Brief #36 traced the install-time

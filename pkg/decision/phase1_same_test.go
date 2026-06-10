@@ -273,3 +273,39 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 		t.Errorf("cycle 2 unsatisfied = %+v, want none (both gangs placed)", r2.Unsatisfied)
 	}
 }
+
+// ADR-0041 rider 3, Phase 1 side: a Same Need already served by a
+// satisfiable Configured domain stays there even when a fresh
+// acquirable-only domain has a smaller satisfiable total. Pre-rider
+// the smallest-satisfiable rule chose the 2-Idle zone-b, credited
+// nothing, and bootstrapped a relocation Phase 3 would then unwind —
+// the cycle-stability hole the rider closes. The serving domain's
+// excess third machine is Phase 3's business, not Phase 1's: the
+// pre-pass simply credits two and emits nothing.
+func TestPhase1_Same_PrefersServingCreditableDomain(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 3; i++ {
+		m := gpuMachineInZone("a-"+idN(i), "zone-a", 1.0)
+		m.State = machine.StateConfigured
+		m.Cluster = "cluster-x"
+		_ = inv.Insert(m)
+	}
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(gpuMachineInZone("b-"+idN(i), "zone-b", 1.0))
+	}
+	snap := inv.Snapshot()
+
+	r := decision.Phase1(snap, []needs.Need{gpuNeed(
+		"cluster-x",
+		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
+		2,
+	)})
+
+	if got := len(r.Actions); got != 0 {
+		t.Fatalf("actions = %d, want 0 (the serving zone-a credits the Need; no relocation into zone-b): %+v", got, r.Actions)
+	}
+	if got := len(r.Unsatisfied); got != 0 {
+		t.Errorf("unsatisfied = %+v, want none", r.Unsatisfied)
+	}
+}

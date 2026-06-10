@@ -7,10 +7,19 @@ package occ
 // Integer vectors keep ChooseSameBucket free of quantity parsing — the
 // string-vector version of this machinery re-parsed resource.Quantity
 // per bucket per Need and starved the shard (see SameSupplyIndex).
+//
+// CreditableCount is the number of candidates contributed by the
+// creditable half of the joint fold — the Need's cluster's Configured/
+// Configuring machines (filled by occ.seedSameProfile and decision's
+// claimMatchingSame). The acquirable half (AcquirableTotals, and the
+// fold-in at both call sites) never increments it, so a non-zero value
+// means "this domain is already serving the Need's cluster" — the
+// ADR-0041 rider-3 prefer-creditable signal.
 type SameBucket struct {
-	Value string
-	Count int
-	Total []int64
+	Value           string
+	Count           int
+	CreditableCount int
+	Total           []int64
 }
 
 // ChooseSameBucket returns the index of the single bucket a
@@ -34,10 +43,28 @@ type SameBucket struct {
 //
 //  1. Prefer a satisfiable bucket: Total covers the full remaining
 //     deficit.
-//  2. Among satisfiable buckets, the smallest Total — least
+//  2. Among satisfiable buckets, one with creditable supply
+//     (CreditableCount > 0) beats an acquirable-only one.
+//  3. Among satisfiable buckets, the smallest Total — least
 //     over-commitment, mirroring the claim loop's stop-when-covered.
-//  3. If none is satisfiable, the most-covering Total.
-//  4. Tiebreak: larger Count, then lexicographically smallest Value.
+//  4. If none is satisfiable, the most-covering Total.
+//  5. Tiebreak: larger Count, then lexicographically smallest Value.
+//
+// Rule 2 is the ADR-0041 rider-3 refinement, deliberately stronger
+// than the ADR's stated last-place tie-break: it sits between the
+// satisfiable test and the score comparison. Sticky-domain semantics —
+// a Need's currently-serving domain must not lose to a fresh
+// acquirable-only domain that merely scores smaller (rule 3) or sorts
+// lower (rule 5) and relocate a healthy gang. Staying put costs
+// nothing: excess machines WITHIN the serving domain are still
+// reclaimed individually by the claim loop's stop-when-covered. The
+// preference is confined to the satisfiable regime on purpose — among
+// unsatisfiable buckets, "staying put costs nothing" no longer holds
+// (the Need is genuinely better served wherever coverage is larger),
+// so the most-covering rule keeps the ADR-0040 Addendum's concentrate-
+// then-park behaviour (TestIntegration_SameDomain_NoOscillation pins
+// it: a 3-Idle domain must beat a 2-Configured one for a 5-machine
+// Need).
 //
 // This is the crediting mirror of FindSame's acquisition scoring
 // (atomic-satisfiable preferred); it ranks on coverage rather than
@@ -59,6 +86,11 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			better = true
 		case sat != bestSat:
 			better = sat
+		case sat && (b.CreditableCount > 0) != (buckets[best].CreditableCount > 0):
+			// ADR-0041 rider 3 (see the rule's doc comment): both
+			// satisfiable — the domain already serving the cluster wins
+			// before any size comparison.
+			better = b.CreditableCount > 0
 		case score != bestScore:
 			// Satisfiable pair: smaller total (less over-commitment)
 			// wins. Unsatisfiable pair: larger coverage wins.

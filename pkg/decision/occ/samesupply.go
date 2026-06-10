@@ -185,10 +185,11 @@ func (ix *SameSupplyIndex) domains(profile needs.Profile, sameKey string) map[st
 // acquirable machines for profile. The per-Need filters (isClaimed,
 // minUnit) run over the cached member lists as integer compares and
 // adds — the per-Need cost is the matching-machine count, with no
-// quantity parsing.
+// quantity parsing. The returned buckets carry CreditableCount == 0
+// by construction: acquirable supply is never creditable (ADR-0041
+// rider 3).
 //
-// isClaimed may be nil: Phase 3 never claims Idle/Speculative
-// machines, so its walk treats the whole index as available.
+// isClaimed may be nil to treat the whole index as available.
 func (ix *SameSupplyIndex) AcquirableTotals(profile needs.Profile, sameKey string, minUnit []needs.ResourceQty, isClaimed func(machine.ID) bool) map[string]SameBucket {
 	minUnitVec := ix.ParseVec(minUnit)
 	out := make(map[string]SameBucket)
@@ -209,4 +210,58 @@ func (ix *SameSupplyIndex) AcquirableTotals(profile needs.Profile, sameKey strin
 		}
 	}
 	return out
+}
+
+// ConsumeAcquirable virtually consumes domain's acquirable members
+// against deficit: it walks the cached member list, marking each
+// matching, minUnit-covering, not-already-consumed machine in the
+// shared consumed set until the deficit is covered (the member that
+// crosses zero is consumed too, mirroring the claim loop's
+// stop-when-covered).
+//
+// ADR-0041 rider (Decision 2): Phase 3's joint ranking used to fold
+// acquirable supply with a nil claimed-view, so the moment idle
+// Same-capacity appeared every gang ranked the same fresh domain best
+// and Phase 3 mass-reclaimed healthy bound gangs. Calling this after
+// each Need's bucket choice makes Phase 3's sequential walk consume
+// acquirable supply the way Phase 1's workers do via OCC claims —
+// restoring the ADR-0040 Addendum's "identical joint potential"
+// promise.
+//
+// minUnit and deficit are parsed once each; the walk itself is
+// integer compares and subtracts over the cached vectors.
+func (ix *SameSupplyIndex) ConsumeAcquirable(profile needs.Profile, sameKey, domain string, minUnit, deficit []needs.ResourceQty, consumed map[machine.ID]struct{}) {
+	remaining := ix.ParseVec(deficit)
+	if !vecHasPositive(remaining) {
+		return
+	}
+	minUnitVec := ix.ParseVec(minUnit)
+	for _, m := range ix.domains(profile, sameKey)[domain] {
+		if _, taken := consumed[m.id]; taken {
+			continue
+		}
+		if !VecCovers(m.vec, minUnitVec) {
+			continue
+		}
+		consumed[m.id] = struct{}{}
+		for i := range remaining {
+			if i < len(m.vec) {
+				remaining[i] -= m.vec[i]
+			}
+		}
+		if !vecHasPositive(remaining) {
+			return
+		}
+	}
+}
+
+// vecHasPositive reports whether any dimension of v is still positive —
+// the integer mirror of !needs.IsZero.
+func vecHasPositive(v []int64) bool {
+	for _, q := range v {
+		if q > 0 {
+			return true
+		}
+	}
+	return false
 }

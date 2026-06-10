@@ -458,20 +458,12 @@ func TestClosedLoop_UnsatisfiableGangIsStableShortfall(t *testing.T) {
 // most 6+acquired. Correct behaviour: every Pod binds AND the ledger
 // agrees (shortfalls → 0, no standing acquisition pressure).
 func TestClosedLoop_SubMachineGangsLedgerMatchesReality(t *testing.T) {
-	// KNOWN-OPEN finding (the bigfleet-uber #53 residual, reproduced
-	// here on 2026-06-11 in 0.4 s): on current code this fails with the
-	// cloud's exact signature — bind 97.65 % (cloud measured 97.5 %),
-	// 14 Pods pending forever despite ample capacity, a standing
-	// shortfall, Configured over-acquired toward one-machine-per-gang,
-	// and a cycle-1 reclaim wave with the ADR-0040 §4 probe firing
-	// (probe=6). The fix is the open claim-granularity design decision
-	// (ADR-0027-level: exclusive per-machine claims vs sub-machine
-	// Needs); un-skip when it lands — this test is its acceptance
-	// criterion. Run it directly with:
-	//
-	//	go test ./sim/ -run SubMachineGangs -count=1
-	t.Skip("known-open: machine-exclusive claiming up-rounds sub-machine gangs (cascade-arc residual; pending claim-granularity ADR)")
-
+	// ADR-0041's acceptance criterion: NormalizeDemand folds these
+	// sub-machine gangs into atomic plain aggregates (MinUnit = one
+	// gang), so the ledger counts machines the way kube-scheduler packs
+	// them and the pre-fold signature (bind 97.65 %, standing
+	// shortfall, +48 % Configured, cycle-1 reclaim wave with the
+	// ADR-0040 §4 probe firing) is gone.
 	const cycles, k = 300, 100
 	const subGangsPerCluster, subGangSize = 12, 4
 

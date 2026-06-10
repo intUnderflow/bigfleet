@@ -10,16 +10,21 @@ import (
 )
 
 // synthSameMachine is one machine of a synthetic Same-domain pool: the
-// domain value it carries and its allocatable as a milli-unit vector
-// (dimension order fixed by the test case — the chooser is agnostic).
+// domain value it carries, its allocatable as a milli-unit vector
+// (dimension order fixed by the test case — the chooser is agnostic),
+// and which half of the joint fold it came from (creditable = the
+// cluster's Configured/Configuring; default acquirable).
 type synthSameMachine struct {
-	domain string
-	alloc  []int64
+	domain     string
+	alloc      []int64
+	creditable bool
 }
 
 // foldSameMachines builds the per-domain bucket aggregates the chooser
 // ranks, from one machine list — the same fold the two crediting sites
-// (occ.seedSameProfile, claimMatchingSame) perform inline.
+// (occ.seedSameProfile, claimMatchingSame) perform inline, including
+// the ADR-0041 rider-3 rule that only creditable members bump
+// CreditableCount.
 func foldSameMachines(ms []synthSameMachine) []occ.SameBucket {
 	index := map[string]int{}
 	var out []occ.SameBucket
@@ -31,6 +36,9 @@ func foldSameMachines(ms []synthSameMachine) []occ.SameBucket {
 			out = append(out, occ.SameBucket{Value: m.domain})
 		}
 		out[i].Count++
+		if m.creditable {
+			out[i].CreditableCount++
+		}
 		out[i].Total = occ.VecAdd(out[i].Total, m.alloc)
 	}
 	return out
@@ -44,6 +52,14 @@ func rackMachines(domain string, n int, alloc []int64) []synthSameMachine {
 	out := make([]synthSameMachine, 0, n)
 	for i := 0; i < n; i++ {
 		out = append(out, synthSameMachine{domain: domain, alloc: alloc})
+	}
+	return out
+}
+
+func creditableRackMachines(domain string, n int, alloc []int64) []synthSameMachine {
+	out := rackMachines(domain, n, alloc)
+	for i := range out {
+		out[i].creditable = true
 	}
 	return out
 }
@@ -134,7 +150,7 @@ func TestChooseSameBucket_Rule(t *testing.T) {
 			machines: append(
 				rackMachines("rack-a", 2, cpus(4)),
 				append(
-					rackMachines("rack-b", 1, cpus(4)),
+					creditableRackMachines("rack-b", 1, cpus(4)),
 					rackMachines("rack-b", 2, []int64{4 * 1000, 16 * gi * 1000})...,
 				)...),
 			deficit: cpus(12),
@@ -145,6 +161,42 @@ func TestChooseSameBucket_Rule(t *testing.T) {
 			machines: nil,
 			deficit:  cpus(8),
 			want:     "",
+		},
+		{
+			// ADR-0041 rider 3: among satisfiable buckets the serving
+			// (creditable) domain wins BEFORE the smallest-total rule —
+			// rack-a's smaller acquirable-only total must not relocate
+			// a healthy gang.
+			name: "satisfiable: creditable beats smaller acquirable-only",
+			machines: append(
+				rackMachines("rack-a", 2, cpus(4)),               // total 8, sat
+				creditableRackMachines("rack-b", 3, cpus(4))...), // total 12, sat
+			deficit: cpus(6),
+			want:    "rack-b",
+		},
+		{
+			// ADR-0041 rider 3: ... and before the lexicographic
+			// tiebreak — a fresh idle domain that merely sorts lower
+			// must not win a satisfiable tie.
+			name: "satisfiable: creditable beats lexicographically-lower acquirable-only",
+			machines: append(
+				rackMachines("rack-a", 2, cpus(4)),
+				creditableRackMachines("rack-b", 2, cpus(4))...),
+			deficit: cpus(8),
+			want:    "rack-b",
+		},
+		{
+			// ADR-0041 rider 3 is confined to the satisfiable regime:
+			// among unsatisfiable buckets coverage still outranks
+			// creditable, preserving the ADR-0040 Addendum's
+			// concentrate-then-park behaviour
+			// (TestIntegration_SameDomain_NoOscillation's shape).
+			name: "unsatisfiable: coverage still outranks creditable",
+			machines: append(
+				creditableRackMachines("rack-a", 2, cpus(4)), // covers 8 of 20
+				rackMachines("rack-b", 3, cpus(4))...),       // covers 12 of 20
+			deficit: cpus(20),
+			want:    "rack-b",
 		},
 	}
 

@@ -64,12 +64,19 @@ must share a topology domain.
    acquirable members as its sequential walk assigns them, mirroring
    Phase 1's sequencing — restoring the ADR-0040 Addendum's "identical
    joint potential" promise.
-3. **Rider — prefer-creditable tie-break.** `ChooseSameBucket` gains a
-   tie-break between score and count: a bucket containing creditable
-   supply beats an acquirable-only bucket. Without it, a fresh idle
-   domain that merely sorts lexicographically lower could win a
-   satisfiable tie and relocate a healthy gang. Cycle stability is the
-   rule's stated intent; this completes it.
+3. **Rider — prefer-creditable, ahead of size scoring (satisfiable
+   regime only).** Among *satisfiable* buckets, `ChooseSameBucket`
+   prefers one containing creditable supply over an acquirable-only one
+   **before** the smallest-total comparison — sticky-domain semantics:
+   a Need's currently-serving domain must not lose to a fresh idle
+   domain that merely scores smaller or sorts lower and relocate a
+   healthy gang. Staying put costs nothing — excess machines *within*
+   the serving domain are still reclaimed individually by the claim
+   loop's stop-when-covered. The preference is deliberately confined to
+   the satisfiable regime: among unsatisfiable buckets the Addendum's
+   most-covering rule must keep winning (concentrate-then-park), or a
+   2-machine serving domain would pin a Need away from a 3-machine idle
+   domain it genuinely needs.
 
 ## Consequences
 
