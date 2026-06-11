@@ -151,6 +151,12 @@ shard:
   # Configured machines that's ~10 induced failures — enough to
   # exercise the recovery path, low enough not to dominate.
   failureRatePerSec: 0.000000116
+  # ADR-0040 §4: read-only phase-attribution probe — one log line per
+  # 20th cycle splitting Need counts / Phase 1 unsatisfied by
+  # co-location plus Phase 3 reclaim-vs-unsatisfied overlap. Cheap
+  # enough to leave on in the small correctness profiles (dev-50), so
+  # a failed `make prevalidate` is self-diagnosing without a re-run.
+  phaseAttributionLog: false
 
 provider:
   resources:

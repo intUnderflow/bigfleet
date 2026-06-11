@@ -112,6 +112,9 @@ spec:
             {{- if .Values.shard.failureRatePerSec }}
             - --failure-rate-per-sec={{ .Values.shard.failureRatePerSec }}
             {{- end }}
+            {{- if .Values.shard.phaseAttributionLog }}
+            - --phase-attribution-log
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
