@@ -1219,7 +1219,11 @@ func (d *driver) buildLegacyPodTemplate() corev1.PodTemplateSpec {
 	}
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
-			Labels: map[string]string{},
+			// The archetype label is deletePods' ownership selector;
+			// without it churn skips legacy pods entirely (the
+			// 2026-06-11 dev-50 run soaked with zero churn activity
+			// and both bind + ack SLOs unmeasured).
+			Labels: map[string]string{labelArchetype: "legacy"},
 			Annotations: map[string]string{
 				"bigfleet.lucy.sh/interruption-penalty": "8192",
 				"bigfleet.lucy.sh/reclamation-penalty":  "65536",

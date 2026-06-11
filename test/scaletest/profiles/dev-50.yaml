@@ -109,18 +109,20 @@ loadProfile:
   # 2 clusters × 2500 Pods = 5000 Pods total → 50 machines at
   # density=100. Small enough that no kwok apiserver's kine saturates.
   target: 2500
-  # M60: churn 60/min so the soak exercises the evict → controller-
-  # recreate → re-bind loop instead of idling (with churn 0 the soak
-  # produced zero binds). The old "churn 0 for a clean binary signal"
-  # rationale predates the seed-calibration fix: the ~7 % plateau it
-  # was written against was actually the matching-capacity shortfall
-  # (see the seed comments above), and the mid-pipeline working set at
-  # 1/sec is ~2 pods against the gate's 50-pod slop. M66.3: the
-  # load-driver now emits the steady-bind histogram in kube-scheduler
-  # mode (it watches unbound pods and records binds of post-fill
-  # creations), so internalBindingLatencyP99 measures real churn
-  # re-binds here instead of reading -1.
-  churnPerMinute: 60
+  # M60: churn ~60 pods/min so the soak exercises the evict →
+  # controller-recreate → re-bind loop instead of idling. The value is
+  # a FRACTION of target per minute (the load-driver computes
+  # target × churnPerMinute / 60 evictions per second): 0.024 × 2500
+  # = 60 pods/min/cluster = 1/sec. The previous literal `60` here
+  # meant "evict the entire cluster every second" — invisible only
+  # because legacy pods carried no archetype label, making churn a
+  # silent no-op (fixed alongside this value). The mid-pipeline
+  # working set at 1/sec is ~2 pods against the gate's 50-pod slop.
+  # M66.3: the load-driver emits the steady-bind histogram in
+  # kube-scheduler mode (it watches unbound pods and records binds of
+  # post-fill creations), so internalBindingLatencyP99 measures real
+  # churn re-binds here instead of reading -1.
+  churnPerMinute: 0.024
   # Short soak: this is a correctness gate, not an endurance test.
   # M60: 3m, matched by the runner's soak-sized SLO windows (sloWindow)
   # — at 1 churn/sec that is ~180 binds in-window, plenty for the p99.
