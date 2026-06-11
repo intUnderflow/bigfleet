@@ -1,0 +1,206 @@
+# realistic-dev — the dev-scale COVERAGE catalog for the dev-50
+# integration gate (M59).
+#
+# Same archetype names and per-Pod shapes as realistic.yaml (name-
+# keyed harness logic — isStateful, gang anchoring — must behave
+# identically), with two deliberate departures:
+#
+#   * Gang sizes are proportionate to a ~50-machine fleet. realistic's
+#     gpu-training-large (64-256 machines, Same(zone)) cannot exist
+#     inside dev-50's supply at all, and its 8-16-machine rack gangs
+#     would be a third of the fleet. Here: gpu-training-small keeps
+#     Same(rack) at [2,4]; gpu-training-medium carries the Same(zone)
+#     path at [4,8]; gpu-training-large is omitted.
+#   * Weights are flattened toward the interesting paths. dev-50's
+#     5,000 Pods materialise as only a few dozen workload objects, so
+#     at realistic's 1-2% weights the gang/GPU/critical paths would be
+#     drawn only some of the time — a coverage gate must hit them every
+#     run, not probabilistically.
+#
+# This file is for PATH COVERAGE, not realism: no measurement taken
+# against it feeds a mechanism decision (that is realistic.yaml's
+# job, per ADR-0043). Both the load-driver and the shard's Configured
+# seed read this same file so seeded inventory matches demand.
+#
+# Schema: see realistic.yaml.
+
+archetypes:
+  # ===== Long tail: tiny stateless services =====
+  # Modal production Pod. Tiny resource shape (app container ~200m /
+  # 256Mi plus ~150-200m / ~200-300Mi of typical mesh+observability
+  # sidecars baked in). Default priority, no co-location. Default-
+  # spread-from-template templates apply zone-spread to ~45% of
+  # them — best-effort spread, since these are commodity replicas.
+  - name: tiny-stateless
+    weight: 40
+    instanceTypes: [m6i.large, m6i.xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 60, resources: { cpu: "400m", memory: "500Mi" } }
+      - { weight: 40, resources: { cpu: "300m", memory: "384Mi" } }
+    priorityClasses: [100]
+    interruptionPenalty: 32
+    reclamationPenalty: 64
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.45
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+
+  # ===== Medium services =====
+  # HPA-driven and fixed-replica deployments at meaningful but not
+  # critical priority. Per-Pod request includes sidecar overhead but
+  # the overhead is a smaller relative bump on a 2-CPU app container.
+  # Spread on 75% — most production services explicitly spread for HA.
+  - name: cpu-service
+    weight: 15
+    instanceTypes: [m6i.xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 70, resources: { cpu: "2200m", memory: "8500Mi" } }
+      - { weight: 30, resources: { cpu: "4200m", memory: "16500Mi" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 1024
+    reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.75
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
+
+  # ===== Batch jobs =====
+  # Resumable, short-lived, low priority. Don't run the mesh/
+  # observability sidecar stack typical of long-lived services — so
+  # no sidecar inflation on their resource shape. Only ~15% carry
+  # spread; most batch is spread-tolerant.
+  - name: cpu-batch
+    weight: 10
+    instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 60, resources: { cpu: "4", memory: "8Gi" } }
+      - { weight: 40, resources: { cpu: "8", memory: "16Gi" } }
+    priorityClasses: [100]
+    interruptionPenalty: 64
+    reclamationPenalty: 256
+    meanLifetimeSeconds: 600  # ~10-min batch
+    spreadConstraintProb: 0.15
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+
+  # ===== Stateful: memory-bound caches =====
+  # In-memory caches with peer chatter (gossip, replication). Want
+  # rack affinity for latency, but tolerate partial fills: 3 of 5
+  # replicas start and the cache rebalances incrementally. Hence
+  # allowPartial: true. Spread is N/A because Same(rack) and
+  # zone-spread on the same key are contradictory per bigfleet.md §8.
+  - name: memory-cache
+    weight: 8
+    instanceTypes: [r6i.xlarge, r6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "2", memory: "16Gi" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 4096
+    reclamationPenalty: 16384
+    meanLifetimeSeconds: 0
+    sameRack: true
+    allowPartial: true
+    groupSizeRange: [3, 5]
+
+  # ===== Stateful: databases =====
+  # Persistent-storage-backed databases. Same rack-affinity reasoning
+  # as memory-cache; replicas can join an existing cluster
+  # incrementally. (Cross-shard spread is operator-emergent — the
+  # operator picks different anchor racks per shard during emission;
+  # we don't model that here, see scale-test follow-on.)
+  - name: stateful-db
+    weight: 8
+    instanceTypes: [r6i.2xlarge, r6i.4xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "8", memory: "32Gi" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 8192
+    reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    allowPartial: true
+    groupSizeRange: [3, 5]
+
+  # ===== GPU inference =====
+  # Latency-sensitive single-GPU inference servers. Long-lived. ~50%
+  # carry zone-spread (replicas distributed for capacity-zone
+  # resilience).
+  - name: gpu-inference
+    weight: 5
+    instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "8", memory: "32Gi", nvidia.com/gpu: "1" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 4096
+    reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.5
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+
+  # ===== GPU training: small (hyperparameter sweeps) =====
+  # Atomic gang. Small-scale experiments and parameter sweeps —
+  # 2-8 GPUs is the dominant gang size for ad-hoc training. Not
+  # marked allowPartial: partial fills break gang scheduling.
+  - name: gpu-training-small
+    weight: 8
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "64", memory: "256Gi", nvidia.com/gpu: "8" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 16384
+    reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange: [2, 4]
+
+  # ===== GPU training: medium =====
+  # Carries the Same(zone) path at dev scale (realistic.yaml's
+  # gpu-training-large is the zone representative there, but 64-256
+  # machines cannot exist in a 50-machine fleet).
+  - name: gpu-training-medium
+    weight: 6
+    instanceTypes: [a3-highgpu-8g]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "64", memory: "256Gi", nvidia.com/gpu: "8" } }
+    priorityClasses: [1000]
+    interruptionPenalty: 32768
+    reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    sameZone: true
+    groupSizeRange: [4, 8]
+
+  # ===== Critical realtime =====
+  # Top priority — control plane, telemetry hot path, safety-critical
+  # services. Always carries strict zone-spread (HA-critical).
+  - name: critical-realtime
+    weight: 3
+    instanceTypes: [c6i.4xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "4", memory: "8Gi" } }
+    priorityClasses: [1000000]
+    interruptionPenalty: 65536
+    reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 1.0
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule

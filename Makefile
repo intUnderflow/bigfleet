@@ -131,7 +131,7 @@ prevalidate-kind: prevalidate ## prevalidate + dev-50 on kind (~8 min warm, need
 	  echo "kind load skipped — image IDs unchanged"; \
 	fi
 	@echo "[$$(date +%T)] kind rung: dev-50"
-	$(MAKE) scaletest PROFILE=dev-50 DURATION=3m
+	$(MAKE) scaletest PROFILE=dev-50 SUBSTRATE=example-kind-laptop DURATION=3m
 	@echo "[$$(date +%T)] prevalidate-kind green"
 
 .PHONY: conformance
@@ -173,10 +173,11 @@ scaletest-images: ## Build the two images the scaletest harness needs (bigfleet,
 	docker build --platform=linux/$$ARCH --build-arg TARGETARCH=$$ARCH -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
 
 .PHONY: scaletest
-scaletest: ## Run the dev-500 profile end-to-end. Override with PROFILE=scaleway-500k etc. DURATION=Xm overrides the profile's soak window (default: loadProfile.durationSeconds).
+scaletest: ## Run a scaletest profile end-to-end. PROFILE=<name> picks the profile; SUBSTRATE=<name> pairs a V2 profile with test/scaletest/substrates/<name>.yaml (required for V2 profiles like dev-50); DURATION=Xm overrides the profile's soak window.
 	@mkdir -p test/scaletest/results
 	$(GO) run ./test/scaletest/cmd/scaletest-runner \
 		--profile=test/scaletest/profiles/$(or $(PROFILE),dev-500).yaml \
+		$(if $(SUBSTRATE),--substrate=test/scaletest/substrates/$(SUBSTRATE).yaml,) \
 		$(if $(DURATION),--duration=$(DURATION),) \
 		--output=test/scaletest/results/$$(date +%Y%m%d-%H%M%S)-$(or $(PROFILE),dev-500)/
 

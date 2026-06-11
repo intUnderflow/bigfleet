@@ -451,6 +451,11 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			"executeConcurrency":       256,
 			"incrementalReconcile":     m.ClusterCount >= 100,
 			"metricsWarmupCycles":      5,
+			// The probe that makes a failed run self-diagnosing: Need
+			// counts split by co-location + Phase 1 unsatisfied +
+			// Phase 3 reclaim overlap, every 20th cycle. Read-only,
+			// one log line — always on for V2 runs.
+			"phaseAttributionLog": true,
 		},
 		"coordinator": map[string]any{
 			"enabled":  true,

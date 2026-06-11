@@ -18,7 +18,14 @@ host:
   memoryGiB: 32
 
 cluster:
-  podsPerCluster: 10000
+  # 2,500, not 10,000: dev-500 (5 × 10K with kine on this class of
+  # laptop) was kine-bound — ~69 % of Pending Pods never even
+  # attempted by kube-scheduler (see ADR-0027 / dev-50.yaml history).
+  # 2,500 objects/cluster is where kine + sqlite + apiserver coexist
+  # comfortably on shared laptop CPU; it also gives dev-50's 5K Pods
+  # a 2-cluster geometry, keeping multi-cluster operator fan-out in
+  # the gate.
+  podsPerCluster: 2500
   clustersPerHost: 5
   storage: kine
   bindThroughputPodsPerSec: 15
