@@ -166,12 +166,11 @@ func MachineFromProto(m *pb.Machine) (machine.Machine, error) {
 		return machine.Machine{}, err
 	}
 	out := machine.Machine{
-		ID:                         machine.ID(m.GetId()),
-		State:                      state,
-		PricePerHour:               m.GetPricePerHour(),
-		InterruptionProbability:    m.GetInterruptionProbability(),
-		TransitionStartedUnixNanos: m.GetTransitionStartedUnixNanos(),
-		LastError:                  m.GetLastError(),
+		ID:                      machine.ID(m.GetId()),
+		State:                   state,
+		PricePerHour:            m.GetPricePerHour(),
+		InterruptionProbability: m.GetInterruptionProbability(),
+		LastError:               m.GetLastError(),
 	}
 	if h := m.GetHost(); h != nil {
 		out.Host = machine.HostRef{Provider: h.GetProvider(), Ref: h.GetRef()}
@@ -200,16 +199,15 @@ func MachineFromProto(m *pb.Machine) (machine.Machine, error) {
 // that build provider-side responses from in-memory state use this.
 func MachineToProto(m machine.Machine) *pb.Machine {
 	out := &pb.Machine{
-		Id:                         string(m.ID),
-		State:                      MachineStateToProto(m.State),
-		InstanceType:               m.Profile.InstanceType,
-		Zone:                       m.Profile.Zone,
-		CapacityType:               capacityTypeToProto(m.Profile.CapacityType),
-		PricePerHour:               m.PricePerHour,
-		InterruptionProbability:    m.InterruptionProbability,
-		Labels:                     cloneStringMap(m.Profile.Labels),
-		TransitionStartedUnixNanos: m.TransitionStartedUnixNanos,
-		LastError:                  m.LastError,
+		Id:                      string(m.ID),
+		State:                   MachineStateToProto(m.State),
+		InstanceType:            m.Profile.InstanceType,
+		Zone:                    m.Profile.Zone,
+		CapacityType:            capacityTypeToProto(m.Profile.CapacityType),
+		PricePerHour:            m.PricePerHour,
+		InterruptionProbability: m.InterruptionProbability,
+		Labels:                  cloneStringMap(m.Profile.Labels),
+		LastError:               m.LastError,
 	}
 	if !m.Host.Empty() {
 		out.Host = &pb.HostRef{Provider: m.Host.Provider, Ref: m.Host.Ref}

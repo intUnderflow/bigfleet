@@ -296,9 +296,6 @@ type Machine struct {
 	// Provider-supplied labels. Used by the autoscaler to satisfy node-selector
 	// requirements without re-deriving them from instance_type/zone.
 	Labels map[string]string `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// Unix-nanos when the current transitional state began. Zero if state is
-	// stable. Used to detect stuck transitions.
-	TransitionStartedUnixNanos int64 `protobuf:"varint,11,opt,name=transition_started_unix_nanos,json=transitionStartedUnixNanos,proto3" json:"transition_started_unix_nanos,omitempty"`
 	// Populated when state == FAILED.
 	LastError string `protobuf:"bytes,12,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	// ADR-0022: the per-machine allocatable capacity this hardware actually
@@ -413,13 +410,6 @@ func (x *Machine) GetLabels() map[string]string {
 		return x.Labels
 	}
 	return nil
-}
-
-func (x *Machine) GetTransitionStartedUnixNanos() int64 {
-	if x != nil {
-		return x.TransitionStartedUnixNanos
-	}
-	return 0
 }
 
 func (x *Machine) GetLastError() string {
@@ -540,9 +530,6 @@ type ListFilter struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Restrict to the listed states. Empty list = any state.
 	States []MachineState `protobuf:"varint,1,rep,packed,name=states,proto3,enum=bigfleet.v1alpha1.MachineState" json:"states,omitempty"`
-	// Optional zone / instance-type filters. Empty = any.
-	Zone         string `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`
-	InstanceType string `protobuf:"bytes,3,opt,name=instance_type,json=instanceType,proto3" json:"instance_type,omitempty"`
 	// Cap on returned results. Zero means no cap.
 	MaxResults int32 `protobuf:"varint,4,opt,name=max_results,json=maxResults,proto3" json:"max_results,omitempty"`
 	// Optional opaque cursor returned by a prior MachineList.revision. When
@@ -591,20 +578,6 @@ func (x *ListFilter) GetStates() []MachineState {
 	return nil
 }
 
-func (x *ListFilter) GetZone() string {
-	if x != nil {
-		return x.Zone
-	}
-	return ""
-}
-
-func (x *ListFilter) GetInstanceType() string {
-	if x != nil {
-		return x.InstanceType
-	}
-	return ""
-}
-
 func (x *ListFilter) GetMaxResults() int32 {
 	if x != nil {
 		return x.MaxResults
@@ -624,9 +597,7 @@ type CreateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The speculative machine to actuate. Must be a machine the caller
 	// currently observes in MACHINE_STATE_SPECULATIVE.
-	MachineId string `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
-	// Optional: tags / labels to apply on creation.
-	Labels        map[string]string `protobuf:"bytes,2,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	MachineId     string `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -666,13 +637,6 @@ func (x *CreateRequest) GetMachineId() string {
 		return x.MachineId
 	}
 	return ""
-}
-
-func (x *CreateRequest) GetLabels() map[string]string {
-	if x != nil {
-		return x.Labels
-	}
-	return nil
 }
 
 // ConfigureRequest moves Idle → Configuring → Configured. The bootstrap
@@ -871,7 +835,7 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\tresources\x18\x01 \x03(\v2+.bigfleet.v1alpha1.Resources.ResourcesEntryR\tresources\x1a<\n" +
 	"\x0eResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb9\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfc\x04\n" +
 	"\aMachine\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x125\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x05state\x12.\n" +
@@ -883,35 +847,28 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\x18interruption_probability\x18\b \x01(\x01R\x17interruptionProbability\x12:\n" +
 	"\tresources\x18\t \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\tresources\x12>\n" +
 	"\x06labels\x18\n" +
-	" \x03(\v2&.bigfleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12A\n" +
-	"\x1dtransition_started_unix_nanos\x18\v \x01(\x03R\x1atransitionStartedUnixNanos\x12\x1d\n" +
+	" \x03(\v2&.bigfleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\f \x01(\tR\tlastError\x12>\n" +
 	"\vallocatable\x18\r \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\vallocatable\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x1c\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\v\x10\f\"\x1c\n" +
 	"\n" +
 	"MachineRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"a\n" +
 	"\vMachineList\x126\n" +
 	"\bmachines\x18\x01 \x03(\v2\x1a.bigfleet.v1alpha1.MachineR\bmachines\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\fR\brevision\"\xc6\x01\n" +
+	"\brevision\x18\x02 \x01(\fR\brevision\"\x99\x01\n" +
 	"\n" +
 	"ListFilter\x127\n" +
-	"\x06states\x18\x01 \x03(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x06states\x12\x12\n" +
-	"\x04zone\x18\x02 \x01(\tR\x04zone\x12#\n" +
-	"\rinstance_type\x18\x03 \x01(\tR\finstanceType\x12\x1f\n" +
+	"\x06states\x18\x01 \x03(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x06states\x12\x1f\n" +
 	"\vmax_results\x18\x04 \x01(\x05R\n" +
 	"maxResults\x12%\n" +
-	"\x0esince_revision\x18\x05 \x01(\fR\rsinceRevision\"\xaf\x01\n" +
+	"\x0esince_revision\x18\x05 \x01(\fR\rsinceRevisionJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04\"4\n" +
 	"\rCreateRequest\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\tR\tmachineId\x12D\n" +
-	"\x06labels\x18\x02 \x03(\v2,.bigfleet.v1alpha1.CreateRequest.LabelsEntryR\x06labels\x1a9\n" +
-	"\vLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
+	"machine_id\x18\x01 \x01(\tR\tmachineIdJ\x04\b\x02\x10\x03\"w\n" +
 	"\x10ConfigureRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x1d\n" +
@@ -963,7 +920,7 @@ func file_bigfleet_v1alpha1_provider_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_bigfleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_bigfleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_bigfleet_v1alpha1_provider_proto_goTypes = []any{
 	(MachineState)(0),        // 0: bigfleet.v1alpha1.MachineState
 	(CapacityType)(0),        // 1: bigfleet.v1alpha1.CapacityType
@@ -979,7 +936,6 @@ var file_bigfleet_v1alpha1_provider_proto_goTypes = []any{
 	(*TransitionAck)(nil),    // 11: bigfleet.v1alpha1.TransitionAck
 	nil,                      // 12: bigfleet.v1alpha1.Resources.ResourcesEntry
 	nil,                      // 13: bigfleet.v1alpha1.Machine.LabelsEntry
-	nil,                      // 14: bigfleet.v1alpha1.CreateRequest.LabelsEntry
 }
 var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
 	12, // 0: bigfleet.v1alpha1.Resources.resources:type_name -> bigfleet.v1alpha1.Resources.ResourcesEntry
@@ -991,25 +947,24 @@ var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
 	3,  // 6: bigfleet.v1alpha1.Machine.allocatable:type_name -> bigfleet.v1alpha1.Resources
 	4,  // 7: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
 	0,  // 8: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
-	14, // 9: bigfleet.v1alpha1.CreateRequest.labels:type_name -> bigfleet.v1alpha1.CreateRequest.LabelsEntry
-	4,  // 10: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
-	8,  // 11: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
-	9,  // 12: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
-	10, // 13: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
-	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.MachineRef
-	5,  // 15: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
-	7,  // 16: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
-	11, // 17: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 18: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 19: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
-	11, // 20: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
-	4,  // 21: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
-	6,  // 22: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
-	17, // [17:23] is the sub-list for method output_type
-	11, // [11:17] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	4,  // 9: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
+	8,  // 10: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
+	9,  // 11: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
+	10, // 12: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
+	5,  // 13: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.MachineRef
+	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
+	7,  // 15: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
+	11, // 16: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 17: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 18: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
+	11, // 19: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
+	4,  // 20: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
+	6,  // 21: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
+	16, // [16:22] is the sub-list for method output_type
+	10, // [10:16] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_provider_proto_init() }
@@ -1023,7 +978,7 @@ func file_bigfleet_v1alpha1_provider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_provider_proto_rawDesc), len(file_bigfleet_v1alpha1_provider_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

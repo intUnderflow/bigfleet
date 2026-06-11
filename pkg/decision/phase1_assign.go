@@ -3,7 +3,6 @@ package decision
 import (
 	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
-	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -82,12 +81,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			})
 		}
 
-		// Outcome counter classification matches the pre-OCC
-		// allocator's categories so existing dashboards keep
-		// working.
-		switch {
-		case r.Unsatisfied:
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
+		if r.Unsatisfied {
 			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
 				Need:            *r.Need,
 				Deficit:         r.Deficit,
@@ -95,16 +89,8 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				Acquired:        len(r.BootstrapMachines) + len(r.ProvisionMachines),
 				SameSatisfiable: r.SameSatisfiable,
 			})
-		case len(r.BootstrapMachines) == 0 && len(r.ProvisionMachines) == 0:
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()
-		case len(r.ProvisionMachines) > 0:
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_spec").Inc()
-		default:
-			metrics.ShardPhase1NeedOutcomes.WithLabelValues("emitted_idle").Inc()
 		}
 	}
-
-	metrics.ShardPhase1EmitsPerCycle.Observe(float64(len(result.Actions)))
 	return result
 }
 

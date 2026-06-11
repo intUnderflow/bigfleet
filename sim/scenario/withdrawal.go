@@ -58,7 +58,7 @@ func withdrawal() sim.Scenario {
 			{
 				Name: "all 32 machines back to Idle",
 				Check: func(s *shard.Shard) error {
-					if got := s.Inventory().CountByState(machine.StateIdle); got != 32 {
+					if got := s.Inventory().Snapshot().CountByState(machine.StateIdle); got != 32 {
 						return fmt.Errorf("idle = %d, want 32", got)
 					}
 					return nil
@@ -67,7 +67,7 @@ func withdrawal() sim.Scenario {
 			{
 				Name: "no machines configured for cluster-train",
 				Check: func(s *shard.Shard) error {
-					if got := s.Inventory().CountByState(machine.StateConfigured); got != 0 {
+					if got := s.Inventory().Snapshot().CountByState(machine.StateConfigured); got != 0 {
 						return fmt.Errorf("configured = %d, want 0", got)
 					}
 					return nil

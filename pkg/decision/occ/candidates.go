@@ -37,9 +37,8 @@ type Candidates struct {
 // that would burn the retry budget in 1:1 demand-to-supply tests
 // (e.g. N Needs and N machines where every Need wants exactly one).
 //
-// Mirrors phase1Allocator.take from the legacy allocator at
-// pkg/decision/phase1_allocator.go:112; the head-cursor amortisation
-// is gone (workers run in parallel, no cursor state).
+// Workers run in parallel so there is no head-cursor amortisation —
+// each worker picks independently from the shared pool.
 func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, deficit, minUnit []needs.ResourceQty) Candidates {
 	if needs.IsZero(deficit) {
 		return Candidates{}
@@ -290,7 +289,7 @@ func (p *Pool) FindSame(state *SharedState, st machine.State, prec Precedence, d
 // FindSpread returns candidates honouring a DoNotSchedule
 // TopologySpread: bucket-pick counts never exceed (current min +
 // maxSkew). Picks cheapest-head among eligible buckets at each step.
-// Mirrors phase1Allocator.takeSpread at pkg/decision/phase1_allocator.go:370.
+// Picks cheapest-head among topology-spread-eligible buckets at each step.
 //
 // The bucket key carries the topology key but an empty SameValue —
 // Spread proposals touch machines across multiple topology domains,

@@ -14,14 +14,6 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
-// EffectiveCost wraps machine.Machine.EffectiveCost as a free
-// function for ergonomic use throughout the decision package. The
-// locked formula lives on the method; this is the legacy spelling
-// kept for call-site continuity.
-func EffectiveCost(m machine.Machine, interruptionPenaltyDollars float64) float64 {
-	return m.EffectiveCost(interruptionPenaltyDollars)
-}
-
 // BucketUpperBoundDollars wraps needs.PenaltyBucket.UpperBoundDollars
 // as a free function for ergonomic use throughout the decision
 // package.

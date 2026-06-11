@@ -179,10 +179,6 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		newProviderID = u.GetProviderId()
 	}
 	newEstReady := existing.Status.EstimatedReadyTime
-	if u.GetEstimatedReadyUnixNanos() != 0 {
-		t := metav1.NewTime(time.Unix(0, u.GetEstimatedReadyUnixNanos()))
-		newEstReady = &t
-	}
 	newLastError := existing.Status.LastError
 	if u.GetLastError() != "" {
 		newLastError = u.GetLastError()

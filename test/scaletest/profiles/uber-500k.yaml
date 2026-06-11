@@ -84,7 +84,6 @@ loadProfile:
   target: 25000   # per-cluster; 2000 clusters × 25K = 50M total CRs.
   churnPerMinute: 0.02
   durationSeconds: 3600
-  reconcilePerTickCap: 200
 
 # Regime-aware envelope (ADR-0028): this is the **scale-proof point** —
 # a single shard under the realistic catalog at the per-shard 500K

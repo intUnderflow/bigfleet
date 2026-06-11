@@ -103,9 +103,7 @@ message Machine {
   // requirements without re-deriving them from instance_type/zone.
   map<string, string> labels = 10;
 
-  // Unix-nanos when the current transitional state began. Zero if state is
-  // stable. Used to detect stuck transitions.
-  int64 transition_started_unix_nanos = 11;
+  reserved 11;  // transition_started_unix_nanos — unused; removed M66.1
 
   // Populated when state == FAILED.
   string last_error = 12;
@@ -140,9 +138,8 @@ message ListFilter {
   // Restrict to the listed states. Empty list = any state.
   repeated MachineState states = 1;
 
-  // Optional zone / instance-type filters. Empty = any.
-  string zone          = 2;
-  string instance_type = 3;
+  reserved 2;  // zone — unused; removed M66.1
+  reserved 3;  // instance_type — unused; removed M66.1
 
   // Cap on returned results. Zero means no cap.
   int32 max_results = 4;
@@ -160,8 +157,7 @@ message CreateRequest {
   // currently observes in MACHINE_STATE_SPECULATIVE.
   string machine_id = 1;
 
-  // Optional: tags / labels to apply on creation.
-  map<string, string> labels = 2;
+  reserved 2;  // labels — unused; removed M66.1
 }
 
 // ConfigureRequest moves Idle → Configuring → Configured. The bootstrap

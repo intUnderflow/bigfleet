@@ -460,12 +460,11 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			"scheduler": "kube-scheduler",
 		},
 		"loadProfile": map[string]any{
-			"target":              s.Cluster.PodsPerCluster,
-			"churnPerMinute":      p.LoadProfile.ChurnPerMinute,
-			"durationSeconds":     p.LoadProfile.SoakSeconds,
-			"reconcilePerTickCap": 200,
-			"preBind":             p.Seed.PreBind,
-			"archetypes":          archetypes,
+			"target":          s.Cluster.PodsPerCluster,
+			"churnPerMinute":  p.LoadProfile.ChurnPerMinute,
+			"durationSeconds": p.LoadProfile.SoakSeconds,
+			"preBind":         p.Seed.PreBind,
+			"archetypes":      archetypes,
 		},
 		"operator": map[string]any{
 			"qps":            200,
@@ -1384,8 +1383,7 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// ADR-0017: only the per-Pod histogram gates a release. M44
 		// flipped Pod-mode to the default, so every profile populates
 		// this histogram; the gate is active everywhere. The -1
-		// sentinel skip in pass() is retained for opt-in CR-mode
-		// runs (mode: cr) and for failed scrapes.
+		// sentinel skip in pass() is retained for failed scrapes.
 		//
 		// M44.4: query the steady-state histogram only. The all-Pods
 		// histogram includes the initial fill, which is a synthetic

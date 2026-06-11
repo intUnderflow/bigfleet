@@ -100,21 +100,21 @@ func TestListByState_AndCluster(t *testing.T) {
 		}
 	}
 
-	if got := inv.CountByState(machine.StateSpeculative); got != 2 {
+	if got := inv.Snapshot().CountByState(machine.StateSpeculative); got != 2 {
 		t.Errorf("speculative count = %d, want 2", got)
 	}
-	if got := inv.CountByState(machine.StateIdle); got != 1 {
+	if got := inv.Snapshot().CountByState(machine.StateIdle); got != 1 {
 		t.Errorf("idle count = %d, want 1", got)
 	}
-	if got := inv.CountByState(machine.StateConfigured); got != 3 {
+	if got := inv.Snapshot().CountByState(machine.StateConfigured); got != 3 {
 		t.Errorf("configured count = %d, want 3", got)
 	}
 
-	clusterA := inv.ListByClusterState("cluster-a", machine.StateConfigured)
+	clusterA := inv.Snapshot().ListByClusterState("cluster-a", machine.StateConfigured)
 	if len(clusterA) != 2 {
 		t.Errorf("cluster-a configured = %d, want 2", len(clusterA))
 	}
-	clusterB := inv.ListByClusterState("cluster-b", machine.StateConfigured)
+	clusterB := inv.Snapshot().ListByClusterState("cluster-b", machine.StateConfigured)
 	if len(clusterB) != 1 {
 		t.Errorf("cluster-b configured = %d, want 1", len(clusterB))
 	}
@@ -183,10 +183,10 @@ func TestPhase3_Conservation(t *testing.T) {
 	if inv.Len() != before {
 		t.Errorf("Len changed unexpectedly: before=%d after=%d (Phase 3 should not change total count, only state)", before, inv.Len())
 	}
-	if got := inv.CountByState(machine.StateConfigured); got != before-reclaim {
+	if got := inv.Snapshot().CountByState(machine.StateConfigured); got != before-reclaim {
 		t.Errorf("configured count = %d, want %d", got, before-reclaim)
 	}
-	if got := inv.CountByState(machine.StateIdle); got != reclaim {
+	if got := inv.Snapshot().CountByState(machine.StateIdle); got != reclaim {
 		t.Errorf("idle count = %d, want %d", got, reclaim)
 	}
 }
@@ -224,7 +224,6 @@ func byteToID(prefix byte, n byte) string {
 func TestSnapshot_MinAssignedPriority(t *testing.T) {
 	t.Parallel()
 	inv := inventory.New()
-	defer inv.Stop()
 	mk := func(id, instType string, priority int32) machine.Machine {
 		return machine.Machine{
 			ID:               machine.ID(id),

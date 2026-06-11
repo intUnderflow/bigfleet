@@ -92,7 +92,6 @@ loadProfile:
   target: 25000   # per-cluster; 4000 clusters × 25K = 100M total CRs.
   churnPerMinute: 0.02
   durationSeconds: 3600
-  reconcilePerTickCap: 200
 
 # Uniform 60 m rampBudget across the uber-* family — the SLO is the
 # SLO, and if BigFleet can't clear at this budget that's signal about

@@ -40,7 +40,7 @@ func TestE2E_HappyPath_PodsToConfigured(t *testing.T) {
 	// Step 2: 4 machines reach Configured on the shard (the operator
 	// rollup landed and the shard executed Phase 1).
 	env.waitFor(120*time.Second, func() bool {
-		c := env.shard.Inventory().CountByState(machine.StateConfigured)
+		c := env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured)
 		states := map[machine.State]int{}
 		for _, m := range env.shard.Inventory().Snapshot().All() {
 			states[m.State]++

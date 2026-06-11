@@ -91,7 +91,6 @@ loadProfile:
   target: 25000   # per-cluster; 200 clusters × 25K = 5M total CRs.
   churnPerMinute: 0.02
   durationSeconds: 3600
-  reconcilePerTickCap: 200
 
 # Regime-aware envelope (ADR-0028): ramp scales linearly with total
 # CR count vs uber-5k (10× CRs → 2× ramp budget, since per-cluster

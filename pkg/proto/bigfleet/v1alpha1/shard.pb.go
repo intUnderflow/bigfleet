@@ -342,10 +342,6 @@ func (*ShardMessage_AvailableCapacity) isShardMessage_Payload() {}
 type Hello struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	ClusterId string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
-	// Free-form capability strings. v1 has no required capabilities;
-	// future protocol features can be advertised here without bumping the
-	// service version.
-	Capabilities []string `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	// Operator's view of the protocol version it speaks.
 	ProtocolVersion string `protobuf:"bytes,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	unknownFields   protoimpl.UnknownFields
@@ -387,13 +383,6 @@ func (x *Hello) GetClusterId() string {
 		return x.ClusterId
 	}
 	return ""
-}
-
-func (x *Hello) GetCapabilities() []string {
-	if x != nil {
-		return x.Capabilities
-	}
-	return nil
 }
 
 func (x *Hello) GetProtocolVersion() string {
@@ -763,10 +752,6 @@ type NodeStateUpdate struct {
 	// Optional provider ID (e.g., "aws:///us-east-1a/i-…") that callers
 	// may surface in UpcomingNode.status for debugging.
 	ProviderId string `protobuf:"bytes,6,opt,name=provider_id,json=providerId,proto3" json:"provider_id,omitempty"`
-	// Estimated wall-clock time at which the node will be Ready. Used by
-	// the operator to populate AvailableCapacity ETAs and to age out stuck
-	// upcoming nodes. Zero if unknown.
-	EstimatedReadyUnixNanos int64 `protobuf:"varint,7,opt,name=estimated_ready_unix_nanos,json=estimatedReadyUnixNanos,proto3" json:"estimated_ready_unix_nanos,omitempty"`
 	// Populated when state == FAILED.
 	LastError string `protobuf:"bytes,8,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	// Node identity the shard is bringing online. Operators copy these into
@@ -853,13 +838,6 @@ func (x *NodeStateUpdate) GetProviderId() string {
 		return x.ProviderId
 	}
 	return ""
-}
-
-func (x *NodeStateUpdate) GetEstimatedReadyUnixNanos() int64 {
-	if x != nil {
-		return x.EstimatedReadyUnixNanos
-	}
-	return 0
 }
 
 func (x *NodeStateUpdate) GetLastError() string {
@@ -967,16 +945,9 @@ type AvailableCapacityUpdate struct {
 	AvailableCount int32                              `protobuf:"varint,4,opt,name=available_count,json=availableCount,proto3" json:"available_count,omitempty"`
 	Confidence     AvailableCapacityUpdate_Confidence `protobuf:"varint,5,opt,name=confidence,proto3,enum=bigfleet.v1alpha1.AvailableCapacityUpdate_Confidence" json:"confidence,omitempty"`
 	// Per-hour cost the shard expects to pay if it draws on this capacity.
-	CostPerHour float64 `protobuf:"fixed64,6,opt,name=cost_per_hour,json=costPerHour,proto3" json:"cost_per_hour,omitempty"`
-	// Whether the shard expects to be able to provision the entire count
-	// atomically (all-or-nothing). Useful for gang-scheduled workloads.
-	SupportsAtomicProvisioning bool `protobuf:"varint,7,opt,name=supports_atomic_provisioning,json=supportsAtomicProvisioning,proto3" json:"supports_atomic_provisioning,omitempty"`
-	// Estimated time to actuate.
-	EstimatedProvisioningSeconds int64 `protobuf:"varint,8,opt,name=estimated_provisioning_seconds,json=estimatedProvisioningSeconds,proto3" json:"estimated_provisioning_seconds,omitempty"`
-	// Node template that consumers may surface in AvailableCapacity.spec.
-	NodeTemplateLabels map[string]string `protobuf:"bytes,9,rep,name=node_template_labels,json=nodeTemplateLabels,proto3" json:"node_template_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	CostPerHour   float64 `protobuf:"fixed64,6,opt,name=cost_per_hour,json=costPerHour,proto3" json:"cost_per_hour,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AvailableCapacityUpdate) Reset() {
@@ -1051,27 +1022,6 @@ func (x *AvailableCapacityUpdate) GetCostPerHour() float64 {
 	return 0
 }
 
-func (x *AvailableCapacityUpdate) GetSupportsAtomicProvisioning() bool {
-	if x != nil {
-		return x.SupportsAtomicProvisioning
-	}
-	return false
-}
-
-func (x *AvailableCapacityUpdate) GetEstimatedProvisioningSeconds() int64 {
-	if x != nil {
-		return x.EstimatedProvisioningSeconds
-	}
-	return 0
-}
-
-func (x *AvailableCapacityUpdate) GetNodeTemplateLabels() map[string]string {
-	if x != nil {
-		return x.NodeTemplateLabels
-	}
-	return nil
-}
-
 var File_bigfleet_v1alpha1_shard_proto protoreflect.FileDescriptor
 
 const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
@@ -1090,12 +1040,11 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\x13reclaim_instruction\x18\x03 \x01(\v2%.bigfleet.v1alpha1.ReclaimInstructionH\x00R\x12reclaimInstruction\x12P\n" +
 	"\x11node_state_update\x18\x04 \x01(\v2\".bigfleet.v1alpha1.NodeStateUpdateH\x00R\x0fnodeStateUpdate\x12[\n" +
 	"\x12available_capacity\x18\x05 \x01(\v2*.bigfleet.v1alpha1.AvailableCapacityUpdateH\x00R\x11availableCapacityB\t\n" +
-	"\apayload\"u\n" +
+	"\apayload\"W\n" +
 	"\x05Hello\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\"\n" +
-	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x12)\n" +
-	"\x10protocol_version\x18\x03 \x01(\tR\x0fprotocolVersion\"q\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12)\n" +
+	"\x10protocol_version\x18\x03 \x01(\tR\x0fprotocolVersionJ\x04\b\x02\x10\x03\"q\n" +
 	"\x0fAcknowledgement\x12\x12\n" +
 	"\x04echo\x18\x01 \x01(\tR\x04echo\x12)\n" +
 	"\x10coordinator_term\x18\x02 \x01(\x03R\x0fcoordinatorTerm\x12\x1f\n" +
@@ -1122,7 +1071,7 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\n" +
 	"ReclaimAck\x12%\n" +
 	"\x0einstruction_id\x18\x01 \x01(\tR\rinstructionId\x12#\n" +
-	"\rnodes_started\x18\x02 \x01(\x05R\fnodesStarted\"\xb8\x04\n" +
+	"\rnodes_started\x18\x02 \x01(\x05R\fnodesStarted\"\x81\x04\n" +
 	"\x0fNodeStateUpdate\x12%\n" +
 	"\x0esupersedes_key\x18\x01 \x01(\tR\rsupersedesKey\x12\x1d\n" +
 	"\n" +
@@ -1132,8 +1081,7 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x05state\x12\x1b\n" +
 	"\tnode_name\x18\x05 \x01(\tR\bnodeName\x12\x1f\n" +
 	"\vprovider_id\x18\x06 \x01(\tR\n" +
-	"providerId\x12;\n" +
-	"\x1aestimated_ready_unix_nanos\x18\a \x01(\x03R\x17estimatedReadyUnixNanos\x12\x1d\n" +
+	"providerId\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\b \x01(\tR\tlastError\x12F\n" +
 	"\x06labels\x18\t \x03(\v2..bigfleet.v1alpha1.NodeStateUpdate.LabelsEntryR\x06labels\x12:\n" +
@@ -1142,11 +1090,11 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\x06taints\x18\v \x03(\v2\x18.bigfleet.v1alpha1.TaintR\x06taints\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\a\x10\b\"G\n" +
 	"\x05Taint\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
-	"\x06effect\x18\x03 \x01(\tR\x06effect\"\xb4\x06\n" +
+	"\x06effect\x18\x03 \x01(\tR\x06effect\"\x81\x04\n" +
 	"\x17AvailableCapacityUpdate\x12%\n" +
 	"\x0esupersedes_key\x18\x01 \x01(\tR\rsupersedesKey\x12N\n" +
 	"\frequirements\x18\x02 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12:\n" +
@@ -1155,20 +1103,15 @@ const file_bigfleet_v1alpha1_shard_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x05 \x01(\x0e25.bigfleet.v1alpha1.AvailableCapacityUpdate.ConfidenceR\n" +
 	"confidence\x12\"\n" +
-	"\rcost_per_hour\x18\x06 \x01(\x01R\vcostPerHour\x12@\n" +
-	"\x1csupports_atomic_provisioning\x18\a \x01(\bR\x1asupportsAtomicProvisioning\x12D\n" +
-	"\x1eestimated_provisioning_seconds\x18\b \x01(\x03R\x1cestimatedProvisioningSeconds\x12t\n" +
-	"\x14node_template_labels\x18\t \x03(\v2B.bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntryR\x12nodeTemplateLabels\x1aE\n" +
-	"\x17NodeTemplateLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"}\n" +
+	"\rcost_per_hour\x18\x06 \x01(\x01R\vcostPerHour\"}\n" +
 	"\n" +
 	"Confidence\x12\x1a\n" +
 	"\x16CONFIDENCE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fCONFIDENCE_NONE\x10\x01\x12\x12\n" +
 	"\x0eCONFIDENCE_LOW\x10\x02\x12\x15\n" +
 	"\x11CONFIDENCE_MEDIUM\x10\x03\x12\x13\n" +
-	"\x0fCONFIDENCE_HIGH\x10\x042[\n" +
+	"\x0fCONFIDENCE_HIGH\x10\x04J\x04\b\a\x10\bJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"2[\n" +
 	"\x05Shard\x12R\n" +
 	"\aSession\x12\".bigfleet.v1alpha1.OperatorMessage\x1a\x1f.bigfleet.v1alpha1.ShardMessage(\x010\x01B\xd7\x01\n" +
 	"\x15com.bigfleet.v1alpha1B\n" +
@@ -1187,7 +1130,7 @@ func file_bigfleet_v1alpha1_shard_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_shard_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bigfleet_v1alpha1_shard_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_bigfleet_v1alpha1_shard_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_bigfleet_v1alpha1_shard_proto_goTypes = []any{
 	(AvailableCapacityUpdate_Confidence)(0), // 0: bigfleet.v1alpha1.AvailableCapacityUpdate.Confidence
 	(*OperatorMessage)(nil),                 // 1: bigfleet.v1alpha1.OperatorMessage
@@ -1202,15 +1145,14 @@ var file_bigfleet_v1alpha1_shard_proto_goTypes = []any{
 	(*Taint)(nil),                           // 10: bigfleet.v1alpha1.Taint
 	(*AvailableCapacityUpdate)(nil),         // 11: bigfleet.v1alpha1.AvailableCapacityUpdate
 	nil,                                     // 12: bigfleet.v1alpha1.NodeStateUpdate.LabelsEntry
-	nil,                                     // 13: bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
-	(*ClusterCapacityNeeds)(nil),            // 14: bigfleet.v1alpha1.ClusterCapacityNeeds
-	(*NodeSelectorRequirement)(nil),         // 15: bigfleet.v1alpha1.NodeSelectorRequirement
-	(MachineState)(0),                       // 16: bigfleet.v1alpha1.MachineState
-	(*Resources)(nil),                       // 17: bigfleet.v1alpha1.Resources
+	(*ClusterCapacityNeeds)(nil),            // 13: bigfleet.v1alpha1.ClusterCapacityNeeds
+	(*NodeSelectorRequirement)(nil),         // 14: bigfleet.v1alpha1.NodeSelectorRequirement
+	(MachineState)(0),                       // 15: bigfleet.v1alpha1.MachineState
+	(*Resources)(nil),                       // 16: bigfleet.v1alpha1.Resources
 }
 var file_bigfleet_v1alpha1_shard_proto_depIdxs = []int32{
 	3,  // 0: bigfleet.v1alpha1.OperatorMessage.hello:type_name -> bigfleet.v1alpha1.Hello
-	14, // 1: bigfleet.v1alpha1.OperatorMessage.rollup:type_name -> bigfleet.v1alpha1.ClusterCapacityNeeds
+	13, // 1: bigfleet.v1alpha1.OperatorMessage.rollup:type_name -> bigfleet.v1alpha1.ClusterCapacityNeeds
 	6,  // 2: bigfleet.v1alpha1.OperatorMessage.bootstrap_response:type_name -> bigfleet.v1alpha1.BootstrapBlobResponse
 	8,  // 3: bigfleet.v1alpha1.OperatorMessage.reclaim_ack:type_name -> bigfleet.v1alpha1.ReclaimAck
 	4,  // 4: bigfleet.v1alpha1.ShardMessage.ack:type_name -> bigfleet.v1alpha1.Acknowledgement
@@ -1218,22 +1160,21 @@ var file_bigfleet_v1alpha1_shard_proto_depIdxs = []int32{
 	7,  // 6: bigfleet.v1alpha1.ShardMessage.reclaim_instruction:type_name -> bigfleet.v1alpha1.ReclaimInstruction
 	9,  // 7: bigfleet.v1alpha1.ShardMessage.node_state_update:type_name -> bigfleet.v1alpha1.NodeStateUpdate
 	11, // 8: bigfleet.v1alpha1.ShardMessage.available_capacity:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate
-	15, // 9: bigfleet.v1alpha1.BootstrapRequest.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	16, // 10: bigfleet.v1alpha1.NodeStateUpdate.state:type_name -> bigfleet.v1alpha1.MachineState
+	14, // 9: bigfleet.v1alpha1.BootstrapRequest.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	15, // 10: bigfleet.v1alpha1.NodeStateUpdate.state:type_name -> bigfleet.v1alpha1.MachineState
 	12, // 11: bigfleet.v1alpha1.NodeStateUpdate.labels:type_name -> bigfleet.v1alpha1.NodeStateUpdate.LabelsEntry
-	17, // 12: bigfleet.v1alpha1.NodeStateUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
+	16, // 12: bigfleet.v1alpha1.NodeStateUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
 	10, // 13: bigfleet.v1alpha1.NodeStateUpdate.taints:type_name -> bigfleet.v1alpha1.Taint
-	15, // 14: bigfleet.v1alpha1.AvailableCapacityUpdate.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	17, // 15: bigfleet.v1alpha1.AvailableCapacityUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
+	14, // 14: bigfleet.v1alpha1.AvailableCapacityUpdate.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	16, // 15: bigfleet.v1alpha1.AvailableCapacityUpdate.resources:type_name -> bigfleet.v1alpha1.Resources
 	0,  // 16: bigfleet.v1alpha1.AvailableCapacityUpdate.confidence:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.Confidence
-	13, // 17: bigfleet.v1alpha1.AvailableCapacityUpdate.node_template_labels:type_name -> bigfleet.v1alpha1.AvailableCapacityUpdate.NodeTemplateLabelsEntry
-	1,  // 18: bigfleet.v1alpha1.Shard.Session:input_type -> bigfleet.v1alpha1.OperatorMessage
-	2,  // 19: bigfleet.v1alpha1.Shard.Session:output_type -> bigfleet.v1alpha1.ShardMessage
-	19, // [19:20] is the sub-list for method output_type
-	18, // [18:19] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	1,  // 17: bigfleet.v1alpha1.Shard.Session:input_type -> bigfleet.v1alpha1.OperatorMessage
+	2,  // 18: bigfleet.v1alpha1.Shard.Session:output_type -> bigfleet.v1alpha1.ShardMessage
+	18, // [18:19] is the sub-list for method output_type
+	17, // [17:18] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_shard_proto_init() }
@@ -1262,7 +1203,7 @@ func file_bigfleet_v1alpha1_shard_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_shard_proto_rawDesc), len(file_bigfleet_v1alpha1_shard_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

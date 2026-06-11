@@ -13,7 +13,7 @@ import (
 func TestEffectiveCost_NoInterruptionRisk(t *testing.T) {
 	t.Parallel()
 	m := machine.Machine{PricePerHour: 6.0, InterruptionProbability: 0.0}
-	got := decision.EffectiveCost(m, 100.0)
+	got := m.EffectiveCost(100.0)
 	if got != 6.0 {
 		t.Errorf("zero-interruption: got %f, want 6.0", got)
 	}
@@ -25,7 +25,7 @@ func TestEffectiveCost_NoInterruptionRisk(t *testing.T) {
 func TestEffectiveCost_PaperWorkedExample_Spot(t *testing.T) {
 	t.Parallel()
 	spot := machine.Machine{PricePerHour: 1.80, InterruptionProbability: 0.10}
-	got := decision.EffectiveCost(spot, 5.0)
+	got := spot.EffectiveCost(5.0)
 	want := 2.30
 	if math.Abs(got-want) > 1e-9 {
 		t.Errorf("paper example: got %f, want %f", got, want)
@@ -38,11 +38,11 @@ func TestEffectiveCost_HighPenaltyFlipsDecision(t *testing.T) {
 	onDemand := machine.Machine{PricePerHour: 6.0, InterruptionProbability: 0.0}
 
 	// Low-penalty workload: spot wins.
-	if decision.EffectiveCost(spot, 5.0) >= decision.EffectiveCost(onDemand, 5.0) {
+	if spot.EffectiveCost(5.0) >= onDemand.EffectiveCost(5.0) {
 		t.Errorf("low penalty: spot effective should be cheaper")
 	}
 	// High-penalty workload: on-demand wins.
-	if decision.EffectiveCost(spot, 50.0) <= decision.EffectiveCost(onDemand, 50.0) {
+	if spot.EffectiveCost(50.0) <= onDemand.EffectiveCost(50.0) {
 		t.Errorf("high penalty: on-demand effective should be cheaper")
 	}
 }

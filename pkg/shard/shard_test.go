@@ -233,7 +233,7 @@ func TestShard_TrainingJob_BootstrapFromIdle(t *testing.T) {
 	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 4)})
 
 	waitFor(t, 5*time.Second, func() bool {
-		return env.shard.Inventory().CountByState(machine.StateConfigured) == 4
+		return env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured) == 4
 	}, "4 machines reach Configured")
 
 	// Operator should have seen exactly 4 BootstrapRequest frames.
@@ -267,13 +267,13 @@ func TestShard_Stockout_PartialFulfilment(t *testing.T) {
 	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 8)})
 
 	waitFor(t, 5*time.Second, func() bool {
-		return env.shard.Inventory().CountByState(machine.StateConfigured) == 2
+		return env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured) == 2
 	}, "2 machines reach Configured")
 
 	// Stays at 2 — no further capacity available to satisfy the
 	// remaining deficit.
 	time.Sleep(200 * time.Millisecond)
-	if got := env.shard.Inventory().CountByState(machine.StateConfigured); got != 2 {
+	if got := env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured); got != 2 {
 		t.Errorf("steady-state Configured = %d, want 2", got)
 	}
 }
@@ -292,14 +292,14 @@ func TestShard_Withdrawal_ReclaimsConfigured(t *testing.T) {
 	op := newScriptedOperator(t, env, "cluster-train")
 	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 4)})
 	waitFor(t, 5*time.Second, func() bool {
-		return env.shard.Inventory().CountByState(machine.StateConfigured) == 4
+		return env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured) == 4
 	}, "4 Configured")
 
 	// Withdraw all needs.
 	op.sendRollup(nil)
 	waitFor(t, 5*time.Second, func() bool {
-		return env.shard.Inventory().CountByState(machine.StateIdle) == 4 &&
-			env.shard.Inventory().CountByState(machine.StateConfigured) == 0
+		return env.shard.Inventory().Snapshot().CountByState(machine.StateIdle) == 4 &&
+			env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured) == 0
 	}, "all machines back to Idle")
 }
 
