@@ -112,3 +112,11 @@ func DrainGrace(preemptorPriority, victimPriority int32) time.Duration {
 		return 10 * time.Minute
 	}
 }
+
+// ReclaimGrace is the drain grace for a voluntary Phase 3 reclaim.
+// The paper §8 keys grace on the preemptor/victim priority gap and
+// bottoms out at the 10m full-graceful tier for small/zero gaps; a
+// voluntary reclaim has no preemptor at all, so it gets that most
+// generous tier (M69). Named constant rather than config — making it
+// tunable is a follow-up if a real fleet needs a different ceiling.
+const ReclaimGrace = 10 * time.Minute

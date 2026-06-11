@@ -24,6 +24,14 @@ func TestPhase3_AllExcessWhenNoNeeds(t *testing.T) {
 		if a.Kind != decision.ActionKindReclaim {
 			t.Errorf("expected Reclaim, got %s", a.Kind)
 		}
+		// M69: the grace rides the ReclaimInstruction to the operator;
+		// a voluntary reclaim gets the full-graceful tier.
+		if a.GracePeriod != decision.ReclaimGrace {
+			t.Errorf("grace = %v, want %v", a.GracePeriod, decision.ReclaimGrace)
+		}
+		if a.PreemptorPriority != 0 {
+			t.Errorf("preemptor priority = %d, want 0 (no preemptor on a voluntary reclaim)", a.PreemptorPriority)
+		}
 	}
 }
 

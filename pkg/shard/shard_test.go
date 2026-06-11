@@ -301,6 +301,29 @@ func TestShard_Withdrawal_ReclaimsConfigured(t *testing.T) {
 		return env.shard.Inventory().Snapshot().CountByState(machine.StateIdle) == 4 &&
 			env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured) == 0
 	}, "all machines back to Idle")
+
+	// M69: each Reclaim routes through the operator so the cordon +
+	// PDB-respecting eviction path (ADR-0009) runs — one
+	// ReclaimInstruction per machine, carrying the voluntary-reclaim
+	// grace and no preemptor.
+	got := 0
+	for done := false; !done; {
+		select {
+		case instr := <-op.reclaimInstructions:
+			got++
+			if want := int64(decision.ReclaimGrace.Seconds()); instr.GetGracePeriodSeconds() != want {
+				t.Errorf("grace_period_seconds = %d, want %d", instr.GetGracePeriodSeconds(), want)
+			}
+			if instr.GetPreemptorPriority() != 0 {
+				t.Errorf("preemptor_priority = %d, want 0 (voluntary reclaim)", instr.GetPreemptorPriority())
+			}
+		case <-time.After(200 * time.Millisecond):
+			done = true
+		}
+	}
+	if got != 4 {
+		t.Errorf("ReclaimInstruction count = %d, want 4", got)
+	}
 }
 
 // Priority inversion: cluster-batch holds 4 GPU machines at priority

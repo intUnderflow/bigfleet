@@ -132,10 +132,13 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 				continue
 			}
 			out.Actions = append(out.Actions, Action{
-				Kind:        ActionKindReclaim,
-				MachineID:   m.ID,
-				Cluster:     cluster,
-				GracePeriod: 0, // Reclaim is voluntary; the operator picks a normal grace at apply time.
+				Kind:      ActionKindReclaim,
+				MachineID: m.ID,
+				Cluster:   cluster,
+				// Rides the ReclaimInstruction to the operator, which
+				// bounds the cordon + PDB-respecting eviction with it
+				// (ADR-0009 / M69).
+				GracePeriod: ReclaimGrace,
 				Reason:      "phase3.excess",
 			})
 		}

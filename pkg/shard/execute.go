@@ -338,9 +338,9 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 }
 
 // executeDrain handles both Reclaim (Phase 3) and Preempt (Phase 2):
-// walks Configured → Draining → Idle through provider.Drain. For
-// Preempt, also notifies the cluster operator so kubelet-side graceful
-// shutdown begins immediately.
+// walks Configured → Draining → Idle through provider.Drain. Both kinds
+// notify the cluster operator first so the cordon + PDB-respecting
+// eviction path (ADR-0009) runs ahead of the provider drain.
 func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 	cur, err := s.inv.Get(a.MachineID)
 	if err != nil {
@@ -351,12 +351,18 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 		return nil
 	}
 
-	if a.Kind == decision.ActionKindPreempt {
-		if sess := s.lookupSession(a.Cluster); sess != nil {
-			sess.sendReclaimInstruction(a.MachineID, a.GracePeriod, a.PreemptorPriority)
-		}
-		// If no session is available we still drain via the provider —
-		// the kubelet will use its own default grace period.
+	// M69: PreemptorPriority is 0 on a voluntary Reclaim — there is no
+	// preemptor; the operator records it as telemetry only.
+	if sess := s.lookupSession(a.Cluster); sess != nil {
+		sess.sendReclaimInstruction(a.MachineID, a.GracePeriod, a.PreemptorPriority)
+	} else if a.Kind == decision.ActionKindReclaim {
+		// No session: we still drain via the provider below (kubelet
+		// default grace), but a voluntary reclaim is supposed to be the
+		// graceful path — skipping the operator's cordon/PDB/evict pass
+		// deserves its own alertable log line, unlike the historically
+		// silent Preempt fallback.
+		s.log.Warn("reclaim fallback: no operator session; PDB-respecting drain skipped",
+			"machine", a.MachineID, "cluster", a.Cluster)
 	}
 
 	if err := s.applyTransition(a.MachineID, machine.StateDraining, nil); err != nil {

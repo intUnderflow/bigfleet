@@ -102,7 +102,7 @@ You don't tune autoscaler parameters per-cluster anymore — there are none in t
 
 - The PriorityClasses your cluster offers (and the unschedulable-pod-controller's mapping to BigFleet `priority` int values).
 - Per-cluster compliance: which `nodeSelector` keys your `BootstrapTemplate` knows how to render userdata for.
-- Pod Disruption Budgets your workloads carry — the operator respects them when handling `ReclaimInstruction`.
+- Pod Disruption Budgets your workloads carry — every drain (Phase 2 preempt and Phase 3 reclaim alike) reaches the operator as a `ReclaimInstruction`, and the operator evicts through the PDB-respecting `policy/v1` Eviction API within the instruction's grace period. The exception is an operator that is disconnected when the drain fires: the shard then drains via the provider directly (kubelet default grace, no PDB pass) and logs `reclaim fallback`.
 
 Watch `bigfleet_operator_session_reconnects_total`: a steady non-zero rate means the stream to the shard is unstable.
 
