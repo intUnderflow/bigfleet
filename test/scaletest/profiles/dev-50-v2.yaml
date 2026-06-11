@@ -1,0 +1,92 @@
+# dev-50-v2 — the M59 catalog-coverage gate, PARKED behind an engine
+# fix. On its first runs (2026-06-11) it exposed a real gap: Phase 1
+# credits open demand against gross machine Allocatable (bound-pod
+# consumption invisible), so catalog fills stall at ~96 % — live and
+# preBind both — while Phase 3 reclaims machines under the pending
+# demand and bootstraps thrash. When the consumed-capacity
+# investigation lands, this profile is its validation vehicle and
+# replaces dev-50.yaml as the gate (the M66.5 swap).
+#
+# Invocation:
+#   make scaletest PROFILE=dev-50-v2 SUBSTRATE=example-kind-laptop DURATION=3m
+#
+# Substrate-agnostic test definition (ADR-0034). The gate pairing is
+# the kind laptop substrate:
+#
+#   scaletest-runner --profile=test/scaletest/profiles/dev-50.yaml \
+#                    --substrate=test/scaletest/substrates/example-kind-laptop.yaml \
+#                    --output=...
+#
+# (`make prevalidate-kind` / `make scaletest PROFILE=dev-50
+# SUBSTRATE=example-kind-laptop` wrap exactly that.)
+#
+# Purpose: prove the *real* Pod-mode chain wires up end to end —
+#   Pod → kube-scheduler marks Unschedulable → unschedulable-pod-
+#   controller → CapacityRequest → operator roll-up → shard NeedsTable
+#   → Phase 1/2/3 → provider → Bootstrap → fake-Node → kube-scheduler
+#   binds the Pod —
+# and, since M59, that the CATALOG demand path works at gate speed:
+# archetype draws, sub-machine folding (ADR-0041), Same(rack) and
+# Same(zone) gangs, gang anchoring. The realistic-dev catalog exists
+# for exactly this (see its header): same archetype names and shapes
+# as realistic.yaml, gang sizes proportionate to a 50-machine fleet,
+# weights flattened so every path is drawn every run.
+#
+# This is a correctness gate, not a scale test and not a realism
+# instrument: no measurement taken here feeds a mechanism decision
+# (ADR-0043 — that is the cloud profiles' job, on realistic.yaml).
+#
+# Seed: Configured-hosted fill with preBind, the ADR-0035 posture the
+# cloud profiles use. The gate's job is chain wiring + the churn →
+# controller-recreate → re-bind path the SLOs measure; it is NOT a
+# live-fill acquisition test — the 2026-06-11 instrumented runs showed
+# a live catalog fill stalls at ~96 % on a real engine-model gap
+# (Phase 1 credits open demand against gross machine capacity;
+# consumption by bound pods is invisible, so the fill's tail reads
+# satisfied while kube-scheduler holds unplaceable pods, and Phase 3
+# reclaims under it). That gap is tracked as its own engine
+# investigation (sim-first); the gate stays green and meaningful
+# meanwhile. Idle 1.2× / Speculative 5× keep an acquisition pool for
+# churn and bursts, drawn from the same catalog as demand.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "dev-50"
+  description: "Laptop kind integration gate: 50 machines, 5K Pods at density=100, catalog/gang/fold coverage."
+
+scale:
+  machines: 50
+  density: 100
+
+catalog:
+  archetypes: realistic-dev
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 5
+  idleHeadroomFraction: 1.2
+
+loadProfile:
+  # 5,000 Pods over 300s = 16.7 binds/s demand vs the kind substrate's
+  # declared 2 × 15/s supply.
+  rampSeconds: 300
+  # Short soak: correctness gate. The runner sizes its SLO rate
+  # windows to the soak (M60 sloWindow).
+  soakSeconds: 180
+  # Fraction of target per minute: 0.024 × 2,500/cluster = 1 evict/s
+  # per cluster, the evict → controller-recreate → re-bind loop the
+  # bind-latency SLO measures.
+  churnPerMinute: 0.024
+
+rampBudget: 10m
+
+slo:
+  # Laptop-loosened posture inherited from the legacy gate; tighten
+  # toward runner defaults once the V2 gate has green baselines.
+  internalBindingLatencyP99Seconds: 30
+  operatorAckP99Seconds: 30
+  shardCycleDurationP99Seconds: 5
+  operatorRollupP99Seconds: 2

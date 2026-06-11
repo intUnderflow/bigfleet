@@ -26,14 +26,14 @@ func TestCommittedProfiles_MatchingCapacityPreflight(t *testing.T) {
 	const dir = "../../profiles"
 
 	// gated: the runner executes these no-catalog, locally, as a gate —
-	// their arithmetic MUST pass. Empty since M59 moved dev-50 to
-	// profileV2 with the realistic-dev catalog: its seed is drawn from
-	// the same catalog as its demand (distribution-matched by
-	// construction), so the single-shape ⅕-rotation arithmetic no
-	// longer describes any gated profile. The map stays so a future
-	// no-catalog gate profile re-enters the assertion, not just the
-	// log.
-	gated := map[string]bool{}
+	// their arithmetic MUST pass. dev-50 is back in the set: its V2
+	// successor (dev-50-v2.yaml, catalog-driven, arithmetic not
+	// applicable) is parked behind the consumed-capacity engine
+	// investigation, so the legacy single-shape profile remains the
+	// gate the devpods run.
+	gated := map[string]bool{
+		"dev-50.yaml": true,
+	}
 	// skipReasons documents why the rest are observed, not gated.
 	skipReasons := map[string]string{
 		"dev-500.yaml": "kept for occasional manual checks, not a gate; both kine-bound and (recorded here) supply-short on the single-shape arithmetic",

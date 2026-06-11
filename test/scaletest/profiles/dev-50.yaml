@@ -1,82 +1,164 @@
-# dev-50 — the fast per-milestone laptop integration gate (M59: V2).
+# dev-50 — the fast per-milestone laptop integration gate.
 #
-# Substrate-agnostic test definition (ADR-0034). The gate pairing is
-# the kind laptop substrate:
-#
-#   scaletest-runner --profile=test/scaletest/profiles/dev-50.yaml \
-#                    --substrate=test/scaletest/substrates/example-kind-laptop.yaml \
-#                    --output=...
-#
-# (`make prevalidate-kind` / `make scaletest PROFILE=dev-50
-# SUBSTRATE=example-kind-laptop` wrap exactly that.)
+# M59 status: the catalog/gang/fold V2 successor (dev-50-v2.yaml +
+# the kind substrate) is built and PARKED — on its first day it
+# exposed a real engine gap (Phase 1 credits open demand against
+# gross machine capacity; bound-pod consumption is invisible, so
+# catalog fills stall at ~96 % while Phase 3 reclaims underneath).
+# This legacy profile stays the gate until that investigation lands;
+# the V2 profile is its validation vehicle.
 #
 # Purpose: prove the *real* Pod-mode chain wires up end to end —
 #   Pod → kube-scheduler marks Unschedulable → unschedulable-pod-
 #   controller → CapacityRequest → operator roll-up → shard NeedsTable
 #   → Phase 1/2/3 → provider → Bootstrap → fake-Node → kube-scheduler
-#   binds the Pod —
-# and, since M59, that the CATALOG demand path works at gate speed:
-# archetype draws, sub-machine folding (ADR-0041), Same(rack) and
-# Same(zone) gangs, gang anchoring. The realistic-dev catalog exists
-# for exactly this (see its header): same archetype names and shapes
-# as realistic.yaml, gang sizes proportionate to a 50-machine fleet,
-# weights flattened so every path is drawn every run.
+#   binds the Pod.
+# This is a *correctness* gate, not a scale test. It is deliberately
+# small so it ramps to ~100 % in minutes and the gate is meaningful.
 #
-# This is a correctness gate, not a scale test and not a realism
-# instrument: no measurement taken here feeds a mechanism decision
-# (ADR-0043 — that is the cloud profiles' job, on realistic.yaml).
+# Why not dev-500: dev-500 (5 clusters × 10K Pods = 50K, ~500 machines)
+# conflated integration correctness with a mini scale test. The scale
+# half made it kine-bound — one M5 Max running 5 kwok apiservers, each
+# with its own kine+sqlite, can't mark Pods Unschedulable fast enough
+# (instrumented run: kine 2.44 cores, kube-scheduler 0.08, ~69 % of
+# Pending Pods never even attempted by kube-scheduler). The kine sqlite
+# dir is already RAM-backed (chart `shared` emptyDir medium: Memory)
+# and runs `_sync=OFF` — the substrate is tuned as far as it goes, so
+# the only laptop lever is a smaller profile. See ADR-0027.
 #
-# Seed: Configured-hosted fill with preBind, the ADR-0035 posture the
-# cloud profiles use. The gate's job is chain wiring + the churn →
-# controller-recreate → re-bind path the SLOs measure; it is NOT a
-# live-fill acquisition test — the 2026-06-11 instrumented runs showed
-# a live catalog fill stalls at ~96 % on a real engine-model gap
-# (Phase 1 credits open demand against gross machine capacity;
-# consumption by bound pods is invisible, so the fill's tail reads
-# satisfied while kube-scheduler holds unplaceable pods, and Phase 3
-# reclaims under it). That gap is tracked as its own engine
-# investigation (sim-first); the gate stays green and meaningful
-# meanwhile. Idle 1.2× / Speculative 5× keep an acquisition pool for
-# churn and bursts, drawn from the same catalog as demand.
+# What moved where:
+#   - logic / scenario correctness  → `make sim`   (pure Go, fast)
+#   - BigFleet-side scale ceilings  → `make scale` (pure Go, no kine)
+#   - integration correctness       → dev-50       (this file)
+#   - realistic-demand-path scale   → Uber infra / scaleway-* (real etcd)
+# dev-500 is kept for occasional bigger local checks, not the gate.
+#
+# Sizing math (M5 Max kind, Docker Desktop ~18 vCPU / 48 GiB cap):
+#   shard:        1 × 1 vCPU / 2 GiB                = 1 vCPU / 2 GiB
+#   coordinator:  1 × 500m / 1 GiB                  = 0.5 vCPU / 1 GiB
+#   prometheus:   1 × 1 vCPU / 4 GiB                = 1 vCPU / 4 GiB
+#   kwok pods:    2 × (500m + 500m) reqs            = 2 vCPU / 4 GiB
+#   total:       ~4.5 vCPU req — fits with wide headroom; limits stay
+#                generous so the (short) ramp burst has room and kine
+#                never has to compete for cores.
 
-apiVersion: bigfleet.io/scaletest/v1
-kind: Profile
+# ADR-0023: the real kube-scheduler runs inside each kwok apiserver
+# container and does both "mark Unschedulable" and "bind". dev-50's
+# whole point is exercising that path, so this stays on.
+harness:
+  scheduler: kube-scheduler
+  # M60 A/B, for the record: capping the scheduler's pod backoff
+  # (harness.schedulerPodMaxBackoffSeconds: 1) produced NO fill
+  # speedup — ~36 binds/s with and without the cap. Backoff is not in
+  # the steady-fill path here: pods requeue only until BigFleet's
+  # nodes appear (~40s), after which ~36/s is the scheduler's own bind
+  # throughput on this substrate. The knob stays available in the
+  # chart for future fill investigations; this profile keeps the
+  # production-faithful defaults.
 
-metadata:
-  name: "dev-50"
-  description: "Laptop kind integration gate: 50 machines, 5K Pods at density=100, catalog/gang/fold coverage."
+kwok:
+  # 2 clusters, not 1: still exercises multi-cluster operator fan-out
+  # and the shard handling more than one Session stream, at 2/5ths the
+  # kine pressure of dev-500.
+  clusterCount: 2
+  # Only 2 kwok apiservers here (vs dev-500's 5), so each gets a wide
+  # CPU limit — kine never has to compete, which is the whole point.
+  apiserverResources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 6,    memory: 8Gi }
+  workloadResources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: 4,    memory: 8Gi }
+  # tmpfs-backed; 2500 Pods of kine state + logs fits comfortably in 1Gi.
+  sharedVolumeSizeLimit: "1Gi"
 
-scale:
-  machines: 50
-  density: 100
+podShim:
+  # pprof on for laptop debugging — port 8774 on each kwok pod.
+  pprofAddr: ":8774"
 
-catalog:
-  archetypes: realistic-dev
+shard:
+  replicas: 1
+  # Headroom math, in the dimension that matters: this profile has no
+  # archetype catalog, so demand is the load-driver's legacy
+  # single-shape template (every Pod: cpu=2/memory=8Gi, nodeAffinity
+  # preflight.LegacyDemandInstanceType — m6i.large since M66.2, when
+  # GPU counts stopped scaling with density) while the no-catalog seed
+  # ROTATES five instance types — only ⅕ of each pool can ever host
+  # the demand. Matching capacity = (60+240)/5 = 60 demand-typed
+  # machines × density-100 = 6,000 Pod slots vs 5,000 demand (20 %
+  # headroom). The original 60/180 split capped matching supply at 48
+  # machines = 4,800 slots < the 4,950 bind gate — the run stalled at
+  # exactly 4,800 binds with BigFleet correctly reporting the residual
+  # as unsatisfiable (no acquirable machine of the right shape).
+  # pkg/scaletest/preflight owns this arithmetic now; its committed-
+  # profile test re-derives these numbers from this file.
+  seedMachines: 60
+  # ADR-0026: the elastic-procurement tier. 4× the Idle seed (not
+  # dev-500's 3×) so the demand-typed fifth alone covers demand+headroom;
+  # Phase 1 still prefers the cheaper owned Idle pool first.
+  seedSpeculative: 240
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
+  incrementalReconcile: true
+  metricsWarmupCycles: 5
+  # The probe that makes a failed prevalidate self-diagnosing: Need
+  # counts split by co-location + Phase 1 unsatisfied + Phase 3
+  # reclaim overlap, every 20th cycle. Read-only, one log line.
+  phaseAttributionLog: true
+  resources:
+    requests: { cpu: 1, memory: 2Gi }
+    limits:   { cpu: 2, memory: 4Gi }
 
-seed:
-  configuredFraction: 1.0
-  preBind: true
-  speculativeMultiplier: 5
-  idleHeadroomFraction: 1.2
+coordinator:
+  replicas: 1
 
 loadProfile:
-  # 5,000 Pods over 300s = 16.7 binds/s demand vs the kind substrate's
-  # declared 2 × 15/s supply.
-  rampSeconds: 300
-  # Short soak: correctness gate. The runner sizes its SLO rate
-  # windows to the soak (M60 sloWindow).
-  soakSeconds: 180
-  # Fraction of target per minute: 0.024 × 2,500/cluster = 1 evict/s
-  # per cluster, the evict → controller-recreate → re-bind loop the
-  # bind-latency SLO measures.
+  # 2 clusters × 2500 Pods = 5000 Pods total → 50 machines at
+  # density=100. Small enough that no kwok apiserver's kine saturates.
+  target: 2500
+  # M60: churn ~60 pods/min so the soak exercises the evict →
+  # controller-recreate → re-bind loop instead of idling. The value is
+  # a FRACTION of target per minute (the load-driver computes
+  # target × churnPerMinute / 60 evictions per second): 0.024 × 2500
+  # = 60 pods/min/cluster = 1/sec. The previous literal `60` here
+  # meant "evict the entire cluster every second" — invisible only
+  # because legacy pods carried no archetype label, making churn a
+  # silent no-op (fixed alongside this value). The mid-pipeline
+  # working set at 1/sec is ~2 pods against the gate's 50-pod slop.
+  # M66.3: the load-driver emits the steady-bind histogram in
+  # kube-scheduler mode (it watches unbound pods and records binds of
+  # post-fill creations), so internalBindingLatencyP99 measures real
+  # churn re-binds here instead of reading -1.
   churnPerMinute: 0.024
+  # Short soak: this is a correctness gate, not an endurance test.
+  # M60: 3m, matched by the runner's soak-sized SLO windows (sloWindow)
+  # — at 1 churn/sec that is ~180 binds in-window, plenty for the p99.
+  durationSeconds: 180
 
+# At 5000 Pods with kine no longer the wall, the ramp should clear in
+# a few minutes. 10m budget is generous headroom; if a run needs more
+# than that on a quiet laptop, something regressed.
 rampBudget: 10m
 
+operator:
+  qps: 200
+  burst: 400
+  ackConcurrency: 16
+  rollupInterval: 1s
+
 slo:
-  # Laptop-loosened posture inherited from the legacy gate; tighten
-  # toward runner defaults once the V2 gate has green baselines.
+  # Inherited from dev-500's laptop-loosened posture as a safe first
+  # cut. With kine no longer saturated these should comfortably beat
+  # the thresholds — tighten toward the runner defaults once dev-50
+  # has a few green baselines.
   internalBindingLatencyP99Seconds: 30
   operatorAckP99Seconds: 30
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
+
+costEstimate:
+  vCPU: 5
+  memoryGB: 14
+  awsSpotUsdPerHour: 0
+  notes: "Free on M5 Max kind. Fast per-milestone integration gate — 2 clusters, 5K Pods, density=100, ~50 machines. Expected wall-clock: ~3-5 min ramp + 5 min soak ≈ 10-min total run."

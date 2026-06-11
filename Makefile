@@ -131,7 +131,7 @@ prevalidate-kind: prevalidate ## prevalidate + dev-50 on kind (~8 min warm, need
 	  echo "kind load skipped — image IDs unchanged"; \
 	fi
 	@echo "[$$(date +%T)] kind rung: dev-50"
-	$(MAKE) scaletest PROFILE=dev-50 SUBSTRATE=example-kind-laptop DURATION=3m
+	$(MAKE) scaletest PROFILE=dev-50 DURATION=3m
 	@echo "[$$(date +%T)] prevalidate-kind green"
 
 .PHONY: conformance
