@@ -193,10 +193,11 @@ as it needs and no further:
 
 | Rung | Command | Time | Catches |
 |---|---|---|---|
-| 1. Closed-loop sim | `go test -run ClosedLoop ./sim/...` | seconds | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures. The cascade class that historically cost a cloud run apiece. |
-| 2. Hot-path benches | `make bench-hot` | ~1 min | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
-| 3. Integration gate | `make prevalidate` (runs 1+2, then `dev-50` on kind) | ~10 min | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. |
-| 4. Cloud | a scale profile on a real substrate | hours | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
+| 0.5. Profile preflight | committed-profile test in `make prevalidate` / runner default-on | <1 s | seed-shape vs demand-shape arithmetic: a bind gate that no soak duration can reach (the dev-50 4,800-slots-vs-4,950-gate class). `pkg/scaletest/preflight`. |
+| 1. Closed-loop sim | `go test -run ClosedLoop ./sim/...` (`-short` for the quick set) | ~30 s short / ~2.5 min full | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures — including `TestClosedLoop_Uber5KCardinality` at full uber-5k decision cardinality (2,580 Needs × 20 clusters), the class that historically cost a 90-minute cloud run apiece. |
+| 2. Hot-path benches | `make bench-hot` | ~10 s warm | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
+| 3. Integration gate | `make prevalidate` (runs 0.5+1+2, then `dev-50` on kind) | ~6 min warm | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. Per-rung timestamps in the log; a stalled fill fails in 2 min (bind-plateau detector), not at the ramp budget. |
+| 4. Cloud | a scale profile on a real substrate | ~25–60 min | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
 
 **Every SHA bound for a cloud run passes `make prevalidate` first.** A
 cloud run that fails on something rungs 1–3 would have caught is a
@@ -213,6 +214,24 @@ because they need different durations:
   fill completion. Don't spend a 30-minute soak proving a slope.
 - **SLO measurement** ("what are the numbers?"): the profile's full
   soak (30 m+). Only worth running once the mechanism is already green.
+
+#### Does the run need a live fill?
+
+The fill is 30–45 min of a cloud mechanism run's wall clock. The
+migrated profiles carry `seed.preBind: true` + `configuredFraction:
+1.0` (M52.B / ADR-0035), which installs the cluster near steady state
+and cuts a mechanism iteration to ~15–25 min — but a pre-bound install
+silently measures **nothing** for mechanism classes whose subject IS
+the fill. Decide from the table; when in doubt, fill live.
+
+| Mechanism class | Live fill? | Why |
+|---|---|---|
+| Bootstrap-slope / bootstraps-per-cycle (M47.2-class) | **required** | with a full Configured seed, the Bootstrap → UpcomingNode → node-creator pipeline never runs at volume — only the churn trickle |
+| Machine state-machine races at fill rate (M48-class) | **required** | the race window is the fill's transition storm |
+| Demand-signal shape during ramp (ADR-0041-class: needs_total collapse, fold classification) | **required** | the signature is the rollup/ledger evolving *during* the fill |
+| kube-scheduler bulk-bind throughput / ramp exploration (ADR-0033/0035) | **required** | ramp capacity is the subject — though ramp is exploration, not an SLO |
+| Steady-state attribution / churn equilibria (Phase 3 behaviour at rest, ADR-0040-class) | preBind fine | the subject starts after steady state; the fill is pure setup tax |
+| Steady-state SLO measurement | preBind fine | ADR-0035's definition — the fill is excluded from the metrics anyway |
 
 ### The 10-minute abort checkpoint
 
