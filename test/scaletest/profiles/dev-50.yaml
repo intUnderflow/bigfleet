@@ -39,6 +39,14 @@
 # whole point is exercising that path, so this stays on.
 harness:
   scheduler: kube-scheduler
+  # M60 A/B, for the record: capping the scheduler's pod backoff
+  # (harness.schedulerPodMaxBackoffSeconds: 1) produced NO fill
+  # speedup — ~36 binds/s with and without the cap. Backoff is not in
+  # the steady-fill path here: pods requeue only until BigFleet's
+  # nodes appear (~40s), after which ~36/s is the scheduler's own bind
+  # throughput on this substrate. The knob stays available in the
+  # chart for future fill investigations; this profile keeps the
+  # production-faithful defaults.
 
 kwok:
   # 2 clusters, not 1: still exercises multi-cluster operator fan-out
@@ -98,17 +106,22 @@ loadProfile:
   # 2 clusters × 2500 Pods = 5000 Pods total → 50 machines at
   # density=100. Small enough that no kwok apiserver's kine saturates.
   target: 2500
-  # churn 0: dev-50 is a *correctness* gate — "does the real Pod→bind
-  # chain converge to 100 %?" needs a clean binary signal. Any churn
-  # keeps a working set of Pods perpetually mid-pipeline (marked
-  # Unschedulable → CR'd → capacity provisioned → awaiting kube-
-  # scheduler re-attempt), which sat ~7 % short of the 99 % gate in
-  # the first dev-50 run and is pure noise here. Churn / reclaim-path
-  # realism belongs in the soak profiles and on Uber infra, not in
-  # the fast per-milestone gate.
-  churnPerMinute: 0
+  # M60: churn 60/min so the soak exercises the evict → controller-
+  # recreate → re-bind loop instead of idling (with churn 0 the soak
+  # produced zero binds). The old "churn 0 for a clean binary signal"
+  # rationale predates the seed-calibration fix: the ~7 % plateau it
+  # was written against was actually the matching-capacity shortfall
+  # (see the seed comments above), and the mid-pipeline working set at
+  # 1/sec is ~2 pods against the gate's 50-pod slop. Honest caveat:
+  # internalBindingLatencyP99 still reads -1 here — the steady-bind
+  # histogram is pod-shim-emitted and dev-50 runs kube-scheduler mode;
+  # a kube-scheduler-mode bind-latency source is the open M52
+  # follow-on, not a churn problem.
+  churnPerMinute: 60
   # Short soak: this is a correctness gate, not an endurance test.
-  durationSeconds: 300
+  # M60: 3m, matched by the runner's soak-sized SLO windows (sloWindow)
+  # — at 1 churn/sec that is ~180 binds in-window, plenty for the p99.
+  durationSeconds: 180
   reconcilePerTickCap: 50
 
 # At 5000 Pods with kine no longer the wall, the ramp should clear in

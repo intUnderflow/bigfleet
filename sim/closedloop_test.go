@@ -2,8 +2,10 @@ package sim_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/sim"
 )
 
@@ -511,6 +513,214 @@ func TestClosedLoop_SubMachineGangsLedgerMatchesReality(t *testing.T) {
 	// churn, no acquisition pressure beyond the true capacity need.
 	if !assertQuiescent(t, res, k, 0) {
 		failed = true
+	}
+	if failed {
+		dumpTrace(t, res)
+	}
+}
+
+// uber5kShapes is the measured uber-5k decision shape, hand-mirrored
+// from pkg/decision/phase1_colocated_bench_test.go's constants (the
+// same practice that file uses — a YAML-driven builder from the
+// archetype catalog would add weighted-random sampling the sim's
+// determinism can't host). Pod resources, instance pinning, priorities
+// and penalties match the catalog archetypes the bench mirrors.
+func uber5kShapes() []sim.WorkloadShape {
+	return []sim.WorkloadShape{
+		{
+			Name:                       "tiny",
+			PodResources:               map[string]string{"cpu": "400m", "memory": "500Mi"},
+			InstanceTypes:              []string{"m6i.large", "m6i.xlarge"},
+			Priority:                   100,
+			InterruptionPenaltyDollars: 32,
+			ReclamationPenaltyDollars:  64,
+		},
+		{
+			Name:                       "service",
+			PodResources:               map[string]string{"cpu": "2200m", "memory": "8500Mi"},
+			InstanceTypes:              []string{"m6i.xlarge"},
+			Priority:                   1000,
+			InterruptionPenaltyDollars: 1024,
+			ReclamationPenaltyDollars:  8192,
+		},
+		{
+			Name:                       "memcache",
+			PodResources:               map[string]string{"cpu": "4", "memory": "32Gi"},
+			InstanceTypes:              []string{"r6i.2xlarge"},
+			Priority:                   1000,
+			InterruptionPenaltyDollars: 4096,
+			ReclamationPenaltyDollars:  16384,
+			SameRack:                   true,
+		},
+		{
+			Name:                       "gpu",
+			PodResources:               map[string]string{"cpu": "64", "nvidia.com/gpu": "8"},
+			InstanceTypes:              []string{"a3-highgpu-8g"},
+			Priority:                   1000,
+			InterruptionPenaltyDollars: 16384,
+			ReclamationPenaltyDollars:  32768,
+			SameRack:                   true,
+		},
+	}
+}
+
+// TestClosedLoop_Uber5KCardinality runs the closed loop at full uber-5k
+// DECISION cardinality: 20 clusters × (2 plain classes + 95 memcache
+// gangs + 32 GPU gangs) = 2,580 Needs, 93 % Same — the measured cloud
+// shape. Plain-shape pod counts are downscaled 1/10 (pod count only
+// scales the cluster model's bind walk; Need cardinality is what the
+// engine's cost scales with), gang sizes are preserved because gang
+// size IS the Need shape. ~380 ms/cycle on the M5 Max: 300 cycles ≈
+// 2 min, the prevalidate rung that moves catalog-cardinality feedback
+// bugs (the ADR-0041 sub-machine-gang class — 95-gang × 20-cluster
+// interactions invisible at the small scenarios' scale) from the
+// ~90-minute cloud rung to here. -short runs 60 cycles (~25 s) for
+// quick local iteration; convergence lands well inside 40 cycles.
+func TestClosedLoop_Uber5KCardinality(t *testing.T) {
+	cycles, k := 300, 100
+	if testing.Short() {
+		cycles, k = 60, 20
+	}
+	const nClusters = 20
+	clusters := make([]sim.ClusterSpec, 0, nClusters)
+	for c := 0; c < nClusters; c++ {
+		clusters = append(clusters, sim.ClusterSpec{
+			ID: machine.ClusterID(fmt.Sprintf("cluster-%d", c)),
+			Workloads: []sim.WorkloadSpec{
+				// Bench shape per cluster: 95 gangs of 4 + 32 gangs of 5,
+				// 1/10-scaled plain demand (bench: tiny 17,500 / service
+				// 3,000 aggregate replicas).
+				{Shape: "memcache", Objects: 95, Replicas: 4},
+				{Shape: "gpu", Objects: 32, Replicas: 5},
+				{Shape: "service", Replicas: 300},
+				{Shape: "tiny", Replicas: 1750},
+			},
+		})
+	}
+	res := runClosedLoop(t, sim.ClosedLoopScenario{
+		Name:     "uber5k-cardinality",
+		Shapes:   uber5kShapes(),
+		Clusters: clusters,
+		Seeds: []sim.SeedPool{
+			// Exact-fit Configured per cluster (demand/density), with
+			// Idle/Speculative approximating the bench's shard-wide
+			// 1,000 / 12,000 rotated across the machine types.
+			{Shape: "tiny", Density: 10, ConfiguredPerCluster: 175,
+				Idle: 333, Speculative: 4000, RacksPerZone: 40},
+			{Shape: "service", Density: 10, ConfiguredPerCluster: 30},
+			{Shape: "memcache", Density: 10, ConfiguredPerCluster: 38,
+				Idle: 333, Speculative: 4000, RacksPerZone: 40, ContiguousRackBlock: 2},
+			{Shape: "gpu", Density: 1, ConfiguredPerCluster: 160,
+				Idle: 334, Speculative: 4000, RacksPerZone: 400, ContiguousRackBlock: 5},
+		},
+		ControllerManaged: true,
+		CRPerPod:          true,
+		Cycles:            cycles,
+	})
+	logConverged(t, res, k)
+
+	failed := !assertQuiescent(t, res, k, 0)
+	end := res.Last(1)[0]
+	if frac := float64(end.BoundPods) / float64(res.TargetPods); frac < 0.99 {
+		t.Errorf("bind fraction = %.4f (%d/%d), want >= 0.99", frac, end.BoundPods, res.TargetPods)
+		failed = true
+	}
+	if failed {
+		dumpTrace(t, res)
+	}
+}
+
+// TestClosedLoop_SupplyExhaustion_StableShortfall_Canary pins the
+// engine-side contract for the 2026-06-11 dev-50 incident family:
+// single-shape demand against a seed where most pools can never host
+// it (the no-catalog seed rotates five instance types; only ⅕
+// matched). When the matching pools genuinely run dry, the correct
+// behaviour is a STABLE stockout — binds plateau at exactly the
+// matching capacity, the residual parks as a constant shortfall
+// (escalation pages capacity planning; the harness has no buy-more
+// lever), and the engine neither thrashes the bound Pods nor burns
+// futile acquisition. A regression that reproduces a stall-below-
+// supply-ceiling as churn or phantom satisfaction fails here in
+// <1 s instead of a 10-minute ramp-budget timeout on kind.
+//
+// Scope honesty: this canary pins the ENGINE's contract. The actual
+// incident was profile arithmetic in harness code the sim never
+// executes — that half is covered by the profile preflight
+// (pkg/scaletest/preflight).
+func TestClosedLoop_SupplyExhaustion_StableShortfall_Canary(t *testing.T) {
+	const cycles, k = 60, 30
+	shapes := []sim.WorkloadShape{{
+		Name:                       "gpu",
+		PodResources:               map[string]string{"nvidia.com/gpu": "8"},
+		InstanceTypes:              []string{"a3-highgpu-8g"},
+		Priority:                   1000,
+		InterruptionPenaltyDollars: 8192,
+		ReclamationPenaltyDollars:  65536,
+	}}
+	// Decoy shapes exist only to shape seed machines no demand can use
+	// (their instance types are outside the gpu demand's In list). No
+	// workload references them.
+	for _, it := range []string{"m6i.large", "c6i.4xlarge", "r6i.xlarge"} {
+		shapes = append(shapes, sim.WorkloadShape{
+			Name:          "decoy-" + it,
+			PodResources:  map[string]string{"cpu": "4", "memory": "16Gi"},
+			InstanceTypes: []string{it},
+			Priority:      1000,
+		})
+	}
+	clusters := []sim.ClusterSpec{
+		{ID: "c1", Workloads: []sim.WorkloadSpec{{Shape: "gpu", Replicas: 16}}},
+		{ID: "c2", Workloads: []sim.WorkloadSpec{{Shape: "gpu", Replicas: 16}}},
+	}
+	// Matching capacity: 12 Configured per cluster + 2 Idle + 2
+	// Speculative shard-wide, density 1 → 28 pod-slots vs 32 demand.
+	// The decoy pools carry GPU-shaped resources on instance types the
+	// demand's In requirement excludes — capacity that exists but can
+	// never host this demand, like the dev-50 seed's other ⅘.
+	seeds := []sim.SeedPool{
+		{Shape: "gpu", Density: 1, ConfiguredPerCluster: 12, Idle: 2, Speculative: 2},
+		{Shape: "decoy-m6i.large", Density: 1, Idle: 8, Speculative: 8},
+		{Shape: "decoy-c6i.4xlarge", Density: 1, Idle: 8, Speculative: 8},
+		{Shape: "decoy-r6i.xlarge", Density: 1, Idle: 8, Speculative: 8},
+	}
+	res := runClosedLoop(t, sim.ClosedLoopScenario{
+		Name:              "supply-exhaustion",
+		Shapes:            shapes,
+		Clusters:          clusters,
+		Seeds:             seeds,
+		ControllerManaged: true,
+		CRPerPod:          true,
+		Cycles:            cycles,
+	})
+	logConverged(t, res, k)
+
+	const matchingCapacity = 2*12 + 2 + 2 // 28 of 32 demanded
+	end := res.Last(1)[0]
+	failed := false
+	if end.BoundPods != matchingCapacity {
+		t.Errorf("bound = %d, want exactly the matching-capacity ceiling %d", end.BoundPods, matchingCapacity)
+		failed = true
+	}
+	if end.PendingPods != res.TargetPods-matchingCapacity {
+		t.Errorf("pending = %d, want %d (the unhostable residual)", end.PendingPods, res.TargetPods-matchingCapacity)
+		failed = true
+	}
+	// Stable stockout: constant non-zero shortfall, zero churn, zero
+	// residual acquisition over the trailing window.
+	if got := res.SumLast(k, churn); got != 0 {
+		t.Errorf("churn over last %d cycles = %d, want 0 (stockout must not thrash)", k, got)
+		failed = true
+	}
+	if got := res.SumLast(k, func(c sim.CycleStats) int { return c.Bootstraps }); got != 0 {
+		t.Errorf("bootstraps over last %d cycles = %d, want 0 (nothing acquirable remains)", k, got)
+		failed = true
+	}
+	for _, c := range res.Last(k) {
+		if c.Shortfalls == 0 {
+			t.Errorf("cycle %d: shortfalls = 0, want a standing stockout shortfall", c.Cycle)
+			failed = true
+			break
+		}
 	}
 	if failed {
 		dumpTrace(t, res)

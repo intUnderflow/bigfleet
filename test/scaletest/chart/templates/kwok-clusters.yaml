@@ -99,6 +99,12 @@ spec:
             # real Kubernetes scheduler with MostAllocated scoring.
             - name: KWOK_SCHEDULER
               value: "{{ .Values.harness.scheduler | default "pod-shim" }}"
+            {{- if .Values.harness.schedulerPodMaxBackoffSeconds }}
+            # M60: cap the scheduler's per-pod retry backoff for bulk
+            # fills (laptop gates). Unset = upstream defaults.
+            - name: SCHED_POD_MAX_BACKOFF_SECONDS
+              value: "{{ .Values.harness.schedulerPodMaxBackoffSeconds }}"
+            {{- end }}
           volumeMounts:
             - { name: shared, mountPath: /var/scaletest }
           resources:

@@ -248,6 +248,14 @@ podShim:
 # apiserver side; setting pod-shim leaves both off.
 harness:
   scheduler: pod-shim
+  # M60: optional cap on kube-scheduler's per-pod retry backoff
+  # (podInitialBackoffSeconds pinned to 1 when set). Upstream defaults
+  # (1s initial / 10s max) are production-faithful but cap a bulk
+  # fill's bind rate when thousands of requeued Pods each serve out
+  # backoff (~33 binds/s on the dev-50 laptop fill with QPS idle).
+  # Laptop gate profiles set 1; cloud profiles should leave this unset
+  # unless ramp throughput is itself under test.
+  schedulerPodMaxBackoffSeconds: 0
 
 # Load profile injected into each KWOK pod via a ConfigMap. See
 # test/scaletest/cmd/load-driver/main.go for the schema.

@@ -890,7 +890,7 @@ loop:
 
 	// Pull metrics summary. Same deadline rationale.
 	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 2*time.Minute)
-	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace)
+	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace, *duration)
 	cancelMetrics()
 
 	res := runResult{
@@ -1323,10 +1323,36 @@ func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error 
 	return exec.CommandContext(ctx, "tar", "-czf", dest, "-C", filepath.Dir(tmp), filepath.Base(tmp)).Run()
 }
 
+// sloWindow renders the Prometheus range window the steady-state SLO
+// queries use: the soak duration, capped at the canonical 5m (a longer
+// soak shouldn't widen the window — 5 minutes of steady state IS the
+// SLO's definition) and floored at 1m (rate() needs ≥2 scrapes).
+// Shorter gates (prevalidate's 3m soak) shrink the window to match so
+// the queries never reach back into the fill's tail — the [5m]
+// literals were written when every soak was ≥5m, and a 3m soak with
+// unchanged windows would silently average ~2m of ramp drain into the
+// steady-state percentiles.
+func sloWindow(soak time.Duration) string {
+	w := soak
+	if w > 5*time.Minute {
+		w = 5 * time.Minute
+	}
+	if w < time.Minute {
+		w = time.Minute
+	}
+	if w%time.Minute == 0 {
+		return fmt.Sprintf("%dm", int(w.Minutes()))
+	}
+	return fmt.Sprintf("%ds", int(w.Seconds()))
+}
+
 // readKeyMetrics queries Prometheus for the runner's SLO metrics. Per-
 // query errors map to a -1 sentinel in the result so the summary makes
-// the gap visible without aborting the whole run.
-func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float64 {
+// the gap visible without aborting the whole run. soak sizes the
+// steady-state rate windows (see sloWindow); the [15m] raft-term query
+// is deliberately untouched — it watches leader stability across the
+// whole run, not the steady-state window.
+func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Duration) map[string]float64 {
 	queries := map[string]string{
 		// Cycle p99 is reported as the worst-shard number — the SLO
 		// applies per shard, not aggregated. With shard.replicas: 1
@@ -1454,8 +1480,11 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string) map[string]float
 		// failed seed-time partially.
 		"shardInventoryMinMaxRatio": `min(sum by (pod) (bigfleet_shard_inventory_machines)) / clamp_min(max(sum by (pod) (bigfleet_shard_inventory_machines)), 1)`,
 	}
+	win := sloWindow(soak)
 	out := make(map[string]float64, len(queries))
 	for k, q := range queries {
+		q = strings.ReplaceAll(q, "[5m:15s]", "["+win+":15s]")
+		q = strings.ReplaceAll(q, "[5m]", "["+win+"]")
 		v, err := promQuery(ctx, kubeconfig, ns, q)
 		if err != nil {
 			out[k] = -1

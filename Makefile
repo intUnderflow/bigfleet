@@ -125,7 +125,7 @@ prevalidate: ## The pre-brief gate: closed-loop sim + hot-path benches + dev-50 
 	  echo "kind load skipped — image IDs unchanged"; \
 	fi
 	@echo "[$$(date +%T)] rung 4/4: dev-50 on kind"
-	$(MAKE) scaletest PROFILE=dev-50 DURATION=5m
+	$(MAKE) scaletest PROFILE=dev-50 DURATION=3m
 	@echo "[$$(date +%T)] prevalidate green — SHA is brief-ready"
 
 .PHONY: conformance

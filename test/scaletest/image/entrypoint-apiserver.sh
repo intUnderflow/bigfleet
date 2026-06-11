@@ -237,6 +237,18 @@ KCM_PID=$!
 # leaves the scheduler off and assumes pod-shim is doing the work.
 SCHEDULER_PID=""
 if [[ "${KWOK_SCHEDULER:-pod-shim}" == "kube-scheduler" ]]; then
+  # SCHED_POD_MAX_BACKOFF_SECONDS (optional, M60): cap the scheduler's
+  # per-pod retry backoff. The upstream defaults (initial 1s, max 10s)
+  # are tuned for real clusters where a retry costs real work; in the
+  # harness's bulk fill thousands of requeued Pods each serving 10s
+  # backoffs cap the bind rate (~33/s on the dev-50 laptop fill) while
+  # client QPS sits idle. Unset = upstream defaults, so cloud profiles
+  # keep production-faithful backoff unless a profile opts in.
+  BACKOFF_BLOCK=""
+  if [[ -n "${SCHED_POD_MAX_BACKOFF_SECONDS:-}" ]]; then
+    BACKOFF_BLOCK="podInitialBackoffSeconds: 1
+podMaxBackoffSeconds: ${SCHED_POD_MAX_BACKOFF_SECONDS}"
+  fi
   cat > "$WORK/scheduler-config.yaml" <<EOF
 apiVersion: kubescheduler.config.k8s.io/v1
 kind: KubeSchedulerConfiguration
@@ -246,6 +258,7 @@ clientConnection:
   burst: 400
 leaderElection:
   leaderElect: false
+${BACKOFF_BLOCK}
 profiles:
   - schedulerName: default-scheduler
     pluginConfig:
