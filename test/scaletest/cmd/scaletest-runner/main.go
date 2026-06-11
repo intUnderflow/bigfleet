@@ -586,6 +586,15 @@ type runResult struct {
 		AggregateInventory   int `json:"aggregateInventory"`
 	} `json:"scale"`
 	Metrics map[string]float64 `json:"metrics"`
+	// UnmeasuredSLOs lists GATED metrics that read the -1 sentinel
+	// (scrape failed or the metric source doesn't exist in this run
+	// mode — e.g. the steady-bind histogram is pod-shim-emitted, so
+	// kube-scheduler-mode profiles have no bind-latency source until
+	// the M52 follow-on lands). M66.3: a pass with entries here is a
+	// pass-with-named-gaps, not a clean pass — every gate used to skip
+	// sentinels SILENTLY, which made the headline binding-latency SLO
+	// vacuous on every active profile without anyone noticing.
+	UnmeasuredSLOs []string `json:"unmeasuredSLOs,omitempty"`
 	// RunnerActions records what the runner fired during the soak,
 	// including whether each action's expected outcome was observed.
 	// Empty for runs without runnerActions: in the profile.
@@ -939,6 +948,11 @@ loop:
 		}
 	}
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas, prof.SLO)
+	res.UnmeasuredSLOs = unmeasuredGated(metrics)
+	if len(res.UnmeasuredSLOs) > 0 {
+		fmt.Fprintf(os.Stderr, "\nWARNING: %d gated SLO(s) UNMEASURED this run (sentinel -1) — the pass verdict does not cover them: %s\n\n",
+			len(res.UnmeasuredSLOs), strings.Join(res.UnmeasuredSLOs, ", "))
+	}
 	if len(res.Failures) > 0 && res.Passed {
 		// SLO numbers passed but a runnerAction assertion didn't fire
 		// — the static-stability invariant requires both.
@@ -1655,6 +1669,28 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // Reaching steady state is a prerequisite for pass() to be called at
 // all (the runner gates on it before soak starts). Ramp throughput is
 // captured in the summary but does not gate pass/fail.
+// unmeasuredGated returns the gated SLO metrics whose value is the -1
+// sentinel. pass() skips sentinels by design (a failed scrape must not
+// flip a verdict), but skipping SILENTLY made vacuous passes invisible
+// (M66.3 / complexity audit §2: the headline binding-latency SLO read
+// -1 on every kube-scheduler-mode profile because its histogram is
+// pod-shim-emitted, and nothing said so).
+func unmeasuredGated(m map[string]float64) []string {
+	gated := []string{
+		"internalBindingLatencyP99Seconds",
+		"shardCycleDurationP99Seconds",
+		"operatorRollupP99Seconds",
+		"operatorAckP99Seconds",
+	}
+	var out []string
+	for _, k := range gated {
+		if v, ok := m[k]; ok && v < 0 {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
 	internalBindingLatencyTarget := 15.0 // ADR-0020: ~10 s rollupInterval ceiling + ~5 s chain headroom
 	if slo.InternalBindingLatencyP99Seconds > 0 {
