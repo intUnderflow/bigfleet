@@ -51,3 +51,4 @@
 | [42a](/adr/0042-addendum-aged-acquisition-parking/) | Accepted | ADR-0042 Addendum: aged acquisition parking — group identity on the wire, park after 8 unsatisfiable cycles, re-probe every 32 |
 | [43](/adr/0043-demand-realism-check-before-mechanism/) | Accepted | Harness-observed triggers get a demand-realism check before mechanism ships |
 | [44](/adr/0044-machine-count-aware-seed-sizing/) | Accepted | Seed machine pools are sized by machine demand (pod share ÷ packing density, gang-aware per-zone floors), not workload weight |
+| [45](/adr/0045-consumed-capacity-in-the-attribution-model/) | Proposed | Consumed capacity enters the attribution model — operator-reported per-machine consumption + bound/open demand split (author decision pending) |
