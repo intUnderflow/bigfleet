@@ -65,6 +65,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/preflight"
 )
 
 type profile struct {
@@ -1101,8 +1102,12 @@ func (d *driver) buildLegacyPodTemplate() corev1.PodTemplateSpec {
 	if len(d.prof.PriorityClasses) > 0 {
 		pri = d.prof.PriorityClasses[d.rng.Intn(len(d.prof.PriorityClasses))]
 	}
-	resources := corev1.ResourceList{
-		"nvidia.com/gpu": resource.MustParse("8"),
+	// The single legacy demand shape is shared with the seed rotation
+	// and the matching-capacity preflight (pkg/scaletest/preflight) so
+	// the three can never drift (M60).
+	resources := corev1.ResourceList{}
+	for k, v := range preflight.LegacyDemandResources() {
+		resources[corev1.ResourceName(k)] = resource.MustParse(v)
 	}
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1129,7 +1134,7 @@ func (d *driver) buildLegacyPodTemplate() corev1.PodTemplateSpec {
 							MatchExpressions: []corev1.NodeSelectorRequirement{{
 								Key:      "node.kubernetes.io/instance-type",
 								Operator: corev1.NodeSelectorOpIn,
-								Values:   []string{"a3-highgpu-8g"},
+								Values:   []string{preflight.LegacyDemandInstanceType},
 							}},
 						}},
 					},

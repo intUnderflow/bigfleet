@@ -625,6 +625,7 @@ func run(args []string) error {
 	chartPath := fs.String("chart", "test/scaletest/chart", "path to the harness chart")
 	duration := fs.Duration("duration", 0, "how long to soak after steady state (defaults to profile.loadProfile.durationSeconds)")
 	maxDuration := fs.Duration("max-duration", 2*time.Hour, "hard cap; teardown if not done")
+	skipPreflight := fs.Bool("skip-preflight", false, "skip the matching-capacity preflight (M60 rung 0.5) — for deliberate over-subscription experiments")
 	output := fs.String("output", "", "output directory for summary + snapshot")
 	yes := fs.Bool("yes", false, "skip cost confirmation prompt")
 	keep := fs.Bool("keep", false, "skip teardown (debugging only)")
@@ -695,6 +696,16 @@ func run(args []string) error {
 			return err
 		}
 		prof = p
+		// M60 rung 0.5: matching-capacity preflight for no-catalog
+		// (legacy single-shape) profiles. A profile whose seeded
+		// matching capacity sits below the bind gate cannot pass — the
+		// fill plateaus and the ramp budget burns (the dev-50 stall:
+		// 4,800 slots vs a 4,950 gate, 10 minutes per attempt).
+		if !*skipPreflight {
+			if err := legacyPreflight(*profilePath); err != nil {
+				return fmt.Errorf("%w (--skip-preflight to run anyway, e.g. for a deliberate over-subscription experiment)", err)
+			}
+		}
 	}
 
 	name := strings.TrimSuffix(filepath.Base(*profilePath), ".yaml")

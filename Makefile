@@ -105,6 +105,8 @@ bench-hot: ## Run the hot-path benchmarks at measured uber-5k cardinality (~1 mi
 .PHONY: prevalidate
 prevalidate: ## The pre-brief gate: closed-loop sim + hot-path benches + dev-50 on kind (~8 min warm). Every SHA bound for a cloud brief runs this first.
 	@docker info >/dev/null 2>&1 || { echo "prevalidate: Docker daemon not running — start Docker Desktop first"; exit 1; }
+	@echo "[$$(date +%T)] rung 0.5: profile matching-capacity preflight"
+	$(GO) test -count=1 -run 'TestCommittedProfiles_MatchingCapacityPreflight|TestLegacySeed' ./test/scaletest/cmd/scaletest-runner/
 	@echo "[$$(date +%T)] rung 1/4: closed-loop sim"
 	$(GO) test -count=1 -run ClosedLoop ./sim/...
 	@echo "[$$(date +%T)] rung 2/4: hot-path benches"

@@ -28,6 +28,7 @@ import (
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/preflight"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
 	"github.com/intUnderflow/bigfleet/pkg/shard/coordclient"
 )
@@ -230,15 +231,14 @@ func seedZoneRack(a *archetype.Archetype, idx, racksPerZone int, zones []string)
 }
 
 func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
-	types := []string{"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge"}
+	// The no-catalog rotation tables live in pkg/scaletest/preflight so
+	// the matching-capacity preflight models exactly the shapes seeded
+	// here (M60: the dev-50 stall happened because these tables and the
+	// load-driver's demand shape lived in two package mains nothing
+	// could cross-check).
+	types := preflight.LegacyInstanceTypes
 	zones := []string{"zone-a", "zone-b", "zone-c"}
-	resources := map[string]map[string]string{
-		"a3-highgpu-8g":  {"nvidia.com/gpu": "8"},
-		"m6i.large":      {"cpu": "2", "memory": "8Gi"},
-		"c6i.4xlarge":    {"cpu": "16", "memory": "32Gi"},
-		"n2-standard-32": {"cpu": "32", "memory": "128Gi"},
-		"r6i.xlarge":     {"cpu": "4", "memory": "32Gi"},
-	}
+	resources := preflight.LegacyResources
 
 	logger.Info("seeding fake inventory",
 		"idle", nIdle,
