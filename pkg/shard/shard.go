@@ -585,6 +585,15 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		// Same-Need. chosen_domain flipping across cycles with
 		// acquired > 0 is the #56 churn loop; pinned domains with
 		// acquired → 0 is parking working.
+		for _, r := range pa.reclaimProbe {
+			s.log.Info("reclaim attribution",
+				"machine", r.machineID,
+				"cluster", r.cluster,
+				"instance_type", r.instanceType,
+				"matches_unsatisfied", r.matches,
+				"fits", r.fits,
+			)
+		}
 		for _, g := range pa.gangProbe {
 			s.log.Info("gang attribution",
 				"group", g.group,
@@ -798,6 +807,13 @@ type phaseAttribution struct {
 	// acquired stays non-zero is the #56 assemble↔reclaim churn
 	// signature; post-ADR-0042 it should pin.
 	gangProbe []gangProbeEntry
+	// reclaimProbe samples Phase 3's reclaim set (probe v3, the #58
+	// follow-up): which machines Phase 3 sheds and whether any
+	// unsatisfied Need matches/fits them. Sustained reclaims with
+	// matches=false alongside equal-rate bootstraps is the
+	// excess-inventory oscillation signature #58 surfaced — churn that
+	// the unsatisfied-only gang probe is blind to by construction.
+	reclaimProbe []reclaimProbeEntry
 }
 
 // gangProbeN bounds the per-cycle gang probe so the log line stays
@@ -805,6 +821,14 @@ type phaseAttribution struct {
 // selection (the first N in Phase 1's result order) keeps the same
 // gangs comparable across cycles.
 const gangProbeN = 5
+
+type reclaimProbeEntry struct {
+	machineID    string
+	cluster      string
+	instanceType string
+	matches      bool // some unsatisfied Need matches the machine's profile
+	fits         bool // ...and the machine covers that Need's MinUnit
+}
 
 type gangProbeEntry struct {
 	group    string
@@ -963,6 +987,15 @@ func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 d
 		}
 		if fits {
 			pa.p3ReclaimMatchesAndFits++
+		}
+		if len(pa.reclaimProbe) < gangProbeN {
+			pa.reclaimProbe = append(pa.reclaimProbe, reclaimProbeEntry{
+				machineID:    string(a.MachineID),
+				cluster:      string(a.Cluster),
+				instanceType: m.Profile.InstanceType,
+				matches:      matched,
+				fits:         fits,
+			})
 		}
 	}
 	return pa

@@ -74,13 +74,23 @@ func TestCollectPhaseAttribution(t *testing.T) {
 	}}
 
 	pa := collectPhaseAttribution(snap, demand, p1, p3)
-	// The gang probe (ADR-0042) samples the unsatisfied Same-Need; its
-	// presence is asserted separately since the struct is no longer
-	// comparable.
+	// The gang probe (ADR-0042) samples the unsatisfied Same-Need; the
+	// reclaim probe (v3, the #58 follow-up) samples every reclaim with
+	// its match/fit verdicts. Asserted separately since the struct is
+	// no longer comparable.
 	if len(pa.gangProbe) != 1 {
 		t.Errorf("gangProbe entries = %d, want 1", len(pa.gangProbe))
 	}
+	wantReclaims := []reclaimProbeEntry{
+		{machineID: "m-fit", cluster: "c1", instanceType: "a3-highgpu-8g", matches: true, fits: true},
+		{machineID: "m-small", cluster: "c1", instanceType: "a3-highgpu-8g", matches: true, fits: false},
+		{machineID: "m-other", cluster: "c1", instanceType: "m5.large", matches: false, fits: false},
+	}
+	if !reflect.DeepEqual(pa.reclaimProbe, wantReclaims) {
+		t.Errorf("reclaimProbe = %+v, want %+v", pa.reclaimProbe, wantReclaims)
+	}
 	pa.gangProbe = nil
+	pa.reclaimProbe = nil
 	want := phaseAttribution{
 		needsTotal:                  3,
 		needsSame:                   2,

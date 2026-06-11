@@ -235,6 +235,7 @@ the fill. Decide from the table; when in doubt, fill live.
 | Bootstrap-slope / bootstraps-per-cycle (M47.2-class) | **required** | with a full Configured seed, the Bootstrap → UpcomingNode → node-creator pipeline never runs at volume — only the churn trickle |
 | Machine state-machine races at fill rate (M48-class) | **required** | the race window is the fill's transition storm |
 | Demand-signal shape during ramp (ADR-0041-class: needs_total collapse, fold classification) | **required** | the signature is the rollup/ledger evolving *during* the fill |
+| Fragmentation-induced gang behaviour (ADR-0042-class: cascade formation, acquisition parking) | **required** | the cascade is a product of the scheduler's incremental, fragmenting placement; pre-packed installs concentrate gangs cleanly and the engine path never fires (#58) |
 | kube-scheduler bulk-bind throughput / ramp exploration (ADR-0033/0035) | **required** | ramp capacity is the subject — though ramp is exploration, not an SLO |
 | Steady-state attribution / churn equilibria (Phase 3 behaviour at rest, ADR-0040-class) | preBind fine | the subject starts after steady state; the fill is pure setup tax |
 | Steady-state SLO measurement | preBind fine | ADR-0035's definition — the fill is excluded from the metrics anyway |

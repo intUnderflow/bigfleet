@@ -71,6 +71,21 @@ Three pieces, shipped together:
   stable `chosen_domain` and `acquired=0`, Bootstrap/Reclaim ≈ 0
   post-fill, `p1_unsatisfied` legitimately holding at the parked-gang
   count.
+- **Fill-mode dependence (#58):** the gang cascade parking targets is
+  a product of live-fill fragmentation — the scheduler's incremental
+  placement leaving gangs unable to find contiguous rack space. Under
+  a pre-packed install (preBind + full Configured seed) the same gangs
+  concentrate cleanly and parking correctly stays idle. Two
+  consequences: production-shaped fills (always incremental) are
+  exactly where parking matters, and preBind validation runs
+  systematically under-test this engine path — the live-fill rows in
+  docs/scaletest.md's decision table now note it.
+- **Probe v3 (#58 follow-up):** the attribution probe also samples
+  Phase 3's reclaim set per cycle (`reclaim attribution`: machine,
+  cluster, instance type, matches/fits an unsatisfied Need) — the
+  unsatisfied-only gang probe is blind by construction to the
+  excess-inventory oscillation #58 surfaced (sustained
+  Bootstrap≈Reclaim where reclaims match no unsatisfied Need).
 - The deterministic sim still cannot discriminate the perturbation
   (ADR-0042's honesty note stands); the parking bookkeeping is pinned
   by unit tests (`TestParkingBookkeeping`) and the contention canary
