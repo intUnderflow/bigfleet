@@ -41,9 +41,10 @@ func TestConformance_SelfTest_OnFake(t *testing.T) {
 	}
 	prov := providerfake.New(providerfake.Options{InstantTransitions: true})
 	// Seed enough Speculative slots for every conformance test that
-	// asks for one (lifecycle, idempotency, drain-on-spec, revision-
-	// advances). Each subtest asks for one and may consume it.
-	for i := 0; i < 20; i++ {
+	// asks for one (lifecycle, idempotency ×4, fencing ×5, drain-on-
+	// spec, revision-advances). Each subtest asks for one and may
+	// consume it.
+	for i := 0; i < 32; i++ {
 		prov.AddSpeculative(
 			machine.ID("conf-spec-"+strconv.Itoa(i)),
 			machine.Profile{

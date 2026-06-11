@@ -93,6 +93,9 @@ func runAllInOne(args []string) error {
 	if err != nil {
 		return fmt.Errorf("shard epoch: %w", err)
 	}
+	// The all-in-one is the demo: it keeps the in-process fake on
+	// purpose. Dialing a real provider (--provider-addr, M71) is the
+	// `shard` subcommand's concern.
 	prov := fake.New(fake.Options{InstantTransitions: true})
 	// Seed a small idle inventory so the quickstart sees demand
 	// satisfied from the first cycle. Each pool covers one common

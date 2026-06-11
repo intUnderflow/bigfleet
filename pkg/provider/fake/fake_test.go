@@ -52,7 +52,7 @@ func TestFake_LifecycleHappyPath_Instant(t *testing.T) {
 	}
 
 	// Idle → Speculative
-	ack, err = p.Delete(ctx, "m-1")
+	ack, err = p.Delete(ctx, provider.DeleteRequest{MachineID: "m-1"})
 	if err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -251,6 +251,108 @@ func TestFake_List_SinceRevisionReturnsDeltasOnly(t *testing.T) {
 	if len(delta2.Machines) != 0 {
 		t.Errorf("post-delta cursor = %d, want 0", len(delta2.Machines))
 	}
+}
+
+// Paper §11 / M71 fencing contract: the fake tracks a per-shard_id
+// high-water mark of accepted (epoch, seq) tokens and rejects anything
+// not strictly newer with ErrFenced. Zero tokens (the in-process
+// harness path) bypass fencing entirely.
+func TestFake_Fencing_Contract(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fence := func(epoch, seq int64) provider.Fence {
+		return provider.Fence{ShardID: "shard-0", ShardEpoch: epoch, SequenceNumber: seq}
+	}
+	newFake := func(t *testing.T) *fake.Provider {
+		t.Helper()
+		p := fake.New(fake.Options{InstantTransitions: true})
+		p.AddSpeculative("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+		return p
+	}
+
+	t.Run("unknown shard_id accepted and establishes the mark", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(3, 7)}); err != nil {
+			t.Fatalf("first contact: %v", err)
+		}
+		// The first contact's token is the mark: replaying it must fail.
+		_, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(3, 7)})
+		if !errors.Is(err, provider.ErrFenced) {
+			t.Fatalf("replay of first token: got %v, want ErrFenced", err)
+		}
+	})
+
+	t.Run("stale epoch rejected", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(2, 1)}); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		_, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(1, 99)})
+		if !errors.Is(err, provider.ErrFenced) {
+			t.Fatalf("stale epoch: got %v, want ErrFenced", err)
+		}
+	})
+
+	t.Run("stale sequence within same epoch rejected", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(1, 5)}); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		_, err := p.Configure(ctx, provider.ConfigureRequest{MachineID: "m-1", ClusterID: "c", Fence: fence(1, 4)})
+		if !errors.Is(err, provider.ErrFenced) {
+			t.Fatalf("stale seq: got %v, want ErrFenced", err)
+		}
+	})
+
+	t.Run("new epoch resets the sequence space", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(1, 1000)}); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(2, 1)}); err != nil {
+			t.Fatalf("new epoch with low seq: got %v, want idempotent accept", err)
+		}
+	})
+
+	t.Run("fence checked before not-found", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(5, 1)}); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		// A zombie must not learn whether a machine exists.
+		_, err := p.Delete(ctx, provider.DeleteRequest{MachineID: "missing", Fence: fence(4, 9)})
+		if !errors.Is(err, provider.ErrFenced) {
+			t.Fatalf("stale token on unknown machine: got %v, want ErrFenced (not ErrNotFound)", err)
+		}
+	})
+
+	t.Run("zero fence bypasses (in-process harness path)", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(9, 9)}); err != nil {
+			t.Fatalf("establish: %v", err)
+		}
+		if _, err := p.Configure(ctx, provider.ConfigureRequest{MachineID: "m-1", ClusterID: "c"}); err != nil {
+			t.Fatalf("unfenced call after fenced ones: %v", err)
+		}
+	})
+
+	t.Run("per-shard isolation", func(t *testing.T) {
+		t.Parallel()
+		p := newFake(t)
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(9, 9)}); err != nil {
+			t.Fatalf("establish shard-0: %v", err)
+		}
+		other := provider.Fence{ShardID: "shard-1", ShardEpoch: 1, SequenceNumber: 1}
+		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: other}); err != nil {
+			t.Fatalf("shard-1's first contact must not be fenced by shard-0's mark: %v", err)
+		}
+	})
 }
 
 // M29 Configured-seed path: machines should appear via List(Configured)

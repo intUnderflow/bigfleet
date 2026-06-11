@@ -156,7 +156,7 @@ var (
 	// is the dominant failure mode.
 	ShardActionExecuteOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_shard_action_execute_outcomes_total",
-		Help: "Count of action-execute outcomes by kind + outcome. Sums to (or close to) ShardActionsTotal — gaps point at unaccounted return paths. Outcomes: success, no_session (operator stream gone), transition_error (state-machine refused), blob_error (operator/local bootstrap blob fetch failed), configure_error (provider Configure rejected), ctx_canceled (cycleCtx timeout).",
+		Help: "Count of action-execute outcomes by kind + outcome. Sums to (or close to) ShardActionsTotal — gaps point at unaccounted return paths. Outcomes: success, no_session (operator stream gone), transition_error (state-machine refused), blob_error (operator/local bootstrap blob fetch failed), configure_error (provider Configure rejected), ctx_canceled (cycleCtx timeout), fenced (provider rejected the paper-§11 fencing token — zombie-shard incident, alert and investigate, never retry).",
 	}, []string{"kind", "outcome"})
 
 	ShardSessionLifecycle = promauto.NewCounterVec(prometheus.CounterOpts{

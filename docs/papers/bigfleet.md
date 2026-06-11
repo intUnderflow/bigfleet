@@ -67,6 +67,8 @@ service CapacityProvider {
 
 Six methods. All transitions async, all idempotent. `List` returns machines in any state subset.
 
+> **Revised at implementation (M71):** `Delete` takes a dedicated `DeleteRequest` (wire-compatible with `MachineRef`: same field 1) because the §11 shard→provider fencing token — `(shard_id, shard_epoch, sequence_number)` — rides on every *mutating* RPC, and `Get`'s shared `MachineRef` must not carry it (reads don't fence). Same six methods, same semantics.
+
 ## 8. Decision engine (per shard, declarative)
 
 **Phase 1**: walk needs top-down by priority. Prefer Idle (one bootstrap). Fall back to Speculative (Create + bootstrap). Within idle: tiebreak by reclamation_penalty. Within speculative: tiebreak by effective_cost.

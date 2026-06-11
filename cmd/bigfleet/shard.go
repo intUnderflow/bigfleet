@@ -26,7 +26,9 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
+	"github.com/intUnderflow/bigfleet/pkg/provider"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
+	"github.com/intUnderflow/bigfleet/pkg/provider/grpcclient"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/preflight"
 	"github.com/intUnderflow/bigfleet/pkg/shard"
@@ -569,10 +571,12 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	logger.Info("seed complete", "idle", idleSeeded, "speculative", specSeeded, "configured", configuredSeeded, "archetypes", len(archetypes))
 }
 
-// runShard runs the shard controller. The in-process fake provider
-// lives at pkg/provider/fake and is used here for laptop / kind / dev
-// installs only; production deployments dial an out-of-tree provider
-// over gRPC via pkg/provider/grpcadapter (see provider-author-guide).
+// runShard runs the shard controller. With --provider-addr set, the
+// shard dials an out-of-tree provider over gRPC via
+// pkg/provider/grpcclient, fencing every mutating call (paper §11, M71).
+// Without it, the in-process fake provider from pkg/provider/fake serves
+// laptop / kind / scaletest installs only — the fake is never a
+// production provider (see provider-author-guide).
 func runShard(args []string) error {
 	fs := flag.NewFlagSet("shard", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -580,6 +584,7 @@ func runShard(args []string) error {
 	metricsAddr := fs.String("metrics-addr", ":8780", "address for the Prometheus /metrics endpoint (\"0\" disables)")
 	shardID := fs.String("id", "shard-0", "this shard's stable identifier")
 	dataDir := fs.String("data-dir", "./data", "directory for shard-local persistent state (epoch counter)")
+	providerAddr := fs.String("provider-addr", "", "host:port of the out-of-tree CapacityProvider's gRPC service (M71). When set, the shard dials it via pkg/provider/grpcclient and stamps the paper §11 fencing token (shard_id, shard_epoch, sequence_number) on every mutating call. Empty = in-process fake provider, for laptop / kind / scaletest only — the fake is never deployed against real machines.")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
 	seedSpeculative := fs.Int("seed-speculative", 0, "scaletest ADR-0026: pre-seed N synthetic Speculative quota slots — the elastic-procurement tier Phase 1 falls back to (Create + bootstrap) when Idle can't satisfy a Need. Drawn from the demand archetype catalog, CapacityType OnDemand with a non-zero price. Every profile that seeds Idle should also set this; without it the harness models only the owned-capacity half of BigFleet's design. 0 disables.")
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
@@ -623,9 +628,31 @@ func runShard(args []string) error {
 		return err
 	}
 
-	// In-memory fake provider. M5 swaps this for a real gRPC client
-	// adapter once an out-of-tree provider is available.
-	prov := fake.New(fake.Options{InstantTransitions: true})
+	// M71: the provider edge. --provider-addr dials the out-of-tree
+	// provider through the gRPC client, which fences every mutating call
+	// with this shard's identity (the same persisted epoch the shard
+	// advertises everywhere else). Empty keeps the in-process fake — the
+	// laptop / kind / scaletest path; all the --seed-* knobs and the
+	// failure injector poke the fake directly and so only exist there.
+	var (
+		prov     provider.Provider
+		fakeProv *fake.Provider
+	)
+	if *providerAddr != "" {
+		if *seedMachines > 0 || *seedSpeculative > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 {
+			return errors.New("--seed-* and --failure-rate-per-sec drive the in-process fake provider and cannot be combined with --provider-addr")
+		}
+		pc, err := grpcclient.New(*providerAddr, grpcclient.Identity{ShardID: *shardID, Epoch: epoch})
+		if err != nil {
+			return fmt.Errorf("provider-addr: %w", err)
+		}
+		defer func() { _ = pc.Close() }()
+		prov = pc
+		logger.Info("dialing out-of-tree provider", "addr", *providerAddr, "shard_id", *shardID, "epoch", epoch.Value())
+	} else {
+		fakeProv = fake.New(fake.Options{InstantTransitions: true})
+		prov = fakeProv
+	}
 
 	cfg := shard.Config{
 		ID:                        *shardID,
@@ -693,7 +720,7 @@ func runShard(args []string) error {
 			demandArches = cat.ForDemand()
 			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches), "demand_count", len(demandArches))
 		}
-		seedFakeInventory(prov, sh, *seedMachines, *seedSpeculative, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
+		seedFakeInventory(fakeProv, sh, *seedMachines, *seedSpeculative, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
 	}
 
 	srv := grpc.NewServer(grpcutil.ServerOptions()...)
@@ -721,7 +748,7 @@ func runShard(args []string) error {
 	// (rate × ConfiguredCount) per tick — exact at small rates,
 	// fine for the 1e-8 to 1e-7 range that matches production.
 	if *failureRatePerSec > 0 {
-		go runFailureInjector(ctx, prov, *failureRatePerSec, logger)
+		go runFailureInjector(ctx, fakeProv, *failureRatePerSec, logger)
 	}
 
 	// Coordinator client: registers this shard with the coordinator

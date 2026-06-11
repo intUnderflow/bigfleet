@@ -22,7 +22,7 @@ Six RPCs, all defined on `service CapacityProvider`. No Watch — reconciliation
 | `Create(CreateRequest) → TransitionAck` | shard → provider | Speculative → Creating → Idle | yes | yes, on `(machine_id, target=Idle)` |
 | `Configure(ConfigureRequest) → TransitionAck` | shard → provider | Idle → Configuring → Configured | yes | yes |
 | `Drain(DrainRequest) → TransitionAck` | shard → provider | Configured → Draining → Idle | yes | yes |
-| `Delete(MachineRef) → TransitionAck` | shard → provider | Idle → Deleting → Speculative | yes | yes |
+| `Delete(DeleteRequest) → TransitionAck` | shard → provider | Idle → Deleting → Speculative | yes | yes |
 | `Get(MachineRef) → Machine` | shard → provider | Read one machine's state | n/a | n/a |
 | `List(ListFilter) → MachineList` | shard → provider | Read inventory subset | n/a | n/a |
 
@@ -48,6 +48,22 @@ Real shards retry on transport failures. They expect retries to be safe.
 ### Transition timeouts → Failed
 
 Each transitional state has a provider-defined timeout. On expiry, move the machine to `MACHINE_STATE_FAILED` with `last_error` populated. The shard takes corrective action depending on which transition failed (clean up, retry on a different slot, escalate).
+
+### Fencing — rejecting zombie shards
+
+Every **mutating** RPC (`Create`, `Configure`, `Drain`, `Delete`) carries the shard's fencing token: `shard_id`, `shard_epoch`, `sequence_number` (BigFleet paper §11). The epoch is persisted shard-side and increments on every shard restart; the sequence number is a per-process monotonic counter, freshly stamped on every call attempt. The token is how your provider refuses a *zombie shard* — an old process (or a duplicate of the same shard identity) whose view of the fleet is stale and whose Drain/Delete would kill the wrong machines.
+
+Your obligations:
+
+- Track, per `shard_id`, the highest `(shard_epoch, sequence_number)` pair you've accepted, compared lexicographically — `(e1, s1)` is newer than `(e2, s2)` iff `e1 > e2`, or `e1 == e2 && s1 > s2`.
+- Reject any mutating request whose token is **not strictly newer** than that high-water mark with `FAILED_PRECONDITION`, **without applying it** — and check the fence before your idempotent-retry short-circuit, so a zombie never gets a cached `operation_id` either.
+- Accept first contact from an unknown `shard_id`; it establishes the high-water mark.
+- A new epoch resets the sequence space: once the epoch advances, any `sequence_number` is acceptable.
+- Advance the high-water mark whenever the fence check passes, even if the operation itself then fails — the mark records "newest shard process seen", not "operations that succeeded".
+- Reserve `FAILED_PRECONDITION` for fencing rejections on this service. The shard alerts on it as a zombie-shard incident; using it for invalid state transitions creates false pages. Use a different code (the in-repo test fixture uses `INTERNAL`) for everything else.
+- Don't worry about retry replays: the shard re-stamps a fresh `sequence_number` on every attempt. Idempotency is keyed on `(machine_id, target_state)`, never on the token.
+
+`Get` and `List` carry no token — reads don't fence; a zombie reading state harms nothing. Persist the high-water marks if you can: a provider restart that forgets them re-opens the zombie window until every live shard makes contact again.
 
 ## Required label and field shape
 
@@ -94,6 +110,7 @@ Threshold: **support `since_revision` once your provider exposes more than ~10,0
 
 - One process per provider. Don't co-locate with the shard.
 - Listen on its own gRPC port. mTLS for production; insecure is fine for in-cluster trust.
+- Shards reach you via their `--provider-addr` flag (Helm: `shard.provider.addr`). The shard side is `pkg/provider/grpcclient`; it stamps the fencing token on every mutating call.
 - One configured provider in the BigFleet coordinator's provider registry per (provider implementation × region) pair. AWS in `us-east-1` and AWS in `eu-west-1` are two separate registry entries even though the implementation is the same.
 
 ## Run the conformance suite
@@ -110,7 +127,7 @@ make conformance TARGET=localhost:9000
 go test -tags=conformance -count=1 -v -target=localhost:9000 ./test/conformance/...
 ```
 
-The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency, exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
+The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency on all four lifecycle RPCs, enforce the fencing contract (stale epoch / stale sequence rejected, new epoch resets, unknown shard accepted, reads unaffected), exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
 
 ## Reference example
 
@@ -121,5 +138,7 @@ A worked-example provider lives outside this repo (e.g. `bigfleet-provider-fake-
 - **Synchronous `Create`** — blocking until the instance is up. Wrong; return immediately, `Get` reports progress. The shard's reconciler polls.
 - **Burying `instance_type` / `zone` in labels.** The shard's `MatchProfile` reads the top-level fields directly. If you only set them in `labels`, GPU pod placement breaks for non-obvious reasons.
 - **Returning a fresh `operation_id` on every retry.** Idempotency requires the same id across retries with the same target. Persist it.
+- **Using `FAILED_PRECONDITION` for anything but fencing.** The shard treats that code as "I am a zombie" and pages a human instead of retrying. Invalid transitions, bad arguments, backend hiccups — all get other codes.
+- **Checking the fence after the idempotency lookup.** A zombie that gets a cached `operation_id` back believes its stale mutation succeeded. Fence first.
 - **Skipping `interruption_probability`.** Spot machines whose probability is 0 will get picked for high-penalty workloads, which is a correctness issue (effective_cost = price + p × penalty). Always set the real value.
 - **Per-RPC timeouts that don't model your backend.** Cloud `Create` of 30–90s ≠ your provider's "request timeout" of 5s. Set transition timeouts to your backend's worst-case.

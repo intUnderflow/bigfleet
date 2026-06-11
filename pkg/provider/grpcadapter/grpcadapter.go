@@ -40,6 +40,7 @@ func (s *Server) Create(ctx context.Context, req *pb.CreateRequest) (*pb.Transit
 	}
 	ack, err := s.p.Create(ctx, provider.CreateRequest{
 		MachineID: machine.ID(req.GetMachineId()),
+		Fence:     fence(req.GetShardId(), req.GetShardEpoch(), req.GetSequenceNumber()),
 	})
 	return ackToProto(ack, err)
 }
@@ -53,6 +54,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.T
 		MachineID:     machine.ID(req.GetMachineId()),
 		ClusterID:     machine.ClusterID(req.GetClusterId()),
 		BootstrapBlob: req.GetBootstrapBlob(),
+		Fence:         fence(req.GetShardId(), req.GetShardEpoch(), req.GetSequenceNumber()),
 	})
 	return ackToProto(ack, err)
 }
@@ -65,17 +67,27 @@ func (s *Server) Drain(ctx context.Context, req *pb.DrainRequest) (*pb.Transitio
 	ack, err := s.p.Drain(ctx, provider.DrainRequest{
 		MachineID:   machine.ID(req.GetMachineId()),
 		GracePeriod: provider.GracePeriod(req.GetGracePeriodSeconds()),
+		Fence:       fence(req.GetShardId(), req.GetShardEpoch(), req.GetSequenceNumber()),
 	})
 	return ackToProto(ack, err)
 }
 
 // Delete implements pb.CapacityProviderServer.
-func (s *Server) Delete(ctx context.Context, req *pb.MachineRef) (*pb.TransitionAck, error) {
-	if req.GetId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "id required")
+func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.TransitionAck, error) {
+	if req.GetMachineId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "machine_id required")
 	}
-	ack, err := s.p.Delete(ctx, machine.ID(req.GetId()))
+	ack, err := s.p.Delete(ctx, provider.DeleteRequest{
+		MachineID: machine.ID(req.GetMachineId()),
+		Fence:     fence(req.GetShardId(), req.GetShardEpoch(), req.GetSequenceNumber()),
+	})
 	return ackToProto(ack, err)
+}
+
+// fence assembles the paper §11 token from the wire fields shared by all
+// four mutating requests. Get/List carry none — reads don't fence.
+func fence(shardID string, epoch, seq int64) provider.Fence {
+	return provider.Fence{ShardID: shardID, ShardEpoch: epoch, SequenceNumber: seq}
 }
 
 // Get implements pb.CapacityProviderServer.
@@ -127,12 +139,17 @@ func ackToProto(ack provider.TransitionAck, err error) (*pb.TransitionAck, error
 }
 
 // mapErr translates package-level provider errors to grpc statuses.
+// FAILED_PRECONDITION is reserved for fencing rejections (proto contract,
+// paper §11) so the shard side can alert on zombie incidents mechanically;
+// everything unmapped — including invalid state transitions — is Internal.
 func mapErr(err error) error {
 	switch {
 	case errors.Is(err, provider.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, provider.ErrNotSupported):
 		return status.Error(codes.Unimplemented, err.Error())
+	case errors.Is(err, provider.ErrFenced):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return status.Error(codes.Internal, err.Error())
 }

@@ -53,6 +53,16 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
 	defer func() {
 		outcome := classifyExecuteError(ctx, err)
 		metrics.ShardActionExecuteOutcomes.WithLabelValues(a.Kind.String(), outcome).Inc()
+		if outcome == outcomeFenced {
+			// Paper §11 / M71: the provider rejected our fencing token —
+			// a newer epoch of this shard_id has already contacted it.
+			// This process is a zombie (stale restart, duplicate identity,
+			// split brain); its view of the fleet cannot be trusted and
+			// retrying is wrong. Error-level on purpose: this is an
+			// incident page, not noise.
+			s.log.Error("provider fenced this shard's mutation — zombie-shard incident; do not retry, investigate duplicate shard identity",
+				"kind", a.Kind.String(), "machine", a.MachineID, "cluster", a.Cluster, "err", err)
+		}
 		// ADR-0046 addendum: every executed action lands in the
 		// decision audit log with its classified outcome.
 		// Suppressed / dry-run actions are recorded at the cycle's
@@ -92,6 +102,11 @@ func (s *Shard) handleBootstrapBlobErr(id machine.ID, err error, lastErrPrefix s
 	})
 }
 
+// outcomeFenced labels a mutation the provider rejected for a stale
+// fencing token (paper §11) — the zombie-shard signal. Checked by
+// execute()'s deferred logger, so it's a named constant.
+const outcomeFenced = "fenced"
+
 // classifyExecuteError maps the err return of execute() to one of a
 // fixed set of outcome labels for the per-execute counter.
 func classifyExecuteError(ctx context.Context, err error) string {
@@ -100,6 +115,12 @@ func classifyExecuteError(ctx context.Context, err error) string {
 	}
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "ctx_canceled"
+	}
+	// Before the message-string buckets: a fenced rejection also matches
+	// the "provider.Create/Configure/Drain" substrings via formatErr, and
+	// it must NOT land in the retryable-looking provider_error bucket.
+	if errors.Is(err, provider.ErrFenced) {
+		return outcomeFenced
 	}
 	msg := err.Error()
 	switch {

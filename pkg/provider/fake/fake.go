@@ -61,6 +61,15 @@ type Provider struct {
 	// stable state, a future call of the same kind mints a fresh op.
 	ops map[opKey]string
 
+	// fenceHWM is the per-shard_id high-water mark of accepted fencing
+	// tokens (paper §11, M71). Mutating calls that carry a token must be
+	// strictly newer than this mark or they're rejected with ErrFenced;
+	// calls with a zero token (in-process harness construction) bypass
+	// fencing entirely. The fake enforces this because it is what the
+	// conformance suite's self-test runs against — it has to model the
+	// contract real providers are held to.
+	fenceHWM map[string]fenceMark
+
 	// nextOp mints fresh operation IDs.
 	nextOp int
 
@@ -106,6 +115,7 @@ func New(opts Options) *Provider {
 		machines:           make(map[machine.ID]*machine.Machine),
 		lastModRev:         make(map[machine.ID]int),
 		ops:                make(map[opKey]string),
+		fenceHWM:           make(map[string]fenceMark),
 		failNext:           make(map[failKey]error),
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
 		instantTransitions: opts.InstantTransitions,
@@ -290,21 +300,21 @@ func (p *Provider) ConfiguredCount() int {
 
 // Create implements provider.Provider.
 func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
-	return p.applyTransition(req.MachineID, opCreate, func(m *machine.Machine) {
+	return p.applyTransition(req.MachineID, opCreate, req.Fence, func(m *machine.Machine) {
 		m.Host = machine.HostRef{Provider: "fake", Ref: string(req.MachineID)}
 	})
 }
 
 // Configure implements provider.Provider.
 func (p *Provider) Configure(_ context.Context, req provider.ConfigureRequest) (provider.TransitionAck, error) {
-	return p.applyTransition(req.MachineID, opConfigure, func(m *machine.Machine) {
+	return p.applyTransition(req.MachineID, opConfigure, req.Fence, func(m *machine.Machine) {
 		m.Cluster = req.ClusterID
 	})
 }
 
 // Drain implements provider.Provider.
 func (p *Provider) Drain(_ context.Context, req provider.DrainRequest) (provider.TransitionAck, error) {
-	return p.applyTransition(req.MachineID, opDrain, func(m *machine.Machine) {
+	return p.applyTransition(req.MachineID, opDrain, req.Fence, func(m *machine.Machine) {
 		m.Cluster = ""
 		m.AssignedPriority = 0
 		m.AssignedInterruptionPenaltyDollars = 0
@@ -314,19 +324,51 @@ func (p *Provider) Drain(_ context.Context, req provider.DrainRequest) (provider
 
 // Delete implements provider.Provider. Bare-metal-style providers should
 // return ErrNotSupported instead.
-func (p *Provider) Delete(_ context.Context, id machine.ID) (provider.TransitionAck, error) {
-	return p.applyTransition(id, opDelete, func(m *machine.Machine) {
+func (p *Provider) Delete(_ context.Context, req provider.DeleteRequest) (provider.TransitionAck, error) {
+	return p.applyTransition(req.MachineID, opDelete, req.Fence, func(m *machine.Machine) {
 		m.Host = machine.HostRef{}
 	})
 }
 
+// checkFence enforces the paper §11 fencing contract. Caller holds p.mu.
+//
+// The check runs before everything else in applyTransition — before the
+// not-found check, before idempotent-retry short-circuiting — per the
+// proto contract: a zombie's request must not be applied, must not be
+// answered with a cached operation_id, and must not learn whether the
+// machine exists. A token that passes advances the high-water mark even
+// if the operation itself then fails (the mark records "newest shard
+// process seen", not "operations that succeeded").
+func (p *Provider) checkFence(f provider.Fence) error {
+	if f.Zero() {
+		return nil // unfenced in-process caller; see fenceHWM doc
+	}
+	hwm, known := p.fenceHWM[f.ShardID]
+	newer := f.ShardEpoch > hwm.epoch ||
+		(f.ShardEpoch == hwm.epoch && f.SequenceNumber > hwm.seq)
+	if known && !newer {
+		return fmt.Errorf("%w: shard %q sent (epoch=%d, seq=%d), high-water mark is (epoch=%d, seq=%d)",
+			provider.ErrFenced, f.ShardID, f.ShardEpoch, f.SequenceNumber, hwm.epoch, hwm.seq)
+	}
+	p.fenceHWM[f.ShardID] = fenceMark{epoch: f.ShardEpoch, seq: f.SequenceNumber}
+	return nil
+}
+
+// fenceMark is the highest (epoch, seq) accepted for one shard_id.
+type fenceMark struct {
+	epoch, seq int64
+}
+
 // applyTransition is the shared implementation of all four lifecycle
-// methods. It handles idempotent retry, failure injection, transition
-// validation, and the instant-vs-staged transition mode.
-func (p *Provider) applyTransition(id machine.ID, kind opKind, postEffect func(*machine.Machine)) (provider.TransitionAck, error) {
+// methods. It handles fencing, idempotent retry, failure injection,
+// transition validation, and the instant-vs-staged transition mode.
+func (p *Provider) applyTransition(id machine.ID, kind opKind, fence provider.Fence, postEffect func(*machine.Machine)) (provider.TransitionAck, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if err := p.checkFence(fence); err != nil {
+		return provider.TransitionAck{}, err
+	}
 	m, ok := p.machines[id]
 	if !ok {
 		return provider.TransitionAck{}, fmt.Errorf("%w: %s", provider.ErrNotFound, id)

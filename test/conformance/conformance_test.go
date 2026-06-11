@@ -121,7 +121,7 @@ func TestConformance_FullLifecycle(t *testing.T) {
 	// Idle → Deleting → Speculative. Optional: providers that don't
 	// support Delete (bare-metal style) return Unimplemented; treat
 	// that as a pass and stop the lifecycle here.
-	if _, err := cli.Delete(ctx, &pb.MachineRef{Id: id}); err != nil {
+	if _, err := cli.Delete(ctx, &pb.DeleteRequest{MachineId: id}); err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			t.Logf("provider does not implement Delete (Unimplemented) — bare-metal-style provider, OK")
 			return
@@ -161,6 +161,110 @@ func TestConformance_CreateIdempotent(t *testing.T) {
 	_ = b
 }
 
+// TestConformance_ConfigureIdempotent: Configure is idempotent on
+// (machine_id, target=Configured) like every other lifecycle RPC —
+// back-to-back calls return the same operation_id whether the second
+// arrives mid-Configuring or after the machine settled. M71 closed the
+// audit gap where only Create had idempotency coverage.
+func TestConformance_ConfigureIdempotent(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+
+	req := &pb.ConfigureRequest{
+		MachineId: id, ClusterId: "conformance-idem",
+		BootstrapBlob: []byte("# conformance idempotency\n"),
+	}
+	a, err := cli.Configure(ctx, req)
+	if err != nil {
+		t.Fatalf("first Configure: %v", err)
+	}
+	b, err := cli.Configure(ctx, req)
+	if err != nil {
+		t.Fatalf("second Configure: %v", err)
+	}
+	if a.GetOperationId() != b.GetOperationId() {
+		t.Errorf("operation_id differs across idempotent retries: a=%s b=%s",
+			a.GetOperationId(), b.GetOperationId())
+	}
+}
+
+// TestConformance_DrainIdempotent: same contract for Drain on
+// (machine_id, target=Idle).
+func TestConformance_DrainIdempotent(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+	if _, err := cli.Configure(ctx, &pb.ConfigureRequest{
+		MachineId: id, ClusterId: "conformance-idem-drain",
+		BootstrapBlob: []byte("# conformance idempotency\n"),
+	}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_CONFIGURED, 10*time.Second)
+
+	req := &pb.DrainRequest{MachineId: id, GracePeriodSeconds: 30}
+	a, err := cli.Drain(ctx, req)
+	if err != nil {
+		t.Fatalf("first Drain: %v", err)
+	}
+	b, err := cli.Drain(ctx, req)
+	if err != nil {
+		t.Fatalf("second Drain: %v", err)
+	}
+	if a.GetOperationId() != b.GetOperationId() {
+		t.Errorf("operation_id differs across idempotent retries: a=%s b=%s",
+			a.GetOperationId(), b.GetOperationId())
+	}
+}
+
+// TestConformance_DeleteIdempotent: same contract for Delete on
+// (machine_id, target=Speculative). Skipped for bare-metal-style
+// providers that return Unimplemented from Delete.
+func TestConformance_DeleteIdempotent(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+
+	req := &pb.DeleteRequest{MachineId: id}
+	a, err := cli.Delete(ctx, req)
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			t.Skip("provider does not implement Delete (Unimplemented) — bare-metal-style provider, OK")
+		}
+		t.Fatalf("first Delete: %v", err)
+	}
+	b, err := cli.Delete(ctx, req)
+	if err != nil {
+		t.Fatalf("second Delete: %v", err)
+	}
+	if a.GetOperationId() != b.GetOperationId() {
+		t.Errorf("operation_id differs across idempotent retries: a=%s b=%s",
+			a.GetOperationId(), b.GetOperationId())
+	}
+}
+
 // TestConformance_GetUnknownMachine verifies that Get on an unknown
 // machine_id returns NotFound.
 func TestConformance_GetUnknownMachine(t *testing.T) {
@@ -187,7 +291,7 @@ func TestConformance_DeleteUnknownMachine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := cli.Delete(ctx, &pb.MachineRef{Id: "nonexistent"})
+	_, err := cli.Delete(ctx, &pb.DeleteRequest{MachineId: "nonexistent"})
 	if err == nil {
 		t.Fatal("expected error on unknown machine_id")
 	}
@@ -361,7 +465,12 @@ func TestConformance_DrainOnSpeculative(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected Drain on Speculative to fail")
 	}
-	// FailedPrecondition / Internal both reasonable; just not OK.
+	// Any failing code except FAILED_PRECONDITION, which the M71 fencing
+	// contract reserves for stale-token rejections so callers can alert
+	// on zombie shards mechanically (see provider.proto).
+	if status.Code(err) == codes.FailedPrecondition {
+		t.Errorf("invalid transition rejected with FAILED_PRECONDITION — that code is reserved for fencing rejections; use a different code (got %v)", err)
+	}
 }
 
 // TestConformance_TransitionalStateObservability is the M23 conformance

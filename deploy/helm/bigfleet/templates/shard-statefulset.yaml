@@ -86,6 +86,11 @@ spec:
             - --data-dir={{ .Values.shard.dataDir }}
             - --advertise-addr=$(POD_NAME).bigfleet-shard-headless.{{ .Values.namespace }}.svc:{{ .Values.shard.service.grpcPort }}
             - --coordinator-addr=bigfleet-coordinator.{{ .Values.namespace }}.svc:{{ .Values.coordinator.service.grpcPort }}
+            {{- if .Values.shard.provider.addr }}
+            # M71: dial the out-of-tree provider; mutations are fenced
+            # with this shard's (id, epoch, sequence) per paper §11.
+            - --provider-addr={{ .Values.shard.provider.addr }}
+            {{- end }}
             # ADR-0046 actuation safety rails (see values.yaml).
             - --actuation-paused={{ .Values.shard.actuationPaused }}
             - --reclaim-cap-fraction={{ .Values.shard.reclaimCapFraction }}

@@ -51,6 +51,14 @@ shard:
   service:
     grpcPort: 7780
     metricsPort: 8780
+  # provider.addr — host:port of the out-of-tree CapacityProvider's gRPC
+  # service (M71). When set, shards dial it and fence every mutating call
+  # with (shard_id, shard_epoch, sequence_number) per paper §11. Empty
+  # keeps the in-process fake provider — dev/demo only; the fake must
+  # never face real machines. Providers ship their own charts in their
+  # own repos (no provider charts here, per the out-of-tree hard rule).
+  provider:
+    addr: ""
   dataDir: /var/lib/bigfleet-shard
   storage:
     size: 1Gi                   # epoch counter + reserved space for future shard-local persistent state

@@ -150,7 +150,7 @@ service CapacityProvider {
   rpc Create   (CreateRequest)    returns (TransitionAck);
   rpc Configure(ConfigureRequest) returns (TransitionAck);
   rpc Drain    (DrainRequest)     returns (TransitionAck);
-  rpc Delete   (MachineRef)       returns (TransitionAck);
+  rpc Delete   (DeleteRequest)    returns (TransitionAck);
   rpc Get      (MachineRef)       returns (Machine);
   rpc List     (ListFilter)       returns (MachineList);
 }
@@ -165,7 +165,9 @@ service CapacityProvider {
 | `Get` | Read-only | No | n/a |
 | `List` | Read-only; supports `since_revision` cursor | No | n/a |
 
-Async semantics: the four lifecycle RPCs return `TransitionAck` immediately; the actual transition is observed via subsequent `Get`/`List`. See [`provider-author-guide.md`](provider-author-guide.md) for the full contract.
+Async semantics: the four lifecycle RPCs return `TransitionAck` immediately; the actual transition is observed via subsequent `Get`/`List`.
+
+Fencing (paper §11, M71): the four mutating RPCs carry the shard's `(shard_id, shard_epoch, sequence_number)` token; providers keep a per-`shard_id` high-water mark and reject non-strictly-newer tokens with `FAILED_PRECONDITION` (reserved for fencing on this service). `Get`/`List` carry no token — reads don't fence. See [`provider-author-guide.md`](provider-author-guide.md) for the full contract.
 
 ## Wire-format invariants
 

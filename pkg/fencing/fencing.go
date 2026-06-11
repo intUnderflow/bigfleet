@@ -9,11 +9,16 @@
 //     term. CoordinatorTerm exposes that high-water mark and Validate
 //     answers the rejection question.
 //
-//   - Shard → provider: every transition RPC the shard issues carries
-//     (shard_id, shard_epoch, sequence_number). The shard's epoch increments
-//     on every restart so a zombie shard process can't issue stale-state
-//     mutations. Epoch is persisted to local disk so a fresh process
-//     always starts at a value larger than any prior process.
+//   - Shard → provider: every mutating provider RPC (Create / Configure /
+//     Drain / Delete — reads don't fence) carries (shard_id, shard_epoch,
+//     sequence_number), stamped by pkg/provider/grpcclient from this
+//     package's Epoch and Sequence (M71). Providers keep a per-shard_id
+//     high-water mark and reject non-monotonic tokens with
+//     FAILED_PRECONDITION — the contract lives in
+//     api/proto/bigfleet/v1alpha1/provider.proto. Epoch increments on
+//     every restart and is persisted to local disk, so a fresh process
+//     always fences higher than any prior process and a zombie can't
+//     issue stale-state mutations once its successor has made contact.
 //
 // The package is intentionally tiny: it owns just enough state to make
 // fencing correct, no policy.
@@ -109,8 +114,11 @@ func LoadEpoch(path string) (*Epoch, error) {
 // Value returns the epoch number this shard is currently at.
 func (e *Epoch) Value() int64 { return e.value }
 
-// Sequence is a monotonic per-shard counter for outbound RPCs. Wrapped
-// over the wire with the shard epoch.
+// Sequence is a monotonic per-shard counter for outbound mutating
+// provider RPCs, carried over the wire alongside the shard epoch by
+// pkg/provider/grpcclient. One fresh value per call attempt — retries
+// re-stamp, so a provider's strictly-newer check never mistakes a
+// transport retry for a replay.
 type Sequence struct {
 	mu  sync.Mutex
 	seq int64

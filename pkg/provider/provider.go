@@ -8,8 +8,9 @@
 // write in-process fakes (pkg/provider/fake) without standing up gRPC.
 //
 // Real providers live in *separate repositories*. They register a gRPC
-// server implementing the protobuf CapacityProvider service; an adapter
-// in the shard wraps that gRPC client to satisfy this Go interface.
+// server implementing the protobuf CapacityProvider service;
+// pkg/provider/grpcclient is the shard-side adapter that wraps that gRPC
+// surface to satisfy this Go interface (M71).
 // The repo never ships in-tree real providers (Kubernetes spent years
 // undoing CCM/CSI in-tree providers; we don't repeat that mistake).
 package provider
@@ -45,7 +46,7 @@ type Provider interface {
 
 	// Delete moves Idle → Deleting → Speculative. Cloud only — bare
 	// metal providers should return ErrNotSupported.
-	Delete(ctx context.Context, machineID machine.ID) (TransitionAck, error)
+	Delete(ctx context.Context, req DeleteRequest) (TransitionAck, error)
 
 	// Get returns the current state of one machine.
 	Get(ctx context.Context, machineID machine.ID) (machine.Machine, error)
@@ -65,9 +66,36 @@ var ErrNotFound = errors.New("provider: machine not found")
 // (e.g., bare metal returning ErrNotSupported from Delete).
 var ErrNotSupported = errors.New("provider: operation not supported")
 
+// ErrFenced is returned by a mutating call whose fencing token is not
+// strictly newer than the provider's high-water mark for this shard_id
+// (paper §11; wire code FAILED_PRECONDITION). It means a newer epoch of
+// this shard identity has already contacted the provider — the caller is
+// a zombie. That is an incident (duplicate shard identity / split brain),
+// not a transient failure: do not blind-retry.
+var ErrFenced = errors.New("provider: fencing token rejected; this shard is stale (zombie)")
+
+// Fence is the paper §11 shard→provider fencing token carried by every
+// mutating call. The zero value means "no token" — in-process callers
+// (the scaletest harness constructing pkg/provider/fake directly) don't
+// fence, and fenced implementations let those calls through.
+//
+// Server-side only: implementations validate it. The shard never sets it
+// on requests — pkg/provider/grpcclient stamps the wire fields itself
+// from its injected identity, minting a fresh SequenceNumber per call
+// attempt so transport retries are never rejected as replays.
+type Fence struct {
+	ShardID        string
+	ShardEpoch     int64
+	SequenceNumber int64
+}
+
+// Zero reports whether the token is absent.
+func (f Fence) Zero() bool { return f.ShardID == "" }
+
 // CreateRequest is the input to Create.
 type CreateRequest struct {
 	MachineID machine.ID
+	Fence     Fence
 }
 
 // ConfigureRequest is the input to Configure.
@@ -75,12 +103,22 @@ type ConfigureRequest struct {
 	MachineID     machine.ID
 	ClusterID     machine.ClusterID
 	BootstrapBlob []byte
+	Fence         Fence
 }
 
 // DrainRequest is the input to Drain.
 type DrainRequest struct {
 	MachineID   machine.ID
 	GracePeriod GracePeriod
+	Fence       Fence
+}
+
+// DeleteRequest is the input to Delete. M71: Delete grew a request struct
+// (it took a bare machine.ID before) because mutating calls carry the
+// fencing token and reads don't.
+type DeleteRequest struct {
+	MachineID machine.ID
+	Fence     Fence
 }
 
 // GracePeriod is a typed integer-second duration used by Drain.

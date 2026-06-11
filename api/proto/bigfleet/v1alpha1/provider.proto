@@ -9,6 +9,37 @@
 // There is no Watch RPC. Reconciliation is List + Get only (see plan §10.6
 // for why; List supports an optional `since_revision` cursor so providers
 // above a documented threshold can serve incremental state efficiently).
+//
+// Fencing (paper §11, M71). Every MUTATING RPC — Create, Configure, Drain,
+// Delete — carries the shard's fencing token: (shard_id, shard_epoch,
+// sequence_number). The shard's epoch is persisted and increments on every
+// process restart; the sequence number is a per-process monotonic counter.
+// Together they let a provider refuse a zombie shard (an old process, or a
+// duplicate of the same shard identity) whose view of the fleet is stale.
+//
+// Providers MUST track, per shard_id, the highest (shard_epoch,
+// sequence_number) pair accepted so far, compared lexicographically:
+// (e1, s1) is newer than (e2, s2) iff e1 > e2, or e1 == e2 and s1 > s2.
+// A mutating request whose token is NOT strictly newer than that
+// high-water mark MUST be rejected with FAILED_PRECONDITION and MUST NOT
+// be applied (the fencing check runs before idempotent-retry
+// short-circuiting). A token that passes advances the high-water mark
+// even if the operation itself then fails. First contact from an unknown
+// shard_id is accepted and establishes the high-water mark. A new epoch
+// resets the sequence space: once the epoch advances, any sequence_number
+// is acceptable.
+//
+// FAILED_PRECONDITION is reserved on this service for fencing rejections,
+// so callers can alert on zombie-shard incidents mechanically. Reject
+// anything else (invalid state transitions, etc.) with a different code.
+//
+// Retries are re-stamped: the shard mints a fresh sequence_number for
+// every call attempt, so a transport-level retry is never rejected as a
+// replay. Idempotency is keyed on (machine_id, target_state) via
+// operation_id reuse, never on the fencing token.
+//
+// Get and List carry no token. Reads don't fence — a zombie shard reading
+// state harms nothing; only mutations actuate machines and money.
 syntax = "proto3";
 
 package bigfleet.v1alpha1;
@@ -17,7 +48,7 @@ service CapacityProvider {
   rpc Create   (CreateRequest)    returns (TransitionAck);
   rpc Configure(ConfigureRequest) returns (TransitionAck);
   rpc Drain    (DrainRequest)     returns (TransitionAck);
-  rpc Delete   (MachineRef)       returns (TransitionAck);
+  rpc Delete   (DeleteRequest)    returns (TransitionAck);
   rpc Get      (MachineRef)       returns (Machine);
   rpc List     (ListFilter)       returns (MachineList);
 }
@@ -120,6 +151,9 @@ message Machine {
   Resources allocatable = 13;
 }
 
+// MachineRef identifies one machine for the read RPC Get. Reads carry no
+// fencing token (see the file-level fencing contract): a zombie shard
+// reading state harms nothing.
 message MachineRef {
   string id = 1;
 }
@@ -134,6 +168,8 @@ message MachineList {
   bytes revision = 2;
 }
 
+// ListFilter restricts the read RPC List. Like Get, List carries no
+// fencing token — reads don't fence.
 message ListFilter {
   // Restrict to the listed states. Empty list = any state.
   repeated MachineState states = 1;
@@ -158,6 +194,11 @@ message CreateRequest {
   string machine_id = 1;
 
   reserved 2;  // labels — unused; removed M66.1
+
+  // Fencing token (paper §11, M71) — see the file-level contract.
+  string shard_id        = 3;
+  int64  shard_epoch     = 4;
+  int64  sequence_number = 5;
 }
 
 // ConfigureRequest moves Idle → Configuring → Configured. The bootstrap
@@ -171,6 +212,11 @@ message ConfigureRequest {
   string cluster_id = 2;
   // Provider-opaque bootstrap data. Applied as user-data / ignition / PXE.
   bytes bootstrap_blob = 3;
+
+  // Fencing token (paper §11, M71) — see the file-level contract.
+  string shard_id        = 4;
+  int64  shard_epoch     = 5;
+  int64  sequence_number = 6;
 }
 
 // DrainRequest moves Configured → Draining → Idle. The grace period bounds
@@ -181,6 +227,24 @@ message DrainRequest {
   string machine_id = 1;
   // Grace period for the kubelet's graceful node shutdown.
   int64 grace_period_seconds = 2;
+
+  // Fencing token (paper §11, M71) — see the file-level contract.
+  string shard_id        = 3;
+  int64  shard_epoch     = 4;
+  int64  sequence_number = 5;
+}
+
+// DeleteRequest moves Idle → Deleting → Speculative. Introduced in M71 so
+// Delete — a mutating RPC — can carry the fencing token Get's MachineRef
+// must not. Wire-compatible with the MachineRef this RPC took before M71:
+// field 1 is the same string at the same number (field names don't travel).
+message DeleteRequest {
+  string machine_id = 1;
+
+  // Fencing token (paper §11, M71) — see the file-level contract.
+  string shard_id        = 2;
+  int64  shard_epoch     = 3;
+  int64  sequence_number = 4;
 }
 
 // TransitionAck is the response from any of Create/Configure/Drain/Delete.
