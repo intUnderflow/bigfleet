@@ -50,3 +50,4 @@
 | [42](/adr/0042-unsatisfiable-domain-choice-is-sticky-at-equal-coverage/) | Accepted | Unsatisfiable-regime `Same`-domain choice is sticky at equal coverage — switch only for strictly greater |
 | [42a](/adr/0042-addendum-aged-acquisition-parking/) | Accepted | ADR-0042 Addendum: aged acquisition parking — group identity on the wire, park after 8 unsatisfiable cycles, re-probe every 32 |
 | [43](/adr/0043-demand-realism-check-before-mechanism/) | Accepted | Harness-observed triggers get a demand-realism check before mechanism ships |
+| [44](/adr/0044-machine-count-aware-seed-sizing/) | Accepted | Seed machine pools are sized by machine demand (pod share ÷ packing density, gang-aware per-zone floors), not workload weight |

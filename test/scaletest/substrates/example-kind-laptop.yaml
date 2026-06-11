@@ -34,9 +34,16 @@ kwokPod:
   requests:
     cpu: 500m
     memory: 1Gi
+  # Wide limits on purpose: the apiserver container also runs kine +
+  # kube-scheduler, and catalog demand (Deployments + ReplicaSets +
+  # affinity-heavy scheduling) is far hungrier than the legacy
+  # single-shape was. At the previous 2-CPU/4Gi cap the apiserver was
+  # CPU-starved into 1.3s kine writes and a liveness-kill mid-fill
+  # (observed 2026-06-11). Limits are caps, not reservations — the
+  # laptop only pays for what a 2-cluster gate actually uses.
   limits:
-    cpu: "2"
-    memory: 4Gi
+    cpu: "6"
+    memory: 8Gi
   # 1Gi tmpfs (chart default). dev-* scale doesn't need more.
   sharedVolumeSizeLimit: "1Gi"
 
