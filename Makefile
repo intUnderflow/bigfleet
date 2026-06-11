@@ -188,7 +188,7 @@ vet: ## Run go vet.
 ##@ Verify
 
 .PHONY: verify
-verify: vet lint test ## What CI runs on every PR.
+verify: vet lint test integration ## What CI runs on every PR. Includes the in-process integration suite (~3s) — it rotted invisibly for weeks when nothing compiled its build tag.
 
 .PHONY: clean
 clean: ## Remove build artifacts.
