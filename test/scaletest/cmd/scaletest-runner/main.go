@@ -1338,7 +1338,7 @@ func snapshotPrometheus(ctx context.Context, kubeconfig, ns, dest string) error 
 // queries use: the soak duration, capped at the canonical 5m (a longer
 // soak shouldn't widen the window — 5 minutes of steady state IS the
 // SLO's definition) and floored at 1m (rate() needs ≥2 scrapes).
-// Shorter gates (prevalidate's 3m soak) shrink the window to match so
+// Shorter gates (the dev-50 integration rung's 3m soak) shrink the window to match so
 // the queries never reach back into the fill's tail — the [5m]
 // literals were written when every soak was ≥5m, and a 3m soak with
 // unchanged windows would silently average ~2m of ramp drain into the

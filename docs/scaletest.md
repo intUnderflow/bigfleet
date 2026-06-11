@@ -191,17 +191,23 @@ A cloud run is the **last** confirmation of a change, never the discovery
 instrument. The ladder, cheapest rung first — every change climbs as far
 as it needs and no further:
 
-| Rung | Command | Time | Catches |
-|---|---|---|---|
-| 0.5. Profile preflight | committed-profile test in `make prevalidate` / runner default-on | <1 s | seed-shape vs demand-shape arithmetic: a bind gate that no soak duration can reach (the dev-50 4,800-slots-vs-4,950-gate class). `pkg/scaletest/preflight`. |
-| 1. Closed-loop sim | `go test -run ClosedLoop ./sim/...` (`-short` for the quick set) | ~30 s short / ~2.5 min full | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures — including `TestClosedLoop_Uber5KCardinality` at full uber-5k decision cardinality (2,580 Needs × 20 clusters), the class that historically cost a 90-minute cloud run apiece. |
-| 2. Hot-path benches | `make bench-hot` | ~10 s warm | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
-| 3. Integration gate | `make prevalidate` (runs 0.5+1+2, then `dev-50` on kind) | ~6 min warm | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. Per-rung timestamps in the log; a stalled fill fails in 2 min (bind-plateau detector), not at the ramp budget. |
-| 4. Cloud | a scale profile on a real substrate | ~25–60 min | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
+| Rung | Where | Command | Time | Catches |
+|---|---|---|---|---|
+| 0.5. Profile preflight | local (`make prevalidate`) / runner default-on | committed-profile test, `pkg/scaletest/preflight` | <1 s | seed-shape vs demand-shape arithmetic: a bind gate that no soak duration can reach (the dev-50 4,800-slots-vs-4,950-gate class). |
+| 1. Closed-loop sim | local (`make prevalidate`) | `go test -run ClosedLoop ./sim/...` (`-short` for the quick set) | ~30 s short / ~2.5 min full | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures — including `TestClosedLoop_Uber5KCardinality` at full uber-5k decision cardinality (2,580 Needs × 20 clusters), the class that historically cost a 90-minute cloud run apiece. |
+| 2. Hot-path benches | local (`make prevalidate`) | `make bench-hot` | ~10 s warm | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
+| 3. Integration gate | **devpod-side, step 0 of every cloud brief** (`make prevalidate-kind` for on-demand local runs) | `dev-50` on kind/k3s, real binaries | ~6 min warm | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. A stalled fill fails in 2 min (bind-plateau detector), not at the ramp budget. |
+| 4. Cloud | devpod-side | a scale profile on a real substrate | ~25–60 min | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
 
-**Every SHA bound for a cloud run passes `make prevalidate` first.** A
-cloud run that fails on something rungs 1–3 would have caught is a
-process bug, not just a code bug.
+**Every SHA bound for a cloud run passes `make prevalidate` (rungs
+0.5–2, Docker-free, ~3 min) before the brief is filed; the brief
+executor then runs rung 3 on its own substrate FIRST and fail-fasts
+the brief — verdict with the gate log, no cloud profile run — if it
+cannot go green.** Rung 3 lives where the compute is free and the
+images get built anyway; `make prevalidate-kind` keeps it runnable
+locally for working on the harness itself. A cloud run that fails on
+something a lower rung would have caught is a process bug, not just a
+code bug.
 
 ### Mechanism runs vs SLO runs
 
