@@ -856,3 +856,38 @@ Operator §3.1 holds 250K CapacityRequest objects in an informer cache for a max
 ---
 
 This plan is the living target. ADRs in `docs/adr/` capture decisions as they harden; this file gets updated when something shifts at the architectural level, not for every implementation detail.
+
+## 12. Production-readiness arc (M67–M78)
+
+Derived from the verified audit in `docs/production-readiness-2026-06.md`
+(2026-06-11: 44 blocker claims, 38 adversarially sustained, 0 refuted).
+Sequencing respects two hard dependencies: the consumed-capacity /
+single-attribution engine work (M67–M68) gates the Idle→Speculative
+release (a Delete path on a mis-attributing engine is a Create↔Delete
+money-burning loop), the M66.5–M66.7 deletion cascade, and the
+validation ladder; everything else can proceed in parallel.
+
+| M | Scope | Depends on | Author gate |
+|---|-------|------------|-------------|
+| M67 | **Consumed-capacity attribution.** Sim-first repro of the gross-Allocatable credit defect (engine task: `p1_unsatisfied=0` with unplaceable pods); ADR for where consumption lives (roll-up carries total desired state per the paper's full-replacement semantics, vs Phase 1 modeling consumption); implement; dev-50-v2 (catalog gate) goes green and replaces the legacy gate. | — | ADR sign-off |
+| M68 | **Single attribution.** Phase 3 derives its keep-set from Phase 1's claimed-set (kills the bootstrap≈reclaim oscillator; supersedes the four mirror-patches since ADR-0027). | M67 | ADR sign-off (likely same ADR) |
+| M69 | **Reclaim safety path.** Phase 3 Reclaims route through the operator's existing cordon/PDB/evict path (as Preempts already do) with real drain-grace; fix the false PDB claims in user-stories and the phase3 comment. | — | — |
+| M70 | **Safety rails.** Per-cycle reclaim blast-radius cap with a production default; empty-roll-up guard; global kill switch (pause acquisitions/reclaims); dry-run/shadow mode (recommend, don't act); wire `machine.Validate` into provider ingest; structured decision audit log. | — | — |
+| M71 | **Provider edge I.** Dial-out gRPC client + `--provider-addr`; shard→provider fencing on the wire (`shard_id`, `shard_epoch`, `sequence_number` on lifecycle RPCs) with provider-side reject semantics; conformance coverage for fencing and idempotency on all six RPCs. | — | — |
+| M72 | **Provider edge II.** Contract round-trips cluster binding and assigned priority/penalties so a shard restart rebuilds full protection state from List+Get. | M71 | — |
+| M73 | **Idle→Speculative release.** Delete action kind + per-CapacityType idle-hold policy (bare metal: forever; on-demand: minutes; spot: ~1m); conformance. | M67, M68 | — |
+| M74 | **Security I.** mTLS on all transports; Session identity binds `cluster_id` to the presented certificate; coordinator admin RPC authn/authz; chart wiring for cert material. | — | — |
+| M75 | **Ops hardening.** Raft join path so the 3-replica chart forms a quorum; coordinator backup/restore tooling + DR runbook; publish operator/UPC images from CI; `buf breaking` in CI; probes/PDBs in charts; cosign/SBOM/dependabot. | — | — |
+| M76 | **Reference provider** (separate repo, per the out-of-tree hard rule) against a substrate of the author's choosing; driven through the conformance suite; closes the provider-author-guide gaps found in the audit. | M71 | substrate choice |
+| M77 | **M66 cascade completion.** M66.5 (dev-50-v2 becomes the gate; delete legacy demand mode + preflight package), M66.6 (M50.5 validation → M50.7 legacy profile deletion), M66.7 (scheduler default flip, delete pod-shim). | M67 | — |
+| M78 | **Validation ladder campaign.** Clean uber-5k baseline on the fixed engine (also the realism-clean ADR-0042 parking measurement); uber-50k; uber-500k (needs partner approval); uber-1m; 24h soak; failover matrix (leader-kill at load, shard-kill, partition); scale-down drills. | M67–M73, M77 | uber-500k+ approval; catalog weight semantics |
+
+**Author decisions queue** (the loop parks work on these and
+continues elsewhere; see the production-readiness audit for context):
+
+1. Catalog weight semantics — `weight` is documented as pod-count
+   share but implemented as workload-object share; the choice changes
+   every profile's demand mix and the M78 baselines.
+2. M67/M68 ADR sign-off — where consumed capacity lives in the model.
+3. M76 — which substrate the reference provider targets.
+4. uber-500k and above — external approval, per standing policy.
