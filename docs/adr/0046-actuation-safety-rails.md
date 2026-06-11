@@ -3,8 +3,9 @@
 ## Status
 
 Accepted, 2026-06-12. Ops scope — first half of M70 (plan §12). The
-remaining M70 items (dry-run/shadow mode, `machine.Validate` at
-provider ingest, decision audit log) are separate changes.
+remaining M70 items (dry-run/shadow mode, `machine.Invariant` at
+provider ingest, decision audit log) landed as the Addendum at the
+bottom of this file.
 
 ## Context
 
@@ -260,7 +261,8 @@ behaviour never touches, per the 5% justification above.
   baseline is in-memory by design; the restart window is ADR-0036's,
   and rail 1 bounds what slips both.
 - **Configurable guard thresholds** — constants until evidence.
-- **Dry-run/shadow mode** — second half of M70, its own change.
+- **Dry-run/shadow mode** — second half of M70; built in the Addendum
+  below.
 
 ## Metrics
 
@@ -299,6 +301,115 @@ for execution").
   defense this ADR's guard complements.
 - [ADR-0042 Addendum] Aged acquisition parking — the §16-tension
   precedent and the constants-not-config posture.
+
+## Addendum (2026-06-12): second half of M70 — shadow mode, ingest validation, decision audit log
+
+Same arc, same boundary, three remaining audit items. All shard-local;
+`pkg/decision` stays pure (one doc-comment change, below); no proto or
+RPC changes.
+
+### Dry-run / shadow mode (`--dry-run`, `shard.dryRun`)
+
+The day-one adoption posture: an operator runs BigFleet in shadow
+against a live fleet to see what it WOULD have done before trusting
+it. Cycles run in full; every decided action is reported — one Info
+log line with kind/machine/cluster/reason/grace, one increment of
+`bigfleet_shard_actions_dryrun_total{kind}` — and nothing executes:
+no provider RPC, no BootstrapRequest or ReclaimInstruction reaches an
+operator.
+
+Mechanically this shares the kill switch's suppression point, but the
+flag and the metric are deliberately distinct from
+`--actuation-paused` / `bigfleet_shard_actions_suppressed_total`:
+dashboards must be able to tell "shadowing by design" (expected,
+possibly weeks-long) from "paused in anger" (an incident, alert if it
+lingers). If both flags are set, the pause wins the counting — an
+emergency stop during a shadow run should read as a pause. Rail 1 and
+`MaxActionsPerCycle` are skipped in shadow: nothing executes, so there
+is no drain rate or execute cost to bound, and the report should be
+the engine's whole decision, not a rail-metered schedule. (Skipping
+the limit also avoids its deferral wakeup busy-looping against a
+never-changing snapshot.)
+
+**Honest limitation:** shadow mode cannot observe what would have
+*bound*. Nothing executes, so no fake Node materializes, the operator
+never writes an UpcomingNode, and no Pod schedules — and because the
+engine's actions never apply, its view never converges and the same
+intentions re-report every cycle. Shadow validates decision volume
+and shape (would it mass-drain? does the acquisition mix look sane?),
+not outcomes. Validating outcomes requires the sim/scaletest ladder,
+which executes against a fake provider.
+
+### `machine.Invariant` at provider ingest
+
+The audit (arc 3) found provider-declared `price` and
+`interruption_probability` entering the locked cost formula
+unvalidated, while the validator (`machine.Invariant` — the audit
+called it `machine.Validate`) ran only inside `inventory.Insert/Apply`
+with its errors discarded at the reconcile call sites, and a reconcile
+doc comment claimed the records arrived "pre-validated" (false:
+grpcadapter checks only the state enum). Changes:
+
+- `machine.Invariant` now also bounds the cost inputs:
+  `price_per_hour` ≥ 0 and not NaN; the probability check catches NaN.
+- The shard screens records at its provider-ingest boundary — the
+  reconcile slow paths (the state-match fast path ingests no fields)
+  and the Create ack, the one ack that carries cost fields. Policy:
+  **reject, loudly** — log + `bigfleet_shard_machines_rejected_total
+  {reason}` (`price` / `interruption_probability` / `structural`) —
+  never crash, never silently accept. The inventory keeps its
+  last-known-good record; a rejected record is never treated as a
+  removal. A rejected Create ack marks the machine Failed, same as a
+  provider error.
+- Conformance: `TestConformance_CostFieldBounds` makes the bounds a
+  mechanical provider contract. The suite's system-under-test is the
+  provider (the shard isn't in that harness), so *survivability* of
+  violations is asserted by `pkg/shard`'s own tests; conformance
+  asserts providers don't emit the garbage in the first place.
+
+### Decision audit log (`--audit-log`, `shard.auditLog`)
+
+A structured, durable record of every action disposition: a dedicated
+`slog` logger writing JSONL to a configurable file path. One record
+per executed action — timestamp, cycle, kind, machine, cluster,
+reason, grace, outcome (the classified execute result) — and one per
+suppressed / dry-run action, marked `outcome=suppressed` /
+`outcome=dryrun`. Empty path disables; the chart value points it at
+the shard's existing data PVC. This is deliberately NOT a storage
+system and NOT a metrics replacement: it is the simplest thing an
+operator can ship to their log pipeline and replay after an incident
+("what exactly did the shard do to cluster X between 14:02 and
+14:09, and why").
+
+- **Rotation / size are explicitly out of scope.** The shard only
+  appends; logrotate-style handling (sidecar, pipeline retention) is
+  the operator's.
+- `cycle` is the shard's cycle counter at record time; under the
+  ADR-0021 async execute pool, an executed action's record carries
+  the executing cycle, which can trail the deciding cycle.
+- Enqueue-time drops/dedups are not audited — they execute nothing
+  and re-derive next cycle; their rates stay metrics
+  (`bigfleet_shard_actions_dropped/deduped_total`).
+- `decision.Action.Reason` was documented as "safe to drop"; that
+  stopped being true — the audit trail depends on it surviving to the
+  actuation boundary. Comment fixed; still unused for decision logic.
+
+### Addendum metrics
+
+| Metric | Type | Meaning |
+|--------|------|---------|
+| `bigfleet_shard_actions_dryrun_total{kind}` | counter | Actions reported-not-executed in shadow mode. A per-cycle intention rate, not a count of distinct actions. |
+| `bigfleet_shard_machines_rejected_total{reason}` | counter | Provider records refused at ingest by `machine.Invariant`. Sustained non-zero = the provider is emitting garbage. |
+
+### Defaults
+
+| Surface | Binary flag | Chart value | Library zero value |
+|---------|-------------|-------------|--------------------|
+| Shadow mode | `--dry-run=false` | `shard.dryRun: false` | off |
+| Audit log | `--audit-log=""` (off) | `shard.auditLog: ""` | `Config.AuditLogger = nil` |
+
+Ingest validation has no knob: it is not a rail an operator tunes,
+it is the contract being enforced.
 
 [ADR-0009]: ./0009-reclaim-uses-policy-v1-eviction-and-async-drain.md
 [ADR-0036]: ./0036-phase3-gated-by-first-rollup.md

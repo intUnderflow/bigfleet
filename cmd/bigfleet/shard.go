@@ -592,6 +592,8 @@ func runShard(args []string) error {
 	actuationPaused := fs.Bool("actuation-paused", false, "ADR-0046 kill switch: run decision cycles and full reporting (reconcile, metrics, shortfalls, AvailableCapacity) but execute no Bootstrap/Provision/Reclaim/Preempt actions. Suppressed actions are counted in bigfleet_shard_actions_suppressed_total. Flipped by redeploy; durable across restarts because it is deployment state.")
 	reclaimCapFraction := fs.Float64("reclaim-cap-fraction", shard.DefaultReclaimCapFraction, "ADR-0046 blast-radius cap: per cycle, per cluster, execute at most max(1, fraction × the cluster's Configured count) Reclaim actions; the surplus re-derives next cycle. Bounds the worst-case drain rate when the engine's inputs or logic are wrong. Preempts are not capped (priority-driven allocation, paper §16). 0 disables.")
 	emptyRollupGuard := fs.Bool("empty-rollup-guard", true, "ADR-0046: quarantine a full-replacement rollup that would retain <10% of a cluster's previously accepted demand (when that demand spans >= 10 Needs) until 3 consecutive rollups confirm the drop. Genuine mass scale-down proceeds ~2 rollup intervals later; a one-shot wipe (operator bug, forged rollup) never lands. =false disables.")
+	dryRun := fs.Bool("dry-run", false, "ADR-0046 addendum shadow mode: run full decision cycles and REPORT every action the shard would execute (Info logs + bigfleet_shard_actions_dryrun_total) without touching the provider or sending instructions to operators. The day-one adoption posture — run BigFleet against a live fleet to see what it WOULD do before trusting it. Distinct from --actuation-paused, the emergency stop. Shadow mode cannot observe what would have bound (nothing executes, no fake Node materializes): it validates decision volume/shape, not outcomes.")
+	auditLogPath := fs.String("audit-log", "", "ADR-0046 addendum: path of a JSONL decision audit log — one record per executed action (timestamp, cycle, kind, machine, cluster, reason, grace, outcome), with suppressed and dry-run actions marked as such. Empty disables. Append-only; rotation/size management is the operator's (logrotate-style).")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
 	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
@@ -639,9 +641,22 @@ func runShard(args []string) error {
 		ActuationPaused:           *actuationPaused,
 		ReclaimCapFraction:        *reclaimCapFraction,
 		EmptyRollupGuard:          *emptyRollupGuard,
+		DryRun:                    *dryRun,
 	}
 	if *actuationPaused {
 		logger.Warn("starting with actuation paused (ADR-0046 kill switch): cycles will decide and report but execute nothing")
+	}
+	if *dryRun {
+		logger.Info("starting in dry-run shadow mode (ADR-0046 addendum): cycles will report decided actions but execute nothing")
+	}
+	if *auditLogPath != "" {
+		f, err := os.OpenFile(*auditLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return fmt.Errorf("audit-log: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		cfg.AuditLogger = slog.New(slog.NewJSONHandler(f, nil))
+		logger.Info("decision audit log enabled", "path", *auditLogPath)
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {

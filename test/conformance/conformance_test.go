@@ -20,6 +20,7 @@ package conformance_test
 import (
 	"context"
 	"flag"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -273,6 +274,42 @@ func TestConformance_LabelShape(t *testing.T) {
 		}
 		// zone is not required (single-zone providers may omit) but
 		// most cloud providers set it.
+	}
+}
+
+// TestConformance_CostFieldBounds verifies the provider never
+// publishes machine records whose cost-formula inputs are out of
+// bounds: price_per_hour must be ≥ 0 and not NaN; interruption_
+// probability must lie in [0, 1] (per the provider.proto contract).
+// These two fields feed BigFleet's locked cost formula
+// (effective_cost = price + probability × penalty) unmodified.
+//
+// The shard survives violations regardless — it rejects out-of-bounds
+// records at ingest (bigfleet_shard_machines_rejected_total, ADR-0046
+// addendum; survivability is asserted by pkg/shard's own tests, since
+// this suite's system-under-test is the provider, not the shard) —
+// but a provider that needs that rail is out of contract, and this
+// test makes the contract mechanical.
+func TestConformance_CostFieldBounds(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := cli.List(ctx, &pb.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(resp.GetMachines()) == 0 {
+		t.Skip("conformance: provider has no machines; seed some and re-run")
+	}
+	for _, m := range resp.GetMachines() {
+		if p := m.GetPricePerHour(); math.IsNaN(p) || p < 0 {
+			t.Errorf("machine %s: price_per_hour %v negative or NaN", m.GetId(), p)
+		}
+		if ip := m.GetInterruptionProbability(); math.IsNaN(ip) || ip < 0 || ip > 1 {
+			t.Errorf("machine %s: interruption_probability %v outside [0,1]", m.GetId(), ip)
+		}
 	}
 }
 

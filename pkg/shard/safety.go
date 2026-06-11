@@ -5,14 +5,21 @@
 // what an inbound roll-up is allowed to do to the NeedsTable (rail 2).
 // None of them ever reorders priority — see the ADR's §16-tension
 // section.
+//
+// The ADR-0046 Addendum (second half of M70) adds three more surfaces
+// at the same boundary, kept in this file: dry-run/shadow mode (the
+// suppression branch lives in runCycleCapturing), the provider-ingest
+// machine validator below, and the decision audit log.
 package shard
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 )
 
 // DefaultReclaimCapFraction is the production default for the
@@ -181,4 +188,63 @@ func capReclaims(snap *inventory.Snapshot, actions []decision.Action, fraction f
 		kept = append(kept, a)
 	}
 	return kept, capped
+}
+
+// validateProviderMachine is the ingest gate for machine records
+// arriving from the provider (reconcile List results, Create acks).
+// machine.Invariant is the validator the production-readiness audit
+// (arc 3) flagged as unwired: it bounds the provider-declared
+// cost-formula inputs — price ≥ 0, interruption_probability ∈ [0, 1]
+// — alongside the structural state invariants. Policy (ADR-0046
+// addendum): reject the record — log + count, never crash, never
+// silently accept — and let the inventory keep its last-known-good
+// state.
+func (s *Shard) validateProviderMachine(m *machine.Machine) error {
+	err := m.Invariant()
+	if err == nil {
+		return nil
+	}
+	metrics.ShardMachinesRejected.WithLabelValues(machineRejectReason(err)).Inc()
+	s.log.Warn("provider machine rejected at ingest (ADR-0046 addendum)",
+		"machine", m.ID, "state", m.State.String(), "err", err)
+	return err
+}
+
+// machineRejectReason buckets an Invariant violation into a bounded
+// metric label. Same Contains-classification pattern as
+// classifyExecuteError; the cost-formula bounds get their own labels
+// because they are the money-path signal, everything else is shape.
+func machineRejectReason(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "price_per_hour"):
+		return "price"
+	case strings.Contains(msg, "interruption_probability"):
+		return "interruption_probability"
+	}
+	return "structural"
+}
+
+// auditAction appends one record to the decision audit log (ADR-0046
+// addendum): cycle, kind, machine, cluster, reason, grace, and the
+// disposition outcome — the classified execute result ("success",
+// "provider_error", ...) for executed actions, "suppressed" for
+// kill-switch drops, "dryrun" for shadow mode. The slog JSON handler
+// supplies the timestamp. cycle is the shard's cycle counter at
+// record time; for executed actions that is the executing cycle,
+// which under the ADR-0021 async pool can trail the deciding cycle.
+// No-op when no audit logger is configured.
+func (s *Shard) auditAction(a *decision.Action, outcome string) {
+	if s.audit == nil {
+		return
+	}
+	s.audit.Info("action",
+		"cycle", s.cycleCount.Load(),
+		"kind", a.Kind.String(),
+		"machine", string(a.MachineID),
+		"cluster", string(a.Cluster),
+		"reason", a.Reason,
+		"grace_seconds", a.GracePeriod.Seconds(),
+		"outcome", outcome,
+	)
 }

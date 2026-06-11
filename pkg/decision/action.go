@@ -67,8 +67,12 @@ type Action struct {
 	// GracePeriod is set on Reclaim and Preempt actions.
 	GracePeriod time.Duration
 
-	// Reason is a human-readable note attached for telemetry. Not used
-	// for decision logic; safe to drop without affecting semantics.
+	// Reason is a short, stable tag for why the engine emitted this
+	// action ("phase1.idle", "phase3.excess", ...). Not used for
+	// decision logic — but no longer droppable telemetry: the shard's
+	// decision audit log (ADR-0046 addendum) records it per
+	// executed/suppressed/dry-run action, so incident replay depends
+	// on it surviving to the actuation boundary.
 	Reason string
 
 	// PreemptorPriority is set on Preempt actions for surface-area in

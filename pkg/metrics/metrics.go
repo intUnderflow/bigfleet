@@ -312,6 +312,32 @@ var (
 		Name: "bigfleet_shard_actuation_paused",
 		Help: "1 while the shard runs with --actuation-paused (ADR-0046): cycles decide and report but execute nothing.",
 	})
+
+	// ShardActionsDryRun counts actions decided under --dry-run shadow
+	// mode (ADR-0046 addendum), by kind. Deliberately distinct from
+	// ShardActionsSuppressed so dashboards can tell "shadowing by
+	// design" (day-one adoption posture, expected) from "paused in
+	// anger" (incident). Nothing counted here reached the provider or
+	// an operator. Because nothing executes, the engine's view never
+	// converges — this is a per-cycle intention rate, not a count of
+	// distinct actions.
+	ShardActionsDryRun = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_actions_dryrun_total",
+		Help: "Decision actions reported-not-executed under --dry-run shadow mode (ADR-0046 addendum), by kind.",
+	}, []string{"kind"})
+
+	// ShardMachinesRejected counts provider machine records refused at
+	// the shard's ingest boundary (reconcile List results, Create acks)
+	// because they failed machine.Invariant — negative/NaN price,
+	// interruption_probability outside [0,1], or a structural state
+	// violation. The inventory keeps its last-known-good record.
+	// Sustained non-zero = the provider is emitting garbage that the
+	// pre-M70 shard would have silently dropped or silently priced
+	// into the cost formula.
+	ShardMachinesRejected = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_machines_rejected_total",
+		Help: "Provider machine records rejected at shard ingest by machine.Invariant (ADR-0046 addendum), by reason (price / interruption_probability / structural).",
+	}, []string{"reason"})
 )
 
 // Coordinator metrics.

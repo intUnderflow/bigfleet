@@ -186,6 +186,28 @@ type Config struct {
 	// after ~2 roll-up intervals. False = off (zero value, same
 	// rationale as ReclaimCapFraction); the binary flag defaults on.
 	EmptyRollupGuard bool
+
+	// DryRun is the ADR-0046-addendum shadow mode: the day-one
+	// adoption posture, distinct from ActuationPaused (the emergency
+	// stop). Cycles run in full and every decided action is REPORTED —
+	// logged at Info and counted in
+	// bigfleet_shard_actions_dryrun_total — but nothing executes: no
+	// provider RPC, no BootstrapRequest or ReclaimInstruction reaches
+	// an operator. Mechanically it shares the kill switch's
+	// suppression point; the flags and metrics stay distinct so
+	// dashboards can tell "shadowing by design" from "paused in
+	// anger". When both are set, ActuationPaused wins the counting —
+	// an emergency stop during a shadow run should read as a pause.
+	DryRun bool
+
+	// AuditLogger, when set, receives one structured record per
+	// decision-action disposition — executed (with its classified
+	// outcome), suppressed by the kill switch, or dry-run — forming
+	// the ADR-0046-addendum decision audit log. The shard binary
+	// points this at a JSONL file handler via --audit-log; nil
+	// disables. Rotation / size management is deliberately the
+	// operator's concern (logrotate-style), not the shard's.
+	AuditLogger *slog.Logger
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -291,6 +313,11 @@ type Shard struct {
 	// set; per-cluster, in-memory (restart window is ADR-0036's).
 	rollupGuard rollupGuard
 
+	// audit is the ADR-0046-addendum decision audit logger
+	// (Config.AuditLogger). nil = disabled. Written by auditAction
+	// from the execute path and the suppression branches.
+	audit *slog.Logger
+
 	log *slog.Logger
 }
 
@@ -351,6 +378,7 @@ func New(cfg Config) (*Shard, error) {
 		demandObservedAt:    make(map[machine.ClusterID]map[string]time.Time),
 		pendingActions:      make(map[machine.ID]struct{}),
 		firstRollupReceived: make(map[machine.ClusterID]bool),
+		audit:               cfg.AuditLogger,
 		log:                 log.With("component", "shard", "shard_id", cfg.ID, "epoch", cfg.Epoch.Value()),
 	}, nil
 }
@@ -702,9 +730,12 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// unchanged snapshot) — and unlike MaxActionsPerCycle's deferral
 	// below, it does NOT trigger an immediate follow-up cycle: the
 	// cap's purpose is spreading risk over wall-clock time, so the
-	// surplus waits for the natural cadence. Skipped while paused
-	// (rail 3 suppresses everything anyway).
-	if !s.cfg.ActuationPaused && s.cfg.ReclaimCapFraction > 0 {
+	// surplus waits for the natural cadence. Skipped while paused or
+	// shadowing: nothing executes under either, so there is no drain
+	// rate to bound — and dry-run's job is to report the engine's
+	// whole decision, not the rail-metered execution schedule
+	// (ADR-0046 addendum).
+	if !s.cfg.ActuationPaused && !s.cfg.DryRun && s.cfg.ReclaimCapFraction > 0 {
 		var capped int
 		all, capped = capReclaims(snap, all, s.cfg.ReclaimCapFraction)
 		if capped > 0 {
@@ -715,9 +746,13 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		}
 	}
 
+	// MaxActionsPerCycle is also skipped while paused or shadowing —
+	// there is no execute cost to bound, and its deferral schedules an
+	// immediate follow-up cycle, which with nothing executing would
+	// re-derive the same surplus and busy-loop the wakeup channel.
 	limit := s.cfg.MaxActionsPerCycle
 	deferred := 0
-	if !s.cfg.ActuationPaused && limit > 0 && len(all) > limit {
+	if !s.cfg.ActuationPaused && !s.cfg.DryRun && limit > 0 && len(all) > limit {
 		deferred = len(all) - limit
 		all = all[:limit]
 	}
@@ -740,13 +775,39 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		// engine's view and intentions stay fully observable; only
 		// execution is withheld. Suppressed actions are counted per
 		// kind and kept out of ShardActionsTotal (which means
-		// "emitted for execution").
-		for _, a := range all {
-			metrics.ShardActionsSuppressed.WithLabelValues(a.Kind.String()).Inc()
+		// "emitted for execution"). Checked before DryRun: an
+		// emergency stop during a shadow run must read as a pause on
+		// dashboards, not blend into the shadow counters.
+		for i := range all {
+			metrics.ShardActionsSuppressed.WithLabelValues(all[i].Kind.String()).Inc()
+			s.auditAction(&all[i], "suppressed")
 		}
 		if len(all) > 0 {
 			s.log.Warn("actuation paused: decided actions suppressed (ADR-0046)",
 				"suppressed", len(all))
+		}
+	case s.cfg.DryRun:
+		// ADR-0046 addendum: shadow mode. Same suppression point as
+		// the kill switch, opposite posture — this is the day-one
+		// adoption mode, run deliberately to see what BigFleet WOULD
+		// do against a live fleet before trusting it. Every decided
+		// action is reported in full (the whole point), at Info, with
+		// its own counter so "shadowing by design" never reads as
+		// "paused in anger". Nothing reaches the provider or an
+		// operator. Limitation (documented in the ADR): with nothing
+		// executing the engine's view never converges, so the same
+		// intentions re-report every cycle — this validates decision
+		// volume/shape, not outcomes.
+		for i := range all {
+			a := &all[i]
+			metrics.ShardActionsDryRun.WithLabelValues(a.Kind.String()).Inc()
+			s.log.Info("dry-run: would execute action",
+				"kind", a.Kind.String(),
+				"machine", a.MachineID,
+				"cluster", a.Cluster,
+				"reason", a.Reason,
+				"grace", a.GracePeriod)
+			s.auditAction(a, "dryrun")
 		}
 	case s.actionQueue != nil:
 		for _, a := range all {
@@ -848,10 +909,10 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// `all` was already populated above when we built the executor's
 	// queue; reuse it for metrics. (We also need to count any deferred
 	// actions not in `all` — they show up via ShardActionsDeferred.)
-	// Suppressed actions (ADR-0046 kill switch) are counted only in
-	// ShardActionsSuppressed so this counter keeps meaning "emitted
-	// for execution".
-	if !s.cfg.ActuationPaused {
+	// Suppressed (ADR-0046 kill switch) and dry-run (addendum) actions
+	// are counted only in their own counters so this one keeps meaning
+	// "emitted for execution".
+	if !s.cfg.ActuationPaused && !s.cfg.DryRun {
 		for _, a := range all {
 			metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
 		}

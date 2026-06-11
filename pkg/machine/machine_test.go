@@ -2,6 +2,7 @@ package machine_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
@@ -163,6 +164,48 @@ func TestInvariant_StableStates(t *testing.T) {
 				InterruptionProbability: 1.5,
 			},
 			wantErr: true,
+		},
+		// ADR-0046 addendum: cost-formula input bounds. These are the
+		// provider-declared fields the shard's ingest gate rejects on.
+		{
+			name: "interruption probability NaN: invalid",
+			machine: machine.Machine{
+				ID:                      "m-1",
+				State:                   machine.StateIdle,
+				Host:                    machine.HostRef{Provider: "aws", Ref: "i-1"},
+				InterruptionProbability: math.NaN(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative price: invalid",
+			machine: machine.Machine{
+				ID:           "m-1",
+				State:        machine.StateIdle,
+				Host:         machine.HostRef{Provider: "aws", Ref: "i-1"},
+				PricePerHour: -0.01,
+			},
+			wantErr: true,
+		},
+		{
+			name: "NaN price: invalid",
+			machine: machine.Machine{
+				ID:           "m-1",
+				State:        machine.StateIdle,
+				Host:         machine.HostRef{Provider: "aws", Ref: "i-1"},
+				PricePerHour: math.NaN(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "in-bounds price and probability: ok",
+			machine: machine.Machine{
+				ID:                      "m-1",
+				State:                   machine.StateIdle,
+				Host:                    machine.HostRef{Provider: "aws", Ref: "i-1"},
+				PricePerHour:            3.50,
+				InterruptionProbability: 0.07,
+			},
 		},
 	}
 	for _, tc := range cases {

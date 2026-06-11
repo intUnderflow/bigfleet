@@ -90,6 +90,11 @@ spec:
             - --actuation-paused={{ .Values.shard.actuationPaused }}
             - --reclaim-cap-fraction={{ .Values.shard.reclaimCapFraction }}
             - --empty-rollup-guard={{ .Values.shard.emptyRollupGuard }}
+            # ADR-0046 addendum: shadow mode + decision audit log.
+            - --dry-run={{ .Values.shard.dryRun }}
+            {{- if .Values.shard.auditLog }}
+            - --audit-log={{ .Values.shard.auditLog }}
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom:

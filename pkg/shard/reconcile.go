@@ -96,13 +96,22 @@ func (s *Shard) reconcileIncremental(ctx context.Context) error {
 // InterruptionPenalty, ReclamationPenalty) which the provider doesn't
 // know about.
 //
-// The provider's domain types come pre-validated by either the fake
-// (constructs valid Machines directly) or grpcadapter (validates at
-// the proto-to-domain conversion). The pre-M11.24a code re-routed
-// every reconciled machine through MachineToProto+MachineFromProto
-// "to exercise the validation paths" — pure duplication that
-// dominated the cycle whenever execute had just fanned out a burst.
-// Trust the provider boundary; drop the round-trip.
+// Validation (ADR-0046 addendum / M70): records taking a slow path are
+// screened by machine.Invariant before they touch inventory — the
+// production-readiness audit (arc 3) found nothing bounding the
+// provider-declared price / interruption_probability on this path. An
+// earlier comment here claimed the records arrived "pre-validated" by
+// the fake or grpcadapter; that was false — grpcadapter checks only
+// the state enum, and Insert/Apply's own Invariant errors were
+// discarded below, so garbage was silently dropped (or, for fields
+// Invariant didn't yet bound, silently accepted into the cost
+// formula). A rejected record is logged + counted and the inventory
+// keeps its last-known-good state; reconcileFull marks the ID seen
+// first, so rejection never masquerades as removal. The state-match
+// fast path is not screened: it ingests nothing. (The pre-M11.24a
+// MachineToProto+MachineFromProto round-trip "to exercise the
+// validation paths" stays dead — it validated the same enum twice and
+// dominated post-burst cycles.)
 func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 	// Skip in-flight machines (bigfleet-uber #23 fix). A worker is
 	// driving this machine through its provider RPC(s); its local
@@ -119,10 +128,14 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 	if s.isPending(dm.ID) {
 		return
 	}
-	if existing, getErr := s.inv.Get(dm.ID); getErr == nil {
-		if existing.State == dm.State {
-			return
-		}
+	existing, getErr := s.inv.Get(dm.ID)
+	if getErr == nil && existing.State == dm.State {
+		return
+	}
+	if s.validateProviderMachine(&dm) != nil {
+		return
+	}
+	if getErr == nil {
 		dm.AssignedPriority = existing.AssignedPriority
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars

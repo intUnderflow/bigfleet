@@ -51,7 +51,13 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
 	metrics.ShardExecuteInflight.Inc()
 	defer metrics.ShardExecuteInflight.Dec()
 	defer func() {
-		metrics.ShardActionExecuteOutcomes.WithLabelValues(a.Kind.String(), classifyExecuteError(ctx, err)).Inc()
+		outcome := classifyExecuteError(ctx, err)
+		metrics.ShardActionExecuteOutcomes.WithLabelValues(a.Kind.String(), outcome).Inc()
+		// ADR-0046 addendum: every executed action lands in the
+		// decision audit log with its classified outcome.
+		// Suppressed / dry-run actions are recorded at the cycle's
+		// suppression branch instead; they never reach execute.
+		s.auditAction(&a, outcome)
 	}()
 	switch a.Kind {
 	case decision.ActionKindBootstrap:
@@ -174,6 +180,20 @@ func (s *Shard) executeProvision(ctx context.Context, a decision.Action) error {
 	// Reflect the provider's view of the host into the inventory.
 	created, mErr := conv.MachineFromProto(conv.MachineToProto(ack.Machine))
 	_ = mErr // round-trip can't fail since we control the source
+	// ADR-0046 addendum: the Create ack is where provider-declared
+	// price / interruption_probability enter the inventory — and the
+	// locked cost formula. A garbage ack is treated like a provider
+	// error: Failed, loud, counted — never ingested. (Configure /
+	// Drain acks merge no cost fields, and their round-tripped form
+	// legitimately lacks the cluster binding the wire doesn't carry,
+	// so full-Invariant screening there would false-positive; the
+	// records they produce still pass inventory.Apply's Invariant.)
+	if vErr := s.validateProviderMachine(&created); vErr != nil {
+		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
+			m.LastError = "create: ack rejected: " + vErr.Error()
+		})
+		return formatErr("provision: provider.Create ack rejected", vErr)
+	}
 	if err := s.applyTransition(a.MachineID, created.State, func(m *machine.Machine) {
 		m.Host = created.Host
 		m.Profile = created.Profile

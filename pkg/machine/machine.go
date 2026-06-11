@@ -12,6 +12,7 @@ package machine
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 // ID is BigFleet's internal machine identifier. Stable across the entire
@@ -273,9 +274,17 @@ func (m Machine) EffectiveCost(interruptionPenaltyDollars float64) float64 {
 	return m.PricePerHour + (m.InterruptionProbability * interruptionPenaltyDollars)
 }
 
-// Invariant validates the structural invariants of a Machine. Returns the
-// first invariant violated, or nil. Used by tests and reconciliation
-// code to assert state-machine consistency.
+// Invariant validates the structural invariants of a Machine plus the
+// bounds on the provider-declared cost-formula inputs: PricePerHour
+// must be ≥ 0 and not NaN, InterruptionProbability must lie in [0, 1].
+// Returns the first invariant violated, or nil.
+//
+// Where it runs: every inventory write (inventory.Insert / Apply) and,
+// loudly, the shard's provider-ingest boundary (reconcile List results
+// and Create acks — ADR-0046 addendum / M70). The production-readiness
+// audit (arc 3) found the cost bounds unenforced at ingest: a provider
+// returning a negative price or probability > 1 fed straight into
+// EffectiveCost, or was silently dropped by a discarded Insert error.
 func (m *Machine) Invariant() error {
 	switch m.State {
 	case StateSpeculative, StateCreating:
@@ -305,8 +314,11 @@ func (m *Machine) Invariant() error {
 	case StateUnspecified:
 		return fmt.Errorf("machine %s: state is Unspecified", m.ID)
 	}
-	if m.InterruptionProbability < 0 || m.InterruptionProbability > 1 {
+	if m.InterruptionProbability < 0 || m.InterruptionProbability > 1 || math.IsNaN(m.InterruptionProbability) {
 		return fmt.Errorf("machine %s: interruption_probability %f outside [0,1]", m.ID, m.InterruptionProbability)
+	}
+	if m.PricePerHour < 0 || math.IsNaN(m.PricePerHour) {
+		return fmt.Errorf("machine %s: price_per_hour %f negative or NaN", m.ID, m.PricePerHour)
 	}
 	return nil
 }

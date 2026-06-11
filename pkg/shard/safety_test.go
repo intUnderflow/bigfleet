@@ -7,6 +7,7 @@ package shard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -24,6 +25,7 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
+	"github.com/intUnderflow/bigfleet/pkg/provider"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 )
 
@@ -463,6 +465,344 @@ func TestActuationPaused_SuppressesExecution(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.ShardActuationPaused); got != 1 {
 		t.Errorf("bigfleet_shard_actuation_paused = %v, want 1", got)
+	}
+}
+
+// --- ADR-0046 addendum: dry-run / shadow mode -----------------------
+
+// TestDryRun_ReportsWithoutExecuting: shadow mode keeps deciding and
+// REPORTS — one Info line per action plus the dryrun counter — but
+// executes nothing: no machine leaves its state, and the kill
+// switch's suppressed counter stays untouched (distinct metrics so
+// dashboards can tell "shadowing by design" from "paused in anger").
+func TestDryRun_ReportsWithoutExecuting(t *testing.T) {
+	var buf bytes.Buffer
+	sh, prov := newSafetyShard(t, func(c *Config) {
+		c.DryRun = true
+		c.Logger = slog.New(slog.NewTextHandler(&buf, nil))
+	})
+	ctx := context.Background()
+
+	// Acquisition side: demand over idle supply decides Bootstraps.
+	for i := 0; i < 4; i++ {
+		prov.AddIdle(machine.ID("dry-idle-"+strconv.Itoa(i)), capTestProfile(), machine.CapacityTypeBareMetal, 0, 0)
+	}
+	// Release side: a Configured machine under an empty roll-up
+	// decides a Reclaim.
+	seedConfigured(t, sh, prov, "dry-r", "dry-conf-0")
+	sh.ApplyRollup("dry-r", nil)
+	sh.ApplyRollup("dry-b", []needs.Need{capTestNeed("dry-b", 4, 1000)})
+
+	dryBefore := testutil.ToFloat64(metrics.ShardActionsDryRun.WithLabelValues("Bootstrap")) +
+		testutil.ToFloat64(metrics.ShardActionsDryRun.WithLabelValues("Reclaim"))
+	suppressedBefore := testutil.ToFloat64(metrics.ShardActionsSuppressed.WithLabelValues("Bootstrap")) +
+		testutil.ToFloat64(metrics.ShardActionsSuppressed.WithLabelValues("Reclaim"))
+
+	for cycle := 0; cycle < 3; cycle++ {
+		acts := sh.Step(ctx)
+		if countKind(acts, decision.ActionKindBootstrap) == 0 {
+			t.Fatalf("cycle %d: no Bootstrap decided — the engine must keep deciding in shadow", cycle)
+		}
+		if countKind(acts, decision.ActionKindReclaim) == 0 {
+			t.Fatalf("cycle %d: no Reclaim decided — the engine must keep deciding in shadow", cycle)
+		}
+		snap := sh.Inventory().Snapshot()
+		if got := snap.CountByState(machine.StateIdle); got != 4 {
+			t.Fatalf("cycle %d: idle = %d, want 4 (no Bootstrap may execute)", cycle, got)
+		}
+		if got := snap.CountByState(machine.StateConfigured); got != 1 {
+			t.Fatalf("cycle %d: configured = %d, want 1 (no Reclaim may execute)", cycle, got)
+		}
+	}
+
+	dryAfter := testutil.ToFloat64(metrics.ShardActionsDryRun.WithLabelValues("Bootstrap")) +
+		testutil.ToFloat64(metrics.ShardActionsDryRun.WithLabelValues("Reclaim"))
+	suppressedAfter := testutil.ToFloat64(metrics.ShardActionsSuppressed.WithLabelValues("Bootstrap")) +
+		testutil.ToFloat64(metrics.ShardActionsSuppressed.WithLabelValues("Reclaim"))
+	if delta := dryAfter - dryBefore; delta < 5 {
+		t.Errorf("dryrun-actions delta = %v, want ≥ 5 (4 Bootstraps + 1 Reclaim per cycle)", delta)
+	}
+	if delta := suppressedAfter - suppressedBefore; delta != 0 {
+		t.Errorf("suppressed-actions delta = %v under dry-run, want 0 (distinct from the kill switch)", delta)
+	}
+	if got := testutil.ToFloat64(metrics.ShardActuationPaused); got != 0 {
+		t.Errorf("bigfleet_shard_actuation_paused = %v under dry-run, want 0", got)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "dry-run: would execute action") {
+		t.Errorf("shadow mode produced no per-action report line; got: %s", logged)
+	}
+	// kind/cluster/reason must be on the line — that's the report an
+	// adopting operator reads.
+	for _, want := range []string{"phase1.idle", "phase3.excess", "dry-b", "dry-r"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("dry-run report lines missing %q", want)
+		}
+	}
+}
+
+// --- ADR-0046 addendum: provider-ingest validation ------------------
+
+// TestProviderIngest_RejectsGarbageMachines drives garbage provider
+// records through the reconcile ingest path and asserts the policy:
+// reject from inventory (log + counter), keep last-known-good, never
+// crash, and keep admitting clean records.
+func TestProviderIngest_RejectsGarbageMachines(t *testing.T) {
+	sh, prov := newSafetyShard(t, nil)
+
+	priceBefore := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("price"))
+	probBefore := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("interruption_probability"))
+	structBefore := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("structural"))
+
+	// Negative price: the cost-formula garbage class.
+	sh.applyReconciledMachine(machine.Machine{
+		ID:           "bad-price",
+		State:        machine.StateIdle,
+		Host:         machine.HostRef{Provider: "fake", Ref: "bad-price"},
+		Profile:      capTestProfile(),
+		PricePerHour: -3,
+	})
+	if _, err := sh.Inventory().Get("bad-price"); err == nil {
+		t.Error("negative-price machine entered inventory")
+	}
+
+	// Probability outside [0,1].
+	sh.applyReconciledMachine(machine.Machine{
+		ID:                      "bad-prob",
+		State:                   machine.StateIdle,
+		Host:                    machine.HostRef{Provider: "fake", Ref: "bad-prob"},
+		Profile:                 capTestProfile(),
+		InterruptionProbability: 1.5,
+	})
+	if _, err := sh.Inventory().Get("bad-prob"); err == nil {
+		t.Error("probability>1 machine entered inventory")
+	}
+
+	// Structural: Configured without a cluster binding.
+	sh.applyReconciledMachine(machine.Machine{
+		ID:      "bad-shape",
+		State:   machine.StateConfigured,
+		Host:    machine.HostRef{Provider: "fake", Ref: "bad-shape"},
+		Profile: capTestProfile(),
+	})
+	if _, err := sh.Inventory().Get("bad-shape"); err == nil {
+		t.Error("clusterless Configured machine entered inventory")
+	}
+
+	// Garbage update for a known machine: rejected, and the inventory
+	// keeps the last-known-good record rather than dropping it.
+	seedConfigured(t, sh, prov, "ingest-c", "good-0")
+	sh.applyReconciledMachine(machine.Machine{
+		ID:                      "good-0",
+		State:                   machine.StateDraining, // diverges → would take the Apply path
+		Host:                    machine.HostRef{Provider: "fake", Ref: "good-0"},
+		Cluster:                 "ingest-c",
+		Profile:                 capTestProfile(),
+		InterruptionProbability: 2,
+	})
+	cur, err := sh.Inventory().Get("good-0")
+	if err != nil {
+		t.Fatalf("good-0 vanished from inventory: %v", err)
+	}
+	if cur.State != machine.StateConfigured || cur.InterruptionProbability != 0 {
+		t.Errorf("last-known-good not preserved: state=%s prob=%v", cur.State, cur.InterruptionProbability)
+	}
+
+	// A clean record still ingests — the gate rejects, it doesn't close.
+	sh.applyReconciledMachine(machine.Machine{
+		ID:                      "clean-0",
+		State:                   machine.StateIdle,
+		Host:                    machine.HostRef{Provider: "fake", Ref: "clean-0"},
+		Profile:                 capTestProfile(),
+		PricePerHour:            1.25,
+		InterruptionProbability: 0.05,
+	})
+	if _, err := sh.Inventory().Get("clean-0"); err != nil {
+		t.Errorf("valid machine rejected at ingest: %v", err)
+	}
+
+	if delta := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("price")) - priceBefore; delta != 1 {
+		t.Errorf("price rejections delta = %v, want 1", delta)
+	}
+	if delta := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("interruption_probability")) - probBefore; delta != 2 {
+		t.Errorf("probability rejections delta = %v, want 2", delta)
+	}
+	if delta := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("structural")) - structBefore; delta != 1 {
+		t.Errorf("structural rejections delta = %v, want 1", delta)
+	}
+}
+
+// garbageAckProvider wraps the fake and corrupts the Create ack's
+// provider-declared price — the one ack that carries cost fields into
+// inventory.
+type garbageAckProvider struct {
+	*fake.Provider
+}
+
+func (g *garbageAckProvider) Create(ctx context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
+	ack, err := g.Provider.Create(ctx, req)
+	if err != nil {
+		return ack, err
+	}
+	ack.Machine.PricePerHour = -42
+	return ack, nil
+}
+
+// TestProviderIngest_RejectsGarbageCreateAck: a garbage Create ack is
+// treated like a provider error — Failed, loud, counted — and the
+// corrupt price never reaches the inventory (or EffectiveCost).
+func TestProviderIngest_RejectsGarbageCreateAck(t *testing.T) {
+	inner := fake.New(fake.Options{InstantTransitions: true})
+	epoch, err := fencing.LoadEpoch(filepath.Join(t.TempDir(), "epoch"))
+	if err != nil {
+		t.Fatalf("LoadEpoch: %v", err)
+	}
+	sh, err := New(Config{
+		ID:       "ack-test",
+		Epoch:    epoch,
+		Provider: &garbageAckProvider{Provider: inner},
+		LocalBootstrap: func(context.Context, machine.ClusterID, []needs.Requirement) ([]byte, error) {
+			return []byte("# ack test\n"), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("shard.New: %v", err)
+	}
+	inner.AddSpeculative("spec-0", capTestProfile(), machine.CapacityTypeOnDemand, 1.0, 0.05)
+	if err := sh.SeedInventory(machine.Machine{
+		ID:                      "spec-0",
+		State:                   machine.StateSpeculative,
+		Profile:                 capTestProfile(),
+		PricePerHour:            1.0,
+		InterruptionProbability: 0.05,
+	}); err != nil {
+		t.Fatalf("SeedInventory: %v", err)
+	}
+	priceBefore := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("price"))
+
+	prof := capTestNeed("ack-c", 1, 1000).Profile
+	execErr := sh.execute(context.Background(), decision.Action{
+		Kind:          decision.ActionKindProvision,
+		MachineID:     "spec-0",
+		Cluster:       "ack-c",
+		SourceProfile: &prof,
+	})
+	if execErr == nil {
+		t.Fatal("execute succeeded on a garbage Create ack; want rejection")
+	}
+	cur, err := sh.Inventory().Get("spec-0")
+	if err != nil {
+		t.Fatalf("inventory get: %v", err)
+	}
+	if cur.State != machine.StateFailed {
+		t.Errorf("state = %s, want Failed (garbage ack treated like a provider error)", cur.State)
+	}
+	if !strings.Contains(cur.LastError, "ack rejected") {
+		t.Errorf("LastError = %q, want the rejection recorded", cur.LastError)
+	}
+	if cur.PricePerHour != 1.0 {
+		t.Errorf("garbage price ingested: %v", cur.PricePerHour)
+	}
+	if delta := testutil.ToFloat64(metrics.ShardMachinesRejected.WithLabelValues("price")) - priceBefore; delta != 1 {
+		t.Errorf("price rejections delta = %v, want 1", delta)
+	}
+}
+
+// --- ADR-0046 addendum: decision audit log --------------------------
+
+// auditEntries decodes a JSONL audit buffer into one map per record.
+func auditEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	out := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("audit line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// TestAuditLog_RecordsExecutedActions: every executed action lands in
+// the audit log as one JSONL record with the full field set and its
+// classified outcome.
+func TestAuditLog_RecordsExecutedActions(t *testing.T) {
+	var audit bytes.Buffer
+	sh, prov := newSafetyShard(t, func(c *Config) {
+		c.AuditLogger = slog.New(slog.NewJSONHandler(&audit, nil))
+	})
+	prov.AddIdle("audit-idle-0", capTestProfile(), machine.CapacityTypeBareMetal, 0, 0)
+	sh.ApplyRollup("audit-c", []needs.Need{capTestNeed("audit-c", 1, 1000)})
+	sh.Step(context.Background())
+
+	entries := auditEntries(t, &audit)
+	if len(entries) == 0 {
+		t.Fatal("no audit records for an executed cycle")
+	}
+	var boot map[string]any
+	for _, e := range entries {
+		if e["kind"] == "Bootstrap" {
+			boot = e
+			break
+		}
+	}
+	if boot == nil {
+		t.Fatalf("no Bootstrap audit record; got %v", entries)
+	}
+	for _, k := range []string{"time", "cycle", "kind", "machine", "cluster", "reason", "grace_seconds", "outcome"} {
+		if _, ok := boot[k]; !ok {
+			t.Errorf("audit record missing %q: %v", k, boot)
+		}
+	}
+	if boot["outcome"] != "success" {
+		t.Errorf("outcome = %v, want success", boot["outcome"])
+	}
+	if boot["cluster"] != "audit-c" {
+		t.Errorf("cluster = %v, want audit-c", boot["cluster"])
+	}
+	if boot["reason"] != "phase1.idle" {
+		t.Errorf("reason = %v, want phase1.idle", boot["reason"])
+	}
+}
+
+// TestAuditLog_MarksSuppressedAndDryRun: not-executed dispositions are
+// recorded too, marked as such — the audit trail distinguishes "did"
+// from "decided but withheld".
+func TestAuditLog_MarksSuppressedAndDryRun(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mut     func(*Config)
+		outcome string
+	}{
+		{"suppressed", func(c *Config) { c.ActuationPaused = true }, "suppressed"},
+		{"dryrun", func(c *Config) { c.DryRun = true }, "dryrun"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var audit bytes.Buffer
+			sh, prov := newSafetyShard(t, func(c *Config) {
+				tc.mut(c)
+				c.AuditLogger = slog.New(slog.NewJSONHandler(&audit, nil))
+			})
+			prov.AddIdle(machine.ID("al-idle-"+tc.name), capTestProfile(), machine.CapacityTypeBareMetal, 0, 0)
+			cluster := machine.ClusterID("al-" + tc.name)
+			sh.ApplyRollup(cluster, []needs.Need{capTestNeed(cluster, 1, 1000)})
+			sh.Step(context.Background())
+
+			entries := auditEntries(t, &audit)
+			if len(entries) == 0 {
+				t.Fatal("no audit records for a withheld cycle")
+			}
+			for _, e := range entries {
+				if e["outcome"] != tc.outcome {
+					t.Errorf("outcome = %v, want %q", e["outcome"], tc.outcome)
+				}
+			}
+		})
 	}
 }
 

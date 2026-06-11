@@ -70,6 +70,19 @@ shard:
   # erase >90% of a cluster's previously accepted demand (when that
   # demand spans >= 10 Needs) until 3 consecutive rollups confirm it.
   emptyRollupGuard: true
+  # dryRun is the ADR-0046-addendum shadow mode — the day-one adoption
+  # posture. Cycles decide and report everything (Info logs +
+  # bigfleet_shard_actions_dryrun_total) but execute nothing: run
+  # BigFleet against a live fleet to see what it WOULD do before
+  # trusting it. Distinct from actuationPaused (the emergency stop).
+  dryRun: false
+  # auditLog, when non-empty, enables the JSONL decision audit log
+  # (one record per executed/suppressed/dry-run action). Point it
+  # under dataDir so it lands on the shard's PVC, e.g.
+  # /var/lib/bigfleet-shard/audit.jsonl, and ship it with your log
+  # pipeline. The shard only appends; rotation/size management is the
+  # operator's (logrotate-style sidecar or pipeline retention).
+  auditLog: ""
 
 # rbac toggles whether ClusterRole / ClusterRoleBinding are rendered.
 # Disable if your cluster admin manages RBAC out-of-band.
