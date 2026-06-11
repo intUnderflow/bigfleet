@@ -157,6 +157,35 @@ type Config struct {
 	// default). The shard subcommand wires --phase-attribution-log and
 	// the BIGFLEET_PHASEDUMP=1 env var here.
 	PhaseAttributionLog bool
+
+	// ActuationPaused is the ADR-0046 global kill switch. When set,
+	// the cycle still runs in full — reconcile, phases, shortfall
+	// recording, AvailableCapacity emission, metrics — but no action
+	// is executed: Bootstrap/Provision/Reclaim/Preempt are counted in
+	// ShardActionsSuppressed and dropped. Step/OnActions still surface
+	// the decided actions so the engine's intentions stay observable
+	// while paused. Static config: flipped by redeploy, never by RPC.
+	ActuationPaused bool
+
+	// ReclaimCapFraction is the ADR-0046 per-cluster reclaim
+	// blast-radius cap: per cycle, at most
+	// max(1, ⌊fraction × cluster's Configured count⌋) Reclaim actions
+	// execute; the surplus re-derives next cycle (Phase 3 is
+	// idempotent against an unchanged snapshot — roll-over, not
+	// drop). Preempts are NOT capped (priority-driven allocation,
+	// paper §16). 0 = cap off — the zero value keeps the sim canaries'
+	// pathologies undamped; the shard binary defaults the flag to
+	// DefaultReclaimCapFraction.
+	ReclaimCapFraction float64
+
+	// EmptyRollupGuard enables the ADR-0046 roll-up quarantine: a
+	// full-replacement roll-up that would retain <10% of the
+	// cluster's previously accepted demand (when that baseline spans
+	// ≥10 Need rows) is held until 3 consecutive roll-ups confirm the
+	// drop. Quarantine, not reject — genuine mass scale-down proceeds
+	// after ~2 roll-up intervals. False = off (zero value, same
+	// rationale as ReclaimCapFraction); the binary flag defaults on.
+	EmptyRollupGuard bool
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -257,6 +286,11 @@ type Shard struct {
 	firstRollupMu       sync.RWMutex
 	firstRollupReceived map[machine.ClusterID]bool
 
+	// rollupGuard is the ADR-0046 empty-roll-up quarantine state.
+	// Consulted by ApplyRollup only when Config.EmptyRollupGuard is
+	// set; per-cluster, in-memory (restart window is ADR-0036's).
+	rollupGuard rollupGuard
+
 	log *slog.Logger
 }
 
@@ -345,14 +379,47 @@ func (s *Shard) markFirstRollupReceived(c machine.ClusterID) {
 	s.firstRollupReceived[c] = true
 }
 
-// ApplyRollup replaces the cluster's NeedsTable slice and marks the
-// cluster as having reported (ADR-0036). The standard session loop
-// uses this path implicitly via direct field updates; tests / sim
-// runners that bypass the session loop call this method to keep the
-// rollup-received gate in sync with the NeedsTable.
-func (s *Shard) ApplyRollup(c machine.ClusterID, ns []needs.Need) {
+// ApplyRollup is the shard's roll-up ingest: it replaces the
+// cluster's NeedsTable slice and marks the cluster as having reported
+// (ADR-0036). Both the session loop and the sim/test runners flow
+// through here, so the ADR-0046 empty-roll-up guard has a single
+// implementation point: when Config.EmptyRollupGuard is set, a
+// full-replacement roll-up that would erase most of the cluster's
+// previously accepted demand is quarantined — the previous demand
+// stays active — until consecutive roll-ups confirm the drop.
+//
+// Returns whether the roll-up was applied. A held roll-up still
+// clears the ADR-0036 Phase 3 gate: the operator DID report, and the
+// demand the shard keeps acting on is real previously-reported state,
+// not "unknown".
+func (s *Shard) ApplyRollup(c machine.ClusterID, ns []needs.Need) bool {
+	defer s.markFirstRollupReceived(c)
+	if s.cfg.EmptyRollupGuard {
+		v := s.rollupGuard.admit(c, len(ns))
+		held := 0.0
+		if !v.accepted {
+			held = float64(v.held)
+		}
+		metrics.ShardRollupQuarantined.WithLabelValues(string(c)).Set(held)
+		if !v.accepted {
+			s.log.Warn("rollup quarantined: full-replacement demand drop held (ADR-0046)",
+				"cluster", c,
+				"previous_rows", v.prevRows,
+				"new_rows", len(ns),
+				"held_consecutive", v.held,
+				"accepted_after", rollupGuardConsecutive)
+			return false
+		}
+		if v.confirmed {
+			s.log.Warn("quarantined rollup accepted: demand drop confirmed by consecutive reports (ADR-0046)",
+				"cluster", c,
+				"previous_rows", v.prevRows,
+				"new_rows", len(ns),
+				"consecutive_reports", rollupGuardConsecutive)
+		}
+	}
 	s.needs.Replace(c, ns)
-	s.markFirstRollupReceived(c)
+	return true
 }
 
 // ID returns the shard's identifier.
@@ -507,6 +574,13 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	cycleStart := time.Now()
 	cycleNum := s.cycleCount.Add(1)
 	recordMetrics := int(cycleNum) > s.cfg.MetricsWarmupCycles
+	// ADR-0046: surface the kill switch every cycle so a pause nobody
+	// remembers stays visible on dashboards for as long as it's on.
+	if s.cfg.ActuationPaused {
+		metrics.ShardActuationPaused.Set(1)
+	} else {
+		metrics.ShardActuationPaused.Set(0)
+	}
 	defer func() {
 		if recordMetrics {
 			metrics.ShardCycleDuration.Observe(time.Since(cycleStart).Seconds())
@@ -622,9 +696,28 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	all = append(all, p2.Actions...)
 	all = append(all, p3.Actions...)
 
+	// ADR-0046 rail 1: per-cluster reclaim blast-radius cap, applied
+	// to the engine's decision before anything executes. The deferred
+	// surplus re-derives next cycle (Phase 3 is idempotent against an
+	// unchanged snapshot) — and unlike MaxActionsPerCycle's deferral
+	// below, it does NOT trigger an immediate follow-up cycle: the
+	// cap's purpose is spreading risk over wall-clock time, so the
+	// surplus waits for the natural cadence. Skipped while paused
+	// (rail 3 suppresses everything anyway).
+	if !s.cfg.ActuationPaused && s.cfg.ReclaimCapFraction > 0 {
+		var capped int
+		all, capped = capReclaims(snap, all, s.cfg.ReclaimCapFraction)
+		if capped > 0 {
+			metrics.ShardReclaimsCapped.Add(float64(capped))
+			s.log.Warn("reclaim blast-radius cap engaged (ADR-0046)",
+				"deferred_reclaims", capped,
+				"cap_fraction", s.cfg.ReclaimCapFraction)
+		}
+	}
+
 	limit := s.cfg.MaxActionsPerCycle
 	deferred := 0
-	if limit > 0 && len(all) > limit {
+	if !s.cfg.ActuationPaused && limit > 0 && len(all) > limit {
 		deferred = len(all) - limit
 		all = all[:limit]
 	}
@@ -640,7 +733,22 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	executeStart := time.Now()
 	dropped := 0
 	deduped := 0
-	if s.actionQueue != nil {
+	switch {
+	case s.cfg.ActuationPaused:
+		// ADR-0046 rail 3: the kill switch. Everything up to here ran
+		// — reconcile, phases, AvailableCapacity, the probes — so the
+		// engine's view and intentions stay fully observable; only
+		// execution is withheld. Suppressed actions are counted per
+		// kind and kept out of ShardActionsTotal (which means
+		// "emitted for execution").
+		for _, a := range all {
+			metrics.ShardActionsSuppressed.WithLabelValues(a.Kind.String()).Inc()
+		}
+		if len(all) > 0 {
+			s.log.Warn("actuation paused: decided actions suppressed (ADR-0046)",
+				"suppressed", len(all))
+		}
+	case s.actionQueue != nil:
 		for _, a := range all {
 			// Drop K: live-state guard at emit time. The cycle's
 			// snapshot is read once at the start; phases compute on
@@ -707,7 +815,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 			metrics.ShardActionsDeduped.Add(float64(deduped))
 		}
 		metrics.ShardActionQueueDepth.Set(float64(len(s.actionQueue)))
-	} else {
+	default:
 		// Step / runCycleCapturing called outside Run() — fall back
 		// to inline serial execute so simulator and tests still work
 		// without spawning a worker pool. Production never hits this.
@@ -740,8 +848,13 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// `all` was already populated above when we built the executor's
 	// queue; reuse it for metrics. (We also need to count any deferred
 	// actions not in `all` — they show up via ShardActionsDeferred.)
-	for _, a := range all {
-		metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
+	// Suppressed actions (ADR-0046 kill switch) are counted only in
+	// ShardActionsSuppressed so this counter keeps meaning "emitted
+	// for execution".
+	if !s.cfg.ActuationPaused {
+		for _, a := range all {
+			metrics.ShardActionsTotal.WithLabelValues(a.Kind.String()).Inc()
+		}
 	}
 	// Inventory state gauge with M25 FinOps labels (capacity_type,
 	// interruption_penalty_bucket). Walks the snapshot once per

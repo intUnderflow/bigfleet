@@ -272,6 +272,46 @@ var (
 		Name: "bigfleet_shard_phase1_occ_retries_exhausted_total",
 		Help: "Count of Needs that hit their retry budget without committing. Differentiates contention-bound Unsatisfied from catalog-bound Unsatisfied.",
 	})
+
+	// ADR-0046 actuation safety rails. One metric per rail plus the
+	// paused gauge, so each rail engaging is independently alertable.
+
+	// ShardReclaimsCapped counts Reclaim actions the per-cluster
+	// blast-radius cap deferred to a later cycle (rail 1). Healthy
+	// steady state is zero: organic scale-down never approaches the
+	// 5%/cycle default. A sustained rate means something is
+	// mass-draining (anomalous demand wipe, engine defect) and the
+	// cap is what's slowing it down — investigate before it finishes.
+	ShardReclaimsCapped = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_reclaims_capped_total",
+		Help: "Reclaim actions deferred by the ADR-0046 per-cluster blast-radius cap. Surplus re-derives next cycle (roll-over, not drop). Sustained non-zero = a mass drain in progress being rate-limited.",
+	})
+
+	// ShardRollupQuarantined is the rail-2 surface: how many
+	// consecutive roll-ups are currently held per cluster by the
+	// empty-roll-up guard (0 = clear). Cardinality is bounded by the
+	// shard's cluster count.
+	ShardRollupQuarantined = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_rollup_quarantined",
+		Help: "Consecutive roll-ups held in quarantine per cluster by the ADR-0046 empty-roll-up guard (0 = clear). While non-zero the cluster's previously accepted demand stays active.",
+	}, []string{"cluster"})
+
+	// ShardActionsSuppressed counts actions the kill switch dropped at
+	// execute time (rail 3), by kind. Deliberately NOT folded into
+	// ShardActionsTotal so that counter keeps meaning "emitted for
+	// execution"; while paused, this is the engine's intentions.
+	ShardActionsSuppressed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_actions_suppressed_total",
+		Help: "Decision actions suppressed by the ADR-0046 kill switch (--actuation-paused), by kind. The cycle still decided them; nothing reached the provider or operator.",
+	}, []string{"kind"})
+
+	// ShardActuationPaused is 1 while the shard runs with the kill
+	// switch on. A pause that nobody remembers is its own incident;
+	// alert on this staying non-zero.
+	ShardActuationPaused = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_actuation_paused",
+		Help: "1 while the shard runs with --actuation-paused (ADR-0046): cycles decide and report but execute nothing.",
+	})
 )
 
 // Coordinator metrics.

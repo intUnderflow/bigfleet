@@ -103,6 +103,11 @@ func runAllInOne(args []string) error {
 		Epoch:    epoch,
 		Provider: prov,
 		Logger:   logger.With("component", "shard"),
+		// ADR-0046 safety rails at their production defaults — every
+		// deployment boundary ships rails-on; only the library zero
+		// value (sim, unit tests) leaves them off.
+		ReclaimCapFraction: shard.DefaultReclaimCapFraction,
+		EmptyRollupGuard:   true,
 	})
 	if err != nil {
 		return fmt.Errorf("shard: %w", err)

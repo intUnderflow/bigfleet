@@ -55,6 +55,21 @@ shard:
   storage:
     size: 1Gi                   # epoch counter + reserved space for future shard-local persistent state
     storageClassName: ""        # "" = default StorageClass
+  # ADR-0046 actuation safety rails.
+  # actuationPaused is the global kill switch: cycles keep deciding and
+  # reporting (reconcile, metrics, shortfalls, AvailableCapacity) but
+  # execute nothing. Flip to true during an incident, helm upgrade, and
+  # watch bigfleet_shard_actions_suppressed_total for what the engine
+  # *would* do.
+  actuationPaused: false
+  # reclaimCapFraction: per cycle, per cluster, at most
+  # max(1, fraction × Configured) Reclaim actions execute; the surplus
+  # rolls to later cycles. Preempts are never capped. 0 disables.
+  reclaimCapFraction: 0.05
+  # emptyRollupGuard quarantines a full-replacement rollup that would
+  # erase >90% of a cluster's previously accepted demand (when that
+  # demand spans >= 10 Needs) until 3 consecutive rollups confirm it.
+  emptyRollupGuard: true
 
 # rbac toggles whether ClusterRole / ClusterRoleBinding are rendered.
 # Disable if your cluster admin manages RBAC out-of-band.

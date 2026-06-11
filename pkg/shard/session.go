@@ -246,14 +246,17 @@ func (sess *operatorSession) rollupWorker(ctx context.Context, sh *Shard) {
 				sh.log.Warn("rollup decode failed", "cluster", sess.cluster, "err", err)
 				continue
 			}
-			sh.needs.Replace(sess.cluster, domainNeeds)
-			// ADR-0036: any rollup arrival — including an empty
-			// one — unblocks Phase 3 reclaim for this cluster.
-			// Set the flag *before* triggerCycle so the next
-			// Phase 3 cycle sees the gate cleared.
-			sh.markFirstRollupReceived(sess.cluster)
-			sh.observeRolledUpDemand(sess.cluster, domainNeeds)
-			sh.triggerCycle()
+			// ApplyRollup replaces the NeedsTable slice and marks the
+			// ADR-0036 first-rollup gate (before triggerCycle, so the
+			// next Phase 3 cycle sees it cleared). It may instead
+			// quarantine the rollup (ADR-0046 empty-roll-up guard) —
+			// the previous accepted demand stays active, so there is
+			// no new cycle work and demandObservedAt must keep
+			// tracking the accepted fingerprints, not the held ones.
+			if sh.ApplyRollup(sess.cluster, domainNeeds) {
+				sh.observeRolledUpDemand(sess.cluster, domainNeeds)
+				sh.triggerCycle()
+			}
 			_ = sess.send(&pb.ShardMessage{
 				Payload: &pb.ShardMessage_Ack{Ack: &pb.Acknowledgement{
 					Echo: "rollup", CoordinatorTerm: sh.term.HighWaterMark(), ShardEpoch: sh.cfg.Epoch.Value(),

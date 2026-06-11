@@ -821,6 +821,11 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		return nil, fmt.Errorf("load epoch: %w", err)
 	}
 
+	// The ADR-0046 safety rails stay at their zero values (off): the
+	// canaries here pin ENGINE pathologies — mass-reclaim cascades,
+	// empty-roll-up oscillations — that the rails exist to blunt;
+	// running them rails-on would dampen the very signal they detect.
+	// The rails have their own test surface (pkg/shard/safety_test.go).
 	sh, err := shard.New(shard.Config{
 		ID:               "closedloop-" + sc.Name,
 		Epoch:            epoch,

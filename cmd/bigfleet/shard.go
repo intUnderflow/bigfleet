@@ -589,6 +589,9 @@ func runShard(args []string) error {
 	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
 	seedDensityMultiplier := fs.Int("seed-density-multiplier", 1, "scaletest: seed each fake-inventory machine with Allocatable = N × Profile.Resources, so one machine has the real capacity of N replicas of its Profile (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 keeps the legacy 1 Pod = 1 machine math. Under ADR-0027's resource-vector model this is just per-machine capacity — Phase 1's `creditExistingSupply` and `take` both diff against the machine's true Allocatable; there is no longer a per-Pod density reconstruction step that needs the multiplier to be honoured separately.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
+	actuationPaused := fs.Bool("actuation-paused", false, "ADR-0046 kill switch: run decision cycles and full reporting (reconcile, metrics, shortfalls, AvailableCapacity) but execute no Bootstrap/Provision/Reclaim/Preempt actions. Suppressed actions are counted in bigfleet_shard_actions_suppressed_total. Flipped by redeploy; durable across restarts because it is deployment state.")
+	reclaimCapFraction := fs.Float64("reclaim-cap-fraction", shard.DefaultReclaimCapFraction, "ADR-0046 blast-radius cap: per cycle, per cluster, execute at most max(1, fraction × the cluster's Configured count) Reclaim actions; the surplus re-derives next cycle. Bounds the worst-case drain rate when the engine's inputs or logic are wrong. Preempts are not capped (priority-driven allocation, paper §16). 0 disables.")
+	emptyRollupGuard := fs.Bool("empty-rollup-guard", true, "ADR-0046: quarantine a full-replacement rollup that would retain <10% of a cluster's previously accepted demand (when that demand spans >= 10 Needs) until 3 consecutive rollups confirm the drop. Genuine mass scale-down proceeds ~2 rollup intervals later; a one-shot wipe (operator bug, forged rollup) never lands. =false disables.")
 	executeConcurrency := fs.Int("execute-concurrency", 1, "max parallel action executors per cycle. 1 = serial (historical default). Bootstrap actions wait on per-cluster gRPC RTTs; raise for ramp-burst workloads.")
 	localBootstrap := fs.Bool("local-bootstrap", false, "scaletest: render bootstrap blobs locally instead of round-tripping through the operator stream. Decouples shard cycle benchmarks from cluster-stream RTT. Production must leave this false.")
 	incrementalReconcile := fs.Bool("incremental-reconcile", false, "opt into delta-only provider.List polling using the SinceRevision cursor. Off = full List every cycle (works for any provider). On = only enable for providers that honour since_revision (plan §10.6 above-conformance-threshold).")
@@ -633,6 +636,12 @@ func runShard(args []string) error {
 		AvailableCapacityInterval: *availableCapacityInterval,
 		MetricsWarmupCycles:       *metricsWarmupCycles,
 		PhaseAttributionLog:       *phaseAttributionLog || os.Getenv("BIGFLEET_PHASEDUMP") == "1",
+		ActuationPaused:           *actuationPaused,
+		ReclaimCapFraction:        *reclaimCapFraction,
+		EmptyRollupGuard:          *emptyRollupGuard,
+	}
+	if *actuationPaused {
+		logger.Warn("starting with actuation paused (ADR-0046 kill switch): cycles will decide and report but execute nothing")
 	}
 	if *localBootstrap {
 		cfg.LocalBootstrap = func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {
