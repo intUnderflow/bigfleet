@@ -115,11 +115,11 @@ loadProfile:
   # rationale predates the seed-calibration fix: the ~7 % plateau it
   # was written against was actually the matching-capacity shortfall
   # (see the seed comments above), and the mid-pipeline working set at
-  # 1/sec is ~2 pods against the gate's 50-pod slop. Honest caveat:
-  # internalBindingLatencyP99 still reads -1 here — the steady-bind
-  # histogram is pod-shim-emitted and dev-50 runs kube-scheduler mode;
-  # a kube-scheduler-mode bind-latency source is the open M52
-  # follow-on, not a churn problem.
+  # 1/sec is ~2 pods against the gate's 50-pod slop. M66.3: the
+  # load-driver now emits the steady-bind histogram in kube-scheduler
+  # mode (it watches unbound pods and records binds of post-fill
+  # creations), so internalBindingLatencyP99 measures real churn
+  # re-binds here instead of reading -1.
   churnPerMinute: 60
   # Short soak: this is a correctness gate, not an endurance test.
   # M60: 3m, matched by the runner's soak-sized SLO windows (sloWindow)

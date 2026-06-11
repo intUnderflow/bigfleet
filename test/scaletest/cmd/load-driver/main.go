@@ -57,10 +57,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -303,6 +305,22 @@ var (
 	steadyStateMetric = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "scaletest_loadgen_steady_state",
 		Help: "1 if this cluster's load-driver has reached its target Pod count (so subsequent Pod creations are churn replacements tagged scaletest.bigfleet/state=\"steady\"); 0 during initial fill. Aggregate sum across clusters drives the dashboard's test-phase indicator.",
+	})
+
+	// bindLatencySteady is the kube-scheduler-mode source of the SLO-
+	// bearing steady-state bind-latency histogram (same name + buckets
+	// as pod-shim's; exactly one source emits per run, selected by
+	// HARNESS_SCHEDULER). M66.3: the label-based discriminator died
+	// with ADR-0038 — churn pods are recreated by their controllers
+	// from fill-era templates, so no churn pod ever carries the
+	// scaletest.bigfleet/state="steady" label. The discriminator here
+	// is creation time instead: the watcher only records Pods created
+	// after the steady phase began, which is the churn/burst population
+	// by construction.
+	bindLatencySteady = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bigfleet_scaletest_pod_bind_latency_steady_seconds",
+		Help:    "BigFleet-internal binding latency for steady-state Pods: wall-clock from Pod.metadata.creationTimestamp to the load-driver observing spec.nodeName set, for Pods created after the steady phase began (initial-fill and pre-bound Pods are excluded). Emitted by the load-driver in kube-scheduler mode; pod-shim emits the same histogram on the legacy path.",
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
 	})
 
 	// Drop U: per-phase wall-clock start time. Combined with time() in
@@ -626,6 +644,15 @@ func (d *driver) run(ctx context.Context) error {
 		d.preBindInitialPods(ctx)
 	}
 
+	// M66.3: in kube-scheduler mode the scheduler binds Pods, so no
+	// harness component sits on the bind path to record latency the
+	// way pod-shim does. Watch for binds instead, from here on — after
+	// the fill and pre-bind, so everything the watcher sees created
+	// from now is steady-state demand (churn replacements, bursts).
+	if os.Getenv("HARNESS_SCHEDULER") == "kube-scheduler" {
+		go d.watchSteadyBinds(ctx)
+	}
+
 	// Phase 2: optional initial burst (above target, then drain back).
 	if d.prof.BurstAtStart > 0 {
 		d.log.Info("burst", "extra", d.prof.BurstAtStart)
@@ -822,6 +849,56 @@ func (d *driver) drainBurst(ctx context.Context) {
 			errs.WithLabelValues("delete").Inc()
 		}
 	}
+}
+
+// watchSteadyBinds records steady-state bind latency in kube-scheduler
+// mode. It watches Pods with spec.nodeName=="" — the unbound set, which
+// is small at any profile size (in-flight churn pods, not the whole
+// cluster) — and treats a Pod leaving the selection with a node name
+// set as the bind event: the apiserver delivers selector-mismatch
+// transitions as DELETED watch events carrying the post-update object.
+// Pods created before the watcher started (initial fill, pre-bind) are
+// excluded by the cutoff; Pods genuinely deleted while unbound carry no
+// node name and are skipped.
+func (d *driver) watchSteadyBinds(ctx context.Context) {
+	cutoff := time.Now()
+	lw := cache.NewListWatchFromClient(
+		d.cs.CoreV1().RESTClient(), "pods", "default",
+		fields.OneTermEqualSelector("spec.nodeName", ""),
+	)
+	informer := cache.NewSharedIndexInformer(lw, &corev1.Pod{}, 0, cache.Indexers{})
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		DeleteFunc: func(obj interface{}) {
+			pod, ok := obj.(*corev1.Pod)
+			if !ok {
+				// DeletedFinalStateUnknown after a relist: the last
+				// known state predates the bind, so bound and deleted
+				// are indistinguishable. Skip rather than guess — a
+				// rare undercount, never a wrong sample.
+				return
+			}
+			if lat, ok := steadyBindLatency(pod, cutoff); ok {
+				bindLatencySteady.Observe(lat.Seconds())
+			}
+		},
+	})
+	if err != nil {
+		d.log.Warn("bind-latency watcher handler registration failed", "err", err)
+		return
+	}
+	d.log.Info("steady bind-latency watcher started")
+	informer.Run(ctx.Done())
+}
+
+// steadyBindLatency classifies a Pod that left the unbound watch
+// selection: a node name means it was bound (not deleted), and a
+// creation time at or after the cutoff means it is steady-state demand
+// rather than initial fill.
+func steadyBindLatency(pod *corev1.Pod, cutoff time.Time) (time.Duration, bool) {
+	if pod.Spec.NodeName == "" || pod.CreationTimestamp.Time.Before(cutoff) {
+		return 0, false
+	}
+	return time.Since(pod.CreationTimestamp.Time), true
 }
 
 // markSteadyState flips the steady-state metric the first time the

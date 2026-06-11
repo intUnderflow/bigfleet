@@ -3,6 +3,7 @@ package main
 import (
 	"math/rand"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -661,4 +662,33 @@ func planNames(plan []assignment) []string {
 		out = append(out, a.pod.Name+"→"+a.node)
 	}
 	return out
+}
+
+// TestSteadyBindLatency covers the M66.3 watcher's classification: a
+// Pod leaving the unbound watch selection counts as a steady-state
+// bind only when it actually has a node (bound, not deleted) and was
+// created after the steady cutoff (churn/burst, not initial fill).
+func TestSteadyBindLatency(t *testing.T) {
+	cutoff := time.Now().Add(-time.Minute)
+	pod := func(node string, created time.Time) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.Time{Time: created}},
+			Spec:       corev1.PodSpec{NodeName: node},
+		}
+	}
+
+	if _, ok := steadyBindLatency(pod("", time.Now()), cutoff); ok {
+		t.Fatal("deleted-while-unbound pod (no node) was counted as a bind")
+	}
+	if _, ok := steadyBindLatency(pod("fake-1", cutoff.Add(-time.Hour)), cutoff); ok {
+		t.Fatal("initial-fill pod (created before cutoff) was counted as steady-state")
+	}
+	created := time.Now().Add(-30 * time.Second)
+	lat, ok := steadyBindLatency(pod("fake-1", created), cutoff)
+	if !ok {
+		t.Fatal("post-cutoff bound pod was not counted")
+	}
+	if lat < 30*time.Second || lat > time.Minute {
+		t.Fatalf("latency = %v, want ~30s (now - creationTimestamp)", lat)
+	}
 }
