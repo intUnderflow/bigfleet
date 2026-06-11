@@ -80,6 +80,16 @@ message CapacityNeed {
   // on one machine). With the Workload API this is the declared gang/unit
   // size. Same map shape as aggregate_resources.
   map<string, string> min_unit = 8;
+
+  // ADR-0042 Addendum: opaque co-location group identity. Set only on
+  // co-located (Same-carrying) needs — one value per gang, stable across
+  // roll-ups for the gang's lifetime — so the autoscaler's per-gang
+  // diagnostics (the gang-attribution probe) and per-need bookkeeping have
+  // identity. The operator already emits one CapacityNeed per gang
+  // (ADR-0024: gangs never merge in aggregation); this names them. Empty
+  // for plain needs. The autoscaler must not derive semantics from the
+  // value beyond equality.
+  string group = 9;
 }
 
 // NodeSelectorRequirement mirrors core/v1.NodeSelectorRequirement, plus a

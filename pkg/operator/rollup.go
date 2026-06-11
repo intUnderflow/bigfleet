@@ -352,6 +352,7 @@ func needToCapacityNeed(n needs.Need) *pb.CapacityNeed {
 		Requirements:              conv.RequirementsToProto(p.Requirements()),
 		AggregateResources:        resourceQtyMap(n.AggregateResources),
 		MinUnit:                   resourceQtyMap(n.MinUnit),
+		Group:                     n.Group,
 		Priority:                  p.Priority(),
 		InterruptionPenaltyBucket: pb.PenaltyBucket(p.InterruptionPenaltyBucket()),
 		ReclamationPenaltyBucket:  pb.PenaltyBucket(p.ReclamationPenaltyBucket()),

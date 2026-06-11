@@ -368,12 +368,22 @@ func (p Profile) computeFingerprint() string {
 // co-location requirement. Empty Group means "no co-location group" and
 // aggregates with other empty-Group Needs sharing the fingerprint.
 //
-// Group is in-memory state; it is not part of the wire format. The
-// operator populates it from CR ownerReferences during rollup so that
-// CRs from different workloads (StatefulSets, Jobs, etc.) become
+// Group crosses the wire as CapacityNeed.group (ADR-0042 Addendum):
+// the operator populates it from CR ownerReferences during rollup so
+// that CRs from different workloads (StatefulSets, Jobs, etc.) become
 // distinct wire-level CapacityNeeds even when their Profiles are
-// identical, and the Phase 1 allocator can co-locate each group
-// independently.
+// identical, the Phase 1 allocator can co-locate each group
+// independently, and shard-side per-gang bookkeeping (the
+// gang-attribution probe, acquisition parking) has stable identity.
+//
+// AcquisitionParked is shard-local state, never on the wire: the shard
+// stamps it each cycle on Same-Needs whose class has been Phase 1-
+// unsatisfiable for the parking threshold (ADR-0042 Addendum). Every
+// supply site honours it identically — domain choice goes
+// creditable-only (the incumbent wins trivially; there is no acquirable
+// bucket to flip to) and acquisition is skipped in both Phase 1 and
+// Phase 3's joint folds, so the parked Need keeps its concentrated
+// partial assembly and stops driving Bootstrap/Reclaim.
 type Need struct {
 	ClusterID          machine.ClusterID
 	Profile            Profile
@@ -381,6 +391,7 @@ type Need struct {
 	MinUnit            []ResourceQty
 	ArrivalUnixNanos   int64
 	Group              string
+	AcquisitionParked  bool
 }
 
 // Aggregate groups a slice of Needs by (cluster, profile fingerprint,

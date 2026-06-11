@@ -38,6 +38,7 @@ func NeedsFromRollup(in *pb.ClusterCapacityNeeds) ([]needs.Need, error) {
 			Profile:            profile,
 			AggregateResources: resourceQtysFromProto(n.GetAggregateResources()),
 			MinUnit:            resourceQtysFromProto(n.GetMinUnit()),
+			Group:              n.GetGroup(),
 			ArrivalUnixNanos:   in.GetTimestampUnixNanos(),
 		})
 	}

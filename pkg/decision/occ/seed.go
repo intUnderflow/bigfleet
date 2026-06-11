@@ -117,11 +117,14 @@ func SeedConfiguredSupply(state *SharedState, needsByIdx []*needs.Need, retryBud
 // cross-domain groups, Phase 3 (correctly strict) reclaimed the
 // off-domain half next cycle, and it re-bootstrapped scattered — a
 // reclaim↔re-bootstrap oscillation at cycle rate.
+// seedCandidate is one creditable machine in a Same-domain bucket:
+// the ID for the claim and the alloc the claim loop subtracts.
+type seedCandidate struct {
+	id    machine.ID
+	alloc []needs.ResourceQty
+}
+
 func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *SameSupplyIndex, n *needs.Need, prec Precedence, sameKey string, retryBudget int) []needs.ResourceQty {
-	type candidate struct {
-		id    machine.ID
-		alloc []needs.ResourceQty
-	}
 	remaining := n.AggregateResources
 	// Bucket totals are the index's integer vectors (ParseVec) so the
 	// per-Need walk does no quantity parsing; candidates keep their
@@ -129,7 +132,7 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 	minUnitVec := acquirable.ParseVec(n.MinUnit)
 	index := make(map[string]int)
 	var buckets []SameBucket
-	var members [][]candidate
+	var members [][]seedCandidate
 	for _, st := range []machine.State{machine.StateConfigured, machine.StateConfiguring} {
 		for _, m := range snap.ListByClusterState(n.ClusterID, st) {
 			if state.IsClaimed(m.ID) {
@@ -157,29 +160,28 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 			buckets[i].Count++
 			buckets[i].CreditableCount++
 			buckets[i].Total = VecAdd(buckets[i].Total, vec)
-			members[i] = append(members[i], candidate{id: m.ID, alloc: alloc})
+			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc})
 		}
 	}
 	// Joint potential: fold in the acquirable half. Domains with only
 	// acquirable supply get an empty members list — choosing one
 	// credits nothing and leaves acquisition (confined there) to fill
 	// the deficit.
-	for v, ab := range acquirable.AcquirableTotals(n.Profile, sameKey, n.MinUnit, state.IsClaimed) {
-		i, exists := index[v]
-		if !exists {
-			i = len(buckets)
-			index[v] = i
-			buckets = append(buckets, SameBucket{Value: v})
-			members = append(members, nil)
-		}
-		buckets[i].Count += ab.Count
-		buckets[i].Total = VecAdd(buckets[i].Total, ab.Total)
+	//
+	// ADR-0042 Addendum: a parked Need folds creditable-only — with no
+	// acquirable bucket to rank, the incumbent domain wins trivially
+	// and the Need cannot flip domains or acquire; it keeps its
+	// concentrated partial assembly and ages in the shortfall buffer.
+	if !n.AcquisitionParked {
+		foldAcquirable(acquirable, state, n, sameKey, index, &buckets, &members)
 	}
-	best := ChooseSameBucket(buckets, acquirable.ParseVec(remaining))
+	deficitVec := acquirable.ParseVec(remaining)
+	best := ChooseSameBucket(buckets, deficitVec)
 	if best < 0 {
 		return remaining
 	}
 	state.recordSameDomain(n, buckets[best].Value)
+	state.recordSameSatisfiable(n, VecCovers(buckets[best].Total, deficitVec))
 	for _, c := range members[best] {
 		if needs.IsZero(remaining) {
 			break
@@ -188,4 +190,21 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 		remaining = needs.SubResources(remaining, c.alloc)
 	}
 	return remaining
+}
+
+// foldAcquirable merges the shard-wide acquirable half (unclaimed Idle
+// + Speculative) into the per-domain buckets, mirroring the creditable
+// fold above. Split out so the ADR-0042 parked path can skip it.
+func foldAcquirable(acquirable *SameSupplyIndex, state *SharedState, n *needs.Need, sameKey string, index map[string]int, buckets *[]SameBucket, members *[][]seedCandidate) {
+	for v, ab := range acquirable.AcquirableTotals(n.Profile, sameKey, n.MinUnit, state.IsClaimed) {
+		i, exists := index[v]
+		if !exists {
+			i = len(*buckets)
+			index[v] = i
+			*buckets = append(*buckets, SameBucket{Value: v})
+			*members = append(*members, nil)
+		}
+		(*buckets)[i].Count += ab.Count
+		(*buckets)[i].Total = VecAdd((*buckets)[i].Total, ab.Total)
+	}
 }

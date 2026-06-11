@@ -160,6 +160,11 @@ type NeedResult struct {
 	// that flips cycle-to-cycle for an unsatisfiable gang is the churn
 	// signature bigfleet-uber #56 diagnosed.
 	SameDomain string
+	// SameSatisfiable is the pre-pass's structural verdict: some
+	// bucket's joint total covered the Need's deficit. The shard's
+	// parking age (ADR-0042 Addendum) only counts cycles where this is
+	// false — losing claim races is not structural unsatisfiability.
+	SameSatisfiable bool
 }
 
 // Result is what Propose returns.

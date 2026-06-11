@@ -28,8 +28,9 @@ type UnsatisfiedNeed struct {
 	// the cycle claimed toward the Need before exhausting. Both feed
 	// the ADR-0042 per-gang attribution probe — a flipping domain
 	// with non-zero acquisition is the #56 churn loop.
-	SameDomain string
-	Acquired   int
+	SameDomain      string
+	Acquired        int
+	SameSatisfiable bool
 }
 
 // Phase1 emits Bootstrap (idle → configured) and Provision
@@ -88,10 +89,11 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 		case r.Unsatisfied:
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("unsatisfied").Inc()
 			result.Unsatisfied = append(result.Unsatisfied, UnsatisfiedNeed{
-				Need:       *r.Need,
-				Deficit:    r.Deficit,
-				SameDomain: r.SameDomain,
-				Acquired:   len(r.BootstrapMachines) + len(r.ProvisionMachines),
+				Need:            *r.Need,
+				Deficit:         r.Deficit,
+				SameDomain:      r.SameDomain,
+				Acquired:        len(r.BootstrapMachines) + len(r.ProvisionMachines),
+				SameSatisfiable: r.SameSatisfiable,
 			})
 		case len(r.BootstrapMachines) == 0 && len(r.ProvisionMachines) == 0:
 			metrics.ShardPhase1NeedOutcomes.WithLabelValues("absorbed_by_supply").Inc()

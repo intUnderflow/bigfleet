@@ -198,6 +198,15 @@ type Shard struct {
 	// is set. Only the cycle goroutine reads/writes this; no lock.
 	reconcileCursor []byte
 
+	// unsatSameAge counts consecutive cycles each Same-Need class
+	// (cluster + group + fingerprint) has been Phase 1-unsatisfiable
+	// (ADR-0042 Addendum). Aged classes get AcquisitionParked stamped
+	// on their Needs before the phases, with a periodic re-probe cycle
+	// so parked demand un-parks the moment supply appears. Entries not
+	// re-seen in a cycle are deleted, so the map is bounded by the
+	// live unsatisfied set. Only the cycle goroutine touches it.
+	unsatSameAge map[string]int
+
 	// cycleCount monotonically counts cycles since shard start. Used
 	// by the warmup gate on metric observations. atomic so a shard
 	// metrics-snapshot read from another goroutine is safe.
@@ -302,6 +311,7 @@ func New(cfg Config) (*Shard, error) {
 		sessionsByCluster:   make(map[machine.ClusterID]*operatorSession),
 		wakeup:              make(chan struct{}, 1),
 		shortfalls:          make(map[string]*shortfallEntry),
+		unsatSameAge:        make(map[string]int),
 		assignedDomains:     make(map[domainKey]struct{}),
 		acCache:             newAvailableCapacityCache(cfg.AvailableCapacityInterval),
 		demandObservedAt:    make(map[machine.ClusterID]map[string]time.Time),
@@ -533,12 +543,14 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// Phase 2 (via Phase 1's residuals), Phase 3 and the attribution
 	// probe all reason over the same normalized demand.
 	demand = decision.NormalizeDemand(snap, demand)
+	s.stampParkedNeeds(demand)
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("snapread").Observe(time.Since(snapStart).Seconds())
 	}
 
 	p1Start := time.Now()
 	p1 := decision.Phase1(snap, demand)
+	s.recordUnsatSameAges(p1)
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("phase1").Observe(time.Since(p1Start).Seconds())
 	}
@@ -580,6 +592,7 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 				"chosen_domain", g.domain,
 				"acquired", g.acquired,
 				"residual", g.deficit,
+				"parked", g.parked,
 			)
 		}
 	}
@@ -799,6 +812,81 @@ type gangProbeEntry struct {
 	domain   string
 	acquired int
 	deficit  string
+	parked   bool
+}
+
+// Acquisition parking (ADR-0042 Addendum). parkAfterCycles is the
+// debounce: a Same-Need class must be Phase 1-unsatisfiable this many
+// consecutive cycles before its members park — long enough that claim
+// races and transient supply dips don't park live demand, short enough
+// that a structurally-unsatisfiable gang stops churning within
+// seconds at the shard's cycle rate. reprobeEveryCycles periodically
+// un-parks for a single cycle so parked demand re-attempts acquisition
+// and naturally un-parks (the age resets) when supply has appeared —
+// without it, a parked Need's creditable-only choice could never see
+// new supply and would park forever.
+const (
+	parkAfterCycles    = 8
+	reprobeEveryCycles = 32
+)
+
+// unsatSameKey identifies a Same-Need class across cycles: group is
+// the wire-level co-location identity (ADR-0042 Addendum); the
+// fingerprint disambiguates groups that collide across workloads; the
+// cluster scopes it.
+func unsatSameKey(n *needs.Need) string {
+	return string(n.ClusterID) + "\x00" + n.Group + "\x00" + n.Profile.Fingerprint()
+}
+
+// recordUnsatSameAges updates the per-class stalled-cycle counter from
+// this cycle's Phase 1 result. Faithful to concentrate-THEN-park: a
+// cycle only ages a class when it was unsatisfied AND acquired nothing
+// — an unsatisfied gang that is still successfully concentrating
+// (Acquired > 0) is making progress and must keep going at full speed,
+// so any progress resets its age. Classes that resolved (or vanished)
+// are forgotten.
+func (s *Shard) recordUnsatSameAges(p1 decision.Phase1Result) {
+	seen := make(map[string]struct{}, len(p1.Unsatisfied))
+	for i := range p1.Unsatisfied {
+		u := &p1.Unsatisfied[i]
+		if _, ok := occ.SameRequirementKey(u.Need.Profile); !ok {
+			continue
+		}
+		k := unsatSameKey(&u.Need)
+		if u.Acquired > 0 || u.SameSatisfiable {
+			// Progress, or a satisfiable bucket exists (the stall is a
+			// lost claim race, not structural): reset.
+			delete(s.unsatSameAge, k)
+			continue
+		}
+		seen[k] = struct{}{}
+		s.unsatSameAge[k]++
+	}
+	for k := range s.unsatSameAge {
+		if _, ok := seen[k]; !ok {
+			delete(s.unsatSameAge, k)
+		}
+	}
+}
+
+// stampParkedNeeds marks this cycle's Same-Needs whose class has aged
+// past the parking threshold, skipping the periodic re-probe cycle.
+// Both phases honour the stamp identically (creditable-only domain
+// choice, no acquisition), so a parked gang keeps its concentrated
+// partial assembly and stops driving Bootstrap/Reclaim.
+func (s *Shard) stampParkedNeeds(demand []needs.Need) {
+	if len(s.unsatSameAge) == 0 {
+		return
+	}
+	for i := range demand {
+		if _, ok := occ.SameRequirementKey(demand[i].Profile); !ok {
+			continue
+		}
+		age := s.unsatSameAge[unsatSameKey(&demand[i])]
+		if age >= parkAfterCycles && age%reprobeEveryCycles != 0 {
+			demand[i].AcquisitionParked = true
+		}
+	}
 }
 
 // formatQtys renders a residual vector compactly for the gang probe
@@ -848,6 +936,7 @@ func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 d
 				domain:   u.SameDomain,
 				acquired: u.Acquired,
 				deficit:  formatQtys(u.Deficit),
+				parked:   u.Need.AcquisitionParked,
 			})
 		}
 	}

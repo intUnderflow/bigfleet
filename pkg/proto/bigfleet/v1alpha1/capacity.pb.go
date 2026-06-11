@@ -383,7 +383,16 @@ type CapacityNeed struct {
 	// able to host (the indivisibility floor; e.g. an 8-GPU pod needs 8 GPU
 	// on one machine). With the Workload API this is the declared gang/unit
 	// size. Same map shape as aggregate_resources.
-	MinUnit       map[string]string `protobuf:"bytes,8,rep,name=min_unit,json=minUnit,proto3" json:"min_unit,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	MinUnit map[string]string `protobuf:"bytes,8,rep,name=min_unit,json=minUnit,proto3" json:"min_unit,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// ADR-0042 Addendum: opaque co-location group identity. Set only on
+	// co-located (Same-carrying) needs — one value per gang, stable across
+	// roll-ups for the gang's lifetime — so the autoscaler's per-gang
+	// diagnostics (the gang-attribution probe) and per-need bookkeeping have
+	// identity. The operator already emits one CapacityNeed per gang
+	// (ADR-0024: gangs never merge in aggregation); this names them. Empty
+	// for plain needs. The autoscaler must not derive semantics from the
+	// value beyond equality.
+	Group         string `protobuf:"bytes,9,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -465,6 +474,13 @@ func (x *CapacityNeed) GetMinUnit() map[string]string {
 		return x.MinUnit
 	}
 	return nil
+}
+
+func (x *CapacityNeed) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
 }
 
 // NodeSelectorRequirement mirrors core/v1.NodeSelectorRequirement, plus a
@@ -602,7 +618,7 @@ const file_bigfleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x120\n" +
 	"\x14timestamp_unix_nanos\x18\x02 \x01(\x03R\x12timestampUnixNanos\x125\n" +
-	"\x05needs\x18\x03 \x03(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x05needs\"\xb3\x05\n" +
+	"\x05needs\x18\x03 \x03(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x05needs\"\xc9\x05\n" +
 	"\fCapacityNeed\x12N\n" +
 	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x12h\n" +
 	"\x13aggregate_resources\x18\x02 \x03(\v27.bigfleet.v1alpha1.CapacityNeed.AggregateResourcesEntryR\x12aggregateResources\x12\x1a\n" +
@@ -610,7 +626,8 @@ const file_bigfleet_v1alpha1_capacity_proto_rawDesc = "" +
 	"\x06spread\x18\x05 \x03(\v2!.bigfleet.v1alpha1.TopologySpreadR\x06spread\x12`\n" +
 	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucket\x12^\n" +
 	"\x1areclamation_penalty_bucket\x18\a \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x18reclamationPenaltyBucket\x12G\n" +
-	"\bmin_unit\x18\b \x03(\v2,.bigfleet.v1alpha1.CapacityNeed.MinUnitEntryR\aminUnit\x1aE\n" +
+	"\bmin_unit\x18\b \x03(\v2,.bigfleet.v1alpha1.CapacityNeed.MinUnitEntryR\aminUnit\x12\x14\n" +
+	"\x05group\x18\t \x01(\tR\x05group\x1aE\n" +
 	"\x17AggregateResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +

@@ -113,7 +113,7 @@ func Phase3(snap *inventory.Snapshot, allNeeds []needs.Need, clusterReady Cluste
 				// One joint domain choice per Need per cycle over both
 				// creditable tiers at once, exactly like Phase 1's
 				// seedSameProfile — see claimMatchingSame.
-				claimMatchingSame(configuring, configured, n.Profile, n.MinUnit, claimed, n.AggregateResources, sameKey, acquirable, consumed)
+				claimMatchingSame(configuring, configured, n.Profile, n.MinUnit, claimed, n.AggregateResources, sameKey, acquirable, consumed, n.AcquisitionParked)
 				continue
 			}
 			// Configuring supply first (claimed so it isn't double-counted
@@ -222,6 +222,7 @@ func claimMatchingSame(
 	sameKey string,
 	acquirable *occ.SameSupplyIndex,
 	consumed map[machine.ID]struct{},
+	parked bool,
 ) []needs.ResourceQty {
 	if needs.IsZero(remaining) {
 		return remaining
@@ -274,20 +275,26 @@ func claimMatchingSame(
 	// keeps no Configured machine and the off-domain scatter is
 	// reclaimed once, mirroring Phase 1's acquisition into that
 	// domain. CreditableCount stays 0 for that half by construction.
-	isConsumed := func(id machine.ID) bool {
-		_, ok := consumed[id]
-		return ok
-	}
-	for v, ab := range acquirable.AcquirableTotals(profile, sameKey, minUnit, isConsumed) {
-		idx, exists := index[v]
-		if !exists {
-			idx = len(buckets)
-			index[v] = idx
-			buckets = append(buckets, occ.SameBucket{Value: v})
-			members = append(members, nil)
+	// ADR-0042 Addendum: a parked Need folds creditable-only here too —
+	// mirroring Phase 1's parked seed pass, so the phases agree that
+	// the incumbent domain's concentrated assembly is kept and no
+	// acquirable domain can outrank it.
+	if !parked {
+		isConsumed := func(id machine.ID) bool {
+			_, ok := consumed[id]
+			return ok
 		}
-		buckets[idx].Count += ab.Count
-		buckets[idx].Total = occ.VecAdd(buckets[idx].Total, ab.Total)
+		for v, ab := range acquirable.AcquirableTotals(profile, sameKey, minUnit, isConsumed) {
+			idx, exists := index[v]
+			if !exists {
+				idx = len(buckets)
+				index[v] = idx
+				buckets = append(buckets, occ.SameBucket{Value: v})
+				members = append(members, nil)
+			}
+			buckets[idx].Count += ab.Count
+			buckets[idx].Total = occ.VecAdd(buckets[idx].Total, ab.Total)
+		}
 	}
 	best := occ.ChooseSameBucket(buckets, acquirable.ParseVec(remaining))
 	if best < 0 {
@@ -303,8 +310,9 @@ func claimMatchingSame(
 	// ADR-0041 rider: the creditable members didn't fully cover the
 	// Need — Phase 1 would fill the residual by acquiring the chosen
 	// domain's Idle/Speculative, so consume them from later Needs'
-	// joint view.
-	if !needs.IsZero(remaining) {
+	// joint view. A parked Need acquires nothing, so it consumes
+	// nothing (ADR-0042 Addendum).
+	if !parked && !needs.IsZero(remaining) {
 		acquirable.ConsumeAcquirable(profile, sameKey, buckets[best].Value, minUnit, remaining, consumed)
 	}
 	return remaining

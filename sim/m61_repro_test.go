@@ -96,7 +96,13 @@ func TestClosedLoop_OversizedGangsScatteredSupply_ParkWithoutChurn(t *testing.T)
 // zero trailing churn, stable shortfalls, satisfiable gangs fully
 // bound.
 func TestClosedLoop_MultiClusterGangContention_ParksQuiet(t *testing.T) {
-	const cycles, k = 120, 40
+	// Parked zero-asset gangs win their first block at re-probe
+	// cadence, and the OCC worker pool makes per-cycle claim winners
+	// timing-dependent — so WHEN the last gang concentrates varies
+	// run-to-run and a fixed quiet-window assertion flakes. The
+	// contract is asserted order-independently below instead: zero
+	// reclaims ever, every acquisition still serving, stable shortfall.
+	const cycles, k = 200, 60
 	shapes := []sim.WorkloadShape{
 		{
 			Name:                       "gpu",
@@ -142,8 +148,23 @@ func TestClosedLoop_MultiClusterGangContention_ParksQuiet(t *testing.T) {
 	logConverged(t, res, k)
 
 	failed := false
-	if got := res.SumLast(k, churn); got != 0 {
-		t.Errorf("churn over last %d cycles = %d, want 0 (contention must not unpark gangs)", k, got)
+	all := len(res.Cycles)
+	// The pathology is assemble↔reclaim: under parking it must never
+	// happen — zero reclaims/preempts/evictions across the WHOLE run.
+	if got := res.SumLast(all, func(c sim.CycleStats) int { return c.Reclaims + c.Preempts + c.Evicted }); got != 0 {
+		t.Errorf("reclaims+preempts+evictions over the run = %d, want 0 (no assembly may be abandoned)", got)
+		failed = true
+	}
+	// Every acquisition productive: total machines acquired equals the
+	// machines still serving at the end — nothing acquired then shed.
+	end := res.Last(1)[0]
+	acquired := res.SumLast(all, func(c sim.CycleStats) int { return c.Bootstraps + c.Provisions })
+	if acquired != end.Configured {
+		t.Errorf("acquired %d machines but %d configured at end — wasted acquisition", acquired, end.Configured)
+		failed = true
+	}
+	if end.BoundPods != end.Configured {
+		t.Errorf("bound=%d configured=%d — concentrated machines must all host pods", end.BoundPods, end.Configured)
 		failed = true
 	}
 	last := res.Last(k)

@@ -140,6 +140,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r.BootstrapMachines = nil
 		r.ProvisionMachines = nil
 		r.SameDomain = state.SameDomainFor(r.Need)
+		r.SameSatisfiable = state.SameSatisfiableFor(r.Need)
 		sumAlloc := []needs.ResourceQty(nil)
 		for _, mid := range state.ClaimedFor(r.Need) {
 			m, ok := snap.Get(mid)
@@ -294,6 +295,13 @@ func computeDeficit(n *needs.Need, state *SharedState) []needs.ResourceQty {
 func findCandidatesFor(pool *Pool, state *SharedState, st machine.State, prec Precedence, n *needs.Need, deficit []needs.ResourceQty) Candidates {
 	profile := n.Profile
 	if sameKey, ok := SameRequirementKey(profile); ok {
+		// ADR-0042 Addendum: a parked Need does not acquire. Its
+		// creditable assembly was claimed by the pre-pass; the residual
+		// ages in the shortfall buffer until the periodic re-probe (or
+		// fresh supply) un-parks it.
+		if n.AcquisitionParked {
+			return Candidates{}
+		}
 		return pool.FindSame(state, st, prec, deficit, n.MinUnit, sameKey, state.SameDomainFor(n))
 	}
 	if topoKey, skew, ok := StrictSpread(profile); ok {

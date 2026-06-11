@@ -31,6 +31,12 @@ type SharedState struct {
 	claimedByNeed map[*needs.Need]map[machine.ID]struct{}
 	bucketSeq     map[BucketKey]uint64
 	sameDomain    map[*needs.Need]string
+	// sameSatisfiable records whether the joint pre-pass found ANY
+	// bucket whose total covers the Need's deficit (ADR-0042 Addendum:
+	// the structural-unsatisfiability signal the shard's parking age
+	// keys on — a gang that merely lost claim races still sees a
+	// satisfiable bucket and must not age toward parking).
+	sameSatisfiable map[*needs.Need]bool
 }
 
 // claim is the per-machine record the broker stores when it
@@ -50,11 +56,12 @@ type claim struct {
 // lifetime; SharedState only reads from it.
 func NewSharedState(snap *inventory.Snapshot) *SharedState {
 	return &SharedState{
-		snap:          snap,
-		claimedBy:     make(map[machine.ID]claim),
-		claimedByNeed: make(map[*needs.Need]map[machine.ID]struct{}),
-		bucketSeq:     make(map[BucketKey]uint64),
-		sameDomain:    make(map[*needs.Need]string),
+		snap:            snap,
+		claimedBy:       make(map[machine.ID]claim),
+		claimedByNeed:   make(map[*needs.Need]map[machine.ID]struct{}),
+		bucketSeq:       make(map[BucketKey]uint64),
+		sameDomain:      make(map[*needs.Need]string),
+		sameSatisfiable: make(map[*needs.Need]bool),
 	}
 }
 
@@ -68,6 +75,22 @@ func (s *SharedState) recordSameDomain(n *needs.Need, domain string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sameDomain[n] = domain
+}
+
+// recordSameSatisfiable stores the pre-pass's structural-
+// satisfiability verdict (see the sameSatisfiable field).
+func (s *SharedState) recordSameSatisfiable(n *needs.Need, sat bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sameSatisfiable[n] = sat
+}
+
+// SameSatisfiableFor reports the pre-pass verdict for n; false for
+// plain Needs and Needs with no buckets at all.
+func (s *SharedState) SameSatisfiableFor(n *needs.Need) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sameSatisfiable[n]
 }
 
 // SameDomainFor returns the Same-domain the pre-pass chose for n, or
