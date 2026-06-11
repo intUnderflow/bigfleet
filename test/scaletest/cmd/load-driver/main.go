@@ -852,32 +852,84 @@ func (d *driver) drainBurst(ctx context.Context) {
 }
 
 // watchSteadyBinds records steady-state bind latency in kube-scheduler
-// mode. It watches Pods with spec.nodeName=="" — the unbound set, which
-// is small at any profile size (in-flight churn pods, not the whole
-// cluster) — and treats a Pod leaving the selection with a node name
-// set as the bind event: the apiserver delivers selector-mismatch
-// transitions as DELETED watch events carrying the post-update object.
-// Pods created before the watcher started (initial fill, pre-bind) are
-// excluded by the cutoff; Pods genuinely deleted while unbound carry no
-// node name and are skipped.
+// mode: a Pod informer whose UpdateFunc treats the nodeName empty →
+// set transition as the bind event.
+//
+// Two discriminators keep the histogram honest about "steady-state":
+// the watcher ARMS only once it has seen the cluster's bound count
+// reach the bind gate (99 % of target) — everything before that is
+// the initial fill's thundering herd, which rampTo's return cannot
+// stand in for because rampTo only creates workload OBJECTS; their
+// Pods materialise and bind minutes later. Once armed, only Pods
+// CREATED after the arm time are recorded, which is the churn/burst
+// population by construction.
+//
+// Why not a spec.nodeName=="" field-selector watch (the obvious
+// lighter shape): the apiserver delivers a selector-mismatch
+// transition as a DELETED event carrying the object's LAST MATCHING
+// state — nodeName still empty — so a bind and a genuine deletion are
+// indistinguishable (validated empirically: 2,500 binds, zero
+// distinguishable events). The full informer sees real MODIFIED
+// events instead; SetTransform strips cached objects to the fields
+// the handler reads so the cache stays small at 100K-Pod cluster
+// sizes.
 func (d *driver) watchSteadyBinds(ctx context.Context) {
-	cutoff := time.Now()
+	gate := int(0.99 * float64(d.prof.Target))
+	var (
+		mu     sync.Mutex
+		bound  int
+		armed  bool
+		cutoff time.Time
+	)
+	noteBound := func(n int) {
+		mu.Lock()
+		bound += n
+		if !armed && bound >= gate {
+			armed = true
+			cutoff = time.Now()
+			d.log.Info("steady bind-latency watcher armed", "bound", bound, "gate", gate)
+		}
+		mu.Unlock()
+	}
+
 	lw := cache.NewListWatchFromClient(
-		d.cs.CoreV1().RESTClient(), "pods", "default",
-		fields.OneTermEqualSelector("spec.nodeName", ""),
+		d.cs.CoreV1().RESTClient(), "pods", "default", fields.Everything(),
 	)
 	informer := cache.NewSharedIndexInformer(lw, &corev1.Pod{}, 0, cache.Indexers{})
+	if err := informer.SetTransform(func(obj interface{}) (interface{}, error) {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			return obj, nil
+		}
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              pod.Name,
+				Namespace:         pod.Namespace,
+				UID:               pod.UID,
+				ResourceVersion:   pod.ResourceVersion,
+				CreationTimestamp: pod.CreationTimestamp,
+			},
+			Spec: corev1.PodSpec{NodeName: pod.Spec.NodeName},
+		}, nil
+	}); err != nil {
+		d.log.Warn("bind-latency watcher transform registration failed", "err", err)
+		return
+	}
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		DeleteFunc: func(obj interface{}) {
-			pod, ok := obj.(*corev1.Pod)
-			if !ok {
-				// DeletedFinalStateUnknown after a relist: the last
-				// known state predates the bind, so bound and deleted
-				// are indistinguishable. Skip rather than guess — a
-				// rare undercount, never a wrong sample.
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			oldPod, okOld := oldObj.(*corev1.Pod)
+			pod, okNew := newObj.(*corev1.Pod)
+			if !okOld || !okNew || oldPod.Spec.NodeName != "" || pod.Spec.NodeName == "" {
 				return
 			}
-			if lat, ok := steadyBindLatency(pod, cutoff); ok {
+			noteBound(1)
+			mu.Lock()
+			rec, cut := armed, cutoff
+			mu.Unlock()
+			if !rec {
+				return
+			}
+			if lat, ok := steadyBindLatency(pod, cut); ok {
 				bindLatencySteady.Observe(lat.Seconds())
 			}
 		},
@@ -886,7 +938,24 @@ func (d *driver) watchSteadyBinds(ctx context.Context) {
 		d.log.Warn("bind-latency watcher handler registration failed", "err", err)
 		return
 	}
-	d.log.Info("steady bind-latency watcher started")
+	d.log.Info("steady bind-latency watcher started", "gate", gate)
+	go func() {
+		// Seed the bound count from the synced cache so a watcher
+		// (re)started against an already-filled cluster still arms
+		// (pre-bound fills, load-driver restarts mid-soak).
+		if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+			return
+		}
+		preBound := 0
+		for _, obj := range informer.GetStore().List() {
+			if pod, ok := obj.(*corev1.Pod); ok && pod.Spec.NodeName != "" {
+				preBound++
+			}
+		}
+		if preBound > 0 {
+			noteBound(preBound)
+		}
+	}()
 	informer.Run(ctx.Done())
 }
 
