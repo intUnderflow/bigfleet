@@ -1,0 +1,23 @@
+# Both images (cmd/bigfleet/Dockerfile, test/scaletest/image/Dockerfile)
+# build from the repo root with `COPY . .`. Without this file the build
+# context is ~1.7GB and — worse — every scaletest run writes into
+# test/scaletest/results/ inside the context, so the NEXT run's
+# byte-identical source still invalidates the COPY layer and rebuilds +
+# kind-reloads images for nothing (measured: 22s + 3s per gate run).
+# Excluding the non-build trees makes image digests a pure function of
+# the source tree, which the digest-verification discipline (M47.7)
+# wants anyway.
+#
+# Keep: all Go source, go.mod/go.sum, api/crd/ (CRD bundle COPY),
+# test/scaletest/image/*.sh (entrypoint COPYs).
+.git/
+test/scaletest/results/
+site/
+bin/
+node_modules/
+docs/
+coverage*
+/bigfleet
+/scaletest-runner
+*.log
+.claude/

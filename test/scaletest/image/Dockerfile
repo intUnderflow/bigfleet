@@ -64,63 +64,57 @@ RUN apt-get update && \
       ca-certificates curl openssl tini bash && \
     rm -rf /var/lib/apt/lists/*
 
-# kube-apiserver (single static binary).
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-apiserver" \
-      -o /usr/local/bin/kube-apiserver && \
-    chmod +x /usr/local/bin/kube-apiserver
-
-# kube-controller-manager — needed for the garbage-collector controller
-# that cascade-deletes ownerRef-owned objects (CRs owned by Pods that
-# get churned). Without it, kwok cluster apiservers accumulate orphan
-# CRs from churn-deleted Pods and the operator's rollup carries stale
-# demand. Surfaced in scaleway-50k Drop F: 2810 CRs vs 1000 live Pods,
-# Phase 3 found nothing to reclaim, chain fell into Phase 2 thrash.
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-controller-manager" \
-      -o /usr/local/bin/kube-controller-manager && \
-    chmod +x /usr/local/bin/kube-controller-manager
-
-# kube-scheduler — ADR-0023: optional, gated by KWOK_SCHEDULER=kube-scheduler
-# in the entrypoint. When enabled, replaces pod-shim's Pod-binding role
-# with the real Kubernetes scheduler so the binding-latency numbers we
-# publish reflect what a production fleet would see.
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-scheduler" \
-      -o /usr/local/bin/kube-scheduler && \
-    chmod +x /usr/local/bin/kube-scheduler
-
-# kubectl, used by entrypoint to apply CRDs and probe readiness.
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kubectl" \
-      -o /usr/local/bin/kubectl && \
-    chmod +x /usr/local/bin/kubectl
-
-# kine (sqlite-backed etcd shim). The release artefact is unconditionally
-# linux-only, named `kine-${ARCH}` (no OS infix).
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://github.com/k3s-io/kine/releases/download/${KINE_VERSION}/kine-${ARCH}" \
-      -o /usr/local/bin/kine && \
-    chmod +x /usr/local/bin/kine
-
-# etcd — M45.5: optional storage backend for kwok apiserver, swapped in
-# via KINE_BACKEND=etcd in the entrypoint. kine-sqlite serialises writes
-# through one WAL fsync stream; etcd writes in parallel with a smaller
-# tail. Worth the ~15 MB image bump for laptop scale tests where the
-# kine WAL was the dominant CPU consumer.
+# All seven third-party binaries, fetched in ONE layer, in PARALLEL,
+# through a persistent BuildKit cache mount keyed on (name, version,
+# arch). Two reasons this isn't seven tidy RUN layers:
+#   - Serial downloads dominated cold builds: 337.6s for the four
+#     dl.k8s.io binaries alone at ~1MB/s (2026-06-11 cold rebuild).
+#     Parallel curls bound the wall time at the slowest single fetch.
+#   - Cache mounts survive Docker-daemon restarts that wipe the layer
+#     cache (that same rebuild re-curled everything while the go-mod
+#     cache mount was intact), so a cold event re-fetches nothing it
+#     has ever seen.
+# Downloads land under a temp name and are renamed only on success, so
+# a partial download can never poison the cache; the install step fails
+# loudly if any fetch died.
+#
+# Why each binary is here:
+#   kube-controller-manager — the garbage-collector controller that
+#     cascade-deletes ownerRef-owned objects (CRs owned by churned
+#     Pods). Without it kwok apiservers accumulate orphan CRs and the
+#     rollup carries stale demand (scaleway-50k Drop F: 2810 CRs vs
+#     1000 live Pods, Phase 2 thrash).
+#   kube-scheduler — ADR-0023: gated by KWOK_SCHEDULER=kube-scheduler;
+#     replaces pod-shim's binding role so published binding-latency
+#     numbers reflect a production fleet.
+#   kubectl — entrypoint CRD apply + readiness probes.
+#   kine — sqlite-backed etcd shim (release artefact is linux-only,
+#     named kine-${ARCH}, no OS infix).
+#   etcd — M45.5: optional KINE_BACKEND=etcd; kine-sqlite serialises
+#     writes through one WAL fsync stream, etcd writes in parallel.
+#   kwok — the node/pod lifecycle controller.
 ARG ETCD_VERSION
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz" \
-      | tar -xzC /tmp && \
-    mv "/tmp/etcd-${ETCD_VERSION}-linux-${ARCH}/etcd" /usr/local/bin/etcd && \
-    chmod +x /usr/local/bin/etcd && \
-    rm -rf "/tmp/etcd-${ETCD_VERSION}-linux-${ARCH}"
-
-# kwok controller.
-RUN ARCH="${TARGETARCH:-amd64}" && \
-    curl -fsSL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok-linux-${ARCH}" \
-      -o /usr/local/bin/kwok && \
-    chmod +x /usr/local/bin/kwok
+RUN --mount=type=cache,target=/dl \
+    set -eu; ARCH="${TARGETARCH:-amd64}"; \
+    fetch() { \
+      [ -s "/dl/$1" ] || { curl -fsSL "$2" -o "/dl/$1.tmp" && mv "/dl/$1.tmp" "/dl/$1"; }; \
+    }; \
+    fetch "kube-apiserver-${KUBE_VERSION}-${ARCH}" "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-apiserver" & p1=$!; \
+    fetch "kube-controller-manager-${KUBE_VERSION}-${ARCH}" "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-controller-manager" & p2=$!; \
+    fetch "kube-scheduler-${KUBE_VERSION}-${ARCH}" "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kube-scheduler" & p3=$!; \
+    fetch "kubectl-${KUBE_VERSION}-${ARCH}" "https://dl.k8s.io/release/${KUBE_VERSION}/bin/linux/${ARCH}/kubectl" & p4=$!; \
+    fetch "kine-${KINE_VERSION}-${ARCH}" "https://github.com/k3s-io/kine/releases/download/${KINE_VERSION}/kine-${ARCH}" & p5=$!; \
+    fetch "etcd-${ETCD_VERSION}-${ARCH}.tar.gz" "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-${ARCH}.tar.gz" & p6=$!; \
+    fetch "kwok-${KWOK_VERSION}-${ARCH}" "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok-linux-${ARCH}" & p7=$!; \
+    wait $p1; wait $p2; wait $p3; wait $p4; wait $p5; wait $p6; wait $p7; \
+    install -m 0755 "/dl/kube-apiserver-${KUBE_VERSION}-${ARCH}" /usr/local/bin/kube-apiserver; \
+    install -m 0755 "/dl/kube-controller-manager-${KUBE_VERSION}-${ARCH}" /usr/local/bin/kube-controller-manager; \
+    install -m 0755 "/dl/kube-scheduler-${KUBE_VERSION}-${ARCH}" /usr/local/bin/kube-scheduler; \
+    install -m 0755 "/dl/kubectl-${KUBE_VERSION}-${ARCH}" /usr/local/bin/kubectl; \
+    install -m 0755 "/dl/kine-${KINE_VERSION}-${ARCH}" /usr/local/bin/kine; \
+    tar -xzOf "/dl/etcd-${ETCD_VERSION}-${ARCH}.tar.gz" "etcd-${ETCD_VERSION}-linux-${ARCH}/etcd" > /usr/local/bin/etcd; \
+    chmod 0755 /usr/local/bin/etcd; \
+    install -m 0755 "/dl/kwok-${KWOK_VERSION}-${ARCH}" /usr/local/bin/kwok
 
 COPY --from=builder /out/bigfleet-operator /usr/local/bin/
 COPY --from=builder /out/bigfleet-unschedulable-pod-controller /usr/local/bin/

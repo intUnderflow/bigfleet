@@ -103,15 +103,30 @@ bench-hot: ## Run the hot-path benchmarks at measured uber-5k cardinality (~1 mi
 		-benchtime=5x -count=1 ./pkg/decision/... ./pkg/operator/
 
 .PHONY: prevalidate
-prevalidate: ## The pre-brief gate: closed-loop sim + hot-path benches + dev-50 on kind (~10 min total). Every SHA bound for a cloud brief runs this first.
+prevalidate: ## The pre-brief gate: closed-loop sim + hot-path benches + dev-50 on kind (~8 min warm). Every SHA bound for a cloud brief runs this first.
+	@docker info >/dev/null 2>&1 || { echo "prevalidate: Docker daemon not running — start Docker Desktop first"; exit 1; }
+	@echo "[$$(date +%T)] rung 1/4: closed-loop sim"
 	$(GO) test -count=1 -run ClosedLoop ./sim/...
+	@echo "[$$(date +%T)] rung 2/4: hot-path benches"
 	$(MAKE) bench-hot
+	@echo "[$$(date +%T)] rung 3/4: images + kind"
 	$(MAKE) scaletest-images
 	@command -v kind >/dev/null || { echo "kind not on PATH"; exit 1; }
 	@kind get clusters | grep -q '^bigfleet-prevalidate$$' || kind create cluster --name bigfleet-prevalidate
-	kind load docker-image bigfleet:dev bigfleet-scaletest:dev --name bigfleet-prevalidate
+	@# Skip the load when the node already has these exact image IDs —
+	@# the stamp lives ON the node so cluster recreation invalidates it.
+	@IDS=$$( (docker images -q bigfleet:dev; docker images -q bigfleet-scaletest:dev) | tr '\n' ' ' ); \
+	NODE=bigfleet-prevalidate-control-plane; \
+	LOADED=$$(docker exec $$NODE cat /etc/bigfleet-loaded-ids 2>/dev/null || true); \
+	if [ "$$IDS" != "$$LOADED" ]; then \
+	  kind load docker-image bigfleet:dev bigfleet-scaletest:dev --name bigfleet-prevalidate && \
+	  docker exec $$NODE sh -c "echo $$IDS > /etc/bigfleet-loaded-ids"; \
+	else \
+	  echo "kind load skipped — image IDs unchanged"; \
+	fi
+	@echo "[$$(date +%T)] rung 4/4: dev-50 on kind"
 	$(MAKE) scaletest PROFILE=dev-50 DURATION=5m
-	@echo "prevalidate green — SHA is brief-ready"
+	@echo "[$$(date +%T)] prevalidate green — SHA is brief-ready"
 
 .PHONY: conformance
 conformance: ## Run the provider conformance suite (TARGET=addr:port).

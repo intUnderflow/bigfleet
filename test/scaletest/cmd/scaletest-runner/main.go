@@ -1142,6 +1142,18 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	// drop below target as deletions run ahead of creations).
 	target := int(0.999 * float64(clusterCount*perClusterTarget))
 	chainAliveThreshold := int(0.99 * float64(clusterCount*perClusterTarget))
+	// Plateau fail-fast: when binds AND bootstraps are both frozen for
+	// plateauTicks consecutive polls while binds sits below the gate,
+	// the fill is structurally stuck (the 2026-06-11 dev-50 incident:
+	// binds pinned at exactly 4,800 = matching-seed capacity for 45
+	// ticks until the 10m budget — 60m on uber-* profiles — expired).
+	// Both counters frozen distinguishes a dead chain from a slow tail:
+	// a live-but-slow fill moves at least one of them. ramp-active pods
+	// must all be Ready so a crash-looping kwok pod doesn't masquerade
+	// as a plateau.
+	const plateauTicks = 12 // × 10s ticker = 2 minutes of zero movement
+	frozen := 0
+	lastBinds, lastBootstraps := -1, -1
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("did not reach steady state within %s", budget)
@@ -1167,6 +1179,17 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 					ready, clusterCount, active, target, binds, target, bootstraps, chainAliveThreshold)
 				return nil
 			}
+			if active >= target && binds >= 0 && binds == lastBinds && bootstraps == lastBootstraps {
+				frozen++
+				if frozen >= plateauTicks {
+					return fmt.Errorf(
+						"bind plateau: binds frozen at %d for %s (gate %d, gap %d) with bootstraps frozen at %d — the fill is structurally stuck, not slow; check seeded matching capacity vs demand shape (profile preflight)",
+						binds, time.Duration(plateauTicks)*10*time.Second, chainAliveThreshold, chainAliveThreshold-binds, bootstraps)
+				}
+			} else {
+				frozen = 0
+			}
+			lastBinds, lastBootstraps = binds, bootstraps
 		}
 		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, binds %d/%d, bootstraps %d (need binds ≥ %d)\n",
 			ready, clusterCount, active, target, binds, target, bootstraps, chainAliveThreshold)
