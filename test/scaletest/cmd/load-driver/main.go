@@ -76,12 +76,13 @@ type profile struct {
 	DurationSeconds int     `yaml:"durationSeconds"`
 
 	// Archetypes: a list of workload templates, weighted-picked on every
-	// workload-object creation. When non-empty, the GPU-only single-shape
+	// workload-object creation. When non-empty, the single-shape
 	// fallback below is bypassed and workloads are emitted from the
 	// chosen archetype. Both the load-driver and the shard's Configured
-	// seed read this list (M31). When empty, behaviour is identical to
-	// pre-M31: instance-type=a3-highgpu-8g, nvidia.com/gpu=8, priority
-	// from PriorityClasses (or 1000), penalties 8192/65536. See
+	// seed read this list (M31). When empty, every workload is the
+	// legacy shape (preflight.LegacyDemandInstanceType +
+	// LegacyDemandResources), priority from PriorityClasses (or 1000),
+	// penalties 8192/65536. See
 	// test/scaletest/profiles/archetypes/realistic.yaml for the
 	// production-realistic catalog.
 	Archetypes []archetype.Archetype `yaml:"archetypes"`
@@ -220,17 +221,17 @@ var replicaDistribution = []replicaBucket{
 const statefulReplicaCap = 25
 
 // drawReplicas returns the replica count for one workload object.
-// sameRack archetypes draw from the archetype's GroupSizeRange
-// (ADR-0040 §3: one workload object is one co-location gang, and the
-// heavy-tailed service-size distribution produced gangs of up to ~400
-// whole machines — unsatisfiable in any topology the harness runs);
-// everything else draws from the service-size distribution via
-// pickReplicas. remaining > 0 caps the draw so the ramp lands on
-// target — a truncated final sameRack group is acceptable, every Need
-// is partial-fill-tolerant in v1 (ADR-0040 §2). Always ≥ 1.
+// Gang archetypes (sameRack / sameZone) draw from the archetype's
+// GroupSizeRange (ADR-0040 §3: one workload object is one co-location
+// gang, and the heavy-tailed service-size distribution produced gangs
+// of up to ~400 whole machines — unsatisfiable in any topology the
+// harness runs); everything else draws from the service-size
+// distribution via pickReplicas. remaining > 0 caps the draw so the
+// ramp lands on target — a truncated final gang is acceptable, every
+// Need is partial-fill-tolerant in v1 (ADR-0040 §2). Always ≥ 1.
 func drawReplicas(rng *rand.Rand, a *archetype.Archetype, stateful bool, remaining int) int {
 	var n int
-	if a != nil && a.SameRack {
+	if isGang(a) {
 		n = a.PickGroupSize(rng)
 	} else {
 		n = pickReplicas(rng, stateful)
@@ -290,14 +291,14 @@ var (
 		Name: "scaletest_loadgen_errors_total",
 	}, []string{"kind"})
 
-	// anchorsBound counts sameRack co-location-group anchor pods the
-	// load-driver force-binds to break the podAffinity bootstrap
-	// deadlock (ADR-0025). One per group; real kube-scheduler places
-	// the rest of each group. BigFleet is unaffected — this only moves
-	// the user-facing bind metric for co-located workloads.
+	// anchorsBound counts co-location-gang (sameRack / sameZone) anchor
+	// pods the load-driver force-binds to break the podAffinity
+	// bootstrap deadlock (ADR-0025). One per group; real kube-scheduler
+	// places the rest of each group. BigFleet is unaffected — this only
+	// moves the user-facing bind metric for co-located workloads.
 	anchorsBound = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "scaletest_loadgen_anchors_bound_total",
-		Help: "Count of sameRack co-location-group anchor pods force-bound by the load-driver (ADR-0025 gang-scheduler stand-in).",
+		Help: "Count of co-location-gang anchor pods force-bound by the load-driver (ADR-0025 gang-scheduler stand-in).",
 	})
 
 	// steadyStateMetric is 1 once this load-driver has filled to its
@@ -592,10 +593,10 @@ func indexArchetypes(arches []archetype.Archetype) map[string]*archetype.Archety
 
 func (d *driver) run(ctx context.Context) error {
 	// ADR-0025: stand in for a gang scheduler — force-bind one anchor
-	// per sameRack co-location group so the group's self-referential
-	// podAffinity can bootstrap. Runs for the whole driver lifetime,
-	// across ramp and steady-state churn.
-	go d.anchorSameRackGroups(ctx)
+	// per co-location gang (sameRack or sameZone) so the group's
+	// self-referential podAffinity can bootstrap. Runs for the whole
+	// driver lifetime, across ramp and steady-state churn.
+	go d.anchorGangGroups(ctx)
 
 	// Phase 1: ramp to target — create the workload objects. Their
 	// controllers create Pods WITHOUT Spec.NodeName, so each Pod goes
@@ -953,16 +954,51 @@ func buildStatefulSet(name string, replicas int32, tmpl corev1.PodTemplateSpec) 
 }
 
 const (
-	// labelCoLocationGroup tags every Pod of one sameRack group with a
-	// shared, group-unique value. The Pod's podAffinity selects it; the
-	// operator aggregates CRs carrying an equal CoLocation term into one
-	// Need. ADR-0024.
+	// labelCoLocationGroup tags every Pod of one gang (sameRack or
+	// sameZone group) with a shared, group-unique value. The Pod's
+	// podAffinity selects it; the operator aggregates CRs carrying an
+	// equal CoLocation term into one Need. ADR-0024.
 	labelCoLocationGroup = "scaletest.bigfleet/co-location-group"
 	// topologyKeyRack is the node-label key sameRack archetypes
 	// co-locate on — the TopologyKey of their podAffinity term, which
 	// the operator turns into a Same(rack) requirement.
 	topologyKeyRack = "topology.bigfleet/rack"
+	// topologyKeyZone is the node-label key sameZone archetypes
+	// co-locate on (M66.2) — gangs larger than a rack share a zone
+	// instead. The shard stamps it on every fake-Node from
+	// Profile.Zone, so zone gangs always have a domain to attach to.
+	topologyKeyZone = "topology.kubernetes.io/zone"
 )
+
+// isGang reports whether an archetype's workload objects form
+// co-location gangs (one workload object = one gang, ADR-0038).
+func isGang(a *archetype.Archetype) bool {
+	return a != nil && (a.SameRack || a.SameZone)
+}
+
+// gangTopologyKey returns the node-label key a gang archetype
+// co-locates on: zone for sameZone, rack otherwise.
+func gangTopologyKey(a *archetype.Archetype) string {
+	if a.SameZone {
+		return topologyKeyZone
+	}
+	return topologyKeyRack
+}
+
+// podGangTopologyKey returns the topology key of a gang pod's required
+// podAffinity term — the domain its co-location group must share.
+// Falls back to the rack key when the pod carries no such term, which
+// preserves the pre-M66.2 behaviour for any group-labelled pod built
+// before the zone-scope split.
+func podGangTopologyKey(p *corev1.Pod) string {
+	if p.Spec.Affinity != nil && p.Spec.Affinity.PodAffinity != nil {
+		terms := p.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		if len(terms) > 0 && terms[0].TopologyKey != "" {
+			return terms[0].TopologyKey
+		}
+	}
+	return topologyKeyRack
+}
 
 // buildPodTemplate constructs the pod template for one workload object.
 // ADR-0038: a workload object's replicas all share ONE shape — one
@@ -1024,17 +1060,19 @@ func (d *driver) buildPodTemplate(a *archetype.Archetype) corev1.PodTemplateSpec
 			},
 		},
 	}
-	if a.SameRack {
+	if isGang(a) {
 		// ADR-0024: co-location is a real podAffinity term. Every Pod
 		// of this workload object carries one group-unique label and
-		// requires co-scheduling with peers carrying it on
-		// topology.bigfleet/rack. The UPC projects this into
-		// CR.Spec.CoLocation; the operator aggregates equal terms into
-		// one Need with a Same(rack) requirement. ADR-0038: one
-		// workload object IS one co-location group — every replica
-		// shares the group label — so the group size is the object's
-		// replica count, drawn from the archetype's GroupSizeRange in
-		// createWorkload (ADR-0040 §3).
+		// requires co-scheduling with peers carrying it on the
+		// archetype's gang topology key — topology.bigfleet/rack for
+		// sameRack, topology.kubernetes.io/zone for sameZone (M66.2).
+		// The UPC projects this into CR.Spec.CoLocation; the operator
+		// aggregates equal terms into one Need with a Same(key)
+		// requirement. ADR-0038: one workload object IS one
+		// co-location group — every replica shares the group label —
+		// so the group size is the object's replica count, drawn from
+		// the archetype's GroupSizeRange in createWorkload (ADR-0040
+		// §3).
 		gid := fmt.Sprintf("%s-%s-grp-%d", d.clusterID, a.Name, d.nextSeq())
 		labels[labelCoLocationGroup] = gid
 		affinity.PodAffinity = &corev1.PodAffinity{
@@ -1042,7 +1080,7 @@ func (d *driver) buildPodTemplate(a *archetype.Archetype) corev1.PodTemplateSpec
 				LabelSelector: &metav1.LabelSelector{
 					MatchLabels: map[string]string{labelCoLocationGroup: gid},
 				},
-				TopologyKey: topologyKeyRack,
+				TopologyKey: gangTopologyKey(a),
 			}},
 		}
 	}
@@ -1096,7 +1134,8 @@ func (d *driver) buildPodTemplate(a *archetype.Archetype) corev1.PodTemplateSpec
 }
 
 // buildLegacyPodTemplate is the pre-M31 single-shape fallback used when
-// no archetype catalog is configured: a3-highgpu-8g GPU Pods.
+// no archetype catalog is configured: one cpu/memory Pod shape pinned
+// to preflight.LegacyDemandInstanceType.
 func (d *driver) buildLegacyPodTemplate() corev1.PodTemplateSpec {
 	pri := int32(1000)
 	if len(d.prof.PriorityClasses) > 0 {
@@ -1244,15 +1283,15 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 			}
 		}
 		// ADR-0040: a group with a member already bound (the ADR-0025
-		// anchor, or a previous sweep) is pinned to that member's rack —
-		// planning the remainder anywhere else would scatter the group.
-		nodeRack := make(map[string]string, len(nodes.Items))
+		// anchor, or a previous sweep) is pinned to that member's
+		// domain — the value of the gang's topology key (rack or zone)
+		// on the member's node. Planning the remainder anywhere else
+		// would scatter the group.
+		nodeLabels := make(map[string]map[string]string, len(nodes.Items))
 		for j := range nodes.Items {
-			if rack, ok := nodes.Items[j].Labels[topologyKeyRack]; ok {
-				nodeRack[nodes.Items[j].Name] = rack
-			}
+			nodeLabels[nodes.Items[j].Name] = nodes.Items[j].Labels
 		}
-		pinnedRack := map[string]string{}
+		pinnedDomain := map[string]string{}
 		for i := range allPods.Items {
 			p := &allPods.Items[i]
 			if p.Spec.NodeName == "" {
@@ -1262,19 +1301,19 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 			if gid == "" {
 				continue
 			}
-			if rack, ok := nodeRack[p.Spec.NodeName]; ok {
-				pinnedRack[gid] = rack
+			if dom, ok := nodeLabels[p.Spec.NodeName][podGangTopologyKey(p)]; ok {
+				pinnedDomain[gid] = dom
 			}
 		}
 		// Plan assignments against the local remaining-capacity map, then
 		// execute the Bind calls in parallel. Co-located groups are
-		// planned whole-group onto a single rack (ADR-0040); see
-		// planPreBind.
+		// planned whole-group onto a single topology domain (ADR-0040);
+		// see planPreBind.
 		unboundPtrs := make([]*corev1.Pod, 0, len(unbound.Items))
 		for i := range unbound.Items {
 			unboundPtrs = append(unboundPtrs, &unbound.Items[i])
 		}
-		plan := planPreBind(unboundPtrs, byArchetype, remaining, pinnedRack)
+		plan := planPreBind(unboundPtrs, byArchetype, remaining, pinnedDomain)
 		var bound atomic.Int64
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, preBindConcurrency)
@@ -1311,13 +1350,16 @@ type assignment struct {
 
 // planPreBind is preBindInitialPods' planning step, factored pure for
 // unit tests. Pods carrying the co-location-group label are planned as
-// whole groups, rack-coherently (ADR-0040): the fast-path previously
+// whole groups, domain-coherently (ADR-0040): the fast-path previously
 // bound groups scattered across racks — a placement a real scheduler
 // can never produce, since required podAffinity holds the group
-// pending instead. Groups are planned before non-group Pods so the
-// constrained placements aren't starved by greedy singles; non-group
-// Pods keep the original first-fit walk. Mutates remaining in place.
-func planPreBind(unbound []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, pinnedRack map[string]string) []assignment {
+// pending instead. The domain key is the group's own podAffinity
+// TopologyKey (rack for sameRack gangs, zone for sameZone gangs).
+// Groups are planned before non-group Pods so the constrained
+// placements aren't starved by greedy singles; non-group Pods keep the
+// original first-fit walk. Mutates remaining in place. pinnedDomain
+// maps group ID → the domain value a bound member already occupies.
+func planPreBind(unbound []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, pinnedDomain map[string]string) []assignment {
 	plan := make([]assignment, 0, len(unbound))
 
 	groups := map[string][]*corev1.Pod{}
@@ -1337,7 +1379,8 @@ func planPreBind(unbound []*corev1.Pod, byArchetype map[string][]*corev1.Node, r
 	sort.Strings(groupIDs)
 
 	for _, gid := range groupIDs {
-		plan = append(plan, planGroupOntoRack(groups[gid], byArchetype, remaining, pinnedRack[gid])...)
+		group := groups[gid]
+		plan = append(plan, planGroupOntoDomain(group, byArchetype, remaining, podGangTopologyKey(group[0]), pinnedDomain[gid])...)
 	}
 
 	for _, pod := range singles {
@@ -1355,35 +1398,36 @@ func planPreBind(unbound []*corev1.Pod, byArchetype map[string][]*corev1.Node, r
 	return plan
 }
 
-// planGroupOntoRack places one whole co-location group onto a single
-// rack, or nowhere. Candidate racks are the topology.bigfleet/rack
-// values among the group's archetype-matching nodes (just pinnedRack
-// when a member is already bound there); each is tried in name order
-// — deterministic across sweeps — by bin-packing the group against a
-// scratch copy of the rack's remaining capacity. The first rack that
-// fits every Pod wins and the scratch is committed. If none fits, the
-// group stays pending for a later sweep / kube-scheduler / the
+// planGroupOntoDomain places one whole co-location group onto a single
+// topology domain (one rack for sameRack gangs, one zone for sameZone
+// gangs), or nowhere. Candidate domains are the domainKey label values
+// among the group's archetype-matching nodes (just pinnedDomain when a
+// member is already bound there); each is tried in name order —
+// deterministic across sweeps — by bin-packing the group against a
+// scratch copy of the domain's remaining capacity. The first domain
+// that fits every Pod wins and the scratch is committed. If none fits,
+// the group stays pending for a later sweep / kube-scheduler / the
 // ADR-0025 anchor — never scattered.
-func planGroupOntoRack(group []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, pinnedRack string) []assignment {
+func planGroupOntoDomain(group []*corev1.Pod, byArchetype map[string][]*corev1.Node, remaining map[string]corev1.ResourceList, domainKey, pinnedDomain string) []assignment {
 	// One workload object is one co-location group, so every Pod shares
 	// the first Pod's archetype (ADR-0038).
 	arch := group[0].Labels[labelArchetype]
-	racks := map[string][]*corev1.Node{}
-	var rackNames []string
+	domains := map[string][]*corev1.Node{}
+	var domainNames []string
 	for _, n := range byArchetype[arch] {
-		rack, ok := n.Labels[topologyKeyRack]
-		if !ok || (pinnedRack != "" && rack != pinnedRack) {
+		dom, ok := n.Labels[domainKey]
+		if !ok || (pinnedDomain != "" && dom != pinnedDomain) {
 			continue
 		}
-		if _, seen := racks[rack]; !seen {
-			rackNames = append(rackNames, rack)
+		if _, seen := domains[dom]; !seen {
+			domainNames = append(domainNames, dom)
 		}
-		racks[rack] = append(racks[rack], n)
+		domains[dom] = append(domains[dom], n)
 	}
-	sort.Strings(rackNames)
+	sort.Strings(domainNames)
 
-	for _, rack := range rackNames {
-		nodes := racks[rack]
+	for _, dom := range domainNames {
+		nodes := domains[dom]
 		scratch := make(map[string]corev1.ResourceList, len(nodes))
 		for _, n := range nodes {
 			scratch[n.Name] = copyResourceList(remaining[n.Name])
@@ -1628,20 +1672,20 @@ func newKubeClient(explicit string) (client.Client, *kubernetes.Clientset, error
 	return k, cs, nil
 }
 
-// anchorSameRackGroups is the harness's gang-scheduler stand-in
-// (ADR-0025). A sameRack pod carries a self-referential required
-// podAffinity, which real kube-scheduler cannot bootstrap from an
-// empty cluster — the first pod of a group has no running peer to
-// co-locate with (a documented Kubernetes limitation; production
-// fleets delegate gang placement to Volcano / Kueue / coscheduling).
-// This loop force-binds one pod of each anchorless group onto a
-// fresh, rack-labelled, resource-fitting fake-Node; kwok marks it
-// Running, and real kube-scheduler then places the rest of the group
-// onto the same rack via podAffinity.
+// anchorGangGroups is the harness's gang-scheduler stand-in
+// (ADR-0025). A gang pod (sameRack or sameZone) carries a
+// self-referential required podAffinity, which real kube-scheduler
+// cannot bootstrap from an empty cluster — the first pod of a group
+// has no running peer to co-locate with (a documented Kubernetes
+// limitation; production fleets delegate gang placement to Volcano /
+// Kueue / coscheduling). This loop force-binds one pod of each
+// anchorless group onto a fresh, domain-labelled, resource-fitting
+// fake-Node; kwok marks it Running, and real kube-scheduler then
+// places the rest of the group onto the same domain via podAffinity.
 //
 // BigFleet is untouched — it provisions capacity for the aggregated
 // Same Need regardless; this only moves the user-facing bind metric.
-func (d *driver) anchorSameRackGroups(ctx context.Context) {
+func (d *driver) anchorGangGroups(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -1656,12 +1700,12 @@ func (d *driver) anchorSameRackGroups(ctx context.Context) {
 	}
 }
 
-// reconcileAnchors force-binds one anchor per anchorless sameRack
-// group. Idempotent and stateless: groups that already have a bound
-// pod are skipped, and nodes already hosting a co-location-group pod
-// are not reused. Scoped to co-location-labelled pods via a label
-// selector — at the largest profiles this list is worth revisiting
-// with an informer (ADR-0025 consequences).
+// reconcileAnchors force-binds one anchor per anchorless gang.
+// Idempotent and stateless: groups that already have a bound pod are
+// skipped, and nodes already hosting a co-location-group pod are not
+// reused. Scoped to co-location-labelled pods via a label selector —
+// at the largest profiles this list is worth revisiting with an
+// informer (ADR-0025 consequences).
 func (d *driver) reconcileAnchors(ctx context.Context) error {
 	var pods corev1.PodList
 	if err := d.k.List(ctx, &pods,
@@ -1706,22 +1750,33 @@ func (d *driver) reconcileAnchors(ctx context.Context) error {
 	}
 	for _, gs := range needy {
 		anchor := gs.pending[0]
-		for i := range nodes.Items {
-			n := &nodes.Items[i]
-			// The node must carry the rack topology key (else the
-			// rest of the group's podAffinity has no domain to attach
-			// to), be unclaimed, and fit the anchor's resources.
-			if claimed[n.Name] || n.Labels[topologyKeyRack] == "" || !nodeFitsPod(n, anchor) {
-				continue
-			}
-			if err := d.bindPod(ctx, anchor, n.Name); err != nil {
-				d.log.Warn("anchor bind failed", "pod", anchor.Name, "node", n.Name, "err", err)
-				break // retry this group next tick
-			}
-			anchorsBound.Inc()
-			claimed[n.Name] = true
-			break
+		n := pickAnchorNode(nodes.Items, claimed, anchor)
+		if n == nil {
+			continue
 		}
+		if err := d.bindPod(ctx, anchor, n.Name); err != nil {
+			d.log.Warn("anchor bind failed", "pod", anchor.Name, "node", n.Name, "err", err)
+			continue // retry this group next tick
+		}
+		anchorsBound.Inc()
+		claimed[n.Name] = true
+	}
+	return nil
+}
+
+// pickAnchorNode returns the first node fit to anchor a gang: it must
+// carry the gang's topology key (rack or zone, derived from the
+// anchor's own podAffinity term — else the rest of the group's
+// podAffinity has no domain to attach to), be unclaimed, and fit the
+// anchor's resources. Returns nil when no node qualifies.
+func pickAnchorNode(nodes []corev1.Node, claimed map[string]bool, anchor *corev1.Pod) *corev1.Node {
+	key := podGangTopologyKey(anchor)
+	for i := range nodes {
+		n := &nodes[i]
+		if claimed[n.Name] || n.Labels[key] == "" || !nodeFitsPod(n, anchor) {
+			continue
+		}
+		return n
 	}
 	return nil
 }

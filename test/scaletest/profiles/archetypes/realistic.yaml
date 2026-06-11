@@ -214,10 +214,13 @@ archetypes:
     groupSizeRange: [2, 8]
 
   # ===== GPU training: medium (standard training jobs) =====
-  # Atomic gang, larger. Median realistic-production gang size is
-  # 16-32. Disproportionate impact on conflict rate under OCC because
-  # any single-machine conflict aborts the entire 16-32-machine
-  # proposal.
+  # Atomic gang, larger. M66.2 (complexity audit Action 2): rack-
+  # coherent gang sizes are capped at realistic rack occupancy — a
+  # rack holds ~50 GPU nodes shared across tenants, so a single gang
+  # claiming up to 16 co-resident nodes is the realistic ceiling for
+  # rack-scope placement; anything larger goes zone-scope (see
+  # gpu-training-large). Still disproportionate OCC conflict impact:
+  # one single-machine conflict aborts the whole proposal.
   - name: gpu-training-medium
     weight: 2  # rounded from 1.5%
     instanceTypes: [a3-highgpu-8g]
@@ -229,11 +232,18 @@ archetypes:
     reclamationPenalty: 65536
     meanLifetimeSeconds: 0
     sameRack: true
-    groupSizeRange: [16, 32]
+    groupSizeRange: [8, 16]
 
   # ===== GPU training: large (foundation models) =====
-  # Atomic gang, very large. Rare but high-impact. A single 64-256-
-  # machine gang dominates Phase 1's worst-case conflict cost.
+  # Atomic gang, very large. Rare but high-impact; a single 64-256-
+  # machine gang dominates Phase 1's worst-case conflict cost. M66.2:
+  # ZONE-scope co-location, not rack — no physical rack holds 64-256
+  # GPU nodes (measured occupancy ~50), so real fleets place these
+  # gangs within a zone/pod and rely on the fabric, which is exactly
+  # what Same(zone) expresses. The previous sameRack form demanded
+  # physically impossible placement and fabricated the perpetual
+  # structurally-unsatisfiable gang population behind the ADR-0042
+  # layer (complexity audit §3 pool 2).
   - name: gpu-training-large
     weight: 1  # rounded from 0.3%; minimum representable at integer weights
     instanceTypes: [a3-highgpu-8g]
@@ -244,7 +254,7 @@ archetypes:
     interruptionPenalty: 65536
     reclamationPenalty: 131072
     meanLifetimeSeconds: 0
-    sameRack: true
+    sameZone: true
     groupSizeRange: [64, 256]
 
   # ===== Critical realtime =====

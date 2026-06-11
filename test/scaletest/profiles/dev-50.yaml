@@ -72,19 +72,22 @@ shard:
   replicas: 1
   # Headroom math, in the dimension that matters: this profile has no
   # archetype catalog, so demand is the load-driver's legacy
-  # single-shape template (every Pod: nvidia.com/gpu=8, nodeAffinity
-  # a3-highgpu-8g — buildLegacyPodTemplate) while the no-catalog seed
+  # single-shape template (every Pod: cpu=2/memory=8Gi, nodeAffinity
+  # preflight.LegacyDemandInstanceType — m6i.large since M66.2, when
+  # GPU counts stopped scaling with density) while the no-catalog seed
   # ROTATES five instance types — only ⅕ of each pool can ever host
-  # the demand. Matching capacity = (60+240)/5 = 60 a3-highgpu-8g
+  # the demand. Matching capacity = (60+240)/5 = 60 demand-typed
   # machines × density-100 = 6,000 Pod slots vs 5,000 demand (20 %
   # headroom). The original 60/180 split capped matching supply at 48
   # machines = 4,800 slots < the 4,950 bind gate — the run stalled at
   # exactly 4,800 binds with BigFleet correctly reporting the residual
   # as unsatisfiable (no acquirable machine of the right shape).
+  # pkg/scaletest/preflight owns this arithmetic now; its committed-
+  # profile test re-derives these numbers from this file.
   seedMachines: 60
   # ADR-0026: the elastic-procurement tier. 4× the Idle seed (not
-  # dev-500's 3×) so the a3 fifth alone covers demand+headroom; Phase 1
-  # still prefers the cheaper owned Idle pool first.
+  # dev-500's 3×) so the demand-typed fifth alone covers demand+headroom;
+  # Phase 1 still prefers the cheaper owned Idle pool first.
   seedSpeculative: 240
   seedDensityMultiplier: 100
   maxActionsPerCycle: 4096

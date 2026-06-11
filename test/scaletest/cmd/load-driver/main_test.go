@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/preflight"
 )
 
 // fixedTemplate is a minimal pod template carrying the fields the UPC
@@ -220,10 +221,36 @@ func TestBuildPodTemplate(t *testing.T) {
 			t.Fatal("podAffinity selector does not match the template's group label")
 		}
 	})
+
+	t.Run("sameZone archetype carries zone-scope co-location group", func(t *testing.T) {
+		// M66.2: zone-scope gangs — same group label as sameRack, but
+		// the podAffinity TopologyKey is the standard zone key.
+		a := &archetype.Archetype{
+			Name:           "gpu-training-large",
+			InstanceTypes:  []string{"a3-highgpu-8g"},
+			SameZone:       true,
+			GroupSizeRange: [2]int{64, 256},
+		}
+		tmpl := d.buildPodTemplate(a)
+		gid := tmpl.Labels[labelCoLocationGroup]
+		if gid == "" {
+			t.Fatal("sameZone template missing co-location-group label")
+		}
+		if tmpl.Spec.Affinity == nil || tmpl.Spec.Affinity.PodAffinity == nil {
+			t.Fatal("sameZone template missing podAffinity")
+		}
+		terms := tmpl.Spec.Affinity.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+		if len(terms) != 1 || terms[0].TopologyKey != topologyKeyZone {
+			t.Fatalf("unexpected podAffinity terms: %+v", terms)
+		}
+		if terms[0].LabelSelector.MatchLabels[labelCoLocationGroup] != gid {
+			t.Fatal("podAffinity selector does not match the template's group label")
+		}
+	})
 }
 
-// TestBuildPodTemplateLegacy asserts the no-catalog fallback still
-// produces a usable GPU template.
+// TestBuildPodTemplateLegacy asserts the no-catalog fallback produces
+// a template matching the shared preflight shape tables.
 func TestBuildPodTemplateLegacy(t *testing.T) {
 	d := &driver{
 		rng:  rand.New(rand.NewSource(5)),
@@ -233,8 +260,16 @@ func TestBuildPodTemplateLegacy(t *testing.T) {
 	if tmpl.Spec.Priority == nil || *tmpl.Spec.Priority != 500 {
 		t.Fatalf("legacy priority = %v, want 500", tmpl.Spec.Priority)
 	}
-	if _, ok := tmpl.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"]; !ok {
-		t.Fatal("legacy template missing GPU request")
+	for k, v := range preflight.LegacyDemandResources() {
+		got, ok := tmpl.Spec.Containers[0].Resources.Requests[corev1.ResourceName(k)]
+		if !ok || got.String() != v {
+			t.Fatalf("legacy template request %s = %v, want %s", k, got, v)
+		}
+	}
+	terms := tmpl.Spec.Affinity.NodeAffinity.
+		RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+	if len(terms) != 1 || terms[0].MatchExpressions[0].Values[0] != preflight.LegacyDemandInstanceType {
+		t.Fatalf("legacy template nodeAffinity = %+v, want %s", terms, preflight.LegacyDemandInstanceType)
 	}
 	// buildDeployment writes labelWorkload into a non-nil map; ensure
 	// the legacy template's label map is allocated.
@@ -320,6 +355,27 @@ func TestDrawReplicasSameRackUsesGroupSizeRange(t *testing.T) {
 	}
 	if !sawOutsideRange {
 		t.Fatal("non-sameRack archetype never drew outside GroupSizeRange; PickGroupSize must not be consulted for it")
+	}
+}
+
+// M66.2: sameZone gangs draw replicas from GroupSizeRange exactly like
+// sameRack ones — drawReplicas keys off "is a gang", not the scope.
+func TestDrawReplicasSameZoneUsesGroupSizeRange(t *testing.T) {
+	rng := rand.New(rand.NewSource(8))
+	a := &archetype.Archetype{
+		Name:           "gpu-training-large",
+		InstanceTypes:  []string{"a3-highgpu-8g"},
+		SameZone:       true,
+		GroupSizeRange: [2]int{64, 256},
+	}
+	for i := 0; i < 5000; i++ {
+		n := drawReplicas(rng, a, false, 0)
+		if n < 64 || n > 256 {
+			t.Fatalf("sameZone draw %d outside GroupSizeRange [64, 256]", n)
+		}
+	}
+	if n := drawReplicas(rng, a, false, 10); n != 10 {
+		t.Fatalf("sameZone draw with remaining=10 = %d, want 10 (truncated final group)", n)
 	}
 }
 
@@ -456,6 +512,146 @@ func TestPlanPreBind_PinnedRackConstrainsGroup(t *testing.T) {
 	plan = planPreBind(group, byArchetype, remaining, pinned)
 	if len(plan) != 0 {
 		t.Fatalf("planned %d Pods onto a full pinned rack; want 0 (never scatter): %+v", len(plan), planNames(plan))
+	}
+}
+
+// planGangPod is planPod plus the required podAffinity term
+// buildPodTemplate emits for gangs, with the given topology key. The
+// planner derives each group's domain key from this term (M66.2).
+func planGangPod(name, arch, gid, cpu, topoKey string) *corev1.Pod {
+	p := planPod(name, arch, gid, cpu)
+	p.Spec.Affinity = &corev1.Affinity{
+		PodAffinity: &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{labelCoLocationGroup: gid},
+				},
+				TopologyKey: topoKey,
+			}},
+		},
+	}
+	return p
+}
+
+// planZoneNode builds a node carrying the zone topology key but NOT the
+// rack key — the shape a fake-Node has when its machine profile carries
+// Zone but no rack label.
+func planZoneNode(name, zone string) *corev1.Node {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+		Name:   name,
+		Labels: map[string]string{labelArchetype: "gpu-training-large", topologyKeyZone: zone},
+	}}
+}
+
+func TestPlanPreBind_ZoneGangLandsOnOneZone(t *testing.T) {
+	// M66.2: a sameZone gang must land entirely within one zone, even
+	// when its nodes carry no rack label at all. zone-a holds one cpu-8
+	// node (fits 2 of 3); zone-b holds two (fits all 3) → zone-b wins.
+	n1 := planZoneNode("n1", "zone-a")
+	n2 := planZoneNode("n2", "zone-b")
+	n3 := planZoneNode("n3", "zone-b")
+	byArchetype := map[string][]*corev1.Node{"gpu-training-large": {n1, n2, n3}}
+	remaining := map[string]corev1.ResourceList{
+		"n1": cpuList("8"), "n2": cpuList("8"), "n3": cpuList("8"),
+	}
+	group := []*corev1.Pod{
+		planGangPod("g-0", "gpu-training-large", "grp-z", "4", topologyKeyZone),
+		planGangPod("g-1", "gpu-training-large", "grp-z", "4", topologyKeyZone),
+		planGangPod("g-2", "gpu-training-large", "grp-z", "4", topologyKeyZone),
+	}
+
+	plan := planPreBind(group, byArchetype, remaining, nil)
+	if len(plan) != 3 {
+		t.Fatalf("planned %d of 3 zone-gang Pods: %+v", len(plan), planNames(plan))
+	}
+	for _, a := range plan {
+		if a.node != "n2" && a.node != "n3" {
+			t.Errorf("pod %s planned onto %s; gang must stay within zone-b", a.pod.Name, a.node)
+		}
+	}
+
+	// No single zone fits the whole gang → nothing is planned, never
+	// scattered across zones.
+	remaining = map[string]corev1.ResourceList{
+		"n1": cpuList("8"), "n2": cpuList("4"), "n3": cpuList("4"),
+	}
+	plan = planPreBind(group, byArchetype, remaining, nil)
+	if len(plan) != 0 {
+		t.Fatalf("planned %d Pods across zones; want 0 (one zone or nowhere): %+v", len(plan), planNames(plan))
+	}
+}
+
+func TestPlanPreBind_ZoneGangHonoursPinnedZone(t *testing.T) {
+	// A zone gang with a member already anchored in zone-b must plan
+	// its remainder there, even though zone-a also fits.
+	n1 := planZoneNode("n1", "zone-a")
+	n2 := planZoneNode("n2", "zone-b")
+	byArchetype := map[string][]*corev1.Node{"gpu-training-large": {n1, n2}}
+	remaining := map[string]corev1.ResourceList{"n1": cpuList("8"), "n2": cpuList("8")}
+	group := []*corev1.Pod{
+		planGangPod("g-0", "gpu-training-large", "grp-z", "4", topologyKeyZone),
+		planGangPod("g-1", "gpu-training-large", "grp-z", "4", topologyKeyZone),
+	}
+	pinned := map[string]string{"grp-z": "zone-b"}
+
+	plan := planPreBind(group, byArchetype, remaining, pinned)
+	if len(plan) != 2 {
+		t.Fatalf("planned %d of 2 pinned zone-gang Pods", len(plan))
+	}
+	for _, a := range plan {
+		if a.node != "n2" {
+			t.Errorf("pod %s planned onto %s; gang is pinned to zone-b", a.pod.Name, a.node)
+		}
+	}
+}
+
+// ---- pickAnchorNode (ADR-0025 gang-scheduler stand-in) ------------------
+
+// anchorNode builds a schedulable node with the given labels and cpu-8
+// Allocatable for pickAnchorNode tests.
+func anchorNode(name string, labels map[string]string) corev1.Node {
+	labels[labelArchetype] = "gpu-training-large"
+	return corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Status: corev1.NodeStatus{
+			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")},
+		},
+	}
+}
+
+func TestPickAnchorNode_DerivesKeyFromPodAffinity(t *testing.T) {
+	// One node carries only the rack key, the other only the zone key.
+	// Each gang's anchor must land on the node carrying ITS topology
+	// key — a zone gang can anchor on a zone-labelled node that lacks
+	// the rack key entirely (M66.2).
+	nodes := []corev1.Node{
+		anchorNode("rack-node", map[string]string{topologyKeyRack: "z1-rack-0"}),
+		anchorNode("zone-node", map[string]string{topologyKeyZone: "zone-a"}),
+	}
+
+	zoneAnchor := planGangPod("z-0", "gpu-training-large", "grp-z", "4", topologyKeyZone)
+	if n := pickAnchorNode(nodes, map[string]bool{}, zoneAnchor); n == nil || n.Name != "zone-node" {
+		t.Fatalf("zone-gang anchor picked %v, want zone-node", n)
+	}
+
+	rackAnchor := planGangPod("r-0", "gpu-training-large", "grp-r", "4", topologyKeyRack)
+	if n := pickAnchorNode(nodes, map[string]bool{}, rackAnchor); n == nil || n.Name != "rack-node" {
+		t.Fatalf("rack-gang anchor picked %v, want rack-node", n)
+	}
+
+	// Affinity-less group pods keep the historical rack-key behaviour.
+	legacyAnchor := planPod("l-0", "gpu-training-large", "grp-l", "4")
+	if n := pickAnchorNode(nodes, map[string]bool{}, legacyAnchor); n == nil || n.Name != "rack-node" {
+		t.Fatalf("affinity-less anchor picked %v, want rack-node (rack fallback)", n)
+	}
+
+	// Claimed and non-fitting nodes are skipped.
+	if n := pickAnchorNode(nodes, map[string]bool{"zone-node": true}, zoneAnchor); n != nil {
+		t.Fatalf("zone-gang anchor picked claimed node %s", n.Name)
+	}
+	big := planGangPod("z-big", "gpu-training-large", "grp-z", "16", topologyKeyZone)
+	if n := pickAnchorNode(nodes, map[string]bool{}, big); n != nil {
+		t.Fatalf("oversized anchor picked %s; node cannot fit it", n.Name)
 	}
 }
 

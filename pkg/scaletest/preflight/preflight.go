@@ -35,7 +35,7 @@ import (
 // matters — LegacyDemandInstanceType must stay index 0 so the
 // matching-share arithmetic (ceil(n/5)) holds.
 var LegacyInstanceTypes = []string{
-	"a3-highgpu-8g", "m6i.large", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge",
+	"m6i.large", "a3-highgpu-8g", "c6i.4xlarge", "n2-standard-32", "r6i.xlarge",
 }
 
 // LegacyResources is each rotation type's per-replica resource map
@@ -54,12 +54,23 @@ var LegacyResources = map[string]map[string]string{
 // Configured seed and the legacy CR profile hardcode the same type so
 // supply and demand meet (see the chart values' seedConfiguredPerCluster
 // comment).
-const LegacyDemandInstanceType = "a3-highgpu-8g"
+const LegacyDemandInstanceType = "m6i.large"
 
 // LegacyDemandResources returns a fresh copy of the legacy per-Pod
 // request map (callers mutate resource lists).
+//
+// M66.2: the shape moved from {nvidia.com/gpu: 8} on a3-highgpu-8g to
+// a cpu/memory pod on m6i.large. The density model only multiplies
+// compressible core resources now (extended resources are physical
+// device counts — see scaleResourceMap), which made a GPU-only legacy
+// demand structurally unhostable at density: gpu:8 pods on gpu:8
+// machines is 1 pod/machine, collapsing dev-50's 6,000-slot
+// arithmetic to 60. A cpu-shaped legacy demand keeps the legacy
+// path's capacity model honest until M66.5 deletes it wholesale.
+// m6i.large was moved to rotation index 0 so the matching-share
+// arithmetic (ceil(n/5)) is unchanged.
 func LegacyDemandResources() map[string]string {
-	return map[string]string{"nvidia.com/gpu": "8"}
+	return map[string]string{"cpu": "2", "memory": "8Gi"}
 }
 
 // LegacySeed is the seed configuration of a no-catalog profile — the

@@ -167,6 +167,18 @@ func scaleResourceMap(in map[string]string, factor int) map[string]string {
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
+		// M66.2 (complexity audit Action 2): only the compressible
+		// core resources scale with density. Extended resources —
+		// nvidia.com/gpu above all — are physical device counts: a
+		// density-100 seed multiplying gpu:8 to gpu:800 manufactured
+		// machines no hardware resembles, silently perturbed
+		// ADR-0041's snapshot-dependent foldability (gang aggregates
+		// "fit" phantom capacity), and contradicted the cloud
+		// harness's empirically ~8-GPU nodes.
+		if k != "cpu" && k != "memory" && k != "ephemeral-storage" {
+			out[k] = v
+			continue
+		}
 		q, err := resource.ParseQuantity(v)
 		if err != nil {
 			// Unparseable: leave the original — Phase 1's PodsPerMachine
@@ -411,10 +423,9 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		// workloads at the top of their priority tier — burst demand
 		// at lower priorities can't preempt them, only equal-tier
 		// demand competes for capacity). When the catalog is empty,
-		// fall back to pre-M31 behaviour: every machine is
-		// a3-highgpu-8g at priority 1000000. This keeps existing
-		// scaleway-1m / scaleway-5m profiles working without
-		// modification.
+		// fall back to the legacy single shape: every machine is
+		// preflight.LegacyDemandInstanceType at priority 1000000,
+		// matching the load-driver's legacy Pod template.
 		picker := archetype.NewPicker(archetypes)
 		rng := rand.New(rand.NewSource(int64(shardOrdinal) + 1))
 		// ADR-0015 §4: synthetic rack pool for `Same` workloads.
@@ -473,7 +484,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					interruptionPenalty = a.InterruptionPenalty
 					reclamationPenalty = a.ReclamationPenalty
 				} else {
-					const it = "a3-highgpu-8g"
+					it := preflight.LegacyDemandInstanceType
 					profile = machine.Profile{
 						InstanceType: it,
 						Zone:         zones[idx%len(zones)],
@@ -523,7 +534,7 @@ func runShard(args []string) error {
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
-	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to a single a3-highgpu-8g GPU shape (the legacy M29 behaviour). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
+	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to the legacy single shape (preflight.LegacyDemandInstanceType, matching the load-driver's legacy Pod template). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
 	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
 	seedDensityMultiplier := fs.Int("seed-density-multiplier", 1, "scaletest: seed each fake-inventory machine with Allocatable = N × Profile.Resources, so one machine has the real capacity of N replicas of its Profile (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 keeps the legacy 1 Pod = 1 machine math. Under ADR-0027's resource-vector model this is just per-machine capacity — Phase 1's `creditExistingSupply` and `take` both diff against the machine's true Allocatable; there is no longer a per-Pod density reconstruction step that needs the multiplier to be honoured separately.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")

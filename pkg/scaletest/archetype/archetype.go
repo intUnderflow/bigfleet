@@ -96,7 +96,15 @@ type Archetype struct {
 	// distributed-DB replicas). Group sizes drawn from
 	// GroupSizeRange (defaults to [1, 1] if unset, i.e. single-
 	// machine — Same is then a no-op).
-	SameRack       bool   `yaml:"sameRack"`
+	SameRack bool `yaml:"sameRack"`
+	// SameZone (M66.2, complexity audit Action 2) — zone-scope
+	// co-location: the load-driver emits podAffinity on
+	// topology.kubernetes.io/zone instead of the rack key. This is how
+	// real fleets place gangs larger than a rack (the catalog's
+	// previous rack-coherent 64-256-node gangs exceeded any physical
+	// rack and fabricated the demand behind the ADR-0042 layer).
+	// Mutually exclusive with SameRack.
+	SameZone       bool   `yaml:"sameZone"`
 	GroupSizeRange [2]int `yaml:"groupSizeRange"`
 
 	// LabelAxes (M35 / Item 2) — per-archetype label dimensions
