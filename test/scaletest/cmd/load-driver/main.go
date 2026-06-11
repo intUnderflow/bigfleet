@@ -174,45 +174,13 @@ func (p profile) demandArchetypes() []archetype.Archetype {
 	return p.Archetypes
 }
 
-// statefulArchetypes is the hardcoded set of archetype names whose
-// workloads need stable identity / ordered semantics — these become
-// StatefulSets; everything else becomes a Deployment. ADR-0038: the
-// classification is intentionally a small in-code set, not a profile
-// knob (YAGNI).
-var statefulArchetypes = map[string]bool{
-	"stateful-db":  true,
-	"memory-cache": true,
-}
-
 // isStateful reports whether an archetype's workload should be modelled
-// as a StatefulSet rather than a Deployment. ADR-0038.
+// as a StatefulSet rather than a Deployment. ADR-0038. The name-keyed
+// set lives in pkg/scaletest/archetype (ADR-0044 §2: seed sizing needs
+// the same classification for E[replicas]).
 func isStateful(archName string) bool {
-	return statefulArchetypes[archName]
+	return archetype.IsStateful(archName)
 }
-
-// replicaBucket is one band of the hardcoded service-size distribution.
-// A workload object's replica count is a uniform draw within the
-// weighted-picked bucket's [lo, hi] range.
-type replicaBucket struct {
-	weight int
-	lo, hi int
-}
-
-// replicaDistribution is the hardcoded heavy-tailed service-size
-// distribution: most services are small, a few are large. ADR-0038
-// fixes this in code on purpose — it is a modelling decision, not a
-// per-profile knob (YAGNI).
-var replicaDistribution = []replicaBucket{
-	{weight: 55, lo: 1, hi: 5},
-	{weight: 30, lo: 6, hi: 25},
-	{weight: 12, lo: 26, hi: 100},
-	{weight: 3, lo: 101, hi: 400},
-}
-
-// statefulReplicaCap clamps StatefulSet replica draws. StatefulSets
-// create Pods ordinally/serially, so a large one bottlenecks the ramp;
-// stateful workloads are kept small.
-const statefulReplicaCap = 25
 
 // drawReplicas returns the replica count for one workload object.
 // Gang archetypes (sameRack / sameZone) draw from the archetype's
@@ -220,7 +188,9 @@ const statefulReplicaCap = 25
 // gang, and the heavy-tailed service-size distribution produced gangs
 // of up to ~400 whole machines — unsatisfiable in any topology the
 // harness runs); everything else draws from the service-size
-// distribution via pickReplicas. remaining > 0 caps the draw so the
+// distribution via archetype.PickReplicas (the table moved to
+// pkg/scaletest/archetype with ADR-0044 so seed sizing and demand
+// agree on E[replicas]). remaining > 0 caps the draw so the
 // ramp lands on target — a truncated final gang is acceptable, every
 // Need is partial-fill-tolerant in v1 (ADR-0040 §2). Always ≥ 1.
 func drawReplicas(rng *rand.Rand, a *archetype.Archetype, stateful bool, remaining int) int {
@@ -228,41 +198,13 @@ func drawReplicas(rng *rand.Rand, a *archetype.Archetype, stateful bool, remaini
 	if isGang(a) {
 		n = a.PickGroupSize(rng)
 	} else {
-		n = pickReplicas(rng, stateful)
+		n = archetype.PickReplicas(rng, stateful)
 	}
 	if remaining > 0 && n > remaining {
 		n = remaining
 	}
 	if n < 1 {
 		n = 1
-	}
-	return n
-}
-
-// pickReplicas draws a workload object's replica count from the
-// hardcoded service-size distribution. Stateful workloads are clamped to
-// statefulReplicaCap.
-func pickReplicas(rng *rand.Rand, stateful bool) int {
-	full := 0
-	for _, b := range replicaDistribution {
-		full += b.weight
-	}
-	r := rng.Intn(full)
-	cum := 0
-	var chosen replicaBucket
-	for _, b := range replicaDistribution {
-		cum += b.weight
-		if r < cum {
-			chosen = b
-			break
-		}
-	}
-	n := chosen.lo
-	if chosen.hi > chosen.lo {
-		n = chosen.lo + rng.Intn(chosen.hi-chosen.lo+1)
-	}
-	if stateful && n > statefulReplicaCap {
-		n = statefulReplicaCap
 	}
 	return n
 }

@@ -42,6 +42,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 )
 
 type costEstimate struct {
@@ -346,28 +348,35 @@ func shardReplicas(machines int) int {
 // loadCatalogArchetypes resolves the workload-archetype catalog the
 // profile names (profile.catalog.archetypes) to the standalone YAML at
 // <profileDir>/archetypes/<name>.yaml and returns its archetype list
-// verbatim. The runner injects this into loadProfile.archetypes so the
+// twice: verbatim ([]any, injected into loadProfile.archetypes so the
 // standalone catalog file is the single source of truth — the chart no
-// longer carries its own (drift-prone) copy. Empty name → "realistic".
-func loadCatalogArchetypes(profilePath, catalogName string) ([]any, error) {
+// longer carries its own drift-prone copy) and typed (the seed-side
+// list, for the ADR-0044 effective-machine computation — the same
+// archetype.LoadCatalog parse the shard binary runs on the injected
+// copy). Empty name → "realistic".
+func loadCatalogArchetypes(profilePath, catalogName string) ([]any, []archetype.Archetype, error) {
 	if catalogName == "" {
 		catalogName = "realistic"
 	}
 	path := filepath.Join(filepath.Dir(profilePath), "archetypes", catalogName+".yaml")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read archetype catalog: %w", err)
+		return nil, nil, fmt.Errorf("read archetype catalog: %w", err)
 	}
 	var doc struct {
 		Archetypes []any `yaml:"archetypes"`
 	}
 	if err := yaml.Unmarshal(b, &doc); err != nil {
-		return nil, fmt.Errorf("parse archetype catalog %s: %w", path, err)
+		return nil, nil, fmt.Errorf("parse archetype catalog %s: %w", path, err)
 	}
 	if len(doc.Archetypes) == 0 {
-		return nil, fmt.Errorf("archetype catalog %s has no archetypes", path)
+		return nil, nil, fmt.Errorf("archetype catalog %s has no archetypes", path)
 	}
-	return doc.Archetypes, nil
+	cat, err := archetype.LoadCatalog(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse archetype catalog (typed): %w", err)
+	}
+	return doc.Archetypes, cat.ForSeed(), nil
 }
 
 // renderHelmValues turns a (profile, substrate, mergedConfig) triple
@@ -385,7 +394,7 @@ func loadCatalogArchetypes(profilePath, catalogName string) ([]any, error) {
 // shape. Production substrates beyond the documented ceilings may
 // need to override via `--set` at install time; that's deferred
 // follow-up.
-func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes []any) map[string]any {
+func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes []any, typedArchetypes []archetype.Archetype) map[string]any {
 	resourceMap := func(r substrateResourceMap) map[string]string {
 		return map[string]string{"cpu": r.CPU, "memory": r.Memory}
 	}
@@ -408,18 +417,28 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	//     × machines, ADR-0026 — the harness must model the whole
 	//     capacity model).
 	//
+	// ADR-0044 §4: the machine count the fractions multiply is the
+	// catalog-derived effective total, not scale.machines. The nominal
+	// keeps defining demand (totalPods = machines × density); the
+	// effective total is what that demand implies as supply once
+	// whole-machine (extended-resource) archetypes pack 1 Pod per
+	// machine instead of `density`, plus per-zone gang floors.
+	// Catalogs with whole-machine archetypes seed well above nominal —
+	// that is the realistic fleet shape.
+	//
 	// Sizing per-cluster vs per-shard mirrors the shard binary's CLI:
 	//   --seed-configured-per-cluster is per-cluster (the harness's
 	//   N % stride == ordinal mapping fans the cluster IDs to shards).
 	//   --seed-machines + --seed-speculative are per-shard totals.
+	machinesEffective := archetype.MachinesForPods(typedArchetypes, p.Scale.Density, m.TotalPods)
 	configuredPerCluster := 0
 	if p.Seed.ConfiguredFraction > 0 {
-		configuredPerCluster = int(float64(p.Scale.Machines) * p.Seed.ConfiguredFraction / float64(m.ClusterCount))
+		configuredPerCluster = int(float64(machinesEffective) * p.Seed.ConfiguredFraction / float64(m.ClusterCount))
 	}
-	idlePerShard := int(float64(p.Scale.Machines) * p.Seed.IdleHeadroomFraction / float64(replicas))
+	idlePerShard := int(float64(machinesEffective) * p.Seed.IdleHeadroomFraction / float64(replicas))
 	speculativePerShard := 0
 	if p.Seed.SpeculativeMultiplier > 0 {
-		speculativePerShard = p.Scale.Machines * p.Seed.SpeculativeMultiplier / replicas
+		speculativePerShard = machinesEffective * p.Seed.SpeculativeMultiplier / replicas
 	}
 
 	values := map[string]any{
@@ -487,8 +506,8 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			"vCPU":              s.Host.VCPU * m.HostsNeeded,
 			"memoryGB":          s.Host.MemoryGiB * m.HostsNeeded,
 			"awsSpotUsdPerHour": s.CostEstimate.PerHostUSDPerHour * float64(m.HostsNeeded),
-			"notes": fmt.Sprintf("BYO: profile %q × substrate %q = %d hosts of %dvCPU/%dGiB",
-				p.Metadata.Name, s.Metadata.Name, m.HostsNeeded, s.Host.VCPU, s.Host.MemoryGiB),
+			"notes": fmt.Sprintf("BYO: profile %q × substrate %q = %d hosts of %dvCPU/%dGiB; seed machines %d nominal → %d effective (ADR-0044 catalog machine-demand shares + gang floors)",
+				p.Metadata.Name, s.Metadata.Name, m.HostsNeeded, s.Host.VCPU, s.Host.MemoryGiB, p.Scale.Machines, machinesEffective),
 		},
 	}
 
@@ -676,7 +695,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		archetypes, err := loadCatalogArchetypes(*profilePath, pv2.Catalog.Archetypes)
+		archetypes, typedArchetypes, err := loadCatalogArchetypes(*profilePath, pv2.Catalog.Archetypes)
 		if err != nil {
 			return err
 		}
@@ -699,7 +718,7 @@ func run(args []string) error {
 		if err := os.MkdirAll(*output, 0o755); err != nil {
 			return fmt.Errorf("output dir: %w", err)
 		}
-		mergedValues, err = writeRenderedValues(renderHelmValues(pv2, sub, cfg, archetypes), *output)
+		mergedValues, err = writeRenderedValues(renderHelmValues(pv2, sub, cfg, archetypes, typedArchetypes), *output)
 		if err != nil {
 			return err
 		}

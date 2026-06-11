@@ -242,6 +242,18 @@ func seedZoneRack(a *archetype.Archetype, idx, racksPerZone int, zones []string)
 	return zone, fmt.Sprintf("%s-rack-%d", zone, slot%racksPerZone)
 }
 
+// archetypeZones is the zone count MachineAllocation's per-zone gang
+// floor multiplies by (ADR-0044 §3).
+func archetypeZones(a *archetype.Archetype) int { return len(a.Zones) }
+
+func sumInts(xs []int) int {
+	total := 0
+	for _, x := range xs {
+		total += x
+	}
+	return total
+}
+
 func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
 	// The no-catalog rotation tables live in pkg/scaletest/preflight so
 	// the matching-capacity preflight models exactly the shapes seeded
@@ -265,10 +277,17 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	// this the idle pool declares only "instance-type maxed out"
 	// resources (e.g. c6i.4xlarge → {cpu: 16}) and a CR asking
 	// {cpu: 4} fails MatchProfile against every idle, leaving Phase 1
-	// silently unable to bind. The picker is shared with the
-	// Configured seed below so Idle and Configured see the same
-	// archetype mix at fold time.
-	idlePicker := archetype.NewPicker(archetypes)
+	// silently unable to bind.
+	//
+	// ADR-0044: per-archetype machine counts derive from machine-demand
+	// shares (weight × E[replicas] / podsPerMachine), not raw weight —
+	// a whole-machine (extended-resource) archetype needs ~density×
+	// more machines per pod than a cpu-shaped one, and weight-
+	// proportional pools starved it by exactly that factor. Gang
+	// archetypes are floored at max(GroupSizeRange) per zone, on top of
+	// the share split, so the largest drawable gang is satisfiable by
+	// construction. The same allocation shapes all three tiers so Idle
+	// and Configured see the same archetype mix at fold time.
 	idleRng := rand.New(rand.NewSource(int64(shardOrdinal) + 17))
 	// M44.4 Drop E: Idle seed carries a topology.bigfleet/rack label so
 	// MatchProfile can satisfy the Same(rack) requirement the operator
@@ -281,39 +300,9 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	// rest round-robin (ADR-0040 Addendum §4).
 	const idleRacksPerZone = 10
 	idleRackCounters := map[string]int{}
-	for i := 0; i < nIdle; i++ {
-		var profile machine.Profile
-		if a := idlePicker.Pick(idleRng); a != nil {
-			it := a.InstanceTypes[i%len(a.InstanceTypes)]
-			z, rack := seedZoneRack(a, idleRackCounters[a.Name], idleRacksPerZone, a.Zones)
-			idleRackCounters[a.Name]++
-			labels := map[string]string{
-				"topology.bigfleet/rack": rack,
-			}
-			for k, v := range a.PickLabels(idleRng) {
-				labels[k] = v
-			}
-			profile = machine.Profile{
-				InstanceType: it,
-				Zone:         z,
-				CapacityType: machine.CapacityTypeBareMetal,
-				Resources:    a.PickSize(idleRng),
-				Labels:       labels,
-			}
-		} else {
-			t := types[i%len(types)]
-			z, rack := seedZoneRack(nil, i, idleRacksPerZone, zones)
-			profile = machine.Profile{
-				InstanceType: t,
-				Zone:         z,
-				CapacityType: machine.CapacityTypeBareMetal,
-				Resources:    resources[t],
-				Labels: map[string]string{
-					"topology.bigfleet/rack": rack,
-				},
-			}
-		}
-		id := machine.ID("idle-" + strconv.Itoa(i))
+	idleSeeded := 0
+	addIdle := func(profile machine.Profile) {
+		id := machine.ID("idle-" + strconv.Itoa(idleSeeded))
 		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
 		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
 		// Profile.Resources. EffectiveAllocatable() falls back to
@@ -327,6 +316,48 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			Profile:     profile,
 			Allocatable: allocatable,
 		})
+		idleSeeded++
+	}
+	if len(archetypes) > 0 {
+		alloc := archetype.MachineAllocation(archetypes, densityMultiplier, nIdle, archetypeZones)
+		if total := sumInts(alloc); total > nIdle {
+			logger.Info("seed: gang floors raised idle machines", "requested", nIdle, "seeding", total)
+		}
+		for ai := range archetypes {
+			a := &archetypes[ai]
+			for n := 0; n < alloc[ai]; n++ {
+				it := a.InstanceTypes[idleSeeded%len(a.InstanceTypes)]
+				z, rack := seedZoneRack(a, idleRackCounters[a.Name], idleRacksPerZone, a.Zones)
+				idleRackCounters[a.Name]++
+				labels := map[string]string{
+					"topology.bigfleet/rack": rack,
+				}
+				for k, v := range a.PickLabels(idleRng) {
+					labels[k] = v
+				}
+				addIdle(machine.Profile{
+					InstanceType: it,
+					Zone:         z,
+					CapacityType: machine.CapacityTypeBareMetal,
+					Resources:    a.PickSize(idleRng),
+					Labels:       labels,
+				})
+			}
+		}
+	} else {
+		for i := 0; i < nIdle; i++ {
+			t := types[i%len(types)]
+			z, rack := seedZoneRack(nil, i, idleRacksPerZone, zones)
+			addIdle(machine.Profile{
+				InstanceType: t,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeBareMetal,
+				Resources:    resources[t],
+				Labels: map[string]string{
+					"topology.bigfleet/rack": rack,
+				},
+			})
+		}
 	}
 
 	// ADR-0026: Speculative tier — elastic procurement quota. Without
@@ -351,48 +382,11 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		// the seed catalog is also the demand catalog.
 		specArches = archetypes
 	}
-	specPicker := archetype.NewPicker(specArches)
 	specRng := rand.New(rand.NewSource(int64(shardOrdinal) + 31))
 	specRackCounters := map[string]int{}
-	for i := 0; i < nSpeculative; i++ {
-		var profile machine.Profile
-		if a := specPicker.Pick(specRng); a != nil {
-			it := a.InstanceTypes[i%len(a.InstanceTypes)]
-			z, rack := seedZoneRack(a, specRackCounters[a.Name], specRacksPerZone, a.Zones)
-			specRackCounters[a.Name]++
-			labels := map[string]string{
-				"topology.bigfleet/rack": rack,
-			}
-			// Mirror the Configured seed (M52.B): tag the Speculative
-			// slot with its archetype so a fake-Node minted from a
-			// Provisioned slot is categorisable by the same label the
-			// Configured seed uses. Without it, Provision output lands
-			// in a `<no value>` archetype bucket for any diagnostic.
-			labels["scaletest.bigfleet/archetype"] = a.Name
-			for k, v := range a.PickLabels(specRng) {
-				labels[k] = v
-			}
-			profile = machine.Profile{
-				InstanceType: it,
-				Zone:         z,
-				CapacityType: machine.CapacityTypeOnDemand,
-				Resources:    a.PickSize(specRng),
-				Labels:       labels,
-			}
-		} else {
-			t := types[i%len(types)]
-			z, rack := seedZoneRack(nil, i, specRacksPerZone, zones)
-			profile = machine.Profile{
-				InstanceType: t,
-				Zone:         z,
-				CapacityType: machine.CapacityTypeOnDemand,
-				Resources:    resources[t],
-				Labels: map[string]string{
-					"topology.bigfleet/rack": rack,
-				},
-			}
-		}
-		id := machine.ID("spec-" + strconv.Itoa(i))
+	specSeeded := 0
+	addSpeculative := func(profile machine.Profile) {
+		id := machine.ID("spec-" + strconv.Itoa(specSeeded))
 		prov.AddSpeculative(id, profile, machine.CapacityTypeOnDemand, specPricePerHour, specInterruptProb)
 		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
 		// Profile.Resources, same as the Idle seed — a realized
@@ -407,6 +401,56 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			PricePerHour:            specPricePerHour,
 			InterruptionProbability: specInterruptProb,
 		})
+		specSeeded++
+	}
+	if len(specArches) > 0 {
+		// ADR-0044: machine-demand-share allocation, same as the Idle
+		// tier above.
+		alloc := archetype.MachineAllocation(specArches, densityMultiplier, nSpeculative, archetypeZones)
+		if total := sumInts(alloc); total > nSpeculative {
+			logger.Info("seed: gang floors raised speculative slots", "requested", nSpeculative, "seeding", total)
+		}
+		for ai := range specArches {
+			a := &specArches[ai]
+			for n := 0; n < alloc[ai]; n++ {
+				it := a.InstanceTypes[specSeeded%len(a.InstanceTypes)]
+				z, rack := seedZoneRack(a, specRackCounters[a.Name], specRacksPerZone, a.Zones)
+				specRackCounters[a.Name]++
+				labels := map[string]string{
+					"topology.bigfleet/rack": rack,
+				}
+				// Mirror the Configured seed (M52.B): tag the Speculative
+				// slot with its archetype so a fake-Node minted from a
+				// Provisioned slot is categorisable by the same label the
+				// Configured seed uses. Without it, Provision output lands
+				// in a `<no value>` archetype bucket for any diagnostic.
+				labels["scaletest.bigfleet/archetype"] = a.Name
+				for k, v := range a.PickLabels(specRng) {
+					labels[k] = v
+				}
+				addSpeculative(machine.Profile{
+					InstanceType: it,
+					Zone:         z,
+					CapacityType: machine.CapacityTypeOnDemand,
+					Resources:    a.PickSize(specRng),
+					Labels:       labels,
+				})
+			}
+		}
+	} else {
+		for i := 0; i < nSpeculative; i++ {
+			t := types[i%len(types)]
+			z, rack := seedZoneRack(nil, i, specRacksPerZone, zones)
+			addSpeculative(machine.Profile{
+				InstanceType: t,
+				Zone:         z,
+				CapacityType: machine.CapacityTypeOnDemand,
+				Resources:    resources[t],
+				Labels: map[string]string{
+					"topology.bigfleet/rack": rack,
+				},
+			})
+		}
 	}
 
 	configuredSeeded := 0
@@ -416,7 +460,8 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		// shard. Each owned cluster gets nConfiguredPerCluster machines.
 		//
 		// M31: when an archetype catalog is provided, machines are
-		// distributed across archetypes proportional to weight. Profile
+		// distributed across archetypes by ADR-0044 machine-demand
+		// share (see the Idle tier above), per cluster. Profile
 		// (instance-type, zone, resources) and assigned penalties come
 		// from the archetype; AssignedPriority is the top of the
 		// archetype's PriorityClasses (the seed represents established
@@ -426,7 +471,6 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		// fall back to the legacy single shape: every machine is
 		// preflight.LegacyDemandInstanceType at priority 1000000,
 		// matching the load-driver's legacy Pod template.
-		picker := archetype.NewPicker(archetypes)
 		rng := rand.New(rand.NewSource(int64(shardOrdinal) + 1))
 		// ADR-0015 §4: synthetic rack pool for `Same` workloads.
 		// 10 racks per zone matches a typical AZ-of-cells deployment.
@@ -439,63 +483,18 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		const racksPerZone = 10
 		rackCounters := map[string]int{}
 		idx := 0
+		var confAlloc []int
+		if len(archetypes) > 0 {
+			confAlloc = archetype.MachineAllocation(archetypes, densityMultiplier, nConfiguredPerCluster, archetypeZones)
+			if total := sumInts(confAlloc); total > nConfiguredPerCluster {
+				logger.Info("seed: gang floors raised configured machines", "requested_per_cluster", nConfiguredPerCluster, "seeding_per_cluster", total)
+			}
+		}
 		for c := shardOrdinal; c < totalClusters; c += clusterStride {
 			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
-			for i := 0; i < nConfiguredPerCluster; i++ {
-				var profile machine.Profile
-				var assignedPriority int32
-				var interruptionPenalty, reclamationPenalty float64
-				if a := picker.Pick(rng); a != nil {
-					it := a.InstanceTypes[idx%len(a.InstanceTypes)]
-					z, rackName := seedZoneRack(a, rackCounters[a.Name], racksPerZone, a.Zones)
-					rackCounters[a.Name]++
-					// ADR-0015 §1: per-machine resources picked from
-					// SizeBuckets when present (production-shape
-					// fingerprint multiplicity); falls back to the
-					// flat Resources map otherwise.
-					machineResources := a.PickSize(rng)
-					labels := map[string]string{}
-					// Every machine carries a rack label; Same-aware
-					// archetypes request it via Exists / Same. Other
-					// archetypes don't see it.
-					labels["topology.bigfleet/rack"] = rackName
-					// M52.B (ADR-0035): tag every seeded machine with
-					// its archetype so the load-driver's pre-bind phase
-					// can look up the archetype from the fake-Node's
-					// labels and build a matching Pod.
-					labels["scaletest.bigfleet/archetype"] = a.Name
-					// M35 / Item 2: per-axis label values matching the
-					// archetype's LabelAxes spec. The load-driver emits
-					// CRs with `In [value]` requirements drawn from the
-					// same axes, so MatchProfile passes for ~1/Count of
-					// seeded machines per CR — production-shaped
-					// fingerprint cardinality.
-					for k, v := range a.PickLabels(rng) {
-						labels[k] = v
-					}
-					profile = machine.Profile{
-						InstanceType: it,
-						Zone:         z,
-						CapacityType: machine.CapacityTypeBareMetal,
-						Resources:    machineResources,
-						Labels:       labels,
-					}
-					assignedPriority = a.MaxPriority()
-					interruptionPenalty = a.InterruptionPenalty
-					reclamationPenalty = a.ReclamationPenalty
-				} else {
-					it := preflight.LegacyDemandInstanceType
-					profile = machine.Profile{
-						InstanceType: it,
-						Zone:         zones[idx%len(zones)],
-						CapacityType: machine.CapacityTypeBareMetal,
-						Resources:    resources[it],
-					}
-					assignedPriority = 1000000
-					interruptionPenalty = 8192
-					reclamationPenalty = 65536
-				}
-				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, i))
+			perCluster := 0
+			addConfigured := func(profile machine.Profile, assignedPriority int32, interruptionPenalty, reclamationPenalty float64) {
+				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, perCluster))
 				prov.AddConfigured(id, profile, machine.CapacityTypeBareMetal, 0, 0, cluster, assignedPriority, interruptionPenalty, reclamationPenalty)
 				// ADR-0022 / M45.4: see Idle seed comment above.
 				allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
@@ -511,11 +510,63 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					AssignedReclamationPenaltyDollars:  reclamationPenalty,
 				})
 				idx++
+				perCluster++
 				configuredSeeded++
+			}
+			if len(archetypes) > 0 {
+				for ai := range archetypes {
+					a := &archetypes[ai]
+					for n := 0; n < confAlloc[ai]; n++ {
+						it := a.InstanceTypes[idx%len(a.InstanceTypes)]
+						z, rackName := seedZoneRack(a, rackCounters[a.Name], racksPerZone, a.Zones)
+						rackCounters[a.Name]++
+						// ADR-0015 §1: per-machine resources picked from
+						// SizeBuckets when present (production-shape
+						// fingerprint multiplicity); falls back to the
+						// flat Resources map otherwise.
+						machineResources := a.PickSize(rng)
+						labels := map[string]string{}
+						// Every machine carries a rack label; Same-aware
+						// archetypes request it via Exists / Same. Other
+						// archetypes don't see it.
+						labels["topology.bigfleet/rack"] = rackName
+						// M52.B (ADR-0035): tag every seeded machine with
+						// its archetype so the load-driver's pre-bind phase
+						// can look up the archetype from the fake-Node's
+						// labels and build a matching Pod.
+						labels["scaletest.bigfleet/archetype"] = a.Name
+						// M35 / Item 2: per-axis label values matching the
+						// archetype's LabelAxes spec. The load-driver emits
+						// CRs with `In [value]` requirements drawn from the
+						// same axes, so MatchProfile passes for ~1/Count of
+						// seeded machines per CR — production-shaped
+						// fingerprint cardinality.
+						for k, v := range a.PickLabels(rng) {
+							labels[k] = v
+						}
+						addConfigured(machine.Profile{
+							InstanceType: it,
+							Zone:         z,
+							CapacityType: machine.CapacityTypeBareMetal,
+							Resources:    machineResources,
+							Labels:       labels,
+						}, a.MaxPriority(), a.InterruptionPenalty, a.ReclamationPenalty)
+					}
+				}
+			} else {
+				for i := 0; i < nConfiguredPerCluster; i++ {
+					it := preflight.LegacyDemandInstanceType
+					addConfigured(machine.Profile{
+						InstanceType: it,
+						Zone:         zones[idx%len(zones)],
+						CapacityType: machine.CapacityTypeBareMetal,
+						Resources:    resources[it],
+					}, 1000000, 8192, 65536)
+				}
 			}
 		}
 	}
-	logger.Info("seed complete", "idle", nIdle, "speculative", nSpeculative, "configured", configuredSeeded, "archetypes", len(archetypes))
+	logger.Info("seed complete", "idle", idleSeeded, "speculative", specSeeded, "configured", configuredSeeded, "archetypes", len(archetypes))
 }
 
 // runShard runs the shard controller. The in-process fake provider
@@ -534,7 +585,7 @@ func runShard(args []string) error {
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
-	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the Configured seed distributes machines across archetypes weighted by Archetype.Weight (instance-type, zone, resources, priority and penalties from each archetype). When empty, the seed falls back to the legacy single shape (preflight.LegacyDemandInstanceType, matching the load-driver's legacy Pod template). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
+	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the seed distributes machines across archetypes by ADR-0044 machine-demand share — weight × E[replicas] / podsPerMachine, with a per-zone floor of max(groupSizeRange) for gang archetypes (instance-type, zone, resources, priority and penalties from each archetype). Gang floors may push seeded totals above the configured counts. When empty, the seed falls back to the legacy single shape (preflight.LegacyDemandInstanceType, matching the load-driver's legacy Pod template). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
 	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
 	seedDensityMultiplier := fs.Int("seed-density-multiplier", 1, "scaletest: seed each fake-inventory machine with Allocatable = N × Profile.Resources, so one machine has the real capacity of N replicas of its Profile (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 keeps the legacy 1 Pod = 1 machine math. Under ADR-0027's resource-vector model this is just per-machine capacity — Phase 1's `creditExistingSupply` and `take` both diff against the machine's true Allocatable; there is no longer a per-Pod density reconstruction step that needs the multiplier to be honoured separately.")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")

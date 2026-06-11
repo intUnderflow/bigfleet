@@ -115,55 +115,8 @@ func TestIsStateful(t *testing.T) {
 	}
 }
 
-func TestPickReplicasWithinBuckets(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
-	// Every draw must land inside one of the declared buckets.
-	for i := 0; i < 5000; i++ {
-		n := pickReplicas(rng, false)
-		if n < 1 {
-			t.Fatalf("stateless draw %d < 1", n)
-		}
-		inBucket := false
-		for _, b := range replicaDistribution {
-			if n >= b.lo && n <= b.hi {
-				inBucket = true
-				break
-			}
-		}
-		if !inBucket {
-			t.Fatalf("stateless draw %d fell outside every bucket", n)
-		}
-	}
-}
-
-func TestPickReplicasStatefulCap(t *testing.T) {
-	rng := rand.New(rand.NewSource(2))
-	for i := 0; i < 5000; i++ {
-		n := pickReplicas(rng, true)
-		if n < 1 {
-			t.Fatalf("stateful draw %d < 1", n)
-		}
-		if n > statefulReplicaCap {
-			t.Fatalf("stateful draw %d exceeds cap %d", n, statefulReplicaCap)
-		}
-	}
-}
-
-func TestPickReplicasHitsLargeBucket(t *testing.T) {
-	// The heavy tail must be reachable: over many draws at least one
-	// stateless service should land in the largest bucket.
-	rng := rand.New(rand.NewSource(3))
-	large := replicaDistribution[len(replicaDistribution)-1]
-	hitLarge := false
-	for i := 0; i < 20000 && !hitLarge; i++ {
-		if n := pickReplicas(rng, false); n >= large.lo {
-			hitLarge = true
-		}
-	}
-	if !hitLarge {
-		t.Fatal("never drew from the large-service bucket in 20000 draws")
-	}
-}
+// PickReplicas bucket / cap / heavy-tail tests live with the
+// distribution in pkg/scaletest/archetype (moved by ADR-0044 §2).
 
 // TestBuildPodTemplateCarriesShape asserts buildPodTemplate produces a
 // template with exactly one shape and every UPC-read field, for both an
