@@ -78,13 +78,11 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 	cache := NewPoolCache(snap)
 
 	// Build a stable []*needs.Need pointing into allNeeds. Workers
-	// reference these pointers; barrier post-processing maps them
-	// back to result indices via needIndex.
+	// reference these pointers; barrier post-processing correlates them
+	// back to result indices by position (needPtrs[i] == &allNeeds[i]).
 	needPtrs := make([]*needs.Need, len(allNeeds))
-	needIndex := make(map[*needs.Need]int, len(allNeeds))
 	for i := range allNeeds {
 		needPtrs[i] = &allNeeds[i]
-		needIndex[&allNeeds[i]] = i
 	}
 
 	// Pre-pass: credit existing supply (Configured / Configuring) for
@@ -160,7 +158,6 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r.Unsatisfied = !needs.IsZero(r.Deficit)
 	}
 
-	_ = needIndex // reserved for future per-Need lookups by pointer
 	return CycleResult{Results: results}
 }
 
@@ -202,7 +199,6 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 	}()
 
 	for _, st := range []machine.State{machine.StateIdle, machine.StateSpeculative} {
-		committedThisState := false
 		for qn.RetriesLeft > 0 {
 			deficit := computeDeficit(qn.Need, state)
 			if needs.IsZero(deficit) {
@@ -232,7 +228,6 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 			}
 
 			if r.Status == StatusCommitted {
-				committedThisState = true
 				committedAnything = true
 				// Topology-constrained Needs: don't retry in this
 				// state. The constraint's bucket / skew accounting
@@ -246,7 +241,6 @@ func processNeed(qn QueuedNeed, state *SharedState, broker *Broker, cache *PoolC
 			}
 			qn.RetriesLeft--
 		}
-		_ = committedThisState
 	}
 }
 
@@ -292,6 +286,9 @@ func computeDeficit(n *needs.Need, state *SharedState) []needs.ResourceQty {
 // QueuedNeed carries the same *needs.Need pointer the pre-pass keyed
 // it under. An empty recorded domain (no bucket existed anywhere)
 // leaves FindSame on its best-bucket fallback.
+//
+// Same wins over Spread when both are present — Same is the stronger
+// constraint (ADR-0040, ADR-0041).
 func findCandidatesFor(pool *Pool, state *SharedState, st machine.State, prec Precedence, n *needs.Need, deficit []needs.ResourceQty) Candidates {
 	profile := n.Profile
 	if sameKey, ok := SameRequirementKey(profile); ok {

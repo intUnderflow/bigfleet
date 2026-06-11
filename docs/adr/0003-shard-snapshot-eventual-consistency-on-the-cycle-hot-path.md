@@ -1,6 +1,6 @@
 # ADR-0003: Shard inventory snapshots are eventually consistent on the cycle hot path
 
-**Status**: Accepted
+**Status**: Superseded by M44.4 Drop A — the shard cycle switched to synchronous `Snapshot()`, making the background fold goroutine redundant; fold goroutine and live triple-indexes removed at M66.1.
 
 **Date**: 2026-05-02
 

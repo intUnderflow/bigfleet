@@ -144,10 +144,6 @@ type Machine struct {
 	// probability in [0, 1]. No cluster-side override (per design memory).
 	InterruptionProbability float64
 
-	// TransitionStartedUnixNanos is when the current transitional state
-	// began. Zero when the state is stable.
-	TransitionStartedUnixNanos int64
-
 	// LastError is populated when State == StateFailed.
 	LastError string
 

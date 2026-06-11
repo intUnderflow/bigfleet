@@ -8,7 +8,7 @@
 |---|--------|-------|
 | [1](/adr/0001-record-architecture-decisions/) | Accepted | Record architecture decisions |
 | [2](/adr/0002-coordinator-topology-single-region/) | Accepted | Coordinator topology: single region |
-| [3](/adr/0003-shard-snapshot-eventual-consistency-on-the-cycle-hot-path/) | Accepted | Shard snapshot: eventual consistency on the cycle hot path |
+| [3](/adr/0003-shard-snapshot-eventual-consistency-on-the-cycle-hot-path/) | Superseded | Shard snapshot: eventual consistency on the cycle hot path |
 | [4](/adr/0004-incremental-reconcile-via-since-revision/) | Accepted | Incremental reconcile via since-revision |
 | [5](/adr/0005-provider-boundary-is-the-validation-point/) | Accepted | Provider boundary is the validation point |
 | [6](/adr/0006-shard-self-registers-via-heartbeat/) | Accepted | Shard self-registers via heartbeat |

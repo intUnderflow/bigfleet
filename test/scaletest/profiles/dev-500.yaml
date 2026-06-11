@@ -92,7 +92,6 @@ loadProfile:
   # 50 creates/sec/cluster sits near the M1/M2 kine ceiling; M5 Max
   # plausibly absorbs more. Bumping this is the first thing to try
   # if a run finishes too slowly.
-  reconcilePerTickCap: 50
 
 # Generous ramp budget: at 50 binds/sec/cluster × 5 = 250 binds/sec
 # fleet (theoretical), 50K Pods ramps in ~3 min. Observed in practice

@@ -156,10 +156,6 @@ spec:
               value: "{{ .Values.operator.ackConcurrency }}"
             - name: OPERATOR_ROLLUP_INTERVAL
               value: "{{ .Values.operator.rollupInterval }}"
-            {{- if .Values.loadProfile.mode }}
-            - name: POD_MODE
-              value: "{{ .Values.loadProfile.mode }}"
-            {{- end }}
             # ADR-0023: tells the workload entrypoint whether to launch
             # pod-shim (legacy, default) or node-creator (new). Must
             # match the KWOK_SCHEDULER setting on the apiserver

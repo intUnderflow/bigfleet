@@ -68,7 +68,6 @@ var ErrNotSupported = errors.New("provider: operation not supported")
 // CreateRequest is the input to Create.
 type CreateRequest struct {
 	MachineID machine.ID
-	Labels    map[string]string
 }
 
 // ConfigureRequest is the input to Configure.

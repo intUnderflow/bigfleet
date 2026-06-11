@@ -40,7 +40,6 @@ func (s *Server) Create(ctx context.Context, req *pb.CreateRequest) (*pb.Transit
 	}
 	ack, err := s.p.Create(ctx, provider.CreateRequest{
 		MachineID: machine.ID(req.GetMachineId()),
-		Labels:    cloneStringMap(req.GetLabels()),
 	})
 	return ackToProto(ack, err)
 }
@@ -94,8 +93,6 @@ func (s *Server) Get(ctx context.Context, req *pb.MachineRef) (*pb.Machine, erro
 // List implements pb.CapacityProviderServer.
 func (s *Server) List(ctx context.Context, req *pb.ListFilter) (*pb.MachineList, error) {
 	filter := provider.ListFilter{
-		Zone:          req.GetZone(),
-		InstanceType:  req.GetInstanceType(),
 		MaxResults:    int(req.GetMaxResults()),
 		SinceRevision: req.GetSinceRevision(),
 	}
@@ -165,15 +162,4 @@ func stateFromProto(s pb.MachineState) (machine.State, error) {
 		return machine.StateFailed, nil
 	}
 	return machine.StateUnspecified, fmt.Errorf("unknown MachineState: %v", s)
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }

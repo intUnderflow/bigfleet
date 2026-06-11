@@ -212,12 +212,12 @@ func TestM5Scale_Kind_ThousandUnschedulablePods(t *testing.T) {
 	startConfig := time.Now()
 	deadlineCfg := startConfig.Add(ceiling)
 	for time.Now().Before(deadlineCfg) {
-		if got := sh.Inventory().CountByState(mac.StateConfigured); got >= numPods {
+		if got := sh.Inventory().Snapshot().CountByState(mac.StateConfigured); got >= numPods {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	got := sh.Inventory().CountByState(mac.StateConfigured)
+	got := sh.Inventory().Snapshot().CountByState(mac.StateConfigured)
 	if got < numPods {
 		t.Errorf("M5 ceiling missed: %d / %d Configured within %v", got, numPods, ceiling)
 	} else {

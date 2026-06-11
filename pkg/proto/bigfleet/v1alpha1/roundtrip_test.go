@@ -71,7 +71,6 @@ func TestRoundTrip_OperatorMessage_OneOfPayloads(t *testing.T) {
 				Payload: &bigfleetv1alpha1.OperatorMessage_Hello{
 					Hello: &bigfleetv1alpha1.Hello{
 						ClusterId:       "cluster-amsterdam-1",
-						Capabilities:    []string{"node-state-update", "available-capacity"},
 						ProtocolVersion: "v1alpha1",
 					},
 				},
@@ -180,13 +179,12 @@ func TestRoundTrip_ShardMessage_OneOfPayloads(t *testing.T) {
 			msg: &bigfleetv1alpha1.ShardMessage{
 				Payload: &bigfleetv1alpha1.ShardMessage_NodeStateUpdate{
 					NodeStateUpdate: &bigfleetv1alpha1.NodeStateUpdate{
-						SupersedesKey:           "node:m-0142",
-						MachineId:               "m-0142",
-						ClusterId:               "cluster-amsterdam-1",
-						State:                   bigfleetv1alpha1.MachineState_MACHINE_STATE_CONFIGURING,
-						NodeName:                "node-gpu-0142",
-						ProviderId:              "aws:///us-east-1a/i-0abc123def456",
-						EstimatedReadyUnixNanos: 1714478500_000_000_000,
+						SupersedesKey: "node:m-0142",
+						MachineId:     "m-0142",
+						ClusterId:     "cluster-amsterdam-1",
+						State:         bigfleetv1alpha1.MachineState_MACHINE_STATE_CONFIGURING,
+						NodeName:      "node-gpu-0142",
+						ProviderId:    "aws:///us-east-1a/i-0abc123def456",
 					},
 				},
 			},
@@ -196,12 +194,10 @@ func TestRoundTrip_ShardMessage_OneOfPayloads(t *testing.T) {
 			msg: &bigfleetv1alpha1.ShardMessage{
 				Payload: &bigfleetv1alpha1.ShardMessage_AvailableCapacity{
 					AvailableCapacity: &bigfleetv1alpha1.AvailableCapacityUpdate{
-						SupersedesKey:                "available:gpu-h100-east",
-						AvailableCount:               200,
-						Confidence:                   bigfleetv1alpha1.AvailableCapacityUpdate_CONFIDENCE_HIGH,
-						CostPerHour:                  31.22,
-						SupportsAtomicProvisioning:   true,
-						EstimatedProvisioningSeconds: 180,
+						SupersedesKey:  "available:gpu-h100-east",
+						AvailableCount: 200,
+						Confidence:     bigfleetv1alpha1.AvailableCapacityUpdate_CONFIDENCE_HIGH,
+						CostPerHour:    31.22,
 					},
 				},
 			},
@@ -321,8 +317,6 @@ func TestRoundTrip_ListFilter_SinceRevision(t *testing.T) {
 			bigfleetv1alpha1.MachineState_MACHINE_STATE_IDLE,
 			bigfleetv1alpha1.MachineState_MACHINE_STATE_CONFIGURED,
 		},
-		Zone:          "us-east-1a",
-		InstanceType:  "p5.48xlarge",
 		MaxResults:    1000,
 		SinceRevision: []byte{0xDE, 0xAD, 0xBE, 0xEF},
 	}

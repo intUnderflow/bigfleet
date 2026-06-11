@@ -292,12 +292,6 @@ func (p *Provider) ConfiguredCount() int {
 func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opCreate, func(m *machine.Machine) {
 		m.Host = machine.HostRef{Provider: "fake", Ref: string(req.MachineID)}
-		for k, v := range req.Labels {
-			if m.Profile.Labels == nil {
-				m.Profile.Labels = make(map[string]string)
-			}
-			m.Profile.Labels[k] = v
-		}
 	})
 }
 

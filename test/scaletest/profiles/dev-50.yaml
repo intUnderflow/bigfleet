@@ -125,7 +125,6 @@ loadProfile:
   # M60: 3m, matched by the runner's soak-sized SLO windows (sloWindow)
   # — at 1 churn/sec that is ~180 binds in-window, plenty for the p99.
   durationSeconds: 180
-  reconcilePerTickCap: 50
 
 # At 5000 Pods with kine no longer the wall, the ramp should clear in
 # a few minutes. 10m budget is generous headroom; if a run needs more

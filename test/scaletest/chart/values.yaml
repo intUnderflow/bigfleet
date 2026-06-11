@@ -268,13 +268,6 @@ loadProfile:
   # default below the per-archetype priorityClasses takes precedence.
   priorityClasses: [100, 1000, 1000000]
   durationSeconds: 600
-  # Driver mode (M43a / M44 default flip). "" or "pods" emits Pods
-  # through the full M43 chain (Pod → Unschedulable → CR → Configured
-  # → fake Node → Pod-bound) — the realistic path. "cr" is the
-  # opt-in legacy shape that emits CRs directly and skips the Pod
-  # layer; the internal-binding-latency gate (ADR-0018) becomes a
-  # no-op on those runs (pass() skips via -1 sentinel per ADR-0017).
-  mode: ""
   # M44 / ADR-0015 realism extras — defaulted on across every profile
   # so we don't have a separate "realistic" variant. Production
   # apiserver write patterns aren't smooth: per-tick churn jitters

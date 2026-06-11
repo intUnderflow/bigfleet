@@ -134,14 +134,6 @@ type profile struct {
 	MicroBurstRatePerMinute float64 `yaml:"microBurstRatePerMinute"`
 	MicroBurstFactor        float64 `yaml:"microBurstFactor"`
 
-	// ReconcilePerTickCap is parsed-but-unused (ADR-0038): the
-	// per-tick reconcile loop it bounded was a hand-rolled
-	// pseudo-ReplicaSet, now replaced by real Deployment/StatefulSet
-	// controllers. The field is kept so mounted ConfigMaps that still
-	// set it don't fail unmarshal; remove it once no profile carries
-	// it.
-	ReconcilePerTickCap int `yaml:"reconcilePerTickCap"`
-
 	// PreBind (M52.B, ADR-0035): when true, the load-driver binds the
 	// initial Pod fill to fake-Nodes via the Bind API after rampTo,
 	// bypassing kube-scheduler's slow filter/score cycle. The Pods

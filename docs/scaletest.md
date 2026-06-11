@@ -123,7 +123,7 @@ The runner will:
 
 ## Captured results
 
-Past runs are committed under [`test/scaletest/results/`](../test/scaletest/results/). Each profile has a current baseline (most recent passing run) tracked in that directory's `README.md`. New runs add a new directory; the baseline table moves only when a passing run beats the previous one.
+`test/scaletest/results/` is a local-only artifact directory (in `.gitignore`; M66.1 untracked it). Run outputs land there when you pass `--output`; they are never committed. Reference baseline numbers in code review or design docs by quoting the relevant `summary.json` fields inline, not by committing the file.
 
 ## What gets emitted per run
 

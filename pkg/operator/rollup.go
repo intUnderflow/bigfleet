@@ -57,8 +57,6 @@ func (o *Operator) runRollup(ctx context.Context, sess *session) error {
 		metrics.OperatorRollupDuration.Observe(time.Since(rollupStart).Seconds())
 		return fmt.Errorf("list CapacityRequests: %w", err)
 	}
-	metrics.OperatorRollupCRCount.Observe(float64(len(crs)))
-
 	buildStart := time.Now()
 	rollup, pending := o.buildRollup(crs)
 	metrics.OperatorRollupPhaseDuration.WithLabelValues("build").Observe(time.Since(buildStart).Seconds())

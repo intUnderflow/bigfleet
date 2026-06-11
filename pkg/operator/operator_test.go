@@ -215,7 +215,7 @@ func TestOperator_DrivesBootstrapToConfigured(t *testing.T) {
 	env.startOperator("cluster-train")
 
 	waitFor(t, 10*time.Second, func() bool {
-		count := env.shard.Inventory().CountByState(machine.StateConfigured)
+		count := env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured)
 		if count != 4 {
 			states := map[machine.State]int{}
 			for _, m := range env.shard.Inventory().Snapshot().All() {

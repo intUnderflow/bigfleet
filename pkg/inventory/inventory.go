@@ -18,129 +18,28 @@ import (
 	"slices"
 	"sort"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 )
 
-// Inventory is a thread-safe collection of machines indexed by ID,
-// (cluster, state), and (state, instance-type). All readers receive
-// defensive copies; writes go through Apply for state-machine
-// validation.
+// Inventory is a thread-safe collection of machines indexed by ID.
+// All readers receive defensive copies via Snapshot(); writes go
+// through Apply for state-machine validation.
 //
-// The (state, instance-type) index is the load-bearing one for Phase 1
-// at scale: real Needs almost always carry a
-// `node.kubernetes.io/instance-type In [...]` selector, and matching
-// against the index turns the per-Need candidate scan from O(N) over
-// total inventory into O(K) over the matching instance type's bucket.
+// ADR-0003 (background fold goroutine + CycleSnapshot) was superseded by
+// M44.4 Drop A, which switched the shard cycle to the synchronous
+// Snapshot() API. The fold goroutine and its live byState /
+// byClusterState / byStateInstanceTp indexes have been removed; the
+// shard hot path and all callers use Snapshot() for consistent reads.
 type Inventory struct {
-	mu                sync.RWMutex
-	byID              map[machine.ID]machine.Machine
-	byState           map[machine.State]map[machine.ID]struct{}
-	byClusterState    map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}
-	byStateInstanceTp map[machine.State]map[string]map[machine.ID]struct{}
-
-	// Cached snapshot. Phase 1/2/3 read this on the cycle hot path.
-	// Built by a background fold goroutine; the cycle never pays the
-	// O(N) build cost. May be slightly stale (bounded by foldDebounce
-	// + foldBuildTime). Stale snapshots are safe: applyTransition's
-	// state-machine validation rejects re-attempts on machines that
-	// have already moved on, and Phase 1 will re-emit the action on
-	// the next cycle once the fold catches up.
-	cachedSnap   atomic.Pointer[Snapshot]
-	foldChan     chan struct{}
-	foldDebounce time.Duration
-	foldStop     chan struct{} // close to halt the fold goroutine
-	foldOnce     sync.Once     // close foldStop at most once
+	mu   sync.RWMutex
+	byID map[machine.ID]machine.Machine
 }
 
-// foldDebounceDefault coalesces bursty writes into one fold pass.
-// Smaller = fresher snapshots, more fold cycles; larger = staler
-// snapshots, less rebuild work. 250ms is a reasonable mid-point: at a
-// 1s cycle interval and ~50 writes/sec, we get ~one fold per cycle
-// triggered by activity, but never more than 4×/sec even under storm.
-const foldDebounceDefault = 250 * time.Millisecond
-
-// New returns an empty inventory with a background fold goroutine
-// running. Call Stop to halt the goroutine when the inventory is no
-// longer in use; tests typically don't bother (the goroutine exits
-// cleanly when the process does).
+// New returns an empty inventory.
 func New() *Inventory {
-	inv := &Inventory{
-		byID:              make(map[machine.ID]machine.Machine),
-		byState:           make(map[machine.State]map[machine.ID]struct{}),
-		byClusterState:    make(map[machine.ClusterID]map[machine.State]map[machine.ID]struct{}),
-		byStateInstanceTp: make(map[machine.State]map[string]map[machine.ID]struct{}),
-		foldChan:          make(chan struct{}, 1),
-		foldDebounce:      foldDebounceDefault,
-		foldStop:          make(chan struct{}),
-	}
-	// Seed an empty snapshot so Snapshot() never returns nil before the
-	// first fold runs.
-	inv.cachedSnap.Store(emptySnapshot())
-	go inv.foldLoop()
-	return inv
-}
-
-// Stop halts the background fold goroutine. Safe to call multiple
-// times. Pending folds are not awaited.
-func (i *Inventory) Stop() {
-	i.foldOnce.Do(func() { close(i.foldStop) })
-}
-
-// signalFold non-blockingly tells the fold loop to rebuild. The
-// channel has capacity 1 so multiple writes between folds collapse to
-// one signal.
-func (i *Inventory) signalFold() {
-	select {
-	case i.foldChan <- struct{}{}:
-	default:
-	}
-}
-
-// foldLoop runs in the background, debouncing fold signals and
-// rebuilding the cached snapshot when one arrives.
-func (i *Inventory) foldLoop() {
-	for {
-		select {
-		case <-i.foldStop:
-			return
-		case <-i.foldChan:
-		}
-		// Debounce: sleep, then drain any further signals that arrived
-		// during the sleep. One fold absorbs N writes.
-		select {
-		case <-i.foldStop:
-			return
-		case <-time.After(i.foldDebounce):
-		}
-		select {
-		case <-i.foldChan:
-		default:
-		}
-		i.fold()
-	}
-}
-
-// fold rebuilds the cached snapshot under an RLock so concurrent
-// writers serialize on the inventory's main lock for the build's
-// duration. Cycle reads (Snapshot()) are unaffected because they go
-// through the atomic pointer.
-func (i *Inventory) fold() {
-	i.mu.RLock()
-	s := i.snapshotLocked()
-	i.mu.RUnlock()
-	i.cachedSnap.Store(s)
-}
-
-// emptySnapshot returns a Snapshot with no machines and no indexes.
-func emptySnapshot() *Snapshot {
-	return &Snapshot{
-		byID:              make(map[machine.ID]int),
-		byState:           make(map[machine.State][]machine.ID),
-		byClusterState:    make(map[machine.ClusterID]map[machine.State][]machine.ID),
-		byStateInstanceTp: make(map[machine.State]map[string][]machine.ID),
+	return &Inventory{
+		byID: make(map[machine.ID]machine.Machine),
 	}
 }
 
@@ -154,57 +53,44 @@ func (i *Inventory) Insert(m machine.Machine) error {
 		return fmt.Errorf("inventory: %w", err)
 	}
 	i.mu.Lock()
+	defer i.mu.Unlock()
 	if _, exists := i.byID[m.ID]; exists {
-		i.mu.Unlock()
 		return fmt.Errorf("inventory: machine %s already exists", m.ID)
 	}
 	i.byID[m.ID] = m
-	i.indexAdd(m)
-	i.mu.Unlock()
-	i.signalFold()
 	return nil
 }
 
 // Apply replaces the existing machine with the given record. Validates
-// the new state, the structural invariant, and (if both old and new
-// states are known) the state machine transition. Apply is the only
-// mutation entry point that updates indexes.
+// the new state, the structural invariant, and the state machine
+// transition when the state changes.
 func (i *Inventory) Apply(m machine.Machine) error {
 	if err := m.Invariant(); err != nil {
 		return fmt.Errorf("inventory: %w", err)
 	}
 	i.mu.Lock()
+	defer i.mu.Unlock()
 	old, exists := i.byID[m.ID]
 	if !exists {
-		i.mu.Unlock()
 		return fmt.Errorf("inventory: %w: %s", ErrNotFound, m.ID)
 	}
 	if old.State != m.State {
 		if err := machine.CheckTransition(old.State, m.State); err != nil {
-			i.mu.Unlock()
 			return fmt.Errorf("inventory: %w", err)
 		}
 	}
-	i.indexRemove(old)
 	i.byID[m.ID] = m
-	i.indexAdd(m)
-	i.mu.Unlock()
-	i.signalFold()
 	return nil
 }
 
 // Remove drops the machine from the inventory.
 func (i *Inventory) Remove(id machine.ID) error {
 	i.mu.Lock()
-	old, exists := i.byID[id]
-	if !exists {
-		i.mu.Unlock()
+	defer i.mu.Unlock()
+	if _, exists := i.byID[id]; !exists {
 		return fmt.Errorf("inventory: %w: %s", ErrNotFound, id)
 	}
 	delete(i.byID, id)
-	i.indexRemove(old)
-	i.mu.Unlock()
-	i.signalFold()
 	return nil
 }
 
@@ -219,44 +105,6 @@ func (i *Inventory) Get(id machine.ID) (machine.Machine, error) {
 	return m, nil
 }
 
-// ListByState returns all machines currently in the given state, sorted
-// by ID for determinism.
-func (i *Inventory) ListByState(state machine.State) []machine.Machine {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	ids := i.byState[state]
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([]machine.Machine, 0, len(ids))
-	for id := range ids {
-		out = append(out, i.byID[id])
-	}
-	sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })
-	return out
-}
-
-// ListByClusterState returns all machines for the given cluster currently
-// in the given state, sorted by ID.
-func (i *Inventory) ListByClusterState(cluster machine.ClusterID, state machine.State) []machine.Machine {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	byState := i.byClusterState[cluster]
-	if byState == nil {
-		return nil
-	}
-	ids := byState[state]
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([]machine.Machine, 0, len(ids))
-	for id := range ids {
-		out = append(out, i.byID[id])
-	}
-	sort.Slice(out, func(a, b int) bool { return out[a].ID < out[b].ID })
-	return out
-}
-
 // Len returns the total number of machines.
 func (i *Inventory) Len() int {
 	i.mu.RLock()
@@ -264,38 +112,19 @@ func (i *Inventory) Len() int {
 	return len(i.byID)
 }
 
-// CountByState returns the count of machines in the given state.
-func (i *Inventory) CountByState(state machine.State) int {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	return len(i.byState[state])
-}
-
 // Snapshot builds a fresh snapshot under the inventory's read lock
-// and returns it. O(N) — every call walks the entire byID map. Tests
-// and any caller that needs strict consistency with the most recent
-// write should use this.
+// and returns it. O(N) — every call walks the entire byID map. This
+// is the only snapshot API; all callers including the shard cycle hot
+// path use it for a consistent view of the inventory.
 //
-// The shard's cycle hot path uses CycleSnapshot instead, which
-// returns a cached pointer maintained by the background fold loop and
-// avoids the per-cycle O(N) build.
+// ADR-0003's background fold goroutine and CycleSnapshot() were
+// superseded by M44.4 Drop A: the shard cycle switched to this
+// synchronous API because the stale cached pointer caused ~50% wasted
+// Bootstraps at real write rates.
 func (i *Inventory) Snapshot() *Snapshot {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	s := i.snapshotLocked()
-	i.cachedSnap.Store(s) // refresh the cache too
-	return s
-}
-
-// CycleSnapshot returns the most recently folded snapshot in O(1).
-// May be slightly stale: writes since the last fold are not visible
-// until the fold goroutine catches up (bounded by foldDebounce +
-// build time). Stale snapshots are safe for the shard's cycle —
-// applyTransition's state-machine validation rejects re-attempts on
-// machines that have already moved on, and Phase 1/2/3 will re-emit
-// any missed actions next cycle once the fold catches up.
-func (i *Inventory) CycleSnapshot() *Snapshot {
-	return i.cachedSnap.Load()
+	return i.snapshotLocked()
 }
 
 // snapshotLocked builds a fresh snapshot from the current live indexes.
@@ -303,9 +132,9 @@ func (i *Inventory) CycleSnapshot() *Snapshot {
 func (i *Inventory) snapshotLocked() *Snapshot {
 	machines := make([]machine.Machine, 0, len(i.byID))
 	byID := make(map[machine.ID]int, len(i.byID))
-	byState := make(map[machine.State][]machine.ID, len(i.byState))
-	byClusterState := make(map[machine.ClusterID]map[machine.State][]machine.ID, len(i.byClusterState))
-	byStateInstanceTp := make(map[machine.State]map[string][]machine.ID, len(i.byStateInstanceTp))
+	byState := make(map[machine.State][]machine.ID)
+	byClusterState := make(map[machine.ClusterID]map[machine.State][]machine.ID)
+	byStateInstanceTp := make(map[machine.State]map[string][]machine.ID)
 
 	ids := make([]machine.ID, 0, len(i.byID))
 	for id := range i.byID {
@@ -484,72 +313,6 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		bucketsByClusterState:        clusterStateBuckets,
 		minPriorityByStateInstanceTp: minPriorityByStateInstanceTp,
 		minPriorityByState:           minPriorityByState,
-	}
-}
-
-func (i *Inventory) indexAdd(m machine.Machine) {
-	if i.byState[m.State] == nil {
-		i.byState[m.State] = make(map[machine.ID]struct{})
-	}
-	i.byState[m.State][m.ID] = struct{}{}
-
-	if m.Cluster != "" {
-		byState, ok := i.byClusterState[m.Cluster]
-		if !ok {
-			byState = make(map[machine.State]map[machine.ID]struct{})
-			i.byClusterState[m.Cluster] = byState
-		}
-		if byState[m.State] == nil {
-			byState[m.State] = make(map[machine.ID]struct{})
-		}
-		byState[m.State][m.ID] = struct{}{}
-	}
-
-	if m.Profile.InstanceType != "" {
-		byType, ok := i.byStateInstanceTp[m.State]
-		if !ok {
-			byType = make(map[string]map[machine.ID]struct{})
-			i.byStateInstanceTp[m.State] = byType
-		}
-		if byType[m.Profile.InstanceType] == nil {
-			byType[m.Profile.InstanceType] = make(map[machine.ID]struct{})
-		}
-		byType[m.Profile.InstanceType][m.ID] = struct{}{}
-	}
-}
-
-func (i *Inventory) indexRemove(m machine.Machine) {
-	if states := i.byState[m.State]; states != nil {
-		delete(states, m.ID)
-		if len(states) == 0 {
-			delete(i.byState, m.State)
-		}
-	}
-	if m.Cluster != "" {
-		if byState := i.byClusterState[m.Cluster]; byState != nil {
-			if ids := byState[m.State]; ids != nil {
-				delete(ids, m.ID)
-				if len(ids) == 0 {
-					delete(byState, m.State)
-				}
-			}
-			if len(byState) == 0 {
-				delete(i.byClusterState, m.Cluster)
-			}
-		}
-	}
-	if m.Profile.InstanceType != "" {
-		if byType := i.byStateInstanceTp[m.State]; byType != nil {
-			if ids := byType[m.Profile.InstanceType]; ids != nil {
-				delete(ids, m.ID)
-				if len(ids) == 0 {
-					delete(byType, m.Profile.InstanceType)
-				}
-			}
-			if len(byType) == 0 {
-				delete(i.byStateInstanceTp, m.State)
-			}
-		}
 	}
 }
 

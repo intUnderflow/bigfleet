@@ -30,7 +30,6 @@ func runCoordinator(args []string) error {
 	nodeID := fs.String("id", "node-1", "stable per-replica identifier")
 	dataDir := fs.String("data-dir", "./coord-data", "directory for Raft logs / snapshots / BoltDB stores")
 	bootstrap := fs.Bool("bootstrap", false, "bootstrap a fresh single-node Raft cluster on first run (use only on the very first replica)")
-	rebalanceInterval := fs.Duration("rebalance-interval", 0, "rebalance loop interval (default 5s; 0 = disabled)")
 	snapshotExportDir := fs.String("snapshot-export-dir", "", "if set, the leader periodically writes Raft snapshots here for DR (paper §10.8). Conventionally a path mounted from durable object storage; empty disables export.")
 	snapshotExportInterval := fs.Duration("snapshot-export-interval", 0, "interval between snapshot exports (default 5m; ignored if --snapshot-export-dir is empty)")
 	if err := fs.Parse(args); err != nil {
@@ -82,13 +81,6 @@ func runCoordinator(args []string) error {
 		logger.Info("metrics serving", "addr", *metricsAddr)
 		go func() { errCh <- metricsSrv.ListenAndServe() }()
 		defer func() { _ = metricsSrv.Shutdown(context.Background()) }()
-	}
-
-	if *rebalanceInterval != 0 || true {
-		rb := coordinator.NewRebalancer(c, srv, coordinator.RebalancerConfig{
-			Interval: *rebalanceInterval, Logger: logger,
-		})
-		go func() { errCh <- rb.Run(ctx) }()
 	}
 
 	select {

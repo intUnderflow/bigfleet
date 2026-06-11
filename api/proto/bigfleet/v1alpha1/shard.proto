@@ -49,10 +49,7 @@ message ShardMessage {
 message Hello {
   string cluster_id = 1;
 
-  // Free-form capability strings. v1 has no required capabilities;
-  // future protocol features can be advertised here without bumping the
-  // service version.
-  repeated string capabilities = 2;
+  reserved 2;  // capabilities — never negotiated; removed M66.1
 
   // Operator's view of the protocol version it speaks.
   string protocol_version = 3;
@@ -156,10 +153,7 @@ message NodeStateUpdate {
   // may surface in UpcomingNode.status for debugging.
   string provider_id = 6;
 
-  // Estimated wall-clock time at which the node will be Ready. Used by
-  // the operator to populate AvailableCapacity ETAs and to age out stuck
-  // upcoming nodes. Zero if unknown.
-  int64 estimated_ready_unix_nanos = 7;
+  reserved 7;  // estimated_ready_unix_nanos — unused; removed M66.1
 
   // Populated when state == FAILED.
   string last_error = 8;
@@ -211,13 +205,7 @@ message AvailableCapacityUpdate {
   // Per-hour cost the shard expects to pay if it draws on this capacity.
   double cost_per_hour = 6;
 
-  // Whether the shard expects to be able to provision the entire count
-  // atomically (all-or-nothing). Useful for gang-scheduled workloads.
-  bool supports_atomic_provisioning = 7;
-
-  // Estimated time to actuate.
-  int64 estimated_provisioning_seconds = 8;
-
-  // Node template that consumers may surface in AvailableCapacity.spec.
-  map<string, string> node_template_labels = 9;
+  reserved 7;  // supports_atomic_provisioning — unused; removed M66.1
+  reserved 8;  // estimated_provisioning_seconds — unused; removed M66.1
+  reserved 9;  // node_template_labels — unused; removed M66.1
 }

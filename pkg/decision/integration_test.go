@@ -44,7 +44,7 @@ func TestIntegration_TrainingJobWithTopology(t *testing.T) {
 	executeActions(t, prov, inv, pf, r.Actions)
 
 	// After execution, every machine should be Configured for cluster-train.
-	if got := inv.CountByState(machine.StateConfigured); got != 64 {
+	if got := inv.Snapshot().CountByState(machine.StateConfigured); got != 64 {
 		t.Errorf("post-execute: configured = %d, want 64", got)
 	}
 }

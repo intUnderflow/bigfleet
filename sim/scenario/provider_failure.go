@@ -151,7 +151,7 @@ func drainFailureDuringWithdrawal() sim.Scenario {
 			{
 				Name: "7 machines back to Idle",
 				Check: func(s *shard.Shard) error {
-					if got := s.Inventory().CountByState(machine.StateIdle); got != 7 {
+					if got := s.Inventory().Snapshot().CountByState(machine.StateIdle); got != 7 {
 						return fmt.Errorf("idle = %d, want 7", got)
 					}
 					return nil
