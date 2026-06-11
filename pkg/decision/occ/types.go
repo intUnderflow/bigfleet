@@ -154,6 +154,12 @@ type NeedResult struct {
 	ProvisionMachines []machine.ID
 	Unsatisfied       bool
 	Deficit           []needs.ResourceQty
+	// SameDomain is the domain the joint pre-pass chose for a
+	// Same-Profile Need ("" for plain Needs or when no bucket existed).
+	// Surfaced for the ADR-0042 per-gang attribution probe: a domain
+	// that flips cycle-to-cycle for an unsatisfiable gang is the churn
+	// signature bigfleet-uber #56 diagnosed.
+	SameDomain string
 }
 
 // Result is what Propose returns.

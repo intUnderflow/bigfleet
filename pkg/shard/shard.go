@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -568,6 +569,19 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 			"p3_reclaim_matches_unsatisfied", pa.p3ReclaimMatchesUnsatisfied,
 			"p3_reclaim_matches_and_fits", pa.p3ReclaimMatchesAndFits,
 		)
+		// ADR-0042 per-gang probe: one line per sampled unsatisfied
+		// Same-Need. chosen_domain flipping across cycles with
+		// acquired > 0 is the #56 churn loop; pinned domains with
+		// acquired → 0 is parking working.
+		for _, g := range pa.gangProbe {
+			s.log.Info("gang attribution",
+				"group", g.group,
+				"cluster", g.cluster,
+				"chosen_domain", g.domain,
+				"acquired", g.acquired,
+				"residual", g.deficit,
+			)
+		}
 	}
 
 	// Emit AvailableCapacity hints (paper §6.2). Eventually-consistent;
@@ -764,6 +778,42 @@ type phaseAttribution struct {
 	p3Reclaim                   int
 	p3ReclaimMatchesUnsatisfied int
 	p3ReclaimMatchesAndFits     int
+	// gangProbe carries up to gangProbeN unsatisfied Same-Needs'
+	// per-cycle attribution (ADR-0042): the joint choice's domain, the
+	// machines acquired before exhausting, and the residual. A
+	// chosen_domain that flips across consecutive probe lines while
+	// acquired stays non-zero is the #56 assemble↔reclaim churn
+	// signature; post-ADR-0042 it should pin.
+	gangProbe []gangProbeEntry
+}
+
+// gangProbeN bounds the per-cycle gang probe so the log line stays
+// readable at uber-5k's ~190 unsatisfied gangs. Deterministic
+// selection (the first N in Phase 1's result order) keeps the same
+// gangs comparable across cycles.
+const gangProbeN = 5
+
+type gangProbeEntry struct {
+	group    string
+	cluster  string
+	domain   string
+	acquired int
+	deficit  string
+}
+
+// formatQtys renders a residual vector compactly for the gang probe
+// line ("cpu=12,nvidia.com/gpu=96").
+func formatQtys(qs []needs.ResourceQty) string {
+	var b strings.Builder
+	for i, q := range qs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(q.Name)
+		b.WriteByte('=')
+		b.WriteString(q.Quantity)
+	}
+	return b.String()
 }
 
 // collectPhaseAttribution computes the probe over the cycle's own
@@ -782,8 +832,23 @@ func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 d
 		}
 	}
 	for i := range p1.Unsatisfied {
-		if _, ok := occ.SameRequirementKey(p1.Unsatisfied[i].Need.Profile); ok {
-			pa.p1UnsatisfiedSame++
+		u := &p1.Unsatisfied[i]
+		if _, ok := occ.SameRequirementKey(u.Need.Profile); !ok {
+			continue
+		}
+		pa.p1UnsatisfiedSame++
+		if len(pa.gangProbe) < gangProbeN {
+			group := u.Need.Group
+			if group == "" {
+				group = u.Need.Profile.Fingerprint()[:12]
+			}
+			pa.gangProbe = append(pa.gangProbe, gangProbeEntry{
+				group:    group,
+				cluster:  string(u.Need.ClusterID),
+				domain:   u.SameDomain,
+				acquired: u.Acquired,
+				deficit:  formatQtys(u.Deficit),
+			})
 		}
 	}
 	for _, a := range p3.Actions {

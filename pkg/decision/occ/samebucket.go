@@ -48,23 +48,32 @@ type SameBucket struct {
 //  3. Among satisfiable buckets, the smallest Total — least
 //     over-commitment, mirroring the claim loop's stop-when-covered.
 //  4. If none is satisfiable, the most-covering Total.
-//  5. Tiebreak: larger Count, then lexicographically smallest Value.
+//  5. Among unsatisfiable buckets of EQUAL coverage, one with
+//     creditable supply wins (ADR-0042: the incumbent domain, where
+//     the Need's concentrated partial assembly lives).
+//  6. Tiebreak: larger Count, then lexicographically smallest Value.
 //
 // Rule 2 is the ADR-0041 rider-3 refinement, deliberately stronger
 // than the ADR's stated last-place tie-break: it sits between the
 // satisfiable test and the score comparison. Sticky-domain semantics —
 // a Need's currently-serving domain must not lose to a fresh
 // acquirable-only domain that merely scores smaller (rule 3) or sorts
-// lower (rule 5) and relocate a healthy gang. Staying put costs
+// lower (rule 6) and relocate a healthy gang. Staying put costs
 // nothing: excess machines WITHIN the serving domain are still
-// reclaimed individually by the claim loop's stop-when-covered. The
-// preference is confined to the satisfiable regime on purpose — among
-// unsatisfiable buckets, "staying put costs nothing" no longer holds
-// (the Need is genuinely better served wherever coverage is larger),
-// so the most-covering rule keeps the ADR-0040 Addendum's concentrate-
-// then-park behaviour (TestIntegration_SameDomain_NoOscillation pins
-// it: a 3-Idle domain must beat a 2-Configured one for a 5-machine
-// Need).
+// reclaimed individually by the claim loop's stop-when-covered.
+//
+// Rule 5 is ADR-0042's unsatisfiable-regime counterpart: switching
+// domains is reserved for STRICTLY greater coverage. Most-covering
+// (rule 4) keeps the ADR-0040 Addendum's concentrate-then-park
+// behaviour — a 3-Idle domain still beats a 2-Configured one for a
+// 5-machine Need (TestIntegration_SameDomain_NoOscillation) — but a
+// structurally-unsatisfiable gang facing dozens of identical-total
+// domains no longer flip-flops between them on count/value noise,
+// abandoning its partial assembly for Phase 3 to reclaim each cycle
+// (the bigfleet-uber #56 ~27/sec churn anatomy). Pinned to the
+// incumbent, in-domain acquirables exhaust, acquisition reaches zero,
+// and the Need ages quietly in the shortfall buffer — parking without
+// any suppression state.
 //
 // This is the crediting mirror of FindSame's acquisition scoring
 // (atomic-satisfiable preferred); it ranks on coverage rather than
@@ -99,6 +108,12 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			} else {
 				better = score > bestScore
 			}
+		case (b.CreditableCount > 0) != (buckets[best].CreditableCount > 0):
+			// ADR-0042 (rule 5): only reachable for unsatisfiable pairs
+			// (satisfiable pairs with differing creditable-presence were
+			// caught by rider 3 above) of EQUAL coverage — the incumbent
+			// domain wins; switching needs strictly greater coverage.
+			better = b.CreditableCount > 0
 		case b.Count != buckets[best].Count:
 			better = b.Count > buckets[best].Count
 		default:

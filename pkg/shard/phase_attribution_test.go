@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
@@ -73,6 +74,13 @@ func TestCollectPhaseAttribution(t *testing.T) {
 	}}
 
 	pa := collectPhaseAttribution(snap, demand, p1, p3)
+	// The gang probe (ADR-0042) samples the unsatisfied Same-Need; its
+	// presence is asserted separately since the struct is no longer
+	// comparable.
+	if len(pa.gangProbe) != 1 {
+		t.Errorf("gangProbe entries = %d, want 1", len(pa.gangProbe))
+	}
+	pa.gangProbe = nil
 	want := phaseAttribution{
 		needsTotal:                  3,
 		needsSame:                   2,
@@ -82,7 +90,7 @@ func TestCollectPhaseAttribution(t *testing.T) {
 		p3ReclaimMatchesUnsatisfied: 2,
 		p3ReclaimMatchesAndFits:     1,
 	}
-	if pa != want {
+	if !reflect.DeepEqual(pa, want) {
 		t.Errorf("collectPhaseAttribution = %+v, want %+v", pa, want)
 	}
 }

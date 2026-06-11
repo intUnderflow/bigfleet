@@ -47,3 +47,4 @@
 | [39](/adr/0039-capacityrequest-per-pod-not-per-unschedulable-pod/) | Accepted | One CapacityRequest per Pod — not per *unschedulable* Pod; the demand signal must be total, not unmet |
 | [40](/adr/0040-same-domain-attribution-unified/) | Accepted | `Same`-domain attribution is unified — every supply-crediting site is domain-aware |
 | [41](/adr/0041-sub-machine-same-needs-fold-into-atomic-aggregates/) | Accepted | Sub-machine `Same`-Needs fold into atomic aggregates — `Same` is for cross-machine topology |
+| [42](/adr/0042-unsatisfiable-domain-choice-is-sticky-at-equal-coverage/) | Accepted | Unsatisfiable-regime `Same`-domain choice is sticky at equal coverage — switch only for strictly greater |

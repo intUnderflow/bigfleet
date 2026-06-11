@@ -139,6 +139,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r := &results[i]
 		r.BootstrapMachines = nil
 		r.ProvisionMachines = nil
+		r.SameDomain = state.SameDomainFor(r.Need)
 		sumAlloc := []needs.ResourceQty(nil)
 		for _, mid := range state.ClaimedFor(r.Need) {
 			m, ok := snap.Get(mid)

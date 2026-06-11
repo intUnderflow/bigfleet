@@ -187,14 +187,27 @@ func TestChooseSameBucket_Rule(t *testing.T) {
 		},
 		{
 			// ADR-0041 rider 3 is confined to the satisfiable regime:
-			// among unsatisfiable buckets coverage still outranks
-			// creditable, preserving the ADR-0040 Addendum's
+			// among unsatisfiable buckets STRICTLY greater coverage still
+			// outranks creditable, preserving the ADR-0040 Addendum's
 			// concentrate-then-park behaviour
 			// (TestIntegration_SameDomain_NoOscillation's shape).
-			name: "unsatisfiable: coverage still outranks creditable",
+			name: "unsatisfiable: strictly greater coverage still outranks creditable",
 			machines: append(
 				creditableRackMachines("rack-a", 2, cpus(4)), // covers 8 of 20
 				rackMachines("rack-b", 3, cpus(4))...),       // covers 12 of 20
+			deficit: cpus(20),
+			want:    "rack-b",
+		},
+		{
+			// ADR-0042 (rule 5): among unsatisfiable buckets of EQUAL
+			// coverage the incumbent — the domain holding the Need's
+			// concentrated partial assembly — wins before count/value.
+			// Identical-total domains must not flip-flop on tie-break
+			// noise and feed the assemble↔reclaim churn (#56).
+			name: "unsatisfiable equal coverage: incumbent beats lexicographically-lower acquirable",
+			machines: append(
+				rackMachines("rack-a", 2, cpus(4)),               // covers 8 of 20
+				creditableRackMachines("rack-b", 2, cpus(4))...), // covers 8 of 20, incumbent
 			deficit: cpus(20),
 			want:    "rack-b",
 		},
