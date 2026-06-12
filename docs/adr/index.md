@@ -51,7 +51,7 @@
 | [42a](/adr/0042-addendum-aged-acquisition-parking/) | Accepted | ADR-0042 Addendum: aged acquisition parking — group identity on the wire, park after 8 unsatisfiable cycles, re-probe every 32 |
 | [43](/adr/0043-demand-realism-check-before-mechanism/) | Accepted | Harness-observed triggers get a demand-realism check before mechanism ships |
 | [44](/adr/0044-machine-count-aware-seed-sizing/) | Accepted | Seed machine pools are sized by machine demand (pod share ÷ packing density, gang-aware per-zone floors), not workload weight |
-| [45](/adr/0045-consumed-capacity-in-the-attribution-model/) | Proposed | Consumed capacity enters the attribution model — operator-reported per-machine consumption + bound/open demand split (author decision pending) |
+| [45](/adr/0045-consumed-capacity-in-the-attribution-model/) | Accepted | Capacity counts for a cluster iff bound — Phase 3 reclaims on demand shrinkage only; BigFleet never models packing (author decision; supersedes its own first draft) |
 | [46](/adr/0046-actuation-safety-rails/) | Accepted | Actuation safety rails — per-cluster reclaim blast-radius cap, empty-roll-up quarantine, global kill switch |
 | [47](/adr/0047-coordinator-raft-join-and-offline-restore/) | Accepted | Coordinator quorum formation by ordinal join; offline snapshot restore as single-voter recovery |
 | [48](/adr/0048-mtls-and-uri-san-identity/) | Accepted | Opt-in file-based mTLS with bigfleet:// URI SAN identity binding — supersedes ADR-0008's transport posture |

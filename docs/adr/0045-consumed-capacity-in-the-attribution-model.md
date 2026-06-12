@@ -1,121 +1,90 @@
-# ADR-0045: consumed capacity enters the attribution model
+# ADR-0045: capacity counts for a cluster iff it is bound — BigFleet never models packing
 
 ## Status
 
-**Proposed — author decision required** (plan §12 queue item 2).
-This is engine-semantics and wire-contract territory; per precedent
-(ADR-0027) it does not ship without sign-off. M67 implements the
-accepted option; M68 (single attribution) builds on it.
+Accepted, 2026-06-12 — author decision, reached in design dialogue.
+Supersedes this ADR's own first draft (which proposed
+operator-reported per-machine consumption; withdrawn as
+scheduler-shadowing). Implemented by M67; M68 dissolves into it.
 
 ## Context
 
-The engine has no representation of capacity consumed by bound Pods.
-Phase 1 credits demand against machines' gross
-`EffectiveAllocatable()` (thirteen credit sites across
-`pkg/decision/occ/{seed,cycle,candidates,samesupply}.go` and
-`normalize.go`; `machine.Machine` has no consumed/free field), and
-Phase 3 independently re-derives a keep-set with the same gross
-arithmetic (`phase3_reclaim.go:158-186,216-319`) — keeping the
-*perfect-bin-packing* machine count.
+The original investigation: at the tail of a catalog fill, the shard
+reported `p1_unsatisfied=0` while the cluster's scheduler held
+unplaceable pods on fragmented residuals, and Phase 3 reclaimed
+machines hosting bound pods under that unchanged demand
+(`sim/m67_repro_test.go`, observed on kind and cloud 2026-06-11).
+The first draft of this ADR read that as "consumed capacity is
+invisible to the engine" and proposed feeding consumption in.
 
-The failure is pinned deterministically by
-`sim/m67_repro_test.go` (`TestClosedLoop_ConsumedCapacityInvisible`)
-and was observed live on kind and cloud (2026-06-11): at the tail of
-a fill, open demand fits the gross aggregate but no per-machine
-residual, so Phase 1 reports `p1_unsatisfied=0` while the scheduler
-holds unplaceable Pods, acquisition stops with idle supply standing
-by, and Phase 3 reclaims "excess" machines that are hosting bound
-Pods — then the loop converges *quietly* in the defective state. In
-the repro, 10 % gross headroom suffices: 4 reclaims evict 32 bound
-Pods under pending demand.
-
-Three facts constrain the fix:
-
-1. **The roll-up already carries total desired state.** Every CR,
-   no phase filter (`rollup.go:121-127`); ADR-0039 makes the CR live
-   for the Pod's entire lifetime precisely so Phase 3's surplus
-   arithmetic sees total demand. Open-CRs-only is not an option.
-2. **The gross diff is the papers' own arithmetic.**
-   `fleet-scale-kubernetes.md:89` (ADR-0027 revision): "diffs
-   `aggregate_resources` against `Σ machine.Allocatable`". The
-   arithmetic is exact only under perfect packing; nothing in the
-   papers models the assumption failing. This ADR chooses new model
-   territory, not a restoration.
-3. **"BigFleet does NOT watch pod events"** (`bigfleet.md:114`).
-   Per-pod placement must not enter the shard. The cluster side,
-   however, already observes binding state (the operator consults
-   Pod status to acknowledge CRs, `rollup.go:175-177`).
-
-### Demand realism (ADR-0043)
-
-The trigger is harness-observed but the shape is production-universal:
-any fleet operating at realistic utilisation has fragmentation —
-residuals scattered across machines that sum to more than the largest
-placeable unit. The repro needs only 90 % per-machine utilisation and
-one open workload larger than a residual. No catalog artifact is
-involved; production fleets emit this shape continuously.
-
-## Options
-
-**A — Demand-side split only** (roll-up marks each Need's bound vs
-open portion). Insufficient alone: the engine still credits gross
-supply, so satisfied-by-arithmetic recurs; rejected as a complete fix.
-
-**B — Operator-reported consumption (recommended).** The operator —
-which already watches the cluster — reports per-machine consumed
-vectors on the existing session stream (additive message with
-`supersedes_key` coalescing, like every other coalescing type), and
-the roll-up splits each Need into bound and open portions (it knows
-CR↔Pod binding state today). The shard stores
-`Consumed` per machine; the attribution model becomes:
-
-- Phase 1 satisfies **open** demand against **residual** supply
-  (`EffectiveAllocatable − Consumed`) plus acquirable machines.
-- Phase 3's keep-set becomes direct rather than re-derived:
-  keep machines with non-zero consumption (they host bound Pods)
-  plus machines claimed for open demand; reclaim only empty-and-
-  unclaimed. The perfect-packing assumption disappears from both
-  phases, and "excess" finally means what the paper intends.
-
-Consistency note: total demand vs gross supply double-counts nothing
-today only because consumption is invisible; B's split (open demand
-vs residual supply) is the consistent pairing once it isn't.
-Paper alignment: roll-ups stay full-replacement total state
-(ADR-0039 intact); the shard still receives only machine-level
-aggregates, never pod events (bigfleet.md:114 intact); the ownerRef
-GC reclaim flow is preserved (Pod dies → consumption drops → machine
-becomes empty-and-unclaimed → Phase 3 reclaims). Wire impact:
-additive fields only. Cluster-side cost: per-node aggregation by the
-operator (a pod informer with field-stripping, the same pattern the
-load-driver's bind watcher uses).
-
-**C — Engine-side inference** (shard treats its own assignment
-history / Phase 1 claims as consumption; no wire change). Cheap but
-unsound: the kube-scheduler, not BigFleet, decides placement, so
-intended and actual placement drift — re-creating the same wrongness
-with a different cause. Useful only as M68's claimed-set persistence,
-not as the consumption source of truth.
+The author's correction reframes it: **clusters demand capacity;
+BigFleet decides whether to fulfill; that is the whole contract.**
+BigFleet is not a scheduler (hard rule), and any arithmetic that
+tries to anticipate whether the cluster's scheduler can *use* bound
+capacity — gross-aggregate satisfaction checks, residual math,
+consumption vectors, perfect-packing keep-sets — is a shadow of the
+scheduler and out of scope by design.
 
 ## Decision
 
-Proposed: **Option B**, with M68 building Phase 3's keep-set from
-consumption + Phase 1's claimed-set (one attribution, two inputs).
-Papers get a companion diff noting the §ADR-0027 arithmetic revision
-("diffs open demand against residual supply") — same mechanism as the
-ADR-0027 paper-diff precedent.
+One accounting rule: **capacity counts for a cluster iff it is bound
+to that cluster.** Binding (Configure) is the atomic act of
+fulfillment; the machine state machine is the only supply ledger.
+
+1. **Demand** is the roll-up's total desired capacity (ADR-0039,
+   unchanged — no wire changes anywhere in this ADR).
+2. **Phase 1**: bound capacity < demand → fulfill the difference.
+   Bound ≥ demand → BigFleet's job is done. Because a binding counts
+   from the moment it is made — before the node exists — double-
+   supply is impossible by construction; no grace windows, no
+   in-flight discounting, no second ledger.
+3. **Phase 3**: reclaim is triggered by **demand shrinkage** only:
+   excess = bound − demand, taken in the paper §8 release order
+   through the ADR-0009/M69 operator-mediated drain path (cordon,
+   PDB-respecting eviction, real grace). Phase 3 does not re-derive
+   per-cycle keep-sets; at steady demand it does nothing. This
+   deletion *is* the former M68 ("single attribution") — there is no
+   longer a second satisfaction arithmetic to unify.
+4. **Satisfied-but-stuck is the cluster's problem.** If bound
+   capacity covers demand but pods cannot place (fragmentation at
+   equal priority), the cluster holds the levers: kube-scheduler
+   preemption resolves it whenever priorities differ; a descheduler
+   or revised capacity demands handle the rest. BigFleet carries no
+   unmet-demand signal, no telemetry for this state, and takes no
+   action — per YAGNI, a signal nothing acts on is speculative
+   plumbing. (Genuine undersupply — e.g. Same gangs short of
+   per-zone machines — still surfaces exactly as today: bound <
+   demand in the constraint-scoped buckets, shortfall buffer,
+   escalation.)
+
+Explicitly NOT built, and rejected by name: per-machine consumed
+vectors; bound/open demand splits; residual-fit arithmetic in any
+phase; a per-machine busy bit for victim selection (PDBs and the
+M69 eviction flow already protect drains; if validation shows
+needless disruption, that evidence may justify one later); any
+persistence/aging rule that overrides bound-vs-demand arithmetic.
 
 ## Consequences
 
-- The `sim/m67_repro_test.go` characterization test inverts: its five
-  defect pins become the fix's acceptance criteria (shortfall
-  reported, acquisition fires, demand places, zero reclaims under
-  pending demand).
-- dev-50-v2 (the catalog gate, parked on this defect) goes green and
-  replaces the legacy gate (M66.5 unblocks, then M77).
-- The bootstrap≈reclaim oscillation evidence (#59/#60) is expected to
-  collapse; the M78 re-baseline measures the ADR-0042 parking layer
-  on a sound engine for the first time.
-- Roll-up and session-stream size grow by the consumption messages;
-  coalescing bounds steady-state traffic to changed machines only.
-- The fleet-scale paper's ADR-0027 section needs the companion diff —
-  flagging explicitly: this revises paper-documented arithmetic.
+- Phase 1 needs little more than doc-comment honesty — its
+  bound-counts arithmetic was always this model. The implementation
+  weight falls on Phase 3: replace keep-set re-derivation with the
+  shrinkage diff. Net code should go DOWN.
+- The bootstrap≈reclaim oscillation class (#59/#60 reclaim
+  attribution, the dev-50-v2 plateau's reclaim-under-demand half)
+  is removed by construction: at steady demand Phase 3 is inert.
+- `sim/m67_repro_test.go` inverts: shortfalls=0 and acquisitions=0
+  become correct-behavior pins; the surviving defect assertion is
+  zero reclaims at steady demand; the pending pods are asserted to
+  be exactly the cluster's residue, untouched by BigFleet.
+- The dev-50-v2 catalog gate redefines around BigFleet's contract:
+  demand covered by bound capacity and zero reclaim churn — not
+  cluster bind-percentage, which asserts a promise BigFleet does not
+  make. Validation SLOs that gate on bind% of catalog profiles need
+  the same review (M78).
+- ADR-0042 parking and the shortfall path are untouched: they handle
+  bound < demand (genuine unsatisfiability), which this ADR does not
+  change.
+- The papers need no diff: this restores §8's "reclaim follows the
+  next roll-up having fewer needs" and §16's division of labour,
+  rather than revising them.

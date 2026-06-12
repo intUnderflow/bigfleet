@@ -898,9 +898,9 @@ continues elsewhere; see the production-readiness audit for context):
 1. Catalog weight semantics — `weight` is documented as pod-count
    share but implemented as workload-object share; the choice changes
    every profile's demand mix and the M78 baselines.
-2. M67/M68 ADR sign-off — **ADR-0045 is drafted (Proposed)** with the
-   sim repro and full evidence trail; recommends operator-reported
-   per-machine consumption + a bound/open demand split (Option B).
-   Awaiting author verdict.
+2. ~~M67/M68 ADR sign-off~~ — **RESOLVED 2026-06-12**: ADR-0045
+   rewritten and Accepted per author decision (capacity counts iff
+   bound; Phase 3 on demand shrinkage only; no packing model, no
+   unmet telemetry — YAGNI). M68 dissolves into the M67 deletion.
 3. M76 — which substrate the reference provider targets.
 4. uber-500k and above — external approval, per standing policy.
