@@ -25,13 +25,15 @@ import (
 // DefaultReclaimCapFraction is the production default for the
 // per-cluster, per-cycle reclaim blast-radius cap (ADR-0046 rail 1):
 // at most max(1, ⌊fraction × Configured⌋) Reclaims execute per
-// cluster per cycle. 5% is an order of magnitude above healthy
-// steady-state reclaim churn, and turns a full-fleet drain signal
-// into ≥ 20 cycles of emission with ReclaimGrace (10 m) ahead of the
-// first workload kill — operator-reaction time instead of one cycle.
-// The default is applied at the binary boundary (shard subcommand,
-// all-in-one, chart); shard.Config's zero value keeps the cap off so
-// the sim canaries retain their diagnostic power.
+// cluster per cycle. Under ADR-0045 Phase 3 is shrinkage-only — at
+// steady demand it emits nothing — so the cap now bites only during
+// genuine scale-down (or a wiped roll-up that slips past rail 2),
+// turning a full-fleet drain signal into ≥ 20 cycles of emission with
+// ReclaimGrace (10 m) ahead of the first workload kill —
+// operator-reaction time instead of one cycle. The default is applied
+// at the binary boundary (shard subcommand, all-in-one, chart);
+// shard.Config's zero value keeps the cap off so the sim canaries
+// retain their diagnostic power.
 const DefaultReclaimCapFraction = 0.05
 
 // Empty-roll-up guard thresholds (ADR-0046 rail 2). Constants, not

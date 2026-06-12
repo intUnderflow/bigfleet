@@ -3,6 +3,7 @@ package decision
 import (
 	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
+	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
@@ -12,6 +13,16 @@ import (
 type Phase1Result struct {
 	Actions     []Action
 	Unsatisfied []UnsatisfiedNeed
+
+	// Claimed is the cycle's final claimed-set: every machine the
+	// attribution walk counted toward a Need — Configured/Configuring
+	// credited by the pre-pass, Idle/Speculative committed by workers.
+	// ADR-0045: this is the engine's single supply attribution; Phase 3
+	// takes it as input and reclaims exactly the Configured machines
+	// absent from it (the cluster's bound capacity in excess of its
+	// demand). One arithmetic, two consumers — the phases cannot
+	// disagree about which machine serves which Need.
+	Claimed map[machine.ID]struct{}
 }
 
 // UnsatisfiedNeed is a Need whose Phase 1 deficit could not be filled
@@ -37,14 +48,26 @@ type UnsatisfiedNeed struct {
 // then records any unfilled residual as an UnsatisfiedNeed for
 // Phase 2 / shortfall escalation.
 //
+// The accounting rule is ADR-0045's: capacity counts for a cluster
+// iff it is bound to that cluster. The pre-pass credits the cluster's
+// Configured AND Configuring machines at gross EffectiveAllocatable —
+// a binding counts from the moment it is made, before the node
+// exists, so double-supply is impossible by construction. Bound <
+// demand → fulfill the difference; bound ≥ demand → BigFleet's job is
+// done. Deliberately NOT modeled: per-machine consumption, residual
+// fit, whether the cluster's scheduler can actually place its pods on
+// the bound capacity — BigFleet is not a scheduler, and
+// satisfied-but-stuck (fragmentation at equal priority) is the
+// cluster's problem to resolve.
+//
 // As of ADR-0029, Phase 1 runs as an Omega-style optimistic-
 // concurrency-control scheduler: workers race over a shared queue
 // of Needs, each proposing to a commit broker that enforces
 // priority on conflict (rather than a single-threaded
 // priority-sorted outer loop). The cycle barrier guarantees a
-// coherent post-Phase-1 claimed-set for Phase 2 / Phase 3 to read.
-// The ADR-0027 stage 5.1 attribution invariant is preserved because
-// both phases consume the same post-barrier claimed-set.
+// coherent post-Phase-1 claimed-set, which is also what Phase 3
+// diffs against the Configured inventory (ADR-0045 single
+// attribution).
 //
 // The cost formula and ADR-0027 resource-vector demand model are
 // unchanged from the pre-OCC Phase 1; only the iteration shape
@@ -52,7 +75,7 @@ type UnsatisfiedNeed struct {
 func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	cycle := occ.RunCycle(snap, allNeeds)
 
-	result := Phase1Result{}
+	result := Phase1Result{Claimed: cycle.Claimed}
 	for _, r := range cycle.Results {
 		if r.Need == nil {
 			continue

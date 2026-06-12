@@ -883,9 +883,14 @@ validation ladder; everything else can proceed in parallel.
 | M78 | **Validation ladder campaign.** Clean uber-5k baseline on the fixed engine (also the realism-clean ADR-0042 parking measurement); uber-50k; uber-500k (needs partner approval); uber-1m; 24h soak; failover matrix (leader-kill at load, shard-kill, partition); scale-down drills. | M67–M73, M77 | uber-500k+ approval; catalog weight semantics |
 
 **Status (2026-06-12, overnight loop):** M69 ✅ M70 ✅ (ADR-0046 +
-addendum) M71 ✅ M72 ✅ M74 ✅ (ADR-0048) M75 ✅ (ADR-0047). M67 is
-parked at step 3 on ADR-0045 sign-off (repro committed, ADR drafted);
-M68/M73/M77/M78 chain behind it; M76 awaits the substrate choice.
+addendum) M71 ✅ M72 ✅ M74 ✅ (ADR-0048) M75 ✅ (ADR-0047). M67
+engine work ✅ per ADR-0045 (Phase 3 shrinkage-only on Phase 1's
+claimed-set; the m67 repro inverted into the bound-counts contract
+pin) — M68 dissolved into it as the ADR records. M67's dev-50-v2
+gate-redefinition tail (the runner's chain-alive bind% gate vs the
+ADR's "demand covered by bound + zero reclaim churn") is the
+remaining follow-up and lands with the M77 gate swap. M73/M77/M78
+now unblocked on the engine side; M76 awaits the substrate choice.
 Every remaining ladder item passes through the author queue below.
 Residual non-blocking follow-ups recorded in their ADRs: Raft
 transport TLS (ADR-0048 §scope), per-ordinal shard Certificates for

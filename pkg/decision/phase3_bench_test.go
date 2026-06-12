@@ -86,10 +86,15 @@ func BenchmarkPhase3_HighDemand(b *testing.B) {
 		}
 	}
 
+	// ADR-0045: the attribution walk Phase 3 used to re-run lives in
+	// Phase 1 (covered by the Phase 1 benches); the timed loop is what
+	// remains of Phase 3 — the Configured-vs-claimed diff.
+	claimed := decision.Phase1(snap, allNeeds).Claimed
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, allNeeds, decision.AlwaysReady)
+		_ = decision.Phase3(snap, claimed, decision.AlwaysReady)
 	}
 }
 
@@ -159,9 +164,13 @@ func BenchmarkPhase3_M29Shape(b *testing.B) {
 		})
 	}
 
+	// ADR-0045: see BenchmarkPhase3_HighDemand — the walk is Phase 1's,
+	// the timed loop is the residual diff.
+	claimed := decision.Phase1(snap, allNeeds).Claimed
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, allNeeds, decision.AlwaysReady)
+		_ = decision.Phase3(snap, claimed, decision.AlwaysReady)
 	}
 }

@@ -99,8 +99,9 @@ func TestIntegration_Withdrawal(t *testing.T) {
 	})
 	executeActions(t, prov, inv, pf, r.Actions)
 
-	// Now training finishes — roll-up has no needs. Phase 3 reclaims all.
-	r3 := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
+	// Now training finishes — roll-up has no needs. The empty demand
+	// claims nothing, so Phase 3 reclaims all (ADR-0045 shrinkage).
+	r3 := runPhase3(t, inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(r3.Actions); got != 64 {
 		t.Fatalf("phase3: reclaim = %d, want 64", got)
 	}
@@ -216,7 +217,7 @@ func TestIntegration_SameDomain_NoOscillation(t *testing.T) {
 		t.Helper()
 		snap := inv.Snapshot()
 		p1 := decision.Phase1(snap, demand)
-		p3 := decision.Phase3(snap, demand, decision.AlwaysReady)
+		p3 := decision.Phase3(snap, p1.Claimed, decision.AlwaysReady)
 		for _, a := range p1.Actions {
 			if a.Kind != decision.ActionKindBootstrap {
 				t.Fatalf("unexpected non-Bootstrap Phase 1 action: %+v", a)

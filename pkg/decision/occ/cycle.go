@@ -15,8 +15,15 @@ import (
 // corresponds to allNeeds[i]. Workers populate
 // BootstrapMachines / ProvisionMachines / Deficit / Unsatisfied based
 // on the final post-barrier claimed-set.
+//
+// Claimed is that final claimed-set flattened to machine IDs: every
+// machine the cycle attributed to some Need — Configured/Configuring
+// credited by the pre-pass, Idle/Speculative committed by workers.
+// ADR-0045: this is the engine's only supply-attribution arithmetic;
+// Phase 3 reclaims exactly the Configured machines absent from it.
 type CycleResult struct {
 	Results []NeedResult
+	Claimed map[machine.ID]struct{}
 }
 
 // Config tunes the cycle's behaviour. Workers and Retries are the
@@ -133,6 +140,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 	// ProvisionMachines / Deficit from the final claimed-set. Workers
 	// don't touch results during the cycle — only here, single-
 	// threaded, after the barrier.
+	claimed := make(map[machine.ID]struct{})
 	for i := range results {
 		r := &results[i]
 		r.BootstrapMachines = nil
@@ -141,6 +149,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r.SameSatisfiable = state.SameSatisfiableFor(r.Need)
 		sumAlloc := []needs.ResourceQty(nil)
 		for _, mid := range state.ClaimedFor(r.Need) {
+			claimed[mid] = struct{}{}
 			m, ok := snap.Get(mid)
 			if !ok {
 				continue
@@ -158,7 +167,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r.Unsatisfied = !needs.IsZero(r.Deficit)
 	}
 
-	return CycleResult{Results: results}
+	return CycleResult{Results: results, Claimed: claimed}
 }
 
 // processNeed runs one Need through the broker. Tries Idle then

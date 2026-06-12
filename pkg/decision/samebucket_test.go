@@ -307,7 +307,12 @@ func TestSameDomainChoiceParity_Phase1VsPhase3(t *testing.T) {
 		t.Fatalf("Phase 1 pre-pass chose %q, want rack-b (joint 12 beats creditable-only 4)", p1Domain)
 	}
 
-	p3 := Phase3(snap, []needs.Need{n}, AlwaysReady)
+	// ADR-0045: Phase 3 keeps what the cycle's claimed-set claims —
+	// parity with Phase 1's domain choice is now by construction (one
+	// walk), but this still pins that the chosen domain's Configured
+	// member is kept and the off-domain one reclaimed.
+	p1 := Phase1(snap, []needs.Need{n})
+	p3 := Phase3(snap, p1.Claimed, AlwaysReady)
 	reclaimed := map[machine.ID]bool{}
 	for _, a := range p3.Actions {
 		reclaimed[a.MachineID] = true

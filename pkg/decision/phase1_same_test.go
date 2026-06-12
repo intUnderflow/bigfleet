@@ -210,14 +210,15 @@ func TestPhase1_Same_DensityAwareMachineCount(t *testing.T) {
 
 // Two Needs with Same in the same cluster, both acquirable-only.
 // ADR-0040 Addendum: each Need's domain is chosen once in the
-// pre-pass over joint potential, and at pre-pass time neither zone is
-// claimed, so both anchor to the same (tie-broken) zone — the
-// higher-precedence Need wins it within the cycle and the other
-// parks as a shortfall instead of re-picking the free zone (the
-// re-pick is the cross-domain oscillation source the Addendum
-// closes). The next cycle's joint choice sees zone-a's supply
-// credited away and anchors the loser to zone-b: convergence at
-// cycle granularity, zero churn in between.
+// pre-pass over joint potential. The ADR-0041 consumption ledger —
+// hoisted into the shared seed walk by ADR-0045 — makes the choice
+// sequence-aware: hi (seeded first, priority order) anchors zone-a
+// (tie-broken smallest value) and virtually consumes its acquirable
+// members, so lo's joint view no longer contains zone-a and it
+// anchors zone-b in the SAME cycle. Pre-ledger both gangs anchored
+// zone-a, hi won it, and lo parked a cycle before re-anchoring —
+// one wasted cycle per contended domain. Either way, lo must never
+// scatter across zones.
 func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 	t.Parallel()
 	inv := inventory.New()
@@ -226,7 +227,7 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 		_ = inv.Insert(gpuMachineInZone(machine.ID("b-"+strconv.Itoa(i)), "zone-b", 1.0))
 	}
 
-	// Two distinct co-location groups; high-priority wins first.
+	// Two distinct co-location groups; high-priority seeds first.
 	hi := gpuProfileWithSame(2_000_000, "topology.kubernetes.io/zone")
 	lo := gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone")
 	hiNeed := needs.Need{ClusterID: "cluster-x", Profile: hi, AggregateResources: needs.ScaleResources(gpuUnit, 3), MinUnit: gpuUnit, Group: "owner-A"}
@@ -235,24 +236,29 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 	snap := inv.Snapshot()
 	r := decision.Phase1(snap, []needs.Need{hiNeed, loNeed})
 
-	// Cycle 1: both Needs anchored zone-a (joint totals tie; smallest
-	// value wins); hi outranks lo there. lo must NOT scatter into
-	// zone-b this cycle.
-	if got := len(r.Actions); got != 3 {
-		t.Fatalf("cycle 1 actions = %d, want 3 (hi's gang only)", got)
+	// Cycle 1: both gangs land, each whole within its own zone — hi in
+	// zone-a (smallest-value tie-break), lo in zone-b (zone-a consumed
+	// from its joint view).
+	if got := len(r.Actions); got != 6 {
+		t.Fatalf("cycle 1 actions = %d, want 6 (both gangs, one zone each)", got)
 	}
 	for _, a := range r.Actions {
 		m, _ := snap.Get(a.MachineID)
-		if m.Profile.Zone != "zone-a" {
-			t.Errorf("cycle 1 picked %s in %s, want zone-a only", a.MachineID, m.Profile.Zone)
+		wantZone := "zone-a"
+		if a.SourceProfile.Priority() == lo.Priority() {
+			wantZone = "zone-b"
+		}
+		if m.Profile.Zone != wantZone {
+			t.Errorf("cycle 1 picked %s in %s for priority %d, want %s (gangs must not scatter or contend)",
+				a.MachineID, m.Profile.Zone, a.SourceProfile.Priority(), wantZone)
 		}
 	}
-	if len(r.Unsatisfied) != 1 || len(r.Unsatisfied[0].Deficit) == 0 {
-		t.Fatalf("cycle 1 unsatisfied = %+v, want lo's full deficit parked as shortfall", r.Unsatisfied)
+	if len(r.Unsatisfied) != 0 {
+		t.Fatalf("cycle 1 unsatisfied = %+v, want none (both gangs placed)", r.Unsatisfied)
 	}
 
-	// Apply hi's bootstraps; cycle 2 anchors lo to zone-b and lands
-	// the second gang there.
+	// Apply the bootstraps; cycle 2 credits both serving zones and
+	// emits nothing — steady state.
 	for _, a := range r.Actions {
 		m, _ := snap.Get(a.MachineID)
 		stepInventory(t, inv, a.MachineID, machine.StateConfiguring, m.Host, a.Cluster)
@@ -260,14 +266,8 @@ func TestPhase1_Same_TwoNeedsLandInDifferentZones(t *testing.T) {
 	}
 	snap2 := inv.Snapshot()
 	r2 := decision.Phase1(snap2, []needs.Need{hiNeed, loNeed})
-	if got := len(r2.Actions); got != 3 {
-		t.Fatalf("cycle 2 actions = %d, want 3 (lo's gang)", got)
-	}
-	for _, a := range r2.Actions {
-		m, _ := snap2.Get(a.MachineID)
-		if m.Profile.Zone != "zone-b" {
-			t.Errorf("cycle 2 picked %s in %s, want zone-b (zone-a is credited to hi)", a.MachineID, m.Profile.Zone)
-		}
+	if got := len(r2.Actions); got != 0 {
+		t.Fatalf("cycle 2 actions = %d, want 0 (both gangs credited where they landed)", got)
 	}
 	if len(r2.Unsatisfied) != 0 {
 		t.Errorf("cycle 2 unsatisfied = %+v, want none (both gangs placed)", r2.Unsatisfied)

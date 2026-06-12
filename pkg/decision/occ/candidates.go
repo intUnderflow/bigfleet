@@ -113,10 +113,9 @@ func (p *Pool) FindBasic(state *SharedState, st machine.State, prec Precedence, 
 // preferred, then cheapest head, then most-available — and take from
 // it. (Successor of the retired pre-OCC phase1Allocator.takeCoLocated.)
 // ADR-0040 mirrors this strict single-bucket semantics at the
-// supply-crediting sites: SeedConfiguredSupply and decision's
-// claimMatching choose their bucket via ChooseSameBucket, which ranks
-// on coverage rather than price because credited supply is already
-// provisioned.
+// supply-crediting site: SeedConfiguredSupply chooses its bucket via
+// ChooseSameBucket, which ranks on coverage rather than price because
+// credited supply is already provisioned.
 //
 // Note: cross-bucket scoring re-walks the (claimed-filtered) bucket
 // each call. The legacy allocator's coLocatedBuilt cache + per-bucket

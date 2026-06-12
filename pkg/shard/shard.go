@@ -651,8 +651,9 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	demand := s.needs.Snapshot()
 	// ADR-0041: fold sub-machine Same-Needs into atomic plain
 	// aggregates against this cycle's snapshot, once, so Phase 1,
-	// Phase 2 (via Phase 1's residuals), Phase 3 and the attribution
-	// probe all reason over the same normalized demand.
+	// Phase 2 (via Phase 1's residuals) and the attribution probe all
+	// reason over the same normalized demand. Phase 3 consumes
+	// Phase 1's claimed-set (ADR-0045), so it inherits the fold.
 	demand = decision.NormalizeDemand(snap, demand)
 	s.stampParkedNeeds(demand)
 	if recordMetrics {
@@ -673,7 +674,11 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	}
 
 	p3Start := time.Now()
-	p3 := decision.Phase3(snap, demand, s.FirstRollupReceived)
+	// ADR-0045: Phase 3 consumes Phase 1's claimed-set — the single
+	// attribution — and reclaims the unclaimed Configured remainder
+	// (bound capacity in excess of demand). It runs no demand walk of
+	// its own.
+	p3 := decision.Phase3(snap, p1.Claimed, s.FirstRollupReceived)
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 	}
@@ -1114,6 +1119,14 @@ func formatQtys(qs []needs.ResourceQty) string {
 // collectPhaseAttribution computes the probe over the cycle's own
 // snapshot and phase results. Read-only; only runs on flag-gated
 // cycles, so the O(reclaims × unsatisfied) match walk is acceptable.
+//
+// ADR-0045 note: p3_reclaim now counts shrinkage excess — Configured
+// machines Phase 1's attribution left unclaimed — because Phase 3 no
+// longer runs a second satisfaction walk. p3_reclaim_matches_* can
+// still be non-zero legitimately (a Same Need confined to one domain
+// leaves matching off-domain scatter to reclaim while it is short);
+// what it can no longer indicate is the two phases disagreeing about
+// the same machine, which shared attribution removed by construction.
 func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 decision.Phase1Result, p3 decision.Phase3Result) phaseAttribution {
 	pa := phaseAttribution{
 		needsTotal: len(demand),

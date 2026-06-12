@@ -213,9 +213,15 @@ func BenchmarkPhase3_Uber5K_CoLocated(b *testing.B) {
 	snap := buildCoLocatedInventory(b)
 	allNeeds := buildCoLocatedNeeds()
 
+	// ADR-0045: Phase 3 no longer walks demand — the attribution cost
+	// moved into Phase 1's pre-pass (BenchmarkPhase1_Uber5K_CoLocated
+	// guards it). The timed loop is the surviving per-cycle Phase 3
+	// work: the Configured-vs-claimed diff over the whole fleet.
+	claimed := decision.Phase1(snap, allNeeds).Claimed
+
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, allNeeds, decision.AlwaysReady)
+		_ = decision.Phase3(snap, claimed, decision.AlwaysReady)
 	}
 }

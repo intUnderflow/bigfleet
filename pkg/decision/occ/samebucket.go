@@ -10,11 +10,11 @@ package occ
 //
 // CreditableCount is the number of candidates contributed by the
 // creditable half of the joint fold — the Need's cluster's Configured/
-// Configuring machines (filled by occ.seedSameProfile and decision's
-// claimMatchingSame). The acquirable half (AcquirableTotals, and the
-// fold-in at both call sites) never increments it, so a non-zero value
-// means "this domain is already serving the Need's cluster" — the
-// ADR-0041 rider-3 prefer-creditable signal.
+// Configuring machines (filled by occ.seedSameProfile, since ADR-0045
+// the only crediting site). The acquirable half (AcquirableTotals)
+// never increments it, so a non-zero value means "this domain is
+// already serving the Need's cluster" — the ADR-0041 rider-3
+// prefer-creditable signal.
 type SameBucket struct {
 	Value           string
 	Count           int
@@ -33,10 +33,9 @@ type SameBucket struct {
 // domain's creditable supply (the Need's cluster's Configured +
 // Configuring) plus its acquirable supply (shard-wide unclaimed Idle +
 // Speculative, via SameSupplyIndex). The choice is made once per Need
-// per cycle, and both phases rank with this same function on vectors
-// from the same index, so they agree by construction (Phase 3's
-// claimMatching imports it directly; the former pkg/decision twin is
-// gone).
+// per cycle, in seedSameProfile — since ADR-0045 the single choosing
+// site: Phase 3 keeps whatever the seed's claims kept, so the phases
+// agree by construction rather than by mirroring.
 //
 // The rule — deterministic and cycle-stable, a strict total order over
 // distinct domain values:

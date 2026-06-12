@@ -119,6 +119,20 @@ type SeedPool struct {
 	Speculative          int // shard-wide Speculative slots
 }
 
+// TargetScale rescales every workload object of Shape (across all
+// clusters) to Replicas at the start of cycle Cycle, before that
+// cycle's rollups derive — the closed-loop analogue of
+// `kubectl scale`. Scale-down deletes pending Pods first, then bound
+// Pods newest-first (the ReplicaSet victim preference); the CRs die
+// with their Pods, so the cycle's rollup carries the shrunken demand
+// (ADR-0039 full replacement) and Phase 3's shrinkage diff sees
+// bound > demand. Scale-up appends pending Pods.
+type TargetScale struct {
+	Cycle    int
+	Shape    string
+	Replicas int
+}
+
 // ClosedLoopScenario declares one closed-loop run.
 type ClosedLoopScenario struct {
 	Name     string
@@ -137,6 +151,10 @@ type ClosedLoopScenario struct {
 	// (the pre-fix unmet-only signal that gave Phase 3 a phantom
 	// surplus).
 	CRPerPod bool
+
+	// Scales are mid-run demand changes — the trigger ADR-0045's
+	// shrinkage-only Phase 3 acts on.
+	Scales []TargetScale
 
 	Cycles int
 }
@@ -266,6 +284,12 @@ func vecCoversVec(have, want resVec) bool {
 func vecSubInPlace(have, want resVec) {
 	for i := range want {
 		have[i] -= want[i]
+	}
+}
+
+func vecAddInPlace(have, add resVec) {
+	for i := range add {
+		have[i] += add[i]
 	}
 }
 
@@ -629,6 +653,73 @@ func (c *clusterModel) bind(snap *inventory.Snapshot) {
 	}
 }
 
+// scaleTo applies a TargetScale to this cluster: every workload object
+// of the named shape gets its target set to replicas, deleting surplus
+// Pods (pending first, then newest bound — the ReplicaSet preference)
+// or appending pending ones. Deleting a bound Pod frees its machine
+// capacity immediately; the next rollup simply carries fewer CRs.
+func (c *clusterModel) scaleTo(shapeName string, replicas int) {
+	for _, wl := range c.workloads {
+		if wl.shape.spec.Name != shapeName {
+			continue
+		}
+		wl.target = replicas
+		for len(wl.pods) > replicas {
+			victim := -1
+			for i := len(wl.pods) - 1; i >= 0; i-- {
+				if wl.pods[i].bound == "" {
+					victim = i
+					break
+				}
+			}
+			if victim < 0 {
+				victim = len(wl.pods) - 1
+			}
+			p := wl.pods[victim]
+			if p.bound != "" {
+				c.unbind(wl, p)
+			}
+			wl.pods = append(wl.pods[:victim], wl.pods[victim+1:]...)
+		}
+		for len(wl.pods) < replicas {
+			wl.pods = append(wl.pods, &clPod{name: fmt.Sprintf("%s-%d", wl.name, wl.next)})
+			wl.next++
+		}
+		// Gang rack pin: with no bound member left, re-anchor on rebind
+		// (same rule as evictAndReconcile).
+		if wl.rack != "" {
+			bound := false
+			for _, p := range wl.pods {
+				if p.bound != "" {
+					bound = true
+					break
+				}
+			}
+			if !bound {
+				wl.rack = ""
+			}
+		}
+	}
+}
+
+// unbind releases p's machine capacity and bookkeeping without marking
+// it evicted — the Pod is being deleted on purpose (scale-down), not
+// killed by a machine transition.
+func (c *clusterModel) unbind(wl *clWorkload, p *clPod) {
+	mid := p.bound
+	p.bound = ""
+	pods := c.podsByMachine[mid]
+	for i, q := range pods {
+		if q == p {
+			c.podsByMachine[mid] = append(pods[:i], pods[i+1:]...)
+			break
+		}
+	}
+	if rem, ok := c.remaining[mid]; ok {
+		vecAddInPlace(rem, wl.shape.podVec)
+	}
+}
+
 func (c *clusterModel) podCounts() (bound, pending int) {
 	for _, wl := range c.workloads {
 		for _, p := range wl.pods {
@@ -875,6 +966,15 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		case <-ctx.Done():
 			return res, ctx.Err()
 		default:
+		}
+
+		for _, ts := range sc.Scales {
+			if ts.Cycle != cycle {
+				continue
+			}
+			for _, m := range models {
+				m.scaleTo(ts.Shape, ts.Replicas)
+			}
 		}
 
 		for _, m := range models {

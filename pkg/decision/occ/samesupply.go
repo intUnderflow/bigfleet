@@ -25,11 +25,10 @@ type sameSupplyMember struct {
 // cycle over the JOINT potential — creditable supply (the Need's
 // cluster's Configured + Configuring) plus acquirable supply
 // (shard-wide unclaimed Idle + Speculative; Idle has no cluster
-// binding). Both choosing sites need the acquirable half:
-// SeedConfiguredSupply (Phase 1's pre-pass) and decision's
-// claimMatching (Phase 3) rank domains against the same index so the
-// two phases pick the same domain on the same snapshot instead of
-// fighting at cycle rate.
+// binding). Since ADR-0045 the choice has one site —
+// SeedConfiguredSupply, whose claimed-set Phase 3 consumes directly —
+// so the two phases cannot pick different domains on the same
+// snapshot.
 //
 // The lazy per-fingerprint build is the perf contract: Needs of the
 // same archetype share Profile content, so there are few fingerprint
@@ -49,9 +48,8 @@ type sameSupplyMember struct {
 // Needs — ~100 s cycles, a starved shard.
 // BenchmarkAcquirableTotals_Uber5KShape guards the path.
 //
-// Not safe for concurrent use. Both consumers are single-threaded by
-// construction: the pre-pass runs before the OCC worker pool starts,
-// and Phase 3's per-cluster walk is sequential.
+// Not safe for concurrent use. Its one consumer is single-threaded by
+// construction: the pre-pass runs before the OCC worker pool starts.
 type SameSupplyIndex struct {
 	snap *inventory.Snapshot
 	byFP map[string]map[string][]sameSupplyMember
@@ -219,14 +217,16 @@ func (ix *SameSupplyIndex) AcquirableTotals(profile needs.Profile, sameKey strin
 // crosses zero is consumed too, mirroring the claim loop's
 // stop-when-covered).
 //
-// ADR-0041 rider (Decision 2): Phase 3's joint ranking used to fold
+// ADR-0041 rider (Decision 2): the joint ranking used to fold
 // acquirable supply with a nil claimed-view, so the moment idle
 // Same-capacity appeared every gang ranked the same fresh domain best
-// and Phase 3 mass-reclaimed healthy bound gangs. Calling this after
-// each Need's bucket choice makes Phase 3's sequential walk consume
-// acquirable supply the way Phase 1's workers do via OCC claims —
-// restoring the ADR-0040 Addendum's "identical joint potential"
-// promise.
+// — the losers assembled nothing and their healthy serving machines
+// read as unclaimed excess. Calling this after each Need's bucket
+// choice makes the seed's sequential walk consume acquirable supply
+// the way the workers will via OCC claims, restoring the ADR-0040
+// Addendum's "identical joint potential" promise (since ADR-0045 the
+// seed is the only ranking site; Phase 3 inherits via the
+// claimed-set).
 //
 // minUnit and deficit are parsed once each; the walk itself is
 // integer compares and subtracts over the cached vectors.

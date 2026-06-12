@@ -9,6 +9,18 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
+// runPhase3 runs the ADR-0045 shared-attribution path the shard uses:
+// Phase 1 on the snapshot and demand produces the cycle's claimed-set
+// (the single supply arithmetic), and Phase 3 diffs the Configured
+// inventory against it. Phase 3 has no demand walk of its own, so
+// every demand-shaped expectation below is really an expectation on
+// the shared walk.
+func runPhase3(t *testing.T, snap *inventory.Snapshot, demand []needs.Need, ready decision.ClusterReadyFn) decision.Phase3Result {
+	t.Helper()
+	p1 := decision.Phase1(snap, demand)
+	return decision.Phase3(snap, p1.Claimed, ready)
+}
+
 // All needs deleted: every configured machine reclaimed.
 func TestPhase3_AllExcessWhenNoNeeds(t *testing.T) {
 	t.Parallel()
@@ -16,7 +28,7 @@ func TestPhase3_AllExcessWhenNoNeeds(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
-	r := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
+	r := runPhase3(t, inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(r.Actions); got != 4 {
 		t.Fatalf("reclaim actions = %d, want 4", got)
 	}
@@ -42,7 +54,7 @@ func TestPhase3_NoOpWhenExactlyMet(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
-	r := decision.Phase3(inv.Snapshot(),
+	r := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 0 {
 		t.Errorf("expected zero reclaim actions, got %d", got)
@@ -68,7 +80,7 @@ func TestPhase3_ReclaimsCheapestFirst(t *testing.T) {
 		m.Profile.CapacityType = machine.CapacityTypeBareMetal
 		_ = inv.Insert(m)
 	}
-	r := decision.Phase3(inv.Snapshot(),
+	r := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 3)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 2 {
 		t.Fatalf("reclaim actions = %d, want 2", got)
@@ -96,7 +108,7 @@ func TestPhase3_TiebreakByReclamationPenalty(t *testing.T) {
 	_ = inv.Insert(low)
 	_ = inv.Insert(high)
 
-	r := decision.Phase3(inv.Snapshot(),
+	r := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("reclaim actions = %d, want 1", got)
@@ -131,7 +143,7 @@ func TestPhase3_KeepsByMatchProfileNotFingerprint(t *testing.T) {
 	// The cluster's live Need is pfB and its demand needs this machine.
 	// Pre-ADR-0027 keep-by-fingerprint would have reclaimed it (stale
 	// stamp); the MatchProfile mirror keeps it — it genuinely serves pfB.
-	kept := decision.Phase3(inv.Snapshot(),
+	kept := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", pfB, 1)}, decision.AlwaysReady)
 	if got := len(kept.Actions); got != 0 {
 		t.Fatalf("reclaim actions = %d, want 0 (machine MatchProfiles the live Need)", got)
@@ -140,7 +152,7 @@ func TestPhase3_KeepsByMatchProfileNotFingerprint(t *testing.T) {
 	// With no live Need claiming it, the same machine is reclaimed —
 	// the Drop F inventory-bloat failure mode is still prevented, just
 	// by "claimed by a live Need" rather than fingerprint equality.
-	gone := decision.Phase3(inv.Snapshot(), nil, decision.AlwaysReady)
+	gone := runPhase3(t, inv.Snapshot(), nil, decision.AlwaysReady)
 	if got := len(gone.Actions); got != 1 || gone.Actions[0].MachineID != "victim-stale" {
 		t.Fatalf("with no Needs: reclaim = %+v, want [victim-stale]", gone.Actions)
 	}
@@ -157,7 +169,7 @@ func TestPhase3_PerProfileMatching(t *testing.T) {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
 	// Roll-up says: only 1 GPU need remains (training mostly done).
-	r := decision.Phase3(inv.Snapshot(),
+	r := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)}, decision.AlwaysReady)
 	if got := len(r.Actions); got != 3 {
 		t.Errorf("reclaim actions = %d, want 3", got)
@@ -174,7 +186,7 @@ func TestPhase3_Conservation(t *testing.T) {
 		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
 	}
 	totalConfigured := 10
-	r := decision.Phase3(inv.Snapshot(),
+	r := runPhase3(t, inv.Snapshot(),
 		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 4)}, decision.AlwaysReady)
 	reclaim := len(r.Actions)
 	keep := totalConfigured - reclaim
@@ -245,7 +257,7 @@ func TestPhase3_DenseMachine_OneCoversManyPodsOfDemand(t *testing.T) {
 		AggregateResources: needs.ScaleResources(unit, 8),
 		MinUnit:            unit,
 	}
-	res := decision.Phase3(snap, []needs.Need{need}, decision.AlwaysReady)
+	res := runPhase3(t, snap, []needs.Need{need}, decision.AlwaysReady)
 
 	if len(res.Actions) != 1 {
 		t.Fatalf("expected 1 Reclaim (second dense machine has no Pod budget left after first absorbs 8), got %d actions: %#v", len(res.Actions), res.Actions)
@@ -282,7 +294,7 @@ func TestPhase3_Same_KeepsChosenDomainReclaimsScatter(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+	r := runPhase3(t, snap, []needs.Need{gpuNeed(
 		"cluster-x",
 		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
 		3,
@@ -311,7 +323,7 @@ func TestPhase3_Same_NoSatisfiableDomainKeepsOneBucketOnly(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+	r := runPhase3(t, snap, []needs.Need{gpuNeed(
 		"cluster-x",
 		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
 		3,
@@ -350,7 +362,7 @@ func TestPhase3_Same_ConfiguringAnchorsTheDomain(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+	r := runPhase3(t, snap, []needs.Need{gpuNeed(
 		"cluster-x",
 		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
 		3,
@@ -369,17 +381,16 @@ func TestPhase3_Same_ConfiguringAnchorsTheDomain(t *testing.T) {
 	}
 }
 
-// ADR-0041 rider: Phase 3's acquirable fold consumes, mirroring
-// Phase 1's sequencing (workers consume acquirable supply via OCC
-// claims). Two same-fingerprint unfoldable gang Needs, each currently
-// served by one Configured machine in its own zone, and one idle zone
-// able to cover one whole gang: the first Need ranks the idle zone
-// best (only satisfiable bucket) and virtually consumes its members,
-// so the second Need's joint view no longer contains it and the second
-// keeps a creditable zone. Pre-rider, BOTH Needs ranked the fresh idle
-// zone best (nil claimed-view), claimed nothing creditable, and both
-// serving machines were mass-reclaimed — 20 of 24 healthy bound gangs
-// in the simulator's trace.
+// ADR-0041 rider (now living in the shared seed walk, ADR-0045): the
+// acquirable fold consumes. Two same-fingerprint unfoldable gang
+// Needs, each currently served by one Configured machine in its own
+// zone, and one idle zone able to cover one whole gang: the first Need
+// ranks the idle zone best (only satisfiable bucket) and virtually
+// consumes its members, so the second Need's joint view no longer
+// contains it and the second keeps a creditable zone. Pre-rider, BOTH
+// Needs ranked the fresh idle zone best (nil claimed-view), claimed
+// nothing creditable, and both serving machines were mass-reclaimed —
+// 20 of 24 healthy bound gangs in the simulator's trace.
 func TestPhase3_Same_AcquirableFoldConsumes(t *testing.T) {
 	t.Parallel()
 	inv := inventory.New()
@@ -396,7 +407,7 @@ func TestPhase3_Same_AcquirableFoldConsumes(t *testing.T) {
 	// machines) satisfies exactly one.
 	demand := []needs.Need{gpuNeed("cluster-x", pf, 2), gpuNeed("cluster-x", pf, 2)}
 
-	r := decision.Phase3(snap, demand, decision.AlwaysReady)
+	r := runPhase3(t, snap, demand, decision.AlwaysReady)
 	if got := len(r.Actions); got != 1 {
 		t.Fatalf("reclaim actions = %d, want 1 (no mass off-domain reclaim of both serving zones): %+v", got, r.Actions)
 	}
@@ -426,7 +437,7 @@ func TestPhase3_Same_PrefersServingCreditableDomain(t *testing.T) {
 	}
 	snap := inv.Snapshot()
 
-	r := decision.Phase3(snap, []needs.Need{gpuNeed(
+	r := runPhase3(t, snap, []needs.Need{gpuNeed(
 		"cluster-x",
 		gpuProfileWithSame(1_000_000, "topology.kubernetes.io/zone"),
 		2,
@@ -454,7 +465,7 @@ func TestPhase3_GateSkipsReclaimWhenClusterNotReady(t *testing.T) {
 	}
 	// No Needs and the gate says the cluster hasn't reported.
 	clusterReady := func(machine.ClusterID) bool { return false }
-	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	r := runPhase3(t, inv.Snapshot(), nil, clusterReady)
 	if got := len(r.Actions); got != 0 {
 		t.Fatalf("Phase 3 reclaimed %d machines for a cluster that hasn't reported; ADR-0036 requires zero", got)
 	}
@@ -473,7 +484,7 @@ func TestPhase3_GateAllowsReclaimAfterEmptyRollup(t *testing.T) {
 	clusterReady := func(c machine.ClusterID) bool {
 		return c == "cluster-reported-empty"
 	}
-	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	r := runPhase3(t, inv.Snapshot(), nil, clusterReady)
 	if got := len(r.Actions); got != 50 {
 		t.Fatalf("Phase 3 reclaimed %d after empty rollup; want 50 (cluster has reported, supply is excess)", got)
 	}
@@ -494,7 +505,7 @@ func TestPhase3_GateIsPerCluster(t *testing.T) {
 	clusterReady := func(c machine.ClusterID) bool {
 		return c == "cluster-reported"
 	}
-	r := decision.Phase3(inv.Snapshot(), nil, clusterReady)
+	r := runPhase3(t, inv.Snapshot(), nil, clusterReady)
 	if got := len(r.Actions); got != 10 {
 		t.Fatalf("expected 10 reclaim actions (cluster-reported only); got %d", got)
 	}
