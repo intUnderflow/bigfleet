@@ -882,6 +882,16 @@ validation ladder; everything else can proceed in parallel.
 | M77 | **M66 cascade completion.** M66.5 (dev-50-v2 becomes the gate; delete legacy demand mode + preflight package), M66.6 (M50.5 validation → M50.7 legacy profile deletion), M66.7 (scheduler default flip, delete pod-shim). | M67 | — |
 | M78 | **Validation ladder campaign.** Clean uber-5k baseline on the fixed engine (also the realism-clean ADR-0042 parking measurement); uber-50k; uber-500k (needs partner approval); uber-1m; 24h soak; failover matrix (leader-kill at load, shard-kill, partition); scale-down drills. | M67–M73, M77 | uber-500k+ approval; catalog weight semantics |
 
+**Status (2026-06-12, overnight loop):** M69 ✅ M70 ✅ (ADR-0046 +
+addendum) M71 ✅ M72 ✅ M74 ✅ (ADR-0048) M75 ✅ (ADR-0047). M67 is
+parked at step 3 on ADR-0045 sign-off (repro committed, ADR drafted);
+M68/M73/M77/M78 chain behind it; M76 awaits the substrate choice.
+Every remaining ladder item passes through the author queue below.
+Residual non-blocking follow-ups recorded in their ADRs: Raft
+transport TLS (ADR-0048 §scope), per-ordinal shard Certificates for
+multi-shard mTLS, runtime kill-switch toggle via coordinator
+instruction (ADR-0046).
+
 **Author decisions queue** (the loop parks work on these and
 continues elsewhere; see the production-readiness audit for context):
 
