@@ -149,6 +149,34 @@ message Machine {
   // SHOULD populate this field; the shard's fake provider does so during
   // M45.0+ inventory seeding, and out-of-tree providers should follow.
   Resources allocatable = 13;
+
+  // Cluster this machine is bound to, recorded from
+  // ConfigureRequest.cluster_id (paper §7: Configure carries the cluster,
+  // so the binding is provider-domain state — the provider legitimately
+  // knows it). Populated while the binding exists (CONFIGURING,
+  // CONFIGURED, DRAINING); cleared when a Drain completes back to IDLE.
+  // Empty for SPECULATIVE / CREATING / IDLE records.
+  //
+  // M72: without this field the wire could not round-trip a Configured
+  // machine — a shard rebuilding inventory from List+Get after a restart
+  // rejected every provider-reported Configured record at ingest
+  // (bigfleet_shard_machines_rejected_total{reason="structural"}).
+  string cluster = 14;
+
+  // Opaque shard-side metadata, stored verbatim from
+  // ConfigureRequest.shard_metadata and echoed on every Get / List /
+  // TransitionAck snapshot of this machine. The contract is STORE AND
+  // ECHO, NEVER INTERPRET: keys and values are BigFleet-internal
+  // (assignment attribution the shard must recover after a restart),
+  // deliberately not first-class fields so no provider is tempted to
+  // read meaning into them. Providers MUST preserve unknown keys
+  // byte-for-byte and MUST clear the whole map together with `cluster`
+  // when a Drain completes — it is per-assignment state established by
+  // Configure, not per-machine state, and a stale echo would let a
+  // restarted shard resurrect a dead workload's attribution onto a new
+  // assignment. (M72; this is the only persistent store the data plane
+  // has, so it is what makes shard restart lose nothing.)
+  map<string, string> shard_metadata = 15;
 }
 
 // MachineRef identifies one machine for the read RPC Get. Reads carry no
@@ -217,6 +245,13 @@ message ConfigureRequest {
   string shard_id        = 4;
   int64  shard_epoch     = 5;
   int64  sequence_number = 6;
+
+  // Opaque shard-side metadata to store with the machine and echo
+  // verbatim as Machine.shard_metadata on subsequent Get / List /
+  // TransitionAck snapshots, until the binding ends (Drain completes).
+  // Never interpret; see Machine.shard_metadata for the full contract.
+  // (M72)
+  map<string, string> shard_metadata = 7;
 }
 
 // DrainRequest moves Configured → Draining → Idle. The grace period bounds

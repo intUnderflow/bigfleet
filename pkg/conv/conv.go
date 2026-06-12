@@ -171,6 +171,14 @@ func MachineFromProto(m *pb.Machine) (machine.Machine, error) {
 		PricePerHour:            m.GetPricePerHour(),
 		InterruptionProbability: m.GetInterruptionProbability(),
 		LastError:               m.GetLastError(),
+		// M72: the cluster binding and the opaque shard_metadata echo
+		// are what let a restarted shard rebuild Configured inventory
+		// from List+Get without tripping the structural invariant or
+		// zeroing preemption protection. The metadata stays verbatim
+		// here — decoding the well-known keys into the Assigned* fields
+		// is the shard's job at reconcile ingest, not the wire's.
+		Cluster:       machine.ClusterID(m.GetCluster()),
+		ShardMetadata: cloneStringMap(m.GetShardMetadata()),
 	}
 	if h := m.GetHost(); h != nil {
 		out.Host = machine.HostRef{Provider: h.GetProvider(), Ref: h.GetRef()}
@@ -208,6 +216,14 @@ func MachineToProto(m machine.Machine) *pb.Machine {
 		InterruptionProbability: m.InterruptionProbability,
 		Labels:                  cloneStringMap(m.Profile.Labels),
 		LastError:               m.LastError,
+		// M72: cluster binding + shard_metadata ride the wire so a shard
+		// restart rebuilds full protection state from List+Get. The
+		// metadata is emitted verbatim from the provider-side store; conv
+		// never manufactures it from the Assigned* fields — the writer is
+		// the shard's Configure call (and the fake's Configured seeding),
+		// keeping "store and echo" the single source of truth.
+		Cluster:       string(m.Cluster),
+		ShardMetadata: cloneStringMap(m.ShardMetadata),
 	}
 	if !m.Host.Empty() {
 		out.Host = &pb.HostRef{Provider: m.Host.Provider, Ref: m.Host.Ref}

@@ -104,6 +104,14 @@ type ConfigureRequest struct {
 	ClusterID     machine.ClusterID
 	BootstrapBlob []byte
 	Fence         Fence
+
+	// ShardMetadata is opaque to the provider: stored verbatim with the
+	// machine and echoed on Get/List until the binding ends (Drain
+	// completes back to Idle). Never interpreted. M72 — this is the
+	// durable copy of the assignment state a restarted shard decodes to
+	// rebuild preemption protection; see pb.Machine.shard_metadata for
+	// the full contract.
+	ShardMetadata map[string]string
 }
 
 // DrainRequest is the input to Drain.

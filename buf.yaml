@@ -13,8 +13,8 @@ lint:
     - SERVICE_SUFFIX
     # RPCs deliberately share request/response types where the design treats
     # them as one message — e.g., all four CapacityProvider lifecycle RPCs
-    # return TransitionAck, Get/Delete take MachineRef. Forcing per-RPC types
-    # is boilerplate that hides the shared semantics.
+    # return TransitionAck. Forcing per-RPC types is boilerplate that hides
+    # the shared semantics.
     - RPC_REQUEST_STANDARD_NAME
     - RPC_RESPONSE_STANDARD_NAME
     - RPC_REQUEST_RESPONSE_UNIQUE

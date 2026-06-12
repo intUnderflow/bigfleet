@@ -393,3 +393,76 @@ func TestFake_AddConfigured_ExposesAssignedMetadata(t *testing.T) {
 		t.Errorf("Idle listing = %d, want 0 (Configured seed must not leak into Idle)", len(idle.Machines))
 	}
 }
+
+// M72: Configure stores shard_metadata verbatim — unknown keys included,
+// nothing decoded — and Get/List echo it until Drain ends the binding.
+// The fake is the conformance reference for store-and-echo-never-
+// interpret, so this test pins the verbatim part hard.
+func TestFake_ShardMetadata_StoredVerbatimAndClearedOnDrain(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+	p.AddIdle("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+
+	md := map[string]string{
+		machine.ShardMetadataKeyAssignedPriority: "1000000",
+		"x-future-shard/unknown-key":             "must-survive",
+	}
+	if _, err := p.Configure(ctx, provider.ConfigureRequest{
+		MachineID: "m-1", ClusterID: "c-1", ShardMetadata: md,
+	}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	// Mutating the caller's map after Configure must not reach the store.
+	md["x-future-shard/unknown-key"] = "mutated-after-the-fact"
+
+	got, err := p.Get(ctx, "m-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ShardMetadata["x-future-shard/unknown-key"] != "must-survive" {
+		t.Errorf("echo not verbatim-at-Configure-time: %v", got.ShardMetadata)
+	}
+	if got.ShardMetadata[machine.ShardMetadataKeyAssignedPriority] != "1000000" {
+		t.Errorf("well-known key lost: %v", got.ShardMetadata)
+	}
+	// Never interpreted: the fake must NOT have decoded the priority.
+	if got.AssignedPriority != 0 {
+		t.Errorf("fake interpreted shard_metadata: AssignedPriority = %d", got.AssignedPriority)
+	}
+
+	if _, err := p.Drain(ctx, provider.DrainRequest{MachineID: "m-1", GracePeriod: 1}); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	got, err = p.Get(ctx, "m-1")
+	if err != nil {
+		t.Fatalf("Get after Drain: %v", err)
+	}
+	if got.Cluster != "" || len(got.ShardMetadata) != 0 {
+		t.Errorf("per-assignment state survived Drain: cluster=%q metadata=%v", got.Cluster, got.ShardMetadata)
+	}
+}
+
+// M72: AddConfigured seeds the shard_metadata echo a real provider would
+// be holding for a machine some shard previously configured, so
+// harness-seeded fleets are restart-rebuildable over the wire.
+func TestFake_AddConfigured_SeedsShardMetadataEcho(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	p.AddConfigured("conf-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeBareMetal,
+		0, 0, "c-7", 1_000_000, 8192, 65536)
+
+	got, err := p.Get(context.Background(), "conf-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	check := machine.Machine{ShardMetadata: got.ShardMetadata}
+	if err := check.DecodeShardMetadata(); err != nil {
+		t.Fatalf("DecodeShardMetadata: %v", err)
+	}
+	if check.AssignedPriority != 1_000_000 ||
+		check.AssignedInterruptionPenaltyDollars != 8192 ||
+		check.AssignedReclamationPenaltyDollars != 65536 {
+		t.Errorf("seeded echo decodes to %+v, want (1000000, 8192, 65536)", check)
+	}
+}

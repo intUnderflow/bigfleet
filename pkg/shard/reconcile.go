@@ -91,10 +91,11 @@ func (s *Shard) reconcileIncremental(ctx context.Context) error {
 // state, so the next reconcile sees state-match and skips. No proto
 // round-trip, no Apply, no allocation.
 //
-// Slow paths: state diverged → apply the new state; machine is new →
-// Insert. Both preserve the assigned-* fields (Priority,
-// InterruptionPenalty, ReclamationPenalty) which the provider doesn't
-// know about.
+// Slow paths: state diverged → apply the new state, preserving the
+// locally-known Assigned* fields (shard memory is authoritative for a
+// machine it already tracks); machine is new → Insert, restoring the
+// Assigned* fields from the provider-echoed shard_metadata (M72 — the
+// restart-rebuild path; the echo is the only durable copy).
 //
 // Validation (ADR-0046 addendum / M70): records taking a slow path are
 // screened by machine.Invariant before they touch inventory — the
@@ -140,9 +141,25 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
 		dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
+		dm.ShardMetadata = nil // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
 		_ = s.inv.Apply(dm)
 		return
 	}
+	// M72: a machine with no local record is either genuinely new or —
+	// the case that matters — a record being rebuilt from List after a
+	// process restart wiped shard memory. The provider-echoed
+	// shard_metadata is the only durable copy of the assignment state
+	// (AssignedPriority + penalties for Phase 2 victim scoring, the Need
+	// fingerprint for Phase 1 attribution); decode it here so a restarted
+	// shard regains preemption protection instead of zeroing it
+	// fleet-wide (production-readiness audit, arc 2). Malformed entries
+	// are skipped key-by-key and logged — partial protection on one
+	// machine beats refusing the machine.
+	if err := dm.DecodeShardMetadata(); err != nil {
+		s.log.Warn("shard_metadata decode failed at ingest; protection state may be incomplete",
+			"machine", dm.ID, "err", err)
+	}
+	dm.ShardMetadata = nil // decoded above; don't carry the map onto the hot path
 	_ = s.inv.Insert(dm)
 }
 

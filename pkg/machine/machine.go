@@ -191,6 +191,17 @@ type Machine struct {
 	// back to Profile.Resources. Providers populating this field describe
 	// a machine whose real capacity differs from its base Resources shape.
 	Allocatable map[string]string
+
+	// ShardMetadata is the provider-echoed copy of the opaque
+	// shard_metadata map (provider.proto, M72): the assignment state the
+	// shard writes at Configure time and recovers from List/Get after a
+	// restart. It lives on the provider side of the Go contract —
+	// pkg/provider/fake stores it verbatim, the conv boundary carries it
+	// across the wire. The shard's inventory does NOT retain it:
+	// reconcile decodes the well-known keys into the Assigned* fields at
+	// ingest and drops the map, keeping the hot-path record small
+	// (paper §9 budgets ~30–55 bytes per machine).
+	ShardMetadata map[string]string
 }
 
 // validTransitions encodes the legal state machine. The decision engine

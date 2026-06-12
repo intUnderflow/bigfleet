@@ -81,8 +81,23 @@ On every `Machine`:
 - `host` — `null` when state is `SPECULATIVE` or `CREATING`; populated otherwise.
 - `resources` — per-machine allocatable; the shard's `MatchProfile` does exact-string match on the resource map at v1.
 - `labels` — anything else the shard / operator might want for matching beyond the well-known fields. `accelerator-type` is a common one.
+- `cluster` — the binding `Configure` established, copied from `ConfigureRequest.cluster_id`. Populated while the binding exists (`CONFIGURING`, `CONFIGURED`, `DRAINING`); cleared when a `Drain` completes back to `IDLE`. Empty for `SPECULATIVE` / `CREATING` / `IDLE`. (M72)
+- `shard_metadata` — see the next section. (M72)
 
 `HostRef` is `(provider, ref)`. `provider` is your provider's name (your choice — used in logs); `ref` is whatever your backend uses to identify the host (instance ID, BMC serial, etc.).
+
+## `shard_metadata` — store and echo, never interpret
+
+`ConfigureRequest.shard_metadata` (M72) is an opaque `map<string,string>` the shard sends alongside the cluster binding. Your obligations are mechanical:
+
+- **Store it verbatim** with the machine when you accept the `Configure`.
+- **Echo it byte-for-byte** as `Machine.shard_metadata` on every `Get` / `List` / `TransitionAck` snapshot, for as long as the binding exists. Preserve keys you don't recognise — a newer BigFleet may write keys an older one didn't.
+- **Clear the whole map together with `cluster`** when a `Drain` completes back to `IDLE`. It is per-assignment state established by `Configure`, not per-machine state; a stale echo would hand a dead workload's attribution to the machine's next assignment.
+- **Never interpret it.** The contents are BigFleet-internal (assignment attribution the shard recovers after a restart). They are deliberately not first-class fields so no provider is tempted to read meaning into them; treat the map like you treat `bootstrap_blob`.
+
+Why it matters: your store is the only persistent state the BigFleet data plane has. A shard that restarts rebuilds its entire inventory from your `List`/`Get`, and `cluster` + `shard_metadata` are what let it rebuild *which workload each machine protects* — drop them and every restart silently removes preemption protection fleet-wide.
+
+Historical note (resolved): before M72 the wire contract could not round-trip the cluster binding at all, so a shard ingesting a gRPC provider's `CONFIGURED` records rejected every one of them — the `bigfleet_shard_machines_rejected_total{reason="structural"}` counter was added in M70 (the "M70b tripwire") precisely to make that visible. M72 closed the gap with the `cluster` and `shard_metadata` fields; the tripwire metric remains live, and a provider that fails to populate `cluster` on bound records will still trip it.
 
 ## `List`, `since_revision`, and reconciliation
 
@@ -127,7 +142,7 @@ make conformance TARGET=localhost:9000
 go test -tags=conformance -count=1 -v -target=localhost:9000 ./test/conformance/...
 ```
 
-The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency on all four lifecycle RPCs, enforce the fencing contract (stale epoch / stale sequence rejected, new epoch resets, unknown shard accepted, reads unaffected), exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
+The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency on all four lifecycle RPCs, enforce the fencing contract (stale epoch / stale sequence rejected, new epoch resets, unknown shard accepted, reads unaffected), enforce the `shard_metadata` echo contract (verbatim on Get and List, unknown keys preserved, cleared with the binding when Drain completes), exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
 
 ## Reference example
 
@@ -141,4 +156,6 @@ A worked-example provider lives outside this repo (e.g. `bigfleet-provider-fake-
 - **Using `FAILED_PRECONDITION` for anything but fencing.** The shard treats that code as "I am a zombie" and pages a human instead of retrying. Invalid transitions, bad arguments, backend hiccups — all get other codes.
 - **Checking the fence after the idempotency lookup.** A zombie that gets a cached `operation_id` back believes its stale mutation succeeded. Fence first.
 - **Skipping `interruption_probability`.** Spot machines whose probability is 0 will get picked for high-penalty workloads, which is a correctness issue (effective_cost = price + p × penalty). Always set the real value.
+- **Interpreting `shard_metadata`, or whitelisting its keys.** The contract is store-and-echo-verbatim. Filtering to keys you recognise drops the assignment state a future BigFleet writes; reading values couples your provider to BigFleet internals that can change without notice.
+- **Letting `cluster` / `shard_metadata` outlive the binding.** Both clear when a Drain completes back to Idle. A stale echo resurrects a dead workload's preemption protection onto the machine's next assignment.
 - **Per-RPC timeouts that don't model your backend.** Cloud `Create` of 30–90s ≠ your provider's "request timeout" of 5s. Set transition timeouts to your backend's worst-case.

@@ -110,6 +110,7 @@ func (c *Client) Configure(ctx context.Context, req provider.ConfigureRequest) (
 		ShardId:        c.id.ShardID,
 		ShardEpoch:     c.id.Epoch.Value(),
 		SequenceNumber: c.id.Seq.Next(),
+		ShardMetadata:  req.ShardMetadata,
 	})
 	return ackFromProto(ack, err)
 }

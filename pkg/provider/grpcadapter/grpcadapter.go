@@ -55,6 +55,7 @@ func (s *Server) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.T
 		ClusterID:     machine.ClusterID(req.GetClusterId()),
 		BootstrapBlob: req.GetBootstrapBlob(),
 		Fence:         fence(req.GetShardId(), req.GetShardEpoch(), req.GetSequenceNumber()),
+		ShardMetadata: req.GetShardMetadata(),
 	})
 	return ackToProto(ack, err)
 }

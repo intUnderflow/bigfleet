@@ -338,7 +338,33 @@ type Machine struct {
 	// to Resources (preserves the pre-ADR-0022 1 CR = 1 machine math). Providers
 	// SHOULD populate this field; the shard's fake provider does so during
 	// M45.0+ inventory seeding, and out-of-tree providers should follow.
-	Allocatable   *Resources `protobuf:"bytes,13,opt,name=allocatable,proto3" json:"allocatable,omitempty"`
+	Allocatable *Resources `protobuf:"bytes,13,opt,name=allocatable,proto3" json:"allocatable,omitempty"`
+	// Cluster this machine is bound to, recorded from
+	// ConfigureRequest.cluster_id (paper §7: Configure carries the cluster,
+	// so the binding is provider-domain state — the provider legitimately
+	// knows it). Populated while the binding exists (CONFIGURING,
+	// CONFIGURED, DRAINING); cleared when a Drain completes back to IDLE.
+	// Empty for SPECULATIVE / CREATING / IDLE records.
+	//
+	// M72: without this field the wire could not round-trip a Configured
+	// machine — a shard rebuilding inventory from List+Get after a restart
+	// rejected every provider-reported Configured record at ingest
+	// (bigfleet_shard_machines_rejected_total{reason="structural"}).
+	Cluster string `protobuf:"bytes,14,opt,name=cluster,proto3" json:"cluster,omitempty"`
+	// Opaque shard-side metadata, stored verbatim from
+	// ConfigureRequest.shard_metadata and echoed on every Get / List /
+	// TransitionAck snapshot of this machine. The contract is STORE AND
+	// ECHO, NEVER INTERPRET: keys and values are BigFleet-internal
+	// (assignment attribution the shard must recover after a restart),
+	// deliberately not first-class fields so no provider is tempted to
+	// read meaning into them. Providers MUST preserve unknown keys
+	// byte-for-byte and MUST clear the whole map together with `cluster`
+	// when a Drain completes — it is per-assignment state established by
+	// Configure, not per-machine state, and a stale echo would let a
+	// restarted shard resurrect a dead workload's attribution onto a new
+	// assignment. (M72; this is the only persistent store the data plane
+	// has, so it is what makes shard restart lose nothing.)
+	ShardMetadata map[string]string `protobuf:"bytes,15,rep,name=shard_metadata,json=shardMetadata,proto3" json:"shard_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -453,6 +479,20 @@ func (x *Machine) GetLastError() string {
 func (x *Machine) GetAllocatable() *Resources {
 	if x != nil {
 		return x.Allocatable
+	}
+	return nil
+}
+
+func (x *Machine) GetCluster() string {
+	if x != nil {
+		return x.Cluster
+	}
+	return ""
+}
+
+func (x *Machine) GetShardMetadata() map[string]string {
+	if x != nil {
+		return x.ShardMetadata
 	}
 	return nil
 }
@@ -716,8 +756,14 @@ type ConfigureRequest struct {
 	ShardId        string `protobuf:"bytes,4,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	ShardEpoch     int64  `protobuf:"varint,5,opt,name=shard_epoch,json=shardEpoch,proto3" json:"shard_epoch,omitempty"`
 	SequenceNumber int64  `protobuf:"varint,6,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Opaque shard-side metadata to store with the machine and echo
+	// verbatim as Machine.shard_metadata on subsequent Get / List /
+	// TransitionAck snapshots, until the binding ends (Drain completes).
+	// Never interpret; see Machine.shard_metadata for the full contract.
+	// (M72)
+	ShardMetadata map[string]string `protobuf:"bytes,7,rep,name=shard_metadata,json=shardMetadata,proto3" json:"shard_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigureRequest) Reset() {
@@ -790,6 +836,13 @@ func (x *ConfigureRequest) GetSequenceNumber() int64 {
 		return x.SequenceNumber
 	}
 	return 0
+}
+
+func (x *ConfigureRequest) GetShardMetadata() map[string]string {
+	if x != nil {
+		return x.ShardMetadata
+	}
+	return nil
 }
 
 // DrainRequest moves Configured → Draining → Idle. The grace period bounds
@@ -1019,7 +1072,7 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\tresources\x18\x01 \x03(\v2+.bigfleet.v1alpha1.Resources.ResourcesEntryR\tresources\x1a<\n" +
 	"\x0eResourcesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfc\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xae\x06\n" +
 	"\aMachine\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x125\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1f.bigfleet.v1alpha1.MachineStateR\x05state\x12.\n" +
@@ -1034,8 +1087,13 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	" \x03(\v2&.bigfleet.v1alpha1.Machine.LabelsEntryR\x06labels\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\f \x01(\tR\tlastError\x12>\n" +
-	"\vallocatable\x18\r \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\vallocatable\x1a9\n" +
+	"\vallocatable\x18\r \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\vallocatable\x12\x18\n" +
+	"\acluster\x18\x0e \x01(\tR\acluster\x12T\n" +
+	"\x0eshard_metadata\x18\x0f \x03(\v2-.bigfleet.v1alpha1.Machine.ShardMetadataEntryR\rshardMetadata\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a@\n" +
+	"\x12ShardMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\v\x10\f\"\x1c\n" +
 	"\n" +
@@ -1056,7 +1114,7 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\bshard_id\x18\x03 \x01(\tR\ashardId\x12\x1f\n" +
 	"\vshard_epoch\x18\x04 \x01(\x03R\n" +
 	"shardEpoch\x12'\n" +
-	"\x0fsequence_number\x18\x05 \x01(\x03R\x0esequenceNumberJ\x04\b\x02\x10\x03\"\xdc\x01\n" +
+	"\x0fsequence_number\x18\x05 \x01(\x03R\x0esequenceNumberJ\x04\b\x02\x10\x03\"\xfd\x02\n" +
 	"\x10ConfigureRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x1d\n" +
@@ -1066,7 +1124,11 @@ const file_bigfleet_v1alpha1_provider_proto_rawDesc = "" +
 	"\bshard_id\x18\x04 \x01(\tR\ashardId\x12\x1f\n" +
 	"\vshard_epoch\x18\x05 \x01(\x03R\n" +
 	"shardEpoch\x12'\n" +
-	"\x0fsequence_number\x18\x06 \x01(\x03R\x0esequenceNumber\"\xc4\x01\n" +
+	"\x0fsequence_number\x18\x06 \x01(\x03R\x0esequenceNumber\x12]\n" +
+	"\x0eshard_metadata\x18\a \x03(\v26.bigfleet.v1alpha1.ConfigureRequest.ShardMetadataEntryR\rshardMetadata\x1a@\n" +
+	"\x12ShardMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc4\x01\n" +
 	"\fDrainRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x120\n" +
@@ -1123,7 +1185,7 @@ func file_bigfleet_v1alpha1_provider_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_provider_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_bigfleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_bigfleet_v1alpha1_provider_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_bigfleet_v1alpha1_provider_proto_goTypes = []any{
 	(MachineState)(0),        // 0: bigfleet.v1alpha1.MachineState
 	(CapacityType)(0),        // 1: bigfleet.v1alpha1.CapacityType
@@ -1140,6 +1202,8 @@ var file_bigfleet_v1alpha1_provider_proto_goTypes = []any{
 	(*TransitionAck)(nil),    // 12: bigfleet.v1alpha1.TransitionAck
 	nil,                      // 13: bigfleet.v1alpha1.Resources.ResourcesEntry
 	nil,                      // 14: bigfleet.v1alpha1.Machine.LabelsEntry
+	nil,                      // 15: bigfleet.v1alpha1.Machine.ShardMetadataEntry
+	nil,                      // 16: bigfleet.v1alpha1.ConfigureRequest.ShardMetadataEntry
 }
 var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
 	13, // 0: bigfleet.v1alpha1.Resources.resources:type_name -> bigfleet.v1alpha1.Resources.ResourcesEntry
@@ -1149,26 +1213,28 @@ var file_bigfleet_v1alpha1_provider_proto_depIdxs = []int32{
 	3,  // 4: bigfleet.v1alpha1.Machine.resources:type_name -> bigfleet.v1alpha1.Resources
 	14, // 5: bigfleet.v1alpha1.Machine.labels:type_name -> bigfleet.v1alpha1.Machine.LabelsEntry
 	3,  // 6: bigfleet.v1alpha1.Machine.allocatable:type_name -> bigfleet.v1alpha1.Resources
-	4,  // 7: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
-	0,  // 8: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
-	4,  // 9: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
-	8,  // 10: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
-	9,  // 11: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
-	10, // 12: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
-	11, // 13: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.DeleteRequest
-	5,  // 14: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
-	7,  // 15: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
-	12, // 16: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
-	12, // 17: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
-	12, // 18: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
-	12, // 19: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
-	4,  // 20: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
-	6,  // 21: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	15, // 7: bigfleet.v1alpha1.Machine.shard_metadata:type_name -> bigfleet.v1alpha1.Machine.ShardMetadataEntry
+	4,  // 8: bigfleet.v1alpha1.MachineList.machines:type_name -> bigfleet.v1alpha1.Machine
+	0,  // 9: bigfleet.v1alpha1.ListFilter.states:type_name -> bigfleet.v1alpha1.MachineState
+	16, // 10: bigfleet.v1alpha1.ConfigureRequest.shard_metadata:type_name -> bigfleet.v1alpha1.ConfigureRequest.ShardMetadataEntry
+	4,  // 11: bigfleet.v1alpha1.TransitionAck.machine:type_name -> bigfleet.v1alpha1.Machine
+	8,  // 12: bigfleet.v1alpha1.CapacityProvider.Create:input_type -> bigfleet.v1alpha1.CreateRequest
+	9,  // 13: bigfleet.v1alpha1.CapacityProvider.Configure:input_type -> bigfleet.v1alpha1.ConfigureRequest
+	10, // 14: bigfleet.v1alpha1.CapacityProvider.Drain:input_type -> bigfleet.v1alpha1.DrainRequest
+	11, // 15: bigfleet.v1alpha1.CapacityProvider.Delete:input_type -> bigfleet.v1alpha1.DeleteRequest
+	5,  // 16: bigfleet.v1alpha1.CapacityProvider.Get:input_type -> bigfleet.v1alpha1.MachineRef
+	7,  // 17: bigfleet.v1alpha1.CapacityProvider.List:input_type -> bigfleet.v1alpha1.ListFilter
+	12, // 18: bigfleet.v1alpha1.CapacityProvider.Create:output_type -> bigfleet.v1alpha1.TransitionAck
+	12, // 19: bigfleet.v1alpha1.CapacityProvider.Configure:output_type -> bigfleet.v1alpha1.TransitionAck
+	12, // 20: bigfleet.v1alpha1.CapacityProvider.Drain:output_type -> bigfleet.v1alpha1.TransitionAck
+	12, // 21: bigfleet.v1alpha1.CapacityProvider.Delete:output_type -> bigfleet.v1alpha1.TransitionAck
+	4,  // 22: bigfleet.v1alpha1.CapacityProvider.Get:output_type -> bigfleet.v1alpha1.Machine
+	6,  // 23: bigfleet.v1alpha1.CapacityProvider.List:output_type -> bigfleet.v1alpha1.MachineList
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_provider_proto_init() }
@@ -1182,7 +1248,7 @@ func file_bigfleet_v1alpha1_provider_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_provider_proto_rawDesc), len(file_bigfleet_v1alpha1_provider_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

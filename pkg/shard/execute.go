@@ -205,10 +205,10 @@ func (s *Shard) executeProvision(ctx context.Context, a decision.Action) error {
 	// price / interruption_probability enter the inventory — and the
 	// locked cost formula. A garbage ack is treated like a provider
 	// error: Failed, loud, counted — never ingested. (Configure /
-	// Drain acks merge no cost fields, and their round-tripped form
-	// legitimately lacks the cluster binding the wire doesn't carry,
-	// so full-Invariant screening there would false-positive; the
-	// records they produce still pass inventory.Apply's Invariant.)
+	// Drain acks merge no cost fields — since M72 their round-tripped
+	// form does carry the cluster binding, but screening stays
+	// Create-only because the records those paths produce still pass
+	// inventory.Apply's Invariant.)
 	if vErr := s.validateProviderMachine(&created); vErr != nil {
 		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
 			m.LastError = "create: ack rejected: " + vErr.Error()
@@ -323,10 +323,24 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		}
 	}
 
+	intPen := decision.BucketUpperBoundDollars(a.SourceProfile.InterruptionPenaltyBucket())
+	recPen := decision.BucketUpperBoundDollars(a.SourceProfile.ReclamationPenaltyBucket())
+	priority := a.SourceProfile.Priority()
+
 	ack, err := s.cfg.Provider.Configure(ctx, provider.ConfigureRequest{
 		MachineID:     a.MachineID,
 		ClusterID:     a.Cluster,
 		BootstrapBlob: blob,
+		// M72 / paper §7: the assignment's protection state rides to the
+		// provider as opaque store-and-echo metadata so a shard restart
+		// can rebuild it from List+Get (reconcile.go decodes it on the
+		// Insert path). Configure is the ONLY writer: these values never
+		// change between Configure and Drain — every reassignment is a
+		// Drain (which clears the echo with the binding) followed by a
+		// fresh Configure, and the post-Configure transition below stamps
+		// the same values locally — so write-once keeps the provider copy
+		// exact, with no drift window to re-Configure over.
+		ShardMetadata: machine.EncodeShardMetadata(priority, intPen, recPen, a.SourceProfile.Fingerprint()),
 	})
 	if err != nil {
 		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
@@ -336,10 +350,6 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	}
 	configured, mErr := conv.MachineFromProto(conv.MachineToProto(ack.Machine))
 	_ = mErr
-
-	intPen := decision.BucketUpperBoundDollars(a.SourceProfile.InterruptionPenaltyBucket())
-	recPen := decision.BucketUpperBoundDollars(a.SourceProfile.ReclamationPenaltyBucket())
-	priority := a.SourceProfile.Priority()
 
 	if err := s.applyTransition(a.MachineID, configured.State, func(m *machine.Machine) {
 		m.Cluster = a.Cluster

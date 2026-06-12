@@ -197,6 +197,12 @@ func (p *Provider) AddConfigured(
 		AssignedPriority:                   priority,
 		AssignedInterruptionPenaltyDollars: interruptionPenalty,
 		AssignedReclamationPenaltyDollars:  reclamationPenalty,
+		// M72: a real provider holding a Configured machine would also be
+		// holding the shard_metadata some shard's Configure stored.
+		// Seeding it keeps harness-seeded fleets restart-rebuildable over
+		// the wire, where only the echo survives — the Assigned* fields
+		// above only reach the shard on the in-process path.
+		ShardMetadata: machine.EncodeShardMetadata(priority, interruptionPenalty, reclamationPenalty, ""),
 	}
 	p.rev++
 	p.lastModRev[id] = p.rev
@@ -309,6 +315,11 @@ func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provid
 func (p *Provider) Configure(_ context.Context, req provider.ConfigureRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opConfigure, req.Fence, func(m *machine.Machine) {
 		m.Cluster = req.ClusterID
+		// M72: store-and-echo, never interpret. The fake is the
+		// conformance reference, so it deliberately does NOT decode the
+		// well-known keys into the Assigned* fields — a copy of the
+		// verbatim map is the whole obligation, unknown keys included.
+		m.ShardMetadata = cloneStringMap(req.ShardMetadata)
 	})
 }
 
@@ -319,6 +330,9 @@ func (p *Provider) Drain(_ context.Context, req provider.DrainRequest) (provider
 		m.AssignedPriority = 0
 		m.AssignedInterruptionPenaltyDollars = 0
 		m.AssignedReclamationPenaltyDollars = 0
+		// M72: shard_metadata is per-assignment state established by
+		// Configure; it clears with the binding, not with the machine.
+		m.ShardMetadata = nil
 	})
 }
 
@@ -529,6 +543,20 @@ func (p *Provider) consumeFail(id machine.ID, target machine.State) error {
 func (p *Provider) mintOp() string {
 	p.nextOp++
 	return "op-" + strconv.Itoa(p.nextOp)
+}
+
+// cloneStringMap copies the caller's map so post-Configure mutations on
+// the caller's side can't reach the stored record (echo must be exactly
+// what was sent at Configure time).
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 type opKind uint8

@@ -214,3 +214,66 @@ func TestRequirementsToProto_PreservesValues(t *testing.T) {
 		t.Errorf("op[1] = %v", out[1].GetOperator())
 	}
 }
+
+// M72: a Configured machine must survive the wire with its cluster
+// binding and shard_metadata echo intact — and, critically, pass
+// machine.Invariant afterwards. Pre-M72 this round trip lost Cluster,
+// so every wire-borne Configured record was rejected at reconcile
+// ingest as reason="structural" (the M70b tripwire).
+func TestMachineRoundTrip_ClusterAndShardMetadata(t *testing.T) {
+	t.Parallel()
+	md := machine.EncodeShardMetadata(900_000, 8192, 64, "fp-1")
+	md["x-unknown/key"] = "opaque" // unknown keys ride verbatim too
+	m := machine.Machine{
+		ID:      "m-1",
+		State:   machine.StateConfigured,
+		Host:    machine.HostRef{Provider: "aws", Ref: "i-1"},
+		Cluster: "cluster-amsterdam",
+		Profile: machine.Profile{
+			InstanceType: "p5.48xlarge",
+			CapacityType: machine.CapacityTypeOnDemand,
+		},
+		ShardMetadata: md,
+	}
+	back, err := conv.MachineFromProto(conv.MachineToProto(m))
+	if err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if back.Cluster != "cluster-amsterdam" {
+		t.Errorf("Cluster = %q, want cluster-amsterdam", back.Cluster)
+	}
+	if len(back.ShardMetadata) != len(md) {
+		t.Fatalf("ShardMetadata len = %d, want %d", len(back.ShardMetadata), len(md))
+	}
+	for k, v := range md {
+		if back.ShardMetadata[k] != v {
+			t.Errorf("ShardMetadata[%q] = %q, want %q", k, back.ShardMetadata[k], v)
+		}
+	}
+	if err := back.Invariant(); err != nil {
+		t.Errorf("wire-borne Configured machine fails Invariant: %v", err)
+	}
+}
+
+// Unbound machines must not grow a cluster or metadata on the wire.
+func TestMachineRoundTrip_UnboundMachineStaysUnbound(t *testing.T) {
+	t.Parallel()
+	m := machine.Machine{
+		ID:      "m-idle",
+		State:   machine.StateIdle,
+		Host:    machine.HostRef{Provider: "aws", Ref: "i-2"},
+		Profile: machine.Profile{InstanceType: "c6a.4xlarge"},
+	}
+	pbMachine := conv.MachineToProto(m)
+	if pbMachine.GetCluster() != "" || len(pbMachine.GetShardMetadata()) != 0 {
+		t.Fatalf("unbound machine serialized binding state: cluster=%q metadata=%v",
+			pbMachine.GetCluster(), pbMachine.GetShardMetadata())
+	}
+	back, err := conv.MachineFromProto(pbMachine)
+	if err != nil {
+		t.Fatalf("round-trip: %v", err)
+	}
+	if back.Cluster != "" || len(back.ShardMetadata) != 0 {
+		t.Errorf("unbound machine grew binding state: %+v", back)
+	}
+}
