@@ -35,6 +35,8 @@ const (
 	Coordinator_ListShards_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListShards"
 	Coordinator_ListDomainAssignments_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ListDomainAssignments"
 	Coordinator_ListQuotas_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListQuotas"
+	Coordinator_JoinRaftCluster_FullMethodName       = "/bigfleet.v1alpha1.Coordinator/JoinRaftCluster"
+	Coordinator_SnapshotSave_FullMethodName          = "/bigfleet.v1alpha1.Coordinator/SnapshotSave"
 )
 
 // CoordinatorClient is the client API for Coordinator service.
@@ -66,6 +68,21 @@ type CoordinatorClient interface {
 	// the FSM (idempotent overwrite of the per-shard slice for a
 	// (provider, region) key); ListQuotas is a read.
 	ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error)
+	// M75 Raft membership (ADR-0047). A coordinator replica with no
+	// existing Raft state asks the leader to AddVoter it into the
+	// cluster. Leader-only (FailedPrecondition on followers / on
+	// unbootstrapped replicas); the joiner retries with backoff until
+	// the call lands on the leader. AddVoter of an existing voter is
+	// idempotent in hashicorp/raft (the configuration change updates
+	// the address in place), so re-joins after a restart are safe.
+	// Same ADR-0008 open-trust posture as the rest of this surface;
+	// M74 authenticates it.
+	JoinRaftCluster(ctx context.Context, in *JoinRaftClusterRequest, opts ...grpc.CallOption) (*JoinRaftClusterResponse, error)
+	// M75 DR (ADR-0047). Streams the leader's freshest Raft snapshot
+	// (meta first, then state chunks) so `bigfleetctl snapshot save`
+	// can capture a restorable backup from a running coordinator.
+	// Leader-only — followers may not have a complete snapshot.
+	SnapshotSave(ctx context.Context, in *SnapshotSaveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SnapshotSaveChunk], error)
 }
 
 type coordinatorClient struct {
@@ -146,6 +163,35 @@ func (c *coordinatorClient) ListQuotas(ctx context.Context, in *ListQuotasReques
 	return out, nil
 }
 
+func (c *coordinatorClient) JoinRaftCluster(ctx context.Context, in *JoinRaftClusterRequest, opts ...grpc.CallOption) (*JoinRaftClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JoinRaftClusterResponse)
+	err := c.cc.Invoke(ctx, Coordinator_JoinRaftCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) SnapshotSave(ctx context.Context, in *SnapshotSaveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SnapshotSaveChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Coordinator_ServiceDesc.Streams[0], Coordinator_SnapshotSave_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SnapshotSaveRequest, SnapshotSaveChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Coordinator_SnapshotSaveClient = grpc.ServerStreamingClient[SnapshotSaveChunk]
+
 // CoordinatorServer is the server API for Coordinator service.
 // All implementations must embed UnimplementedCoordinatorServer
 // for forward compatibility.
@@ -175,6 +221,21 @@ type CoordinatorServer interface {
 	// the FSM (idempotent overwrite of the per-shard slice for a
 	// (provider, region) key); ListQuotas is a read.
 	ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error)
+	// M75 Raft membership (ADR-0047). A coordinator replica with no
+	// existing Raft state asks the leader to AddVoter it into the
+	// cluster. Leader-only (FailedPrecondition on followers / on
+	// unbootstrapped replicas); the joiner retries with backoff until
+	// the call lands on the leader. AddVoter of an existing voter is
+	// idempotent in hashicorp/raft (the configuration change updates
+	// the address in place), so re-joins after a restart are safe.
+	// Same ADR-0008 open-trust posture as the rest of this surface;
+	// M74 authenticates it.
+	JoinRaftCluster(context.Context, *JoinRaftClusterRequest) (*JoinRaftClusterResponse, error)
+	// M75 DR (ADR-0047). Streams the leader's freshest Raft snapshot
+	// (meta first, then state chunks) so `bigfleetctl snapshot save`
+	// can capture a restorable backup from a running coordinator.
+	// Leader-only — followers may not have a complete snapshot.
+	SnapshotSave(*SnapshotSaveRequest, grpc.ServerStreamingServer[SnapshotSaveChunk]) error
 	mustEmbedUnimplementedCoordinatorServer()
 }
 
@@ -205,6 +266,12 @@ func (UnimplementedCoordinatorServer) ListDomainAssignments(context.Context, *Li
 }
 func (UnimplementedCoordinatorServer) ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListQuotas not implemented")
+}
+func (UnimplementedCoordinatorServer) JoinRaftCluster(context.Context, *JoinRaftClusterRequest) (*JoinRaftClusterResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinRaftCluster not implemented")
+}
+func (UnimplementedCoordinatorServer) SnapshotSave(*SnapshotSaveRequest, grpc.ServerStreamingServer[SnapshotSaveChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method SnapshotSave not implemented")
 }
 func (UnimplementedCoordinatorServer) mustEmbedUnimplementedCoordinatorServer() {}
 func (UnimplementedCoordinatorServer) testEmbeddedByValue()                     {}
@@ -353,6 +420,35 @@ func _Coordinator_ListQuotas_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Coordinator_JoinRaftCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinRaftClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).JoinRaftCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_JoinRaftCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).JoinRaftCluster(ctx, req.(*JoinRaftClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_SnapshotSave_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(SnapshotSaveRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CoordinatorServer).SnapshotSave(m, &grpc.GenericServerStream[SnapshotSaveRequest, SnapshotSaveChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Coordinator_SnapshotSaveServer = grpc.ServerStreamingServer[SnapshotSaveChunk]
+
 // Coordinator_ServiceDesc is the grpc.ServiceDesc for Coordinator service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -388,7 +484,17 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ListQuotas",
 			Handler:    _Coordinator_ListQuotas_Handler,
 		},
+		{
+			MethodName: "JoinRaftCluster",
+			Handler:    _Coordinator_JoinRaftCluster_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "SnapshotSave",
+			Handler:       _Coordinator_SnapshotSave_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "bigfleet/v1alpha1/coordinator.proto",
 }

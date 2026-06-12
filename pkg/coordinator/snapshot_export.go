@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,33 +48,49 @@ func (c *Coordinator) snapshotExportLoop(ctx context.Context) {
 	}
 }
 
-func (c *Coordinator) exportSnapshotOnce() error {
-	// Trigger a snapshot so the latest stored one reflects current state.
-	// hashicorp/raft.Snapshot is async — it returns a Future that we
-	// wait on (cheap; state is small).
-	if err := c.raft.Snapshot().Error(); err != nil {
-		return fmt.Errorf("trigger snapshot: %w", err)
+// openLatestSnapshot triggers a fresh Raft snapshot and opens the
+// most recent one from the store. Shared by the periodic export loop
+// and the SnapshotSave RPC (M75 DR). Returns nil meta when the store
+// is empty.
+func (c *Coordinator) openLatestSnapshot() (*raft.SnapshotMeta, io.ReadCloser, error) {
+	// Trigger a snapshot so the latest stored one reflects current
+	// state. hashicorp/raft.Snapshot is async — it returns a Future
+	// that we wait on (cheap; state is small). ErrNothingNewToSnapshot
+	// means the stored snapshot already reflects every committed apply
+	// — exactly what we want to hand out, not a failure.
+	if err := c.raft.Snapshot().Error(); err != nil && !errors.Is(err, raft.ErrNothingNewToSnapshot) {
+		return nil, nil, fmt.Errorf("trigger snapshot: %w", err)
 	}
 
 	snaps, err := c.snapshotStore.List()
 	if err != nil {
-		return fmt.Errorf("list snapshots: %w", err)
+		return nil, nil, fmt.Errorf("list snapshots: %w", err)
 	}
 	if len(snaps) == 0 {
-		return nil
+		return nil, nil, nil
 	}
 	latest := snaps[0] // SnapshotStore.List returns most-recent-first.
+	meta, src, err := c.snapshotStore.Open(latest.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open snapshot: %w", err)
+	}
+	return meta, src, nil
+}
 
-	dest := filepath.Join(c.cfg.SnapshotExportDir, fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102-150405"), latest.ID))
+func (c *Coordinator) exportSnapshotOnce() error {
+	meta, src, err := c.openLatestSnapshot()
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		return nil
+	}
+	defer src.Close()
+
+	dest := filepath.Join(c.cfg.SnapshotExportDir, fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102-150405"), meta.ID))
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return fmt.Errorf("mkdir export dest: %w", err)
 	}
-
-	meta, src, err := c.snapshotStore.Open(latest.ID)
-	if err != nil {
-		return fmt.Errorf("open snapshot: %w", err)
-	}
-	defer src.Close()
 
 	// Persist the snapshot's meta sidecar + the FSM-state payload. The
 	// meta payload is small JSON; the state is whatever the FSM's

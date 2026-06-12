@@ -25,9 +25,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOOS=linux GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 \
     go build -trimpath -ldflags="-s -w" \
-      -o /out/bigfleet ./cmd/bigfleet
+      -o /out/bigfleet ./cmd/bigfleet && \
+    GOOS=linux GOARCH=${TARGETARCH:-amd64} CGO_ENABLED=0 \
+    go build -trimpath -ldflags="-s -w" \
+      -o /out/bigfleetctl ./cmd/bigfleetctl
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /out/bigfleet /usr/local/bin/bigfleet
+# bigfleetctl ships in the same image so the DR runbook
+# (docs/operator-guide.md → Disaster recovery) can run
+# `snapshot restore` from a pod that mounts the coordinator's PVC —
+# distroless has no shell to fetch a binary with.
+COPY --from=builder /out/bigfleetctl /usr/local/bin/bigfleetctl
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/bigfleet"]

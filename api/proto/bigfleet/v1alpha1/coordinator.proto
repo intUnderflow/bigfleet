@@ -41,6 +41,45 @@ service Coordinator {
   // the FSM (idempotent overwrite of the per-shard slice for a
   // (provider, region) key); ListQuotas is a read.
   rpc ListQuotas(ListQuotasRequest) returns (ListQuotasResponse);
+
+  // M75 Raft membership (ADR-0047). A coordinator replica with no
+  // existing Raft state asks the leader to AddVoter it into the
+  // cluster. Leader-only (FailedPrecondition on followers / on
+  // unbootstrapped replicas); the joiner retries with backoff until
+  // the call lands on the leader. AddVoter of an existing voter is
+  // idempotent in hashicorp/raft (the configuration change updates
+  // the address in place), so re-joins after a restart are safe.
+  // Same ADR-0008 open-trust posture as the rest of this surface;
+  // M74 authenticates it.
+  rpc JoinRaftCluster(JoinRaftClusterRequest) returns (JoinRaftClusterResponse);
+
+  // M75 DR (ADR-0047). Streams the leader's freshest Raft snapshot
+  // (meta first, then state chunks) so `bigfleetctl snapshot save`
+  // can capture a restorable backup from a running coordinator.
+  // Leader-only — followers may not have a complete snapshot.
+  rpc SnapshotSave(SnapshotSaveRequest) returns (stream SnapshotSaveChunk);
+}
+
+message JoinRaftClusterRequest {
+  // The joiner's stable Raft server ID (its pod name in the chart).
+  string node_id = 1;
+  // The joiner's advertised Raft transport address, e.g.
+  // bigfleet-coordinator-1.bigfleet-coordinator.<ns>.svc:7791.
+  string raft_address = 2;
+}
+message JoinRaftClusterResponse {}
+
+message SnapshotSaveRequest {}
+message SnapshotSaveChunk {
+  oneof payload {
+    // First frame: the JSON-encoded hashicorp/raft SnapshotMeta
+    // (index, term, configuration). Mirrors the meta.json the
+    // leader's periodic snapshot-export loop writes, so saved
+    // archives and exported directories restore identically.
+    bytes meta_json = 1;
+    // Subsequent frames: the FSM snapshot payload.
+    bytes data = 2;
+  }
 }
 
 message ListQuotasRequest {}

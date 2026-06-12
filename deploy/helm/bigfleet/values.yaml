@@ -15,7 +15,12 @@ namespace: bigfleet-system
 coordinator:
   enabled: true
   replicas: 3                   # ADR-0002: single Raft group, 3 voters
-  bootstrap: true               # set false on subsequent helm upgrades
+  # bootstrap stays true for the life of the install: only ordinal 0
+  # honours it (ADR-0047), and only when its data dir has no existing
+  # Raft state. Ordinals >0 join via the leader. Set false only if you
+  # are restoring from snapshot and want to be explicit that nothing
+  # may mint a fresh cluster.
+  bootstrap: true
   dataDir: /var/lib/bigfleet
   resources:
     requests:
@@ -31,7 +36,6 @@ coordinator:
     grpcPort: 7790
     raftPort: 7791
     metricsPort: 8790
-  rebalanceInterval: 5s
 
 shard:
   enabled: true

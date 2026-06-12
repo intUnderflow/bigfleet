@@ -16,6 +16,11 @@ metadata:
     app.kubernetes.io/component: shard
 spec:
   clusterIP: None
+  # Operators are permanently bound to a shard ordinal; its per-pod
+  # DNS record must not vanish while the shard restarts or waits on
+  # its first provider reconcile, or every bound operator loses the
+  # only name it is allowed to dial.
+  publishNotReadyAddresses: true
   selector:
     {{- include "bigfleet.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: shard
@@ -110,6 +115,22 @@ spec:
               containerPort: {{ .Values.shard.service.grpcPort }}
             - name: metrics
               containerPort: {{ .Values.shard.service.metricsPort }}
+          # M75 probes. Neither touches the coordinator: a shard must
+          # stay alive and ready with zero coordinators (static
+          # stability). Readiness latches after the first successful
+          # provider reconcile — before that the shard would be
+          # deciding against an empty inventory view.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
           volumeMounts:
             - name: data
               mountPath: {{ .Values.shard.dataDir }}

@@ -36,8 +36,18 @@ type Config struct {
 
 	// Bootstrap, if true, bootstraps a fresh single-node cluster.
 	// Use only on the very first Coordinator's first run; subsequent
-	// replicas join via Join().
+	// replicas join via JoinAddress.
 	Bootstrap bool
+
+	// JoinAddress, if non-empty, is the host:port of a coordinator
+	// gRPC service (typically the headless Service, so attempts
+	// spread across replicas) this node asks to AddVoter it into the
+	// Raft cluster (ADR-0047). Run starts a membership reconciler
+	// that retries with backoff until this node is a voter at its
+	// current advertise address — covering fresh joins, restart
+	// re-joins (idempotent), and the address rewrite a pod-IP change
+	// needs. Set on every replica; only Bootstrap is ordinal-0-only.
+	JoinAddress string
 
 	// SnapshotRetention is how many snapshot files Raft retains.
 	// Defaults to 2.
@@ -143,6 +153,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	if c.cfg.SnapshotExportDir != "" {
 		go c.snapshotExportLoop(ctx)
 	}
+	if c.cfg.JoinAddress != "" {
+		go c.joinLoop(ctx)
+	}
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -236,6 +249,12 @@ func (c *Coordinator) close() {
 	c.closed = true
 	if c.raft != nil {
 		_ = c.raft.Shutdown().Error()
+	}
+	// The TCP transport's listener outlives raft.Shutdown; close it so
+	// killed-leader tests (and rolling restarts) free the port instead
+	// of leaving peers connected to a node that will never answer.
+	if closer, ok := c.transport.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
 	if closer, ok := c.logStore.(interface{ Close() error }); ok {
 		_ = closer.Close()

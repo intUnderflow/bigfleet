@@ -14,6 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the buf-breaking step diffs the proto module
+          # against the merge-base of main, which a depth-1 clone
+          # cannot resolve.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -46,6 +51,16 @@ jobs:
 
       - name: Lint
         run: make lint
+
+      - name: Buf breaking (proto wire compatibility)
+        # buf.yaml has configured breaking:FILE since M0; M75 makes it
+        # enforced. Compare against the merge-base with main so a PR is
+        # only blamed for its own proto reshapes, not for main moving.
+        # On pushes to main the merge-base is HEAD itself (no-op); the
+        # PR gate is the enforcement point.
+        run: |
+          git fetch origin main
+          make buf-breaking
 
       - name: Test
         run: make test

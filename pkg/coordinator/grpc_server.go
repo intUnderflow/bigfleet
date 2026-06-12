@@ -2,7 +2,9 @@ package coordinator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -347,6 +349,65 @@ func (g *GRPCServer) ListQuotas(_ context.Context, _ *pb.ListQuotasRequest) (*pb
 		return out[i].GetRegion() < out[j].GetRegion()
 	})
 	return &pb.ListQuotasResponse{Allocations: out}, nil
+}
+
+// JoinRaftCluster adds the calling replica as a Raft voter (M75,
+// ADR-0047). Leader-only — hashicorp/raft membership changes go
+// through the leader's log. AddVoter of an existing voter is
+// idempotent (the configuration change updates the address in
+// place), so a replica re-joining after a restart is safe.
+func (g *GRPCServer) JoinRaftCluster(_ context.Context, req *pb.JoinRaftClusterRequest) (*pb.JoinRaftClusterResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if req == nil || req.GetNodeId() == "" || req.GetRaftAddress() == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id and raft_address required")
+	}
+	if err := g.c.AddVoter(req.GetNodeId(), req.GetRaftAddress()); err != nil {
+		return nil, status.Errorf(codes.Unavailable, "JoinRaftCluster: %v", err)
+	}
+	return &pb.JoinRaftClusterResponse{}, nil
+}
+
+// SnapshotSave streams the leader's freshest Raft snapshot — one
+// meta_json frame, then state chunks (M75 DR, ADR-0047). Leader-only:
+// a follower's snapshot can lag arbitrarily, and a backup that
+// silently dropped recent writes is worse than a failed RPC.
+func (g *GRPCServer) SnapshotSave(_ *pb.SnapshotSaveRequest, stream pb.Coordinator_SnapshotSaveServer) error {
+	if !g.c.IsLeader() {
+		return status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	meta, src, err := g.c.openLatestSnapshot()
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "SnapshotSave: %v", err)
+	}
+	if meta == nil {
+		return status.Error(codes.NotFound, "SnapshotSave: no snapshot available yet")
+	}
+	defer func() { _ = src.Close() }()
+
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return status.Errorf(codes.Internal, "SnapshotSave: marshal meta: %v", err)
+	}
+	if err := stream.Send(&pb.SnapshotSaveChunk{Payload: &pb.SnapshotSaveChunk_MetaJson{MetaJson: metaJSON}}); err != nil {
+		return err
+	}
+	buf := make([]byte, 1<<20)
+	for {
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			if err := stream.Send(&pb.SnapshotSaveChunk{Payload: &pb.SnapshotSaveChunk_Data{Data: buf[:n]}}); err != nil {
+				return err
+			}
+		}
+		if errors.Is(rerr, io.EOF) {
+			return nil
+		}
+		if rerr != nil {
+			return status.Errorf(codes.Unavailable, "SnapshotSave: read snapshot: %v", rerr)
+		}
+	}
 }
 
 // ListDomainAssignments returns the topology-domain → shard mapping.

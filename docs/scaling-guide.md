@@ -78,7 +78,6 @@ Mitigations, in order of preference:
 
 - `coordinator.replicas`: 1 for dev, 3 for production. Per ADR-0002, single Raft group / single region for v1.
 - `coordinator.storage.size`: 10 Gi default is generous. Raft log + snapshots are ~500 MB at 100M nodes; 10 Gi fits ~20 snapshot-retention cycles plus headroom.
-- `coordinator.rebalanceInterval`: 5 s default. Lowering increases responsiveness but burns more apply-cycles. Raise to 30s+ once your fleet is mostly stable (rebalance is rare in steady state).
 
 ### Shard
 

@@ -1,0 +1,13 @@
+# M75 supply chain: weekly dependency bumps for the Go module and the
+# GitHub Actions the CI/image/chart workflows pin. PRs run the full
+# verify gate (including `buf breaking`) like any other change.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

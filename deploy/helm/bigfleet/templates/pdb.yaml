@@ -1,0 +1,42 @@
+# M75 PodDisruptionBudgets.
+#
+# Coordinator: minAvailable = a Raft majority, so a node drain can
+# never take quorum down. Only rendered for replicas > 1 — a
+# single-replica dev install with minAvailable: 1 would block every
+# voluntary disruption forever.
+{{- if and .Values.coordinator.enabled (gt (int .Values.coordinator.replicas) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bigfleet-coordinator
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
+spec:
+  minAvailable: {{ add (div (int .Values.coordinator.replicas) 2) 1 }}
+  selector:
+    matchLabels:
+      {{- include "bigfleet.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: coordinator
+{{- end }}
+{{- if .Values.shard.enabled }}
+---
+# Shard: one at a time. Each ordinal is a singleton its bound
+# operators dial by name (no replica can stand in for it), so the
+# budget paces drains rather than guaranteeing a quorum.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bigfleet-shard
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "bigfleet.labels" . | nindent 4 }}
+    app.kubernetes.io/component: shard
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "bigfleet.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: shard
+{{- end }}

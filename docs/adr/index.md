@@ -53,3 +53,4 @@
 | [44](/adr/0044-machine-count-aware-seed-sizing/) | Accepted | Seed machine pools are sized by machine demand (pod share ÷ packing density, gang-aware per-zone floors), not workload weight |
 | [45](/adr/0045-consumed-capacity-in-the-attribution-model/) | Proposed | Consumed capacity enters the attribution model — operator-reported per-machine consumption + bound/open demand split (author decision pending) |
 | [46](/adr/0046-actuation-safety-rails/) | Accepted | Actuation safety rails — per-cluster reclaim blast-radius cap, empty-roll-up quarantine, global kill switch |
+| [47](/adr/0047-coordinator-raft-join-and-offline-restore/) | Accepted | Coordinator quorum formation by ordinal join; offline snapshot restore as single-voter recovery |

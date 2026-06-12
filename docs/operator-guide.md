@@ -48,9 +48,11 @@ kubectl apply -f https://github.com/intUnderflow/bigfleet/raw/main/api/crd/bigfl
 helm install bigfleet oci://ghcr.io/intunderflow/charts/bigfleet \
   --version 0.1.0 \
   --namespace bigfleet-system --create-namespace \
-  --set coordinator.replicas=3 \
-  --set coordinator.bootstrap=true   # only for the first install
-# After the first install, helm upgrade with coordinator.bootstrap=false.
+  --set coordinator.replicas=3
+# Quorum forms automatically (ADR-0047): ordinal 0 bootstraps, ordinals
+# 1..N join via the leader. coordinator.bootstrap=true (the default) is
+# safe to leave set for the life of the install — only ordinal 0
+# honours it, and only when its data dir is empty.
 
 # 3. On each managed cluster, install the per-cluster operator.
 helm install bigfleet-operator oci://ghcr.io/intunderflow/charts/bigfleet-operator \
@@ -118,11 +120,77 @@ Two panels per group:
 | `bigfleet_operator_session_reconnects_total` rising | Shard ↔ operator network unhealthy | Check shard health; check kubelet/CNI on the cluster running the operator. Operators reconnect with backoff automatically. |
 | `bigfleet_shard_cycle_duration_seconds` p99 > 1s | Hot path overloaded | (a) Is the inventory huge? Check `bigfleet_shard_inventory_machines`. (b) Provider RPCs slow? Check provider's own metrics. (c) Consider sharding more aggressively. |
 
+## Disaster recovery (coordinator state)
+
+Static stability is the first thing to know: **shards and managed clusters keep running with the coordinator entirely down**, through the whole loss-and-restore procedure below. The data plane makes provisioning decisions autonomously; what pauses is coordinator-mediated work — new shard registrations, new cluster→shard bindings, domain assignments, cross-shard rebalancing instructions. There is no provisioning fire drill; do the restore calmly.
+
+### Backups
+
+Two mechanisms, use both:
+
+- **Continuous export (recommended baseline).** Run the coordinator with `--snapshot-export-dir` pointed at a path mounted from durable object storage. The leader exports a snapshot every `--snapshot-export-interval` (default 5m) as a `<timestamp>-<id>/` directory containing `meta.json` + `state`, with a `latest` symlink. Coordinator state is small; 5 minutes is cheap. Your exposure window is this interval.
+- **On-demand save.** `bigfleetctl --coordinator=<addr> snapshot save backup.snap` streams the leader's freshest snapshot to a single file. Take one before every chart upgrade and before any planned management-cluster maintenance.
+
+### Total-loss recovery
+
+When all coordinator replicas (or their PVCs) are gone:
+
+```sh
+# 0. Scale the coordinator StatefulSet to zero. Restore is OFFLINE —
+#    it rewrites a stopped coordinator's data dir.
+kubectl -n bigfleet-system scale statefulset bigfleet-coordinator --replicas=0
+
+# 1. Restore the newest snapshot into ordinal 0's (recreated) PVC.
+#    bigfleetctl ships in the bigfleet image; run it from a pod that
+#    mounts the PVC at /var/lib/bigfleet. The archive can be a
+#    `snapshot save` file or an exported snapshot directory (use
+#    <export-dir>/latest).
+bigfleetctl snapshot restore \
+  --data-dir=/var/lib/bigfleet \
+  --node-id=bigfleet-coordinator-0 \
+  --raft-advertise=bigfleet-coordinator-0.bigfleet-coordinator.bigfleet-system.svc:7791 \
+  backup.snap
+
+# 2. Make sure ordinals 1 and 2 have EMPTY data dirs (delete their
+#    PVCs). They must re-join the restored cluster, not vote with
+#    stale state.
+
+# 3. Scale back to 3. Ordinal 0 starts with the restored snapshot and
+#    elects itself (the restore writes a single-voter configuration —
+#    hashicorp/raft installs the membership recorded in the snapshot's
+#    meta, the same single-survivor shape as hashicorp's peers.json
+#    recovery); ordinals 1 and 2 join via ADR-0047 and the quorum
+#    re-forms by itself.
+kubectl -n bigfleet-system scale statefulset bigfleet-coordinator --replicas=3
+```
+
+### What a restore loses
+
+Everything committed between the snapshot and the failure — bounded by the export interval (or the age of your last `snapshot save`):
+
+- **Cluster→shard bindings made since the snapshot.** These re-create themselves: clusters are bound on first contact, so the next roll-up from an unbound cluster re-binds it. The consequence to expect: the re-bind may land on a *different* shard than the lost binding, in which case machines the original shard held for that cluster are no longer attributed to it and get reclaimed/re-provisioned rather than recognised. Transient over-provisioning, not an outage.
+- **Shard registrations and domain assignments since the snapshot.** Shards re-register on their next heartbeat (~10s). Domain assignments made via `bigfleetctl assign-domain` since the snapshot must be re-applied by hand — check your change log.
+- **Nothing on the data plane.** Running workloads, operator sessions, shard inventories, and in-flight provisioning are untouched (shard state lives on the shards).
+
+One non-restore failure worth knowing (ADR-0047): if ordinal 0 *alone* loses its PVC while 1 and 2 keep theirs, do **not** restore — the survivors still have quorum and the live state. Wipe ordinal 0's data dir and let it re-join as an empty replica.
+
 ## Security
 
 - **Operator → shard**: mTLS recommended. Per-cluster client certs scoped to the cluster's claimed `cluster_id`. Production deployments should add a server-side check that the cert's CN matches the `Hello.cluster_id`.
 - **Shard → coordinator**: mTLS recommended. The coordinator gRPC service is internal; a network-policy fence inside the management cluster is also worthwhile.
 - **Shard → provider**: depends on the provider. Cloud providers typically use cloud-IAM for the underlying API; the BigFleet ↔ provider gRPC channel between them is process-local on the shard host or cell, so a Unix socket or localhost-only TCP is reasonable.
+
+### Supply chain
+
+Images pushed from main are cosign-signed (keyless, GitHub OIDC) and carry a BuildKit SPDX SBOM attestation. Verify before deploying:
+
+```sh
+cosign verify ghcr.io/intunderflow/bigfleet:main \
+  --certificate-identity-regexp='^https://github.com/intUnderflow/bigfleet/\.github/workflows/images\.yml@.*$' \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+```
+
+Same command for `bigfleet-operator` and `bigfleet-unschedulable-pod-controller`. Inspect the SBOM with `docker buildx imagetools inspect <ref> --format '{{ json .SBOM }}'`.
 
 ## Upgrades
 
@@ -130,7 +198,7 @@ Two panels per group:
 v1alpha1 is in flux until v1beta1. Use `kubectl apply` for in-place CRD upgrades; the operator informers re-list on schema bumps. Never delete and recreate a CRD with existing CapacityRequest objects (you'll lose state).
 
 ### Coordinator upgrades
-Helm upgrade is rolling — one replica at a time. The Raft cluster tolerates one replica down out of three; leader election handles stepdown automatically. **Always** upgrade with `coordinator.bootstrap=false` after the first install.
+Helm upgrade is rolling — one replica at a time, paced by the readiness probe (a restarted replica reports ready once it observes a Raft leader again). The Raft cluster tolerates one replica down out of three; leader election handles stepdown automatically, and the PodDisruptionBudget (`minAvailable: 2` at 3 replicas) keeps node drains from taking quorum. `coordinator.bootstrap=true` is safe to leave set (ADR-0047): only ordinal 0 honours it, and only on an empty data dir.
 
 ### Shard upgrades
 Rolling. Each shard's existing assignments are persisted by the coordinator (cluster → shard, domain → shard); a fresh shard process re-reads them on startup and re-establishes provider connections.

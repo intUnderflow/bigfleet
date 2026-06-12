@@ -1,9 +1,11 @@
 name: Images
 
-# Build the two scaletest container images. Behaviour:
+# Build the container images. Behaviour:
 #
 #   on push to main    — build AND push to GHCR with :main and
-#                        :sha-<short> tags.
+#                        :sha-<short> tags, attach a BuildKit SBOM
+#                        attestation, and cosign-sign the digest
+#                        keylessly (M75 supply chain).
 #   on pull_request    — build only (smoke test that the image still
 #                        builds at PR HEAD). Never logs in to GHCR;
 #                        never pushes. Avoids any write-token exposure
@@ -12,11 +14,17 @@ name: Images
 # Tags pushed from main:
 #   :main          moving — always the latest main build.
 #   :sha-<short>   immutable; helm pins via --set image.tag=sha-<short>.
+#
+# Verification (also in docs/operator-guide.md → Security):
+#
+#   cosign verify ghcr.io/intunderflow/bigfleet:main \
+#     --certificate-identity-regexp='^https://github.com/intUnderflow/bigfleet/\.github/workflows/images\.yml@.*$' \
+#     --certificate-oidc-issuer=https://token.actions.githubusercontent.com
 
 on:
   push:
     branches: [main]
-    # The two images bundle Go binaries built from /cmd, /pkg, /api,
+    # The images bundle Go binaries built from /cmd, /pkg, /api,
     # /test/scaletest, and the Dockerfiles themselves; CRDs are also
     # baked in. A push that only touches /docs, /site, /sim, or
     # tests-with-no-image-impact (e.g. /test/conformance) shouldn't
@@ -40,7 +48,8 @@ on:
       - ".github/workflows/images.yml"
 
 # Default permissions = none. The push job below grants packages:write
-# only for itself; PR builds run with the read-only default.
+# (and id-token:write for keyless signing) only for itself; PR builds
+# run with the read-only default.
 permissions: {}
 
 jobs:
@@ -56,6 +65,10 @@ jobs:
         include:
           - image: bigfleet
             dockerfile: cmd/bigfleet/Dockerfile
+          - image: bigfleet-operator
+            dockerfile: cmd/operator/Dockerfile
+          - image: bigfleet-unschedulable-pod-controller
+            dockerfile: cmd/bigfleet-unschedulable-pod-controller/Dockerfile
           - image: bigfleet-scaletest
             dockerfile: test/scaletest/image/Dockerfile
     steps:
@@ -79,18 +92,27 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless cosign: sign with the workflow's OIDC identity instead
+      # of a long-lived key (nothing to rotate or leak).
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - image: bigfleet
             dockerfile: cmd/bigfleet/Dockerfile
+          - image: bigfleet-operator
+            dockerfile: cmd/operator/Dockerfile
+          - image: bigfleet-unschedulable-pod-controller
+            dockerfile: cmd/bigfleet-unschedulable-pod-controller/Dockerfile
           - image: bigfleet-scaletest
             dockerfile: test/scaletest/image/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -106,8 +128,10 @@ jobs:
           short_sha=$(git rev-parse --short=12 "$GITHUB_SHA")
           owner_lc=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           base="ghcr.io/${owner_lc}/${{ matrix.image }}"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
           echo "tags=${base}:main,${base}:sha-${short_sha}" >> "$GITHUB_OUTPUT"
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -115,5 +139,17 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          # BuildKit-generated SPDX SBOM, attached to the image as an
+          # attestation manifest (M75 supply chain). Inspect with:
+          #   docker buildx imagetools inspect <ref> --format '{{ json .SBOM }}'
+          sbom: true
+          provenance: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Cosign sign (keyless)
+        # Sign by digest — tags are mutable, the digest is the thing
+        # the signature should bind to. Both tags resolve to it.
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign "${{ steps.tags.outputs.base }}@${{ steps.build.outputs.digest }}"

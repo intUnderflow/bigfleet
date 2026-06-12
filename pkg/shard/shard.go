@@ -263,6 +263,14 @@ type Shard struct {
 	// metrics-snapshot read from another goroutine is safe.
 	cycleCount atomic.Int64
 
+	// firstReconcileDone latches once a reconcile against the provider
+	// has completed without error. Backs the /readyz probe (M75): a
+	// shard that has never seen the provider's inventory would decide
+	// against an empty view. Latched — readiness never regresses on a
+	// later transient provider error, and it deliberately has no
+	// coordinator dependency (static-stability hard rule).
+	firstReconcileDone atomic.Bool
+
 	// acCache dedups per-(cluster, fingerprint) AvailableCapacity
 	// emits so the operator-side apiserver isn't re-written every
 	// cycle with the same tuple.
@@ -456,6 +464,11 @@ func (s *Shard) ID() string { return s.cfg.ID }
 // Epoch returns the shard's per-process epoch.
 func (s *Shard) Epoch() int64 { return s.cfg.Epoch.Value() }
 
+// FirstReconcileDone reports whether at least one reconcile against
+// the provider has completed successfully. Readiness signal for the
+// shard's /readyz probe (M75).
+func (s *Shard) FirstReconcileDone() bool { return s.firstReconcileDone.Load() }
+
 // Run drives the worker loop until ctx is cancelled. Cycles fire on the
 // configured interval and on rollup-triggered wake-ups. ADR-0021: a
 // pool of executeWorker goroutines drains the action queue
@@ -622,6 +635,8 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	reconcileStart := time.Now()
 	if err := s.reconcile(cycleCtx); err != nil {
 		s.log.Warn("reconcile failed", "err", err)
+	} else {
+		s.firstReconcileDone.Store(true)
 	}
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("reconcile").Observe(time.Since(reconcileStart).Seconds())

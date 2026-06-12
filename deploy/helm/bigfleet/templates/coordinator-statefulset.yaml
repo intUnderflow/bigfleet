@@ -9,6 +9,12 @@ metadata:
     app.kubernetes.io/component: coordinator
 spec:
   clusterIP: None  # headless; needed for stable Raft peer addresses
+  # A joining replica is NOT ready until the leader has voted it in,
+  # but the leader must resolve the joiner's per-pod DNS to replicate
+  # to it — and on a full restart no replica is ready until a leader
+  # is elected. Without this the per-pod records vanish exactly when
+  # quorum formation needs them.
+  publishNotReadyAddresses: true
   selector:
     {{- include "bigfleet.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator
@@ -34,6 +40,11 @@ metadata:
 spec:
   serviceName: bigfleet-coordinator
   replicas: {{ .Values.coordinator.replicas }}
+  # Parallel, not OrderedReady: readiness now gates on Raft leadership,
+  # and after a full restart no replica reports ready until a quorum
+  # elects a leader. OrderedReady would hold pod 1 on pod 0's readiness
+  # — a permanent deadlock for a 3-voter cluster.
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       {{- include "bigfleet.selectorLabels" . | nindent 6 }}
@@ -57,7 +68,14 @@ spec:
             - --id=$(POD_NAME)
             - --data-dir={{ .Values.coordinator.dataDir }}
             - --metrics-addr=:{{ .Values.coordinator.service.metricsPort }}
-            - --rebalance-interval={{ .Values.coordinator.rebalanceInterval }}
+            # ADR-0047 quorum formation: every replica gets identical
+            # args (distroless image — no shell to vary them); the
+            # binary splits on the ordinal in --id. Only ordinal 0
+            # honours --bootstrap; every replica runs the membership
+            # reconciler against the headless Service below until the
+            # leader has it as a voter at its current address (also
+            # heals the pod-IP change a restart causes). Idempotent.
+            - --join-addr=bigfleet-coordinator.{{ .Values.namespace }}.svc:{{ .Values.coordinator.service.grpcPort }}
             {{- if .Values.coordinator.bootstrap }}
             - --bootstrap
             {{- end }}
@@ -73,6 +91,22 @@ spec:
               containerPort: {{ .Values.coordinator.service.raftPort }}
             - name: metrics
               containerPort: {{ .Values.coordinator.service.metricsPort }}
+          # Liveness: grpc_health_v1 default service — SERVING for the
+          # life of the process, decoupled from Raft so quorum loss
+          # never restart-loops the replicas that could re-form it.
+          livenessProbe:
+            grpc:
+              port: {{ .Values.coordinator.service.grpcPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Readiness: SERVING once this replica observes a Raft
+          # leader (itself or a peer). Gates a joiner until it's a
+          # voter; paces rolling upgrades on actual recovery.
+          readinessProbe:
+            grpc:
+              port: {{ .Values.coordinator.service.grpcPort }}
+              service: bigfleet.v1alpha1.Coordinator
+            periodSeconds: 5
           volumeMounts:
             - name: data
               mountPath: {{ .Values.coordinator.dataDir }}

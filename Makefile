@@ -64,9 +64,13 @@ build: ## Compile all binaries.
 
 ##@ Test
 
+# test: -timeout raised from go test's 10m default — the sim package's
+# closed-loop scenarios (M61/M67 repros) run ~2min without -race and
+# 6-10x that with it; the default timeout made CI red on every push
+# from M67.1 until M75 noticed.
 .PHONY: test
 test: ## Run unit tests with the race detector.
-	$(GO) test -race -count=1 ./...
+	$(GO) test -race -count=1 -timeout=30m ./...
 
 .PHONY: test-cover
 test-cover: ## Run tests with coverage.
@@ -83,7 +87,7 @@ e2e: ## Run kind-based end-to-end tests. Requires kind, kubectl, and a running D
 
 .PHONY: sim
 sim: ## Run the simulator scenario suite + verify recorded goldens.
-	$(GO) test -race -count=1 ./sim/...
+	$(GO) test -race -count=1 -timeout=30m ./sim/...
 	$(GO) build -o $(BIN)/fauxctl ./cmd/fauxctl
 	@for s in $$(ls sim/golden/*.jsonl 2>/dev/null | xargs -n1 basename | sed 's/\.jsonl//'); do \
 		$(BIN)/fauxctl verify $$s || exit 1; \
@@ -150,6 +154,10 @@ lint: tools ## Run linters.
 	$(BIN)/golangci-lint run ./...
 	$(BIN)/buf lint
 
+.PHONY: buf-breaking
+buf-breaking: tools ## Check proto wire compatibility (buf.yaml's breaking:FILE) against where this branch diverged from origin/main (M75 — configured since M0, unenforced until now).
+	$(BIN)/buf breaking --against ".git#ref=$$(git merge-base refs/remotes/origin/main HEAD)"
+
 .PHONY: helm-render
 helm-render: ## Render all Helm charts to /dev/null as a smoke check.
 	@command -v helm >/dev/null || { echo "helm not on PATH"; exit 1; }
@@ -191,7 +199,7 @@ vet: ## Run go vet, including every build-tagged test package — tagged code ro
 ##@ Verify
 
 .PHONY: verify
-verify: vet lint test integration ## What CI runs on every PR. Includes the in-process integration suite (~3s) — it rotted invisibly for weeks when nothing compiled its build tag.
+verify: vet lint buf-breaking test integration ## What CI runs on every PR. Includes the in-process integration suite (~3s) — it rotted invisibly for weeks when nothing compiled its build tag.
 
 .PHONY: clean
 clean: ## Remove build artifacts.

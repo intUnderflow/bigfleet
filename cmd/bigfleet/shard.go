@@ -774,6 +774,22 @@ func runShard(args []string) error {
 	if *metricsAddr != "0" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
+		// M75 probes. Liveness = this HTTP server answers (cheaper
+		// than scraping /metrics). Readiness = the first provider
+		// reconcile completed, so the shard is deciding against a
+		// real inventory view. Latched, and on purpose neither probe
+		// touches the coordinator — a shard must stay alive and ready
+		// with zero coordinators (static-stability hard rule).
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+			if sh.FirstReconcileDone() {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.Error(w, "first provider reconcile not yet complete", http.StatusServiceUnavailable)
+		})
 		// ADR-0019 / M44.4: pprof endpoints for live cpu/heap/goroutine
 		// capture during cloud runs. The bench at 50K Phase 1 calls
 		// takes 20 ms total on M5 Max; the same workload measures
