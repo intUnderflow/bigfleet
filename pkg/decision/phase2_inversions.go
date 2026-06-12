@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
@@ -40,6 +41,16 @@ func DefaultPhase2Options() Phase2Options {
 // of the next cycle's Phase 1 once the victims become Idle. Phase 2
 // only emits the Preempt actions; the resulting Idle machines feed the
 // next cycle.
+//
+// Victim eligibility is scoped by the Need's constraint scope (M68,
+// joining the ADR-0045 unification): a victim must host at least one
+// MinUnit chunk of the demanded shape, Same-carrying Needs preempt only
+// inside the domain Phase 1's pre-pass chose for them (skipping
+// entirely when no domain was choosable), and AcquisitionParked Needs
+// (ADR-0042 Addendum) never preempt — parking suppresses acquisition
+// and preemption alike. Scoping changes WHO is eligible; the §8
+// victim-score formula and drain-grace table are paper-locked and
+// untouched.
 //
 // Performance (M27): when multiple unresolved Needs share a (Profile
 // fingerprint, preemptor priority) key, the per-key MatchProfile +
@@ -94,6 +105,33 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 
 	out := Phase2Result{}
 	for _, u := range resolved {
+		// ADR-0042 Addendum guard (M68): a parked Need is one Phase 1
+		// decided not to acquire for this cycle; preempting victims for
+		// it contradicts that decision and disrupts workloads for demand
+		// that won't assemble. Parking suppresses acquisition AND
+		// preemption — the Need's demand still counts in the Phase 1
+		// credit fold (its partial assembly stays claimed), and its
+		// residual passes through here so it keeps aging in the
+		// shortfall buffer.
+		if u.Need.AcquisitionParked {
+			out.Unresolved = append(out.Unresolved, u)
+			continue
+		}
+
+		// ADR-0045 unification (M68): a Same-carrying Need can only use
+		// capacity freed inside the domain Phase 1's pre-pass chose for
+		// it (UnsatisfiedNeed.SameDomain, recorded by ChooseSameBucket).
+		// Preempting in another domain frees capacity the gang cannot
+		// assemble on — it masks the shortfall and churns victims. No
+		// recorded domain means no creditable or acquirable bucket
+		// existed anywhere; with no domain to extend, skip rather than
+		// preempt domain-blind.
+		sameKey, hasSame := occ.SameRequirementKey(u.Need.Profile)
+		if hasSame && u.SameDomain == "" {
+			out.Unresolved = append(out.Unresolved, u)
+			continue
+		}
+
 		preemptorPriority := u.Need.Profile.Priority()
 		key := cacheKey{fingerprint: u.Need.Profile.Fingerprint(), priority: preemptorPriority}
 
@@ -162,6 +200,17 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 		// Drain victims from the cached head until the freed
 		// EffectiveAllocatable covers the deficit vector (ADR-0027),
 		// skipping any already claimed in this Phase 2 pass.
+		//
+		// M68 eligibility scoping (changes WHO is eligible, never how
+		// victims are scored — the §8 formula above is paper-locked):
+		// (a) a victim too small to host one MinUnit chunk of the
+		//     demanded shape frees nothing the Need can use; preempting
+		//     it is pure disruption. Mirrors the seed walk's per-Need
+		//     MinUnit floor (occ.SeedConfiguredSupply).
+		// (b) Same Needs count only victims inside their chosen domain.
+		// Both are per-Need facts (MinUnit and domain vary across Needs
+		// sharing a cache key), so they apply here at the drain walk,
+		// not in the cached per-(fingerprint, priority) scoring pass.
 		remaining := u.Deficit
 		var picks []scoredVictim
 		for _, sv := range sorted {
@@ -171,8 +220,17 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 			if _, taken := claimed[sv.m.ID]; taken {
 				continue
 			}
+			alloc := needs.ResourceQtysFromMap(sv.m.EffectiveAllocatable())
+			if !needs.Covers(alloc, u.Need.MinUnit) {
+				continue
+			}
+			if hasSame {
+				if v, ok := lookupAttribute(sameKey, sv.m); !ok || v != u.SameDomain {
+					continue
+				}
+			}
 			picks = append(picks, sv)
-			remaining = needs.SubResources(remaining, needs.ResourceQtysFromMap(sv.m.EffectiveAllocatable()))
+			remaining = needs.SubResources(remaining, alloc)
 		}
 
 		for _, c := range picks {

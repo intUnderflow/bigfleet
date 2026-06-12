@@ -119,7 +119,7 @@ Lowest score wins. Two penalties, deliberately distinct:
 
 ### Phase 3 — Reclaim excess
 
-Walk configured machines whose cluster no longer needs them. Drain to Idle. The release order is governed by `reclamation_penalty` (cheapest first).
+Shrinkage-only (ADR-0045): a machine is excess iff the cluster's bound capacity exceeds its demand — the cycle's attribution walk (the same one Phase 1 credits supply with) left it unclaimed. At steady demand Phase 3 emits nothing; it never re-derives per-cycle keep-sets, and it carries no arithmetic about whether the cluster's scheduler can *use* its bound capacity (satisfied-but-stuck is the cluster's problem). Excess drains to Idle in the paper-§8 release order, governed by price and `reclamation_penalty`.
 
 ### Why phases, not a single optimiser
 

@@ -102,14 +102,36 @@ func (s *Shard) Shortfalls() []Shortfall {
 // tracker from Phase 2's unresolved set. Existing entries age by one
 // cycle; entries no longer present are dropped (eventually-consistent —
 // shortfalls that resolve naturally just disappear).
+//
+// M68 (philosophy-conformance audit, satisfaction-arithmetic lens):
+// distinct unresolved Needs routinely share a Profile fingerprint —
+// several parked gangs of one workload shape differ only by
+// co-location Group. The ledger entry is the fingerprint's TOTAL unmet
+// demand, so same-fingerprint deficits are summed per cycle
+// (resource-vector add) and the entry ages once per fingerprint per
+// cycle. Pre-fix, last-writer-wins kept only one gang's deficit and
+// AgeCycles advanced once per seed — N gangs aged their fingerprint N×
+// per cycle, distorting the paper-§9 age escalation. The ledger stays
+// fingerprint-keyed rather than disaggregating by Group: its only
+// consumer is the coordinator report (Shortfalls(), top-100 by
+// priority), and the coordinator seeks supply by Profile — per-gang
+// rows would add identity it cannot act on.
 func (s *Shard) recordShortfalls(unresolved []shortfallSeed) {
 	s.shortfallMu.Lock()
 	defer s.shortfallMu.Unlock()
 
-	seen := make(map[string]struct{}, len(unresolved))
+	cycle := make(map[string]shortfallSeed, len(unresolved))
 	for _, u := range unresolved {
 		fp := u.Profile.Fingerprint()
-		seen[fp] = struct{}{}
+		if agg, ok := cycle[fp]; ok {
+			agg.Deficit = needs.AddResources(agg.Deficit, u.Deficit)
+			cycle[fp] = agg
+			continue
+		}
+		cycle[fp] = u
+	}
+
+	for fp, u := range cycle {
 		if existing, ok := s.shortfalls[fp]; ok {
 			existing.Deficit = u.Deficit
 			existing.AgeCycles++
@@ -124,7 +146,7 @@ func (s *Shard) recordShortfalls(unresolved []shortfallSeed) {
 	}
 	// Drop entries that have aged out (no longer present in this cycle).
 	for fp := range s.shortfalls {
-		if _, still := seen[fp]; !still {
+		if _, still := cycle[fp]; !still {
 			delete(s.shortfalls, fp)
 		}
 	}

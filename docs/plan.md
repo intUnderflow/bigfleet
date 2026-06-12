@@ -870,7 +870,7 @@ validation ladder; everything else can proceed in parallel.
 | M | Scope | Depends on | Author gate |
 |---|-------|------------|-------------|
 | M67 | **Consumed-capacity attribution.** Sim-first repro of the gross-Allocatable credit defect (engine task: `p1_unsatisfied=0` with unplaceable pods); ADR for where consumption lives (roll-up carries total desired state per the paper's full-replacement semantics, vs Phase 1 modeling consumption); implement; dev-50-v2 (catalog gate) goes green and replaces the legacy gate. | — | ADR sign-off |
-| M68 | **Single attribution.** Phase 3 derives its keep-set from Phase 1's claimed-set (kills the bootstrap≈reclaim oscillator; supersedes the four mirror-patches since ADR-0027). | M67 | ADR sign-off (likely same ADR) |
+| M68 | **Phase 2 joins the ADR-0045 unification** (repurposed — the original single-attribution scope dissolved into M67). Victim *eligibility* scoped by the Need's constraint scope, scoring untouched: MinUnit chunk filter; Same Needs preempt only in their Phase-1-chosen domain (skip when no domain was choosable); AcquisitionParked Needs never preempt. Plus the shortfall-ledger fix: same-fingerprint deficits sum per cycle, age once per fingerprint per cycle. From the 2026-06-12 philosophy-conformance audit. | M67 | — |
 | M69 | **Reclaim safety path.** Phase 3 Reclaims route through the operator's existing cordon/PDB/evict path (as Preempts already do) with real drain-grace; fix the false PDB claims in user-stories and the phase3 comment. | — | — |
 | M70 | **Safety rails.** Per-cycle reclaim blast-radius cap with a production default; empty-roll-up guard; global kill switch (pause acquisitions/reclaims); dry-run/shadow mode (recommend, don't act); wire `machine.Validate` into provider ingest; structured decision audit log. | — | — |
 | M71 | **Provider edge I.** Dial-out gRPC client + `--provider-addr`; shard→provider fencing on the wire (`shard_id`, `shard_epoch`, `sequence_number` on lifecycle RPCs) with provider-side reject semantics; conformance coverage for fencing and idempotency on all six RPCs. | — | — |
@@ -886,7 +886,10 @@ validation ladder; everything else can proceed in parallel.
 addendum) M71 ✅ M72 ✅ M74 ✅ (ADR-0048) M75 ✅ (ADR-0047). M67
 engine work ✅ per ADR-0045 (Phase 3 shrinkage-only on Phase 1's
 claimed-set; the m67 repro inverted into the bound-counts contract
-pin) — M68 dissolved into it as the ADR records. M67's dev-50-v2
+pin) — the original M68 scope dissolved into it as the ADR records;
+M68 was repurposed from the 2026-06-12 philosophy-conformance audit
+(Phase 2 constraint-scope victim eligibility + shortfall-ledger
+summing) and is ✅. M67's dev-50-v2
 gate-redefinition tail (the runner's chain-alive bind% gate vs the
 ADR's "demand covered by bound + zero reclaim churn") is the
 remaining follow-up and lands with the M77 gate swap. M73/M77/M78
