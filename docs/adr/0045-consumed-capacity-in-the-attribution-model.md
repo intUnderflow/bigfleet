@@ -88,3 +88,13 @@ persistence/aging rule that overrides bound-vs-demand arithmetic.
 - The papers need no diff: this restores §8's "reclaim follows the
   next roll-up having fewer needs" and §16's division of labour,
   rather than revising them.
+- **Future work (author, 2026-06-12): the sanctioned home for
+  stuck-pod smartness is the operator, not the core.** The per-
+  cluster operator already translates cluster reality into demand;
+  a smarter reference operator — or a user's own specialized one —
+  can observe satisfied-but-stuck conditions and reshape what it
+  asks BigFleet for, with zero core changes. This mirrors the
+  out-of-tree provider model on the demand side: BigFleet ships the
+  wire contract and a reference operator; specialization lives at
+  the edges, where cluster-specific knowledge lives. Not scheduled;
+  recorded so the extension point is designed-for, not rediscovered.
