@@ -8,9 +8,7 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
@@ -20,8 +18,15 @@ import (
 // returns when any one of them errors out. The caller (Run) handles the
 // reconnect backoff.
 func (o *Operator) runOnce(ctx context.Context) error {
-	conn, err := grpc.NewClient(o.cfg.ShardAddress,
-		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	// ADR-0048: dial options carry mTLS when Config.TLS is set,
+	// plaintext otherwise. Built per reconnect so rotated certs are
+	// re-read even on a fresh connection (the reload callbacks cover
+	// in-connection rotation already).
+	dialOpts, err := o.cfg.TLS.DialOptions()
+	if err != nil {
+		return fmt.Errorf("tls: %w", err)
+	}
+	conn, err := grpc.NewClient(o.cfg.ShardAddress, dialOpts...)
 	if err != nil {
 		return fmt.Errorf("dial shard: %w", err)
 	}

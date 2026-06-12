@@ -12,9 +12,57 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
+
+// ADR-0048 caller identity. When the transport is mTLS the verified
+// client certificate's bigfleet:// URI SAN gates every RPC:
+//
+//   - ReportShard binds the caller-asserted shard_id to
+//     bigfleet://shard/<shard_id> — the same binding Session applies
+//     to Hello.cluster_id on the shard.
+//   - The whole admin surface (M15: Assign/UnassignDomain,
+//     RemoveShard, ListShards, ListDomainAssignments; M24: ListQuotas;
+//     M75: JoinRaftCluster, SnapshotSave) requires bigfleet://admin.
+//     Coordinator replicas carry the admin SAN themselves: they call
+//     JoinRaftCluster on each other (ADR-0047) and ARE the admin
+//     domain.
+//
+// On plaintext transports both checks are skipped — the pre-ADR-0048
+// trust-the-network posture, retained as the zero-config default.
+
+// requireShardIdentity enforces the shard_id ↔ URI SAN binding.
+func (g *GRPCServer) requireShardIdentity(ctx context.Context, shardID string) error {
+	uri, mtls, err := grpcutil.PeerIdentity(ctx)
+	if !mtls {
+		return nil
+	}
+	if want := grpcutil.ShardURI(shardID); err != nil || uri != want {
+		g.c.log.Error("coordinator rejected shard identity",
+			"shard_id", shardID, "presented_identity", uri, "err", err)
+		return status.Errorf(codes.PermissionDenied,
+			"coordinator: client certificate identity %q does not authorize shard_id %q", uri, shardID)
+	}
+	return nil
+}
+
+// requireAdminIdentity enforces the bigfleet://admin SAN on the admin
+// surface.
+func (g *GRPCServer) requireAdminIdentity(ctx context.Context, rpc string) error {
+	uri, mtls, err := grpcutil.PeerIdentity(ctx)
+	if !mtls {
+		return nil
+	}
+	if err != nil || uri != grpcutil.AdminURI {
+		g.c.log.Error("coordinator rejected admin identity",
+			"rpc", rpc, "presented_identity", uri, "err", err)
+		return status.Errorf(codes.PermissionDenied,
+			"coordinator: %s requires client certificate URI SAN %q (got %q)", rpc, grpcutil.AdminURI, uri)
+	}
+	return nil
+}
 
 // GRPCServer wraps a Coordinator with the proto-generated server
 // surface. Construct it after the Coordinator is up and register it
@@ -83,6 +131,9 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 	}
 	if req == nil || req.GetShardId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "shard_id required")
+	}
+	if err := g.requireShardIdentity(ctx, req.GetShardId()); err != nil {
+		return nil, err
 	}
 	shardID := ShardID(req.GetShardId())
 
@@ -251,6 +302,9 @@ func (g *GRPCServer) AssignDomain(ctx context.Context, req *pb.AssignDomainReque
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
 	}
+	if err := g.requireAdminIdentity(ctx, "AssignDomain"); err != nil {
+		return nil, err
+	}
 	if req == nil || req.GetTopologyKey() == "" || req.GetTopologyValue() == "" || req.GetShardId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "topology_key, topology_value, shard_id all required")
 	}
@@ -272,6 +326,9 @@ func (g *GRPCServer) UnassignDomain(ctx context.Context, req *pb.UnassignDomainR
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
 	}
+	if err := g.requireAdminIdentity(ctx, "UnassignDomain"); err != nil {
+		return nil, err
+	}
 	if req == nil || req.GetTopologyKey() == "" || req.GetTopologyValue() == "" {
 		return nil, status.Error(codes.InvalidArgument, "topology_key and topology_value required")
 	}
@@ -287,6 +344,9 @@ func (g *GRPCServer) UnassignDomain(ctx context.Context, req *pb.UnassignDomainR
 func (g *GRPCServer) RemoveShard(ctx context.Context, req *pb.RemoveShardRequest) (*pb.RemoveShardResponse, error) {
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireAdminIdentity(ctx, "RemoveShard"); err != nil {
+		return nil, err
 	}
 	if req == nil || req.GetShardId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "shard_id required")
@@ -304,9 +364,12 @@ func (g *GRPCServer) RemoveShard(ctx context.Context, req *pb.RemoveShardRequest
 // The State guards itself with an RLock so this is safe on followers
 // too, but we still gate to leader-only for v1 to keep the read story
 // consistent (no stale-read footguns until we explicitly opt in).
-func (g *GRPCServer) ListShards(_ context.Context, _ *pb.ListShardsRequest) (*pb.ListShardsResponse, error) {
+func (g *GRPCServer) ListShards(ctx context.Context, _ *pb.ListShardsRequest) (*pb.ListShardsResponse, error) {
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireAdminIdentity(ctx, "ListShards"); err != nil {
+		return nil, err
 	}
 	entries := g.c.State().Shards()
 	out := make([]*pb.ShardRegistryEntry, 0, len(entries))
@@ -324,9 +387,12 @@ func (g *GRPCServer) ListShards(_ context.Context, _ *pb.ListShardsRequest) (*pb
 // ListQuotas returns the speculative-pool slice for every
 // (provider, region) the coordinator has assigned. Read path; same
 // leader-only contract as ListShards / ListDomainAssignments. M24.
-func (g *GRPCServer) ListQuotas(_ context.Context, _ *pb.ListQuotasRequest) (*pb.ListQuotasResponse, error) {
+func (g *GRPCServer) ListQuotas(ctx context.Context, _ *pb.ListQuotasRequest) (*pb.ListQuotasResponse, error) {
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireAdminIdentity(ctx, "ListQuotas"); err != nil {
+		return nil, err
 	}
 	all := g.c.State().Quotas()
 	out := make([]*pb.QuotaAllocation, 0, len(all))
@@ -356,9 +422,14 @@ func (g *GRPCServer) ListQuotas(_ context.Context, _ *pb.ListQuotasRequest) (*pb
 // through the leader's log. AddVoter of an existing voter is
 // idempotent (the configuration change updates the address in
 // place), so a replica re-joining after a restart is safe.
-func (g *GRPCServer) JoinRaftCluster(_ context.Context, req *pb.JoinRaftClusterRequest) (*pb.JoinRaftClusterResponse, error) {
+func (g *GRPCServer) JoinRaftCluster(ctx context.Context, req *pb.JoinRaftClusterRequest) (*pb.JoinRaftClusterResponse, error) {
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	// Joining replicas present the coordinator's own certificate,
+	// which carries bigfleet://admin (ADR-0048).
+	if err := g.requireAdminIdentity(ctx, "JoinRaftCluster"); err != nil {
+		return nil, err
 	}
 	if req == nil || req.GetNodeId() == "" || req.GetRaftAddress() == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id and raft_address required")
@@ -376,6 +447,11 @@ func (g *GRPCServer) JoinRaftCluster(_ context.Context, req *pb.JoinRaftClusterR
 func (g *GRPCServer) SnapshotSave(_ *pb.SnapshotSaveRequest, stream pb.Coordinator_SnapshotSaveServer) error {
 	if !g.c.IsLeader() {
 		return status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	// SnapshotSave hands out the full coordinator state — admin-only
+	// under mTLS (ADR-0048).
+	if err := g.requireAdminIdentity(stream.Context(), "SnapshotSave"); err != nil {
+		return err
 	}
 	meta, src, err := g.c.openLatestSnapshot()
 	if err != nil {
@@ -412,9 +488,12 @@ func (g *GRPCServer) SnapshotSave(_ *pb.SnapshotSaveRequest, stream pb.Coordinat
 
 // ListDomainAssignments returns the topology-domain → shard mapping.
 // Same leader-only contract as ListShards.
-func (g *GRPCServer) ListDomainAssignments(_ context.Context, _ *pb.ListDomainAssignmentsRequest) (*pb.ListDomainAssignmentsResponse, error) {
+func (g *GRPCServer) ListDomainAssignments(ctx context.Context, _ *pb.ListDomainAssignmentsRequest) (*pb.ListDomainAssignmentsResponse, error) {
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireAdminIdentity(ctx, "ListDomainAssignments"); err != nil {
+		return nil, err
 	}
 	entries := g.c.State().Shards()
 	out := make([]*pb.DomainAssignment, 0)

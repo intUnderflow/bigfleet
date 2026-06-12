@@ -608,8 +608,17 @@ func runShard(args []string) error {
 	coordinatorAddr := fs.String("coordinator-addr", "", "host:port of the coordinator's gRPC service. When set, the shard heartbeats to ReportShard so it appears in coordinator membership and can have domains assigned to it. Empty disables — single-shard / dev runs without a coordinator stay unaffected.")
 	advertiseAddr := fs.String("advertise-addr", "", "host:port the coordinator should record as this shard's dial address. Defaults to --listen; in StatefulSet deploys, set to the per-pod headless-Service DNS, e.g. bigfleet-shard-0.bigfleet-shard-headless:7780.")
 	heartbeatInterval := fs.Duration("coordinator-heartbeat-interval", 10*time.Second, "how often to send ReportShard to the coordinator. Below ~5s starts spamming Raft applies on registration churn; above ~30s makes coordinator-side LastHeartbeat staleness alarms fire on healthy shards.")
+	// ADR-0048: one symmetric flag set covers every gRPC edge of this
+	// process — the Session server, the coordinator report client, and
+	// the provider dial-out. The certificate must carry the URI SAN
+	// bigfleet://shard/<--id>.
+	var tlsCfg grpcutil.TLSConfig
+	tlsCfg.RegisterFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
+	}
+	if err := tlsCfg.Validate(); err != nil {
+		return err
 	}
 	if *listen == "" {
 		return errors.New("--listen is required")
@@ -642,7 +651,7 @@ func runShard(args []string) error {
 		if *seedMachines > 0 || *seedSpeculative > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 {
 			return errors.New("--seed-* and --failure-rate-per-sec drive the in-process fake provider and cannot be combined with --provider-addr")
 		}
-		pc, err := grpcclient.New(*providerAddr, grpcclient.Identity{ShardID: *shardID, Epoch: epoch})
+		pc, err := grpcclient.New(*providerAddr, grpcclient.Identity{ShardID: *shardID, Epoch: epoch}, tlsCfg)
 		if err != nil {
 			return fmt.Errorf("provider-addr: %w", err)
 		}
@@ -723,7 +732,11 @@ func runShard(args []string) error {
 		seedFakeInventory(fakeProv, sh, *seedMachines, *seedSpeculative, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
 	}
 
-	srv := grpc.NewServer(grpcutil.ServerOptions()...)
+	serverOpts, err := tlsCfg.ServerOptions()
+	if err != nil {
+		return err
+	}
+	srv := grpc.NewServer(serverOpts...)
 	pb.RegisterShardServer(srv, sh)
 
 	lis, err := net.Listen("tcp", *listen)
@@ -764,6 +777,7 @@ func runShard(args []string) error {
 			View:               coordclient.ViewFromShard(sh),
 			CoordinatorTerm:    sh.CoordinatorTerm(),
 			ReportInterval:     *heartbeatInterval,
+			TLS:                tlsCfg,
 			Logger:             logger,
 		})
 		if err != nil {

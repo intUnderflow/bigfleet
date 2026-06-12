@@ -13,7 +13,7 @@
 | [5](/adr/0005-provider-boundary-is-the-validation-point/) | Accepted | Provider boundary is the validation point |
 | [6](/adr/0006-shard-self-registers-via-heartbeat/) | Accepted | Shard self-registers via heartbeat |
 | [7](/adr/0007-cluster-to-shard-binding-is-operator-chosen-at-deploy-time/) | Accepted | Cluster-to-shard binding is operator-chosen at deploy time |
-| [8](/adr/0008-coordinator-admin-rpcs-are-leader-only-and-unauthenticated-in-v1/) | Accepted | Coordinator admin RPCs are leader-only and unauthenticated in v1 |
+| [8](/adr/0008-coordinator-admin-rpcs-are-leader-only-and-unauthenticated-in-v1/) | Amended by ADR-0048 | Coordinator admin RPCs are leader-only and unauthenticated in v1 |
 | [9](/adr/0009-reclaim-uses-policy-v1-eviction-and-async-drain/) | Accepted | Reclaim uses policy/v1 eviction and async drain |
 | [10](/adr/0010-minimum-kubernetes-version-1-31/) | Accepted | Minimum Kubernetes version 1.31 |
 | [11](/adr/0011-bootstrap-template-is-helm-values-text-template/) | Accepted | Bootstrap template is Helm values text template |
@@ -54,3 +54,4 @@
 | [45](/adr/0045-consumed-capacity-in-the-attribution-model/) | Proposed | Consumed capacity enters the attribution model — operator-reported per-machine consumption + bound/open demand split (author decision pending) |
 | [46](/adr/0046-actuation-safety-rails/) | Accepted | Actuation safety rails — per-cluster reclaim blast-radius cap, empty-roll-up quarantine, global kill switch |
 | [47](/adr/0047-coordinator-raft-join-and-offline-restore/) | Accepted | Coordinator quorum formation by ordinal join; offline snapshot restore as single-voter recovery |
+| [48](/adr/0048-mtls-and-uri-san-identity/) | Accepted | Opt-in file-based mTLS with bigfleet:// URI SAN identity binding — supersedes ADR-0008's transport posture |

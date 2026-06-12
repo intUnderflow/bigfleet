@@ -11,6 +11,7 @@ import (
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
@@ -54,7 +55,7 @@ func TestShardRestart_RebuildsProtectionStateOverWire(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadEpoch: %v", err)
 		}
-		cli, err := grpcclient.New(lis.Addr().String(), grpcclient.Identity{ShardID: "shard-restart", Epoch: epoch})
+		cli, err := grpcclient.New(lis.Addr().String(), grpcclient.Identity{ShardID: "shard-restart", Epoch: epoch}, grpcutil.TLSConfig{})
 		if err != nil {
 			t.Fatalf("grpcclient.New: %v", err)
 		}

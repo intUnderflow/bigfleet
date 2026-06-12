@@ -169,6 +169,14 @@ var (
 		Help: "Number of currently-installed operator sessions on this shard. Should equal the count of clusters bound to this shard's domain assignment; lower means at least one cluster's operator hasn't dialed (or got disconnected).",
 	})
 
+	// ADR-0048: any non-zero rate here is a security event — a caller
+	// holding a valid client certificate asserted a cluster_id its
+	// certificate does not carry. Alert on it.
+	ShardSessionIdentityRejected = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_session_identity_rejected_total",
+		Help: "Count of operator sessions terminated because the mTLS client certificate's bigfleet:// URI SAN did not match the Hello.cluster_id (or did not carry exactly one bigfleet:// URI SAN). Zero in healthy fleets; non-zero means a misissued certificate or an impersonation attempt (ADR-0048).",
+	})
+
 	// M44.4 Drop B: gauge of currently-running execute() goroutines.
 	// Compare against the configured executeConcurrency cap to see if
 	// the shard is parallelism-bound during burst — a sustained gauge

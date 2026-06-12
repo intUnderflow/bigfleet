@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
@@ -43,6 +44,23 @@ func (s *Shard) Session(stream pb.Shard_SessionServer) error {
 		return status.Error(codes.InvalidArgument, "session: first frame must be Hello with cluster_id")
 	}
 	cluster := machine.ClusterID(hello.GetClusterId())
+	// ADR-0048 identity binding: on an mTLS transport the client
+	// certificate must assert the cluster it claims to be — the
+	// Hello.cluster_id is otherwise a free-text impersonation vector
+	// (receive another cluster's reclaim instructions, or zero its
+	// capacity with a forged full-replacement roll-up). Plaintext
+	// transports skip the check: identity is only as strong as the
+	// transport, and the plaintext posture is documented in the ADR.
+	if uri, mtls, idErr := grpcutil.PeerIdentity(stream.Context()); mtls {
+		if want := grpcutil.ClusterURI(string(cluster)); idErr != nil || uri != want {
+			metrics.ShardSessionIdentityRejected.Inc()
+			s.log.Error("operator session identity rejected",
+				"cluster", cluster, "presented_identity", uri, "err", idErr)
+			return status.Errorf(codes.PermissionDenied,
+				"session: client certificate identity %q does not authorize cluster_id %q (want URI SAN %q)",
+				uri, cluster, want)
+		}
+	}
 	sess := newOperatorSession(cluster, stream)
 	s.installSession(cluster, sess)
 	defer s.removeSession(cluster, sess)

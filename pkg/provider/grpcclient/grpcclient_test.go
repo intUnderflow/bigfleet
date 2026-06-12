@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
@@ -53,7 +54,7 @@ func newEpoch(t *testing.T, restarts int) *fencing.Epoch {
 
 func newClient(t *testing.T, addr, shardID string, epoch *fencing.Epoch) *grpcclient.Client {
 	t.Helper()
-	c, err := grpcclient.New(addr, grpcclient.Identity{ShardID: shardID, Epoch: epoch})
+	c, err := grpcclient.New(addr, grpcclient.Identity{ShardID: shardID, Epoch: epoch}, grpcutil.TLSConfig{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -162,13 +163,13 @@ func TestClient_ErrorMapping(t *testing.T) {
 // fencing identity — a shard that can't fence must not reach a provider.
 func TestClient_IdentityValidation(t *testing.T) {
 	epoch := newEpoch(t, 1)
-	if _, err := grpcclient.New("", grpcclient.Identity{ShardID: "s", Epoch: epoch}); err == nil {
+	if _, err := grpcclient.New("", grpcclient.Identity{ShardID: "s", Epoch: epoch}, grpcutil.TLSConfig{}); err == nil {
 		t.Error("empty addr accepted")
 	}
-	if _, err := grpcclient.New("127.0.0.1:1", grpcclient.Identity{Epoch: epoch}); err == nil {
+	if _, err := grpcclient.New("127.0.0.1:1", grpcclient.Identity{Epoch: epoch}, grpcutil.TLSConfig{}); err == nil {
 		t.Error("empty ShardID accepted")
 	}
-	if _, err := grpcclient.New("127.0.0.1:1", grpcclient.Identity{ShardID: "s"}); err == nil {
+	if _, err := grpcclient.New("127.0.0.1:1", grpcclient.Identity{ShardID: "s"}, grpcutil.TLSConfig{}); err == nil {
 		t.Error("nil Epoch accepted")
 	}
 }

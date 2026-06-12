@@ -2,8 +2,10 @@
 #
 # Renders into a StatefulSet for the coordinator (Raft state on a PVC)
 # and a Deployment for the shards. Real production deployments should
-# (a) raise replica counts, (b) attach mTLS via a sidecar or a custom
-# values overlay, (c) wire ServiceMonitor / PodMonitor for Prometheus.
+# (a) raise replica counts, (b) enable mTLS by pointing the tls
+# secretName values below at cert-manager-issued Secrets (ADR-0048;
+# see docs/operator-guide.md → "Transport security"), (c) wire
+# ServiceMonitor / PodMonitor for Prometheus.
 
 image:
   repository: ghcr.io/intunderflow/bigfleet
@@ -36,6 +38,21 @@ coordinator:
     grpcPort: 7790
     raftPort: 7791
     metricsPort: 8790
+  # tls.secretName — name of an EXISTING kubernetes.io/tls Secret
+  # (keys tls.crt / tls.key / ca.crt — exactly what a cert-manager
+  # Certificate produces) mounted into the coordinator. Non-empty =
+  # ADR-0048 mTLS on the coordinator gRPC port: clients must present
+  # a CA-signed certificate, the admin surface requires the URI SAN
+  # bigfleet://admin, and ReportShard binds shard_id to
+  # bigfleet://shard/<shard_id>. The coordinator's own certificate
+  # must carry bigfleet://admin (replicas call JoinRaftCluster on
+  # each other) plus DNS SANs for the bigfleet-coordinator Service
+  # names. Empty = plaintext (the default; ADR-0008 posture). The
+  # chart never generates certificates — cert-manager is the expected
+  # issuer (operator-guide has the Certificate manifests). The Raft
+  # port stays plaintext either way (ADR-0048 documents why).
+  tls:
+    secretName: ""
 
 shard:
   enabled: true
@@ -55,6 +72,20 @@ shard:
   service:
     grpcPort: 7780
     metricsPort: 8780
+  # tls.secretName — name of an EXISTING kubernetes.io/tls Secret
+  # (keys tls.crt / tls.key / ca.crt) mounted into every shard pod.
+  # Non-empty = ADR-0048 mTLS on the Session port AND on the shard's
+  # outbound dials (coordinator reports, provider): operators must
+  # present a certificate whose URI SAN matches their asserted
+  # cluster_id (bigfleet://cluster/<cluster_id>), and the shard's own
+  # certificate must carry bigfleet://shard/<shard_id> plus DNS SANs
+  # for its per-pod headless-Service name. Because the SAN embeds the
+  # shard_id, one shared Secret only fits replicas=1; multi-shard
+  # installs need a per-ordinal Secret (issue one Certificate per
+  # shard and overlay per-pod — see operator-guide). Empty =
+  # plaintext (the default).
+  tls:
+    secretName: ""
   # provider.addr — host:port of the out-of-tree CapacityProvider's gRPC
   # service (M71). When set, shards dial it and fence every mutating call
   # with (shard_id, shard_epoch, sequence_number) per paper §11. Empty

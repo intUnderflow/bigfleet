@@ -79,6 +79,15 @@ spec:
             {{- if .Values.coordinator.bootstrap }}
             - --bootstrap
             {{- end }}
+            {{- if .Values.coordinator.tls.secretName }}
+            # ADR-0048 mTLS: serves the gRPC port and dials peers'
+            # JoinRaftCluster with the same certificate, which must
+            # carry the URI SAN bigfleet://admin. Raft (:{{ .Values.coordinator.service.raftPort }})
+            # stays plaintext — see ADR-0048.
+            - --tls-cert=/etc/bigfleet/tls/tls.crt
+            - --tls-key=/etc/bigfleet/tls/tls.key
+            - --tls-ca=/etc/bigfleet/tls/ca.crt
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom:
@@ -91,6 +100,24 @@ spec:
               containerPort: {{ .Values.coordinator.service.raftPort }}
             - name: metrics
               containerPort: {{ .Values.coordinator.service.metricsPort }}
+          {{- if .Values.coordinator.tls.secretName }}
+          # ADR-0048: kubelet's gRPC probe is plaintext-only and can't
+          # complete an mTLS handshake, so with TLS on the gRPC port
+          # the probes move to their HTTP twins on the metrics port.
+          # Same semantics: liveness = process up, readiness = a Raft
+          # leader observed.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+          {{- else }}
           # Liveness: grpc_health_v1 default service — SERVING for the
           # life of the process, decoupled from Raft so quorum loss
           # never restart-loops the replicas that could re-form it.
@@ -107,11 +134,23 @@ spec:
               port: {{ .Values.coordinator.service.grpcPort }}
               service: bigfleet.v1alpha1.Coordinator
             periodSeconds: 5
+          {{- end }}
           volumeMounts:
             - name: data
               mountPath: {{ .Values.coordinator.dataDir }}
+            {{- if .Values.coordinator.tls.secretName }}
+            - name: tls
+              mountPath: /etc/bigfleet/tls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.coordinator.resources | nindent 12 }}
+      {{- if .Values.coordinator.tls.secretName }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.coordinator.tls.secretName }}
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

@@ -105,6 +105,16 @@ spec:
             {{- if .Values.shard.auditLog }}
             - --audit-log={{ .Values.shard.auditLog }}
             {{- end }}
+            {{- if .Values.shard.tls.secretName }}
+            # ADR-0048 mTLS: one flag set covers the Session server,
+            # the coordinator report dial, and the provider dial. The
+            # certificate must carry bigfleet://shard/<shard_id>;
+            # because the SAN embeds the id, a shared Secret only
+            # fits replicas=1 (see values.yaml).
+            - --tls-cert=/etc/bigfleet/tls/tls.crt
+            - --tls-key=/etc/bigfleet/tls/tls.key
+            - --tls-ca=/etc/bigfleet/tls/ca.crt
+            {{- end }}
           env:
             - name: POD_NAME
               valueFrom:
@@ -134,8 +144,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.shard.dataDir }}
+            {{- if .Values.shard.tls.secretName }}
+            - name: tls
+              mountPath: /etc/bigfleet/tls
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.shard.resources | nindent 12 }}
+      {{- if .Values.shard.tls.secretName }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ .Values.shard.tls.secretName }}
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bfv1alpha1 "github.com/intUnderflow/bigfleet/pkg/apis/bigfleet/v1alpha1"
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/operator"
 )
@@ -53,6 +54,11 @@ func run(args []string) error {
 	ackConcurrency := fs.Int("ack-concurrency", 16, "max parallel CR Pending→Acknowledged status writes per rollup")
 	rollupInterval := fs.Duration("rollup-interval", 0, "interval between rollups; 0 means use the operator default (10s)")
 	bootstrapTemplateFile := fs.String("bootstrap-template-file", "", "path to a Go text/template file for kubelet userdata. Context: .ClusterID, .Requirements ([]{Key, Operator, Values}). Empty → use the built-in stub renderer (M21).")
+	// ADR-0048: the operator's certificate must carry the URI SAN
+	// bigfleet://cluster/<--cluster-id>; the shard binds the asserted
+	// cluster_id to it and kills mismatched sessions.
+	var tlsCfg grpcutil.TLSConfig
+	tlsCfg.RegisterFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -88,6 +94,7 @@ func run(args []string) error {
 	op, err := operator.New(operator.Config{
 		ClusterID:              machine.ClusterID(*clusterID),
 		ShardAddress:           *shardAddr,
+		TLS:                    tlsCfg,
 		KubeClient:             kc,
 		AcknowledgeConcurrency: *ackConcurrency,
 		RollupInterval:         *rollupInterval,

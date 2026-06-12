@@ -74,6 +74,106 @@ helm install bigfleet-unschedulable-pod-controller \
 
 Equivalent install commands using a git checkout (useful for development or air-gapped environments) replace `oci://ghcr.io/intunderflow/charts/<chart> --version <V>` with `./deploy/helm/<chart>` and drop the version flag.
 
+## Transport security (mTLS + identity)
+
+BigFleet ships plaintext by default — the quickstart and the scaletest harness stay zero-config, and a plaintext install is making the ADR-0008 trust-the-network choice with eyes open. For any deployment where a shard or coordinator is reachable from more than one trust domain, enable [ADR-0048](adr/0048-mtls-and-uri-san-identity.md) mTLS: it encrypts every gRPC edge **and** binds the protobuf-asserted identities (`Hello.cluster_id`, `ShardReport.shard_id`) to the client certificate, which is what actually stops one cluster impersonating another (stealing its reclaim instructions, or zeroing its capacity with a forged full-replacement roll-up).
+
+### How it works
+
+Every binary takes the same three flags; the charts wire them when you set a `tls.secretName` value:
+
+```
+--tls-cert=/etc/bigfleet/tls/tls.crt
+--tls-key=/etc/bigfleet/tls/tls.key
+--tls-ca=/etc/bigfleet/tls/ca.crt
+```
+
+All three set = mTLS (servers require and verify client certs; clients verify servers — both against the same CA bundle). None = plaintext. A partial set is a startup error. One flag set covers every edge of a process: the shard's flags apply to its Session server, its coordinator dial, and its provider dial.
+
+### URI SAN conventions
+
+Identity is a URI SAN on the certificate — **exactly one `bigfleet://` URI per certificate**:
+
+| Component | Required URI SAN | Also needs |
+|---|---|---|
+| Cluster operator | `bigfleet://cluster/<cluster_id>` | — |
+| Shard | `bigfleet://shard/<shard_id>` | DNS SAN for its per-pod headless-Service name |
+| Coordinator | `bigfleet://admin` | DNS SANs for the `bigfleet-coordinator` Service names |
+| `bigfleetctl` | `bigfleet://admin` | — |
+
+The shard terminates a Session whose certificate doesn't carry the asserted `cluster_id` with `PermissionDenied` and increments `bigfleet_shard_session_identity_rejected_total` — alert on any non-zero rate. The coordinator applies the same binding to `ReportShard.shard_id` and gates the whole admin surface (`AssignDomain`, `UnassignDomain`, `RemoveShard`, `ListShards`, `ListDomainAssignments`, `ListQuotas`, `JoinRaftCluster`, `SnapshotSave`) on `bigfleet://admin`.
+
+### Issuing certificates with cert-manager
+
+The charts never generate certificates; they mount existing `kubernetes.io/tls` Secrets (`tls.crt` / `tls.key` / `ca.crt` — exactly what a cert-manager `Certificate` produces). One private CA for the whole BigFleet trust domain is the expected shape:
+
+```yaml
+# Management cluster: coordinator certificate (shared by all replicas).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bigfleet-coordinator-tls
+  namespace: bigfleet-system
+spec:
+  secretName: bigfleet-coordinator-tls
+  issuerRef: {name: bigfleet-ca, kind: ClusterIssuer}
+  uris:
+    - bigfleet://admin
+  dnsNames:
+    - bigfleet-coordinator.bigfleet-system.svc
+    - "*.bigfleet-coordinator.bigfleet-system.svc"
+---
+# Management cluster: shard certificate. The URI SAN embeds the
+# shard_id, so issue one Certificate per shard ordinal; the reference
+# chart's single tls.secretName fits replicas=1 (per-ordinal Secret
+# overlays are your composition for multi-shard installs).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bigfleet-shard-0-tls
+  namespace: bigfleet-system
+spec:
+  secretName: bigfleet-shard-0-tls
+  issuerRef: {name: bigfleet-ca, kind: ClusterIssuer}
+  uris:
+    - bigfleet://shard/bigfleet-shard-0
+  dnsNames:
+    - bigfleet-shard-0.bigfleet-shard-headless.bigfleet-system.svc
+---
+# Each managed cluster: operator client certificate. The URI must
+# match the chart's clusterID value exactly.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bigfleet-operator-tls
+  namespace: bigfleet-system
+spec:
+  secretName: bigfleet-operator-tls
+  issuerRef: {name: bigfleet-ca, kind: ClusterIssuer}
+  uris:
+    - bigfleet://cluster/cluster-prod-eu
+```
+
+Then point the charts at the Secrets:
+
+```sh
+helm upgrade bigfleet ./deploy/helm/bigfleet \
+  --set coordinator.tls.secretName=bigfleet-coordinator-tls \
+  --set shard.tls.secretName=bigfleet-shard-0-tls
+helm upgrade bigfleet-operator ./deploy/helm/bigfleet-operator \
+  --set tls.secretName=bigfleet-operator-tls ...
+```
+
+`bigfleetctl` against an mTLS coordinator needs the admin cert files (`--tls-cert/--tls-key/--tls-ca`); running it as a Job that mounts the coordinator's Secret is the simplest pattern.
+
+### Rotation
+
+Leaf certificates rotate **live**: every TLS handshake stats the cert/key files and re-reads them when an mtime changes, which is exactly what happens when cert-manager renews a mounted Secret. No restart, no reconnect storm; a half-written rotation keeps serving the previous coherent pair until both files agree. The **CA bundle is read once at startup** — rotate the CA by trust-bundle overlap (append the new CA to the bundle, restart, roll all leaf certs, remove the old CA, restart).
+
+### What mTLS does not cover
+
+The Raft transport between coordinator replicas (`:7791`) stays plaintext — hashicorp/raft's TCP transport is a separate stream from the gRPC stack and securing it is tracked follow-up work (ADR-0048 has the rationale). Keep the Raft port cluster-internal with a NetworkPolicy. Metrics/pprof endpoints are also plaintext HTTP; under mTLS the coordinator's kubelet probes move to HTTP twins on the metrics port automatically (kubelet's gRPC probe cannot present a client certificate).
+
 ## Day-2 observability
 
 Each binary exposes Prometheus metrics on a configurable port:
@@ -176,9 +276,9 @@ One non-restore failure worth knowing (ADR-0047): if ordinal 0 *alone* loses its
 
 ## Security
 
-- **Operator → shard**: mTLS recommended. Per-cluster client certs scoped to the cluster's claimed `cluster_id`. Production deployments should add a server-side check that the cert's CN matches the `Hello.cluster_id`.
-- **Shard → coordinator**: mTLS recommended. The coordinator gRPC service is internal; a network-policy fence inside the management cluster is also worthwhile.
-- **Shard → provider**: depends on the provider. Cloud providers typically use cloud-IAM for the underlying API; the BigFleet ↔ provider gRPC channel between them is process-local on the shard host or cell, so a Unix socket or localhost-only TCP is reasonable.
+- **Operator → shard**: enable ADR-0048 mTLS (see "Transport security" above). The shard verifies the client certificate's `bigfleet://cluster/<cluster_id>` URI SAN against `Hello.cluster_id` — the impersonation check is built in, not a deployment add-on.
+- **Shard → coordinator**: the same mTLS layer binds `ShardReport.shard_id` to `bigfleet://shard/<shard_id>` and gates the admin surface on `bigfleet://admin`. A network-policy fence inside the management cluster is still worthwhile (it's the only protection the plaintext Raft port has).
+- **Shard → provider**: the shard presents its `bigfleet://shard/<shard_id>` certificate when mTLS is on; verifying it is the provider's job (the provider boundary is the validation point, ADR-0005). Cloud providers typically also use cloud-IAM for the underlying API; if the provider runs process-local on the shard host, a Unix socket or localhost-only TCP is reasonable.
 
 ### Supply chain
 

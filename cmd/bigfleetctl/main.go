@@ -15,8 +15,10 @@
 //	bigfleetctl snapshot restore --data-dir=/var/lib/bigfleet --node-id=bigfleet-coordinator-0 \
 //	    --raft-advertise=bigfleet-coordinator-0.bigfleet-coordinator.bigfleet-system.svc:7791 backup.snap
 //
-// v1 ships unauthenticated — the coordinator is a cluster-internal
-// service. Exposing it externally requires a sidecar (mTLS / OIDC).
+// Plaintext by default (cluster-internal coordinator, ADR-0008
+// posture). Against an ADR-0048 mTLS coordinator, pass
+// --tls-cert/--tls-key/--tls-ca with a certificate carrying the URI
+// SAN bigfleet://admin — the whole admin surface is admin-gated.
 package main
 
 import (
@@ -34,7 +36,6 @@ import (
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/intUnderflow/bigfleet/pkg/coordinator"
 	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
@@ -53,6 +54,11 @@ func run(args []string) error {
 	root.SetOutput(os.Stderr)
 	addr := root.String("coordinator", "127.0.0.1:7790", "host:port of the coordinator's gRPC service")
 	timeout := root.Duration("timeout", 10*time.Second, "per-RPC timeout")
+	// ADR-0048: against an mTLS coordinator, the CLI's certificate
+	// must carry the URI SAN bigfleet://admin — the whole admin
+	// surface is admin-gated.
+	var tlsCfg grpcutil.TLSConfig
+	tlsCfg.RegisterFlags(root)
 	if err := root.Parse(args); err != nil {
 		return err
 	}
@@ -68,8 +74,11 @@ func run(args []string) error {
 		return cmdSnapshotRestore(rest[2:])
 	}
 
-	conn, err := grpc.NewClient(*addr,
-		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	dialOpts, err := tlsCfg.DialOptions()
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(*addr, dialOpts...)
 	if err != nil {
 		return fmt.Errorf("dial coordinator: %w", err)
 	}

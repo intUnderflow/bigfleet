@@ -6,9 +6,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
@@ -95,8 +93,14 @@ func (c *Coordinator) membershipCurrent() bool {
 
 // joinOnce makes one JoinRaftCluster attempt against JoinAddress.
 func (c *Coordinator) joinOnce(ctx context.Context) error {
-	conn, err := grpc.NewClient(c.cfg.JoinAddress,
-		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	// ADR-0048: under mTLS the replica presents the coordinator's own
+	// certificate (URI SAN bigfleet://admin) to the leader's
+	// admin-gated JoinRaftCluster. Zero-value TLS = plaintext.
+	dialOpts, err := c.cfg.TLS.DialOptions()
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(c.cfg.JoinAddress, dialOpts...)
 	if err != nil {
 		return err
 	}

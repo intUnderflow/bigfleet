@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 )
 
@@ -68,6 +69,15 @@ type Config struct {
 	// small, snapshot every few minutes is trivial). Set to 0 to
 	// disable export entirely (useful for tests).
 	SnapshotExportInterval time.Duration
+
+	// TLS configures mTLS for the JoinRaftCluster dial this replica
+	// makes against JoinAddress (ADR-0048) — the same files the
+	// process serves with: the coordinator certificate carries
+	// bigfleet://admin, which is what the leader's JoinRaftCluster
+	// authz requires. Zero value = plaintext. The Raft transport
+	// itself is NOT covered (hashicorp/raft TCP transport TLS is
+	// separate follow-up work; see ADR-0048).
+	TLS grpcutil.TLSConfig
 
 	// Logger receives structured events.
 	Logger *slog.Logger

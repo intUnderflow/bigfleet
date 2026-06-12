@@ -113,23 +113,45 @@ spec:
             {{- if .Values.bootstrapTemplate }}
             - --bootstrap-template-file=/etc/bigfleet/bootstrap.tmpl
             {{- end }}
+            {{- if .Values.tls.secretName }}
+            # ADR-0048 mTLS: the certificate must carry the URI SAN
+            # bigfleet://cluster/{{ .Values.clusterID }} — the shard
+            # binds Hello.cluster_id to it.
+            - --tls-cert=/etc/bigfleet/tls/tls.crt
+            - --tls-key=/etc/bigfleet/tls/tls.key
+            - --tls-ca=/etc/bigfleet/tls/ca.crt
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}
-          {{- if .Values.bootstrapTemplate }}
+          {{- if or .Values.bootstrapTemplate .Values.tls.secretName }}
           volumeMounts:
+            {{- if .Values.bootstrapTemplate }}
             - name: bootstrap-template
               mountPath: /etc/bigfleet
               readOnly: true
+            {{- end }}
+            {{- if .Values.tls.secretName }}
+            - name: tls
+              mountPath: /etc/bigfleet/tls
+              readOnly: true
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if .Values.bootstrapTemplate }}
+      {{- if or .Values.bootstrapTemplate .Values.tls.secretName }}
       volumes:
+        {{- if .Values.bootstrapTemplate }}
         - name: bootstrap-template
           configMap:
             name: bigfleet-operator-bootstrap-template
             items:
               - key: bootstrap.tmpl
                 path: bootstrap.tmpl
+        {{- end }}
+        {{- if .Values.tls.secretName }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
       {{- end }}

@@ -24,6 +24,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/metrics"
 )
@@ -38,6 +39,14 @@ type Config struct {
 	// ShardAddress is the host:port of the BigFleet shard's gRPC
 	// endpoint.
 	ShardAddress string
+
+	// TLS configures mTLS for the shard dial (ADR-0048). The
+	// certificate must carry the URI SAN
+	// bigfleet://cluster/<ClusterID> — the shard binds
+	// Hello.cluster_id to it and terminates mismatched sessions with
+	// PermissionDenied. Zero value = plaintext (the pre-ADR-0048
+	// posture, still the default).
+	TLS grpcutil.TLSConfig
 
 	// KubeClient is the controller-runtime client used to read
 	// CapacityRequests and write UpcomingNodes. Must be wired against a
@@ -116,6 +125,11 @@ func New(cfg Config) (*Operator, error) {
 	}
 	if cfg.ShardAddress == "" {
 		return nil, errors.New("operator: Config.ShardAddress is required")
+	}
+	// Surface a partial TLS flag set at startup, not on the first
+	// (endlessly retried) reconnect.
+	if err := cfg.TLS.Validate(); err != nil {
+		return nil, fmt.Errorf("operator: %w", err)
 	}
 	if cfg.KubeClient == nil {
 		return nil, errors.New("operator: Config.KubeClient is required")

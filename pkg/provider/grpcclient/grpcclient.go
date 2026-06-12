@@ -19,7 +19,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/intUnderflow/bigfleet/pkg/conv"
@@ -60,9 +59,12 @@ type Client struct {
 }
 
 // New dials addr (lazily — gRPC connects on first call) and returns a
-// Client that fences as identity. Transport is plaintext, matching every
-// other BigFleet edge (ADR-0008 trust-the-network reference-impl stance).
-func New(addr string, identity Identity) (*Client, error) {
+// Client that fences as identity. tlsCfg selects the transport
+// (ADR-0048): zero value = plaintext (the pre-ADR-0048
+// trust-the-network stance, still the default); all three files set =
+// mTLS, with the shard presenting a certificate whose URI SAN is
+// bigfleet://shard/<ShardID> for the provider to authorize against.
+func New(addr string, identity Identity, tlsCfg grpcutil.TLSConfig) (*Client, error) {
 	if addr == "" {
 		return nil, errors.New("grpcclient: provider address is empty")
 	}
@@ -75,8 +77,11 @@ func New(addr string, identity Identity) (*Client, error) {
 	if identity.Seq == nil {
 		identity.Seq = &fencing.Sequence{}
 	}
-	conn, err := grpc.NewClient(addr,
-		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	dialOpts, err := tlsCfg.DialOptions()
+	if err != nil {
+		return nil, fmt.Errorf("grpcclient: %w", err)
+	}
+	conn, err := grpc.NewClient(addr, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("grpcclient: dial %s: %w", addr, err)
 	}

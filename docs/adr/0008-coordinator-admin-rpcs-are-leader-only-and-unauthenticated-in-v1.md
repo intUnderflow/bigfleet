@@ -1,6 +1,10 @@
 # ADR-0008: Coordinator admin RPCs — leader-only, unauthenticated in v1, sidecar for external
 
-**Status**: Accepted
+**Status**: Accepted; the transport/authn posture (unauthenticated +
+sidecar-for-external) is superseded by
+[ADR-0048](0048-mtls-and-uri-san-identity.md), which adds opt-in
+mTLS with URI SAN identity on every BigFleet transport. The
+leader-only RPC contract below stands.
 
 **Date**: 2026-05-05
 

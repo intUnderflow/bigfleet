@@ -40,8 +40,18 @@ func runCoordinator(args []string) error {
 	joinAddr := fs.String("join-addr", "", "host:port of the coordinator gRPC Service used to form a multi-replica Raft cluster (M75, ADR-0047). When set, --id must end in a StatefulSet ordinal: only ordinal 0 honours --bootstrap, and every replica runs a membership reconciler that asks the leader at this address to AddVoter it until it is a voter at its current advertise address (retried with backoff; idempotent across restarts; also heals the address change a pod restart causes). Empty keeps the single-node dev behaviour.")
 	snapshotExportDir := fs.String("snapshot-export-dir", "", "if set, the leader periodically writes Raft snapshots here for DR (paper §10.8). Conventionally a path mounted from durable object storage; empty disables export.")
 	snapshotExportInterval := fs.Duration("snapshot-export-interval", 0, "interval between snapshot exports (default 5m; ignored if --snapshot-export-dir is empty)")
+	// ADR-0048: one symmetric flag set covers the coordinator gRPC
+	// server and the JoinRaftCluster dial replicas make at each other.
+	// The certificate must carry the URI SAN bigfleet://admin — the
+	// coordinator IS the admin domain. The Raft transport (:7791) is
+	// NOT covered; see ADR-0048 for why that's separate follow-up.
+	var tlsCfg grpcutil.TLSConfig
+	tlsCfg.RegisterFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errFlagParse, err)
+	}
+	if err := tlsCfg.Validate(); err != nil {
+		return err
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -76,6 +86,7 @@ func runCoordinator(args []string) error {
 		JoinAddress:            *joinAddr,
 		SnapshotExportDir:      *snapshotExportDir,
 		SnapshotExportInterval: *snapshotExportInterval,
+		TLS:                    tlsCfg,
 		Logger:                 logger,
 	})
 	if err != nil {
@@ -83,7 +94,11 @@ func runCoordinator(args []string) error {
 	}
 
 	srv := coordinator.NewGRPCServer(c)
-	gsrv := grpc.NewServer(grpcutil.ServerOptions()...)
+	serverOpts, err := tlsCfg.ServerOptions()
+	if err != nil {
+		return err
+	}
+	gsrv := grpc.NewServer(serverOpts...)
 	pb.RegisterCoordinatorServer(gsrv, srv)
 
 	// M75 probes: standard grpc_health_v1 on the same gRPC port.
@@ -126,6 +141,22 @@ func runCoordinator(args []string) error {
 	if *metricsAddr != "0" {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.Handler())
+		// HTTP twins of the grpc_health_v1 probes, mirroring the shard
+		// (M75). They exist because kubelet's gRPC probe is
+		// plaintext-only: with ADR-0048 mTLS on the gRPC port the
+		// probe can't even handshake, so the chart points probes here
+		// when TLS is enabled. Same semantics as the gRPC services:
+		// liveness = process up, readiness = a Raft leader observed.
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+			if c.LeaderAddress() != "" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.Error(w, "no raft leader observed", http.StatusServiceUnavailable)
+		})
 		metricsSrv := &http.Server{Addr: *metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		logger.Info("metrics serving", "addr", *metricsAddr)
 		go func() { errCh <- metricsSrv.ListenAndServe() }()

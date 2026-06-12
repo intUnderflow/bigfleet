@@ -1,6 +1,7 @@
 // Package grpcutil centralises the gRPC server/dial options shared by
-// every BigFleet process so the wire limits are set in exactly one
-// place.
+// every BigFleet process so the wire limits — and the ADR-0048
+// opt-in mTLS layer with its bigfleet:// URI SAN identity helpers
+// (tls.go) — are implemented in exactly one place.
 package grpcutil
 
 import "google.golang.org/grpc"

@@ -14,12 +14,12 @@ package coordclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/grpcutil"
@@ -53,6 +53,12 @@ type Config struct {
 	// ReportInterval is how often the client calls ReportShard.
 	// Default 30s per the paper.
 	ReportInterval time.Duration
+
+	// TLS configures mTLS for the coordinator dial (ADR-0048). The
+	// certificate must carry the URI SAN bigfleet://shard/<View.ID()>
+	// — the coordinator binds ShardReport.shard_id to it. Zero value
+	// = plaintext.
+	TLS grpcutil.TLSConfig
 
 	// Logger receives structured events. nil → default.
 	Logger *slog.Logger
@@ -129,6 +135,9 @@ func New(cfg Config) (*Client, error) {
 	if cfg.CoordinatorTerm == nil {
 		return nil, errors.New("coordclient: Config.CoordinatorTerm required")
 	}
+	if err := cfg.TLS.Validate(); err != nil {
+		return nil, fmt.Errorf("coordclient: %w", err)
+	}
 	if cfg.ReportInterval == 0 {
 		cfg.ReportInterval = 30 * time.Second
 	}
@@ -148,8 +157,12 @@ func New(cfg Config) (*Client, error) {
 // keeps operating against its existing allocations regardless of
 // whether this loop is making progress.
 func (c *Client) Run(ctx context.Context) error {
-	conn, err := grpc.NewClient(c.cfg.CoordinatorAddress,
-		append(grpcutil.DialOptions(), grpc.WithTransportCredentials(insecure.NewCredentials()))...)
+	// ADR-0048: mTLS when Config.TLS is set, plaintext otherwise.
+	dialOpts, err := c.cfg.TLS.DialOptions()
+	if err != nil {
+		return err
+	}
+	conn, err := grpc.NewClient(c.cfg.CoordinatorAddress, dialOpts...)
 	if err != nil {
 		return err
 	}

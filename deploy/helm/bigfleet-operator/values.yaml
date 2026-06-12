@@ -15,6 +15,18 @@ clusterID: ""
 # Required.
 shardAddress: ""
 
+# tls.secretName — name of an EXISTING kubernetes.io/tls Secret (keys
+# tls.crt / tls.key / ca.crt — what a cert-manager Certificate
+# produces) mounted into the operator pod. Non-empty = the operator
+# dials the shard with ADR-0048 mTLS; its certificate must carry the
+# URI SAN bigfleet://cluster/<clusterID>, which the shard binds the
+# Session's Hello.cluster_id to (mismatch = PermissionDenied). Empty =
+# plaintext (the default). The chart never generates certificates —
+# cert-manager is the expected issuer; docs/operator-guide.md has the
+# Certificate manifest.
+tls:
+  secretName: ""
+
 resources:
   requests:
     cpu: 100m
