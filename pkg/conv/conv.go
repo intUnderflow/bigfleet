@@ -13,6 +13,8 @@ package conv
 import (
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
@@ -22,6 +24,16 @@ import (
 // NeedsFromRollup converts a ClusterCapacityNeeds proto into a slice of
 // domain needs.Need values. The proto's full-replacement semantics are
 // preserved by the caller (which Replace()s the cluster's contribution).
+//
+// M68b (philosophy-conformance audit): this is the demand-ingest
+// validation gate, the mirror of the provider-ingest gate
+// (shard.validateProviderMachine, M70b posture). Roll-ups carrying
+// out-of-range penalty buckets or unparseable resource quantities are
+// rejected whole — the caller logs + counts and keeps the cluster's
+// last-known-good demand. Pre-fix the asymmetry was silent: an unknown
+// bucket aliased into the domain enum and a malformed quantity degraded
+// to zero inside pkg/needs vector arithmetic, both quietly corrupting
+// what the cluster asked for.
 func NeedsFromRollup(in *pb.ClusterCapacityNeeds) ([]needs.Need, error) {
 	if in == nil {
 		return nil, nil
@@ -33,11 +45,19 @@ func NeedsFromRollup(in *pb.ClusterCapacityNeeds) ([]needs.Need, error) {
 		if err != nil {
 			return nil, fmt.Errorf("need %d: %w", i, err)
 		}
+		agg, err := resourceQtysFromProto(n.GetAggregateResources())
+		if err != nil {
+			return nil, fmt.Errorf("need %d: aggregate_resources: %w", i, err)
+		}
+		minUnit, err := resourceQtysFromProto(n.GetMinUnit())
+		if err != nil {
+			return nil, fmt.Errorf("need %d: min_unit: %w", i, err)
+		}
 		out = append(out, needs.Need{
 			ClusterID:          cluster,
 			Profile:            profile,
-			AggregateResources: resourceQtysFromProto(n.GetAggregateResources()),
-			MinUnit:            resourceQtysFromProto(n.GetMinUnit()),
+			AggregateResources: agg,
+			MinUnit:            minUnit,
 			Group:              n.GetGroup(),
 			ArrivalUnixNanos:   in.GetTimestampUnixNanos(),
 		})
@@ -66,25 +86,40 @@ func profileFromProto(n *pb.CapacityNeed) (needs.Profile, error) {
 			WhenUnsatisfiable: whenUnsatisfiableFromProto(s.GetWhenUnsatisfiable()),
 		})
 	}
+	intBucket, err := penaltyBucketFromProto(n.GetInterruptionPenaltyBucket())
+	if err != nil {
+		return needs.Profile{}, fmt.Errorf("interruption_penalty_bucket: %w", err)
+	}
+	recBucket, err := penaltyBucketFromProto(n.GetReclamationPenaltyBucket())
+	if err != nil {
+		return needs.Profile{}, fmt.Errorf("reclamation_penalty_bucket: %w", err)
+	}
 	return needs.NewProfile(
 		reqs, spread,
 		n.GetPriority(),
-		penaltyBucketFromProto(n.GetInterruptionPenaltyBucket()),
-		penaltyBucketFromProto(n.GetReclamationPenaltyBucket()),
+		intBucket,
+		recBucket,
 	), nil
 }
 
 // resourceQtysFromProto converts a proto resource map into the domain
 // []needs.ResourceQty form used by Need.AggregateResources / MinUnit.
-func resourceQtysFromProto(m map[string]string) []needs.ResourceQty {
+// M68b: quantities are parse-checked here because the downstream vector
+// arithmetic (pkg/needs/resources.go) deliberately degrades malformed
+// strings to zero — fine on the hot path where values are already
+// canonical, silent demand corruption at the trust boundary.
+func resourceQtysFromProto(m map[string]string) ([]needs.ResourceQty, error) {
 	if len(m) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]needs.ResourceQty, 0, len(m))
 	for k, v := range m {
+		if _, err := resource.ParseQuantity(v); err != nil {
+			return nil, fmt.Errorf("resource %q: unparseable quantity %q: %w", k, v, err)
+		}
 		out = append(out, needs.ResourceQty{Name: k, Quantity: v})
 	}
-	return out
+	return out, nil
 }
 
 func operatorFromProto(op pb.NodeSelectorRequirement_Operator) (needs.Operator, error) {
@@ -149,10 +184,16 @@ func whenUnsatisfiableFromProto(w pb.TopologySpread_WhenUnsatisfiable) needs.Whe
 	return needs.WhenUnsatisfiableUnspecified
 }
 
-func penaltyBucketFromProto(b pb.PenaltyBucket) needs.PenaltyBucket {
+func penaltyBucketFromProto(b pb.PenaltyBucket) (needs.PenaltyBucket, error) {
 	// PenaltyBucket enums are deliberately numeric-aligned between proto
-	// and domain (see pkg/needs).
-	return needs.PenaltyBucket(b)
+	// and domain (see pkg/needs). M68b: bounds-checked at ingest — the
+	// domain type is a uint8, so an out-of-range int32 from a newer or
+	// buggy operator would otherwise wrap/alias into a real bucket and
+	// silently mis-price the workload in victim scoring.
+	if b < 0 || b > pb.PenaltyBucket(needs.PenaltyBucketPinned) {
+		return 0, fmt.Errorf("penalty bucket %d out of range [0, %d]", b, needs.PenaltyBucketPinned)
+	}
+	return needs.PenaltyBucket(b), nil
 }
 
 // MachineFromProto converts a wire-format Machine into the domain

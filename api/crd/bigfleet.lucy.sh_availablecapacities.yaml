@@ -83,50 +83,6 @@ spec:
                   capacity.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
-              estimatedProvisioningTime:
-                description: |-
-                  EstimatedProvisioningTime is the wall-clock duration the shard
-                  expects to take from request to Ready.
-                type: string
-              nodeTemplate:
-                description: NodeTemplate shows operators what kind of node would
-                  result.
-                properties:
-                  labels:
-                    additionalProperties:
-                      type: string
-                    type: object
-                  taints:
-                    items:
-                      description: |-
-                        The node this Taint is attached to has the "effect" on
-                        any pod that does not tolerate the Taint.
-                      properties:
-                        effect:
-                          description: |-
-                            Required. The effect of the taint on pods
-                            that do not tolerate the taint.
-                            Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
-                          type: string
-                        key:
-                          description: Required. The taint key to be applied to a
-                            node.
-                          type: string
-                        timeAdded:
-                          description: TimeAdded represents the time at which the
-                            taint was added.
-                          format: date-time
-                          type: string
-                        value:
-                          description: The taint value corresponding to the taint
-                            key.
-                          type: string
-                      required:
-                      - effect
-                      - key
-                      type: object
-                    type: array
-                type: object
               requirements:
                 description: Requirements describe the matchable shape of this capacity.
                 items:
@@ -167,11 +123,6 @@ spec:
                   x-kubernetes-int-or-string: true
                 description: Resources the capacity would expose per machine.
                 type: object
-              supportsAtomicProvisioning:
-                description: |-
-                  SupportsAtomicProvisioning indicates whether the entire AvailableCount
-                  can be provisioned all-or-nothing. Useful for gang-scheduled workloads.
-                type: boolean
             required:
             - availability
             - availableCount

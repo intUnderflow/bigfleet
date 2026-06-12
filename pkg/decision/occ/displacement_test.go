@@ -173,9 +173,6 @@ func TestBroker_AllOrNothingWithDisplacement_HappyPath(t *testing.T) {
 	if len(r.Displaced) != 1 {
 		t.Fatalf("Displaced = %v, want 1 (single Need across m1+m2)", r.Displaced)
 	}
-	if len(r.Conflicted) != 0 {
-		t.Fatalf("Conflicted = %v, want empty", r.Conflicted)
-	}
 	for _, mid := range []machine.ID{"m1", "m2", "m3"} {
 		if !s.IsClaimed(mid) {
 			t.Errorf("AllOrNothing left %q unclaimed", mid)
@@ -235,7 +232,8 @@ func TestBroker_IncrementalMixedDisplaceAndConflict(t *testing.T) {
 	_, _ = preClaim(t, s, b, bucket, []machine.ID{"m2"}, lowPri, 10)
 
 	// Mid-priority Incremental over [m1, m2, m3]: should commit
-	// m2 (displaced) + m3 (new); m1 stays conflicted.
+	// m2 (displaced) + m3 (new); m1's incumbent is immovable, so m1
+	// is absent from Committed and keeps its high-priority owner.
 	r := b.Propose(occ.Proposal{
 		Bucket: bucket, Machines: []machine.ID{"m1", "m2", "m3"}, ObservedSeq: s.BucketSeq(bucket),
 		Precedence:  midPri,
@@ -250,8 +248,8 @@ func TestBroker_IncrementalMixedDisplaceAndConflict(t *testing.T) {
 	if !equalIDs(committed, []machine.ID{"m2", "m3"}) {
 		t.Errorf("Committed = %v, want [m2 m3]", committed)
 	}
-	if !equalIDs(sortedIDs(r.Conflicted), []machine.ID{"m1"}) {
-		t.Errorf("Conflicted = %v, want [m1]", r.Conflicted)
+	if got := s.OwnersForTest()["m1"]; got != highPri {
+		t.Errorf("m1 owner precedence = %+v, want immovable incumbent %+v", got, highPri)
 	}
 	if len(r.Displaced) != 1 {
 		t.Fatalf("Displaced = %v, want 1 (m2's old owner)", r.Displaced)
@@ -367,10 +365,11 @@ func TestBroker_PriorityIsMonotoneUnderConcurrency(t *testing.T) {
 						if r.Status == occ.StatusCommitted && len(r.Committed) > 0 {
 							break
 						}
-						// Did the immovable check fire? If so,
-						// move on — we can't win this machine
-						// at this priority.
-						if state.PrecedenceAt(mid, prec) {
+						// Immovable incumbent? Move on — we can't
+						// win this machine at this priority.
+						// (!DisplaceableBy ⇔ claimed by a
+						// ≥-precedence owner.)
+						if !state.DisplaceableBy(mid, prec) {
 							break
 						}
 					}

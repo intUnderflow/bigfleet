@@ -171,11 +171,11 @@ type NeedResult struct {
 //
 //   - Committed: machines now owned by the proposing Need (subset of
 //     Proposal.Machines for ModeIncremental; exactly Proposal.Machines
-//     for ModeAllOrNothing successes).
-//
-//   - Conflicted: machines whose incumbent claim is at least as high
-//     precedence as the proposer — immovable. Empty for ModeAllOrNothing
-//     successes; possibly non-empty for ModeIncremental.
+//     for ModeAllOrNothing successes). Machines absent from Committed
+//     were held by immovable (≥-precedence) incumbents; the worker
+//     re-reads state for any retry rather than consuming a conflict
+//     list (the former Conflicted field was deleted as a dead signal —
+//     M68b philosophy-conformance audit).
 //
 //   - Displaced: incumbent Needs whose claims this commit evicted.
 //     The broker has already released the underlying machine claims;
@@ -187,9 +187,8 @@ type NeedResult struct {
 //     seqno on conflict). The worker uses it as the ObservedSeq for
 //     any retry.
 type Result struct {
-	Status     ResultStatus
-	Committed  []machine.ID
-	Conflicted []machine.ID
-	Displaced  []QueuedNeed
-	NewSeq     uint64
+	Status    ResultStatus
+	Committed []machine.ID
+	Displaced []QueuedNeed
+	NewSeq    uint64
 }

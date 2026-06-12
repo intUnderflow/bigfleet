@@ -190,9 +190,6 @@ func newUpcomingNode() *v1alpha1.UpcomingNode {
 			ProvisioningStartTime: &metav1.Time{
 				Time: time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC),
 			},
-			EstimatedReadyTime: &metav1.Time{
-				Time: time.Date(2026, 4, 30, 12, 3, 0, 0, time.UTC),
-			},
 		},
 	}
 }
@@ -219,20 +216,9 @@ func newAvailableCapacity() *v1alpha1.AvailableCapacity {
 				"memory":         resource.MustParse("1872Gi"),
 				"nvidia.com/gpu": resource.MustParse("8"),
 			},
-			AvailableCount:             200,
-			Availability:               v1alpha1.ConfidenceHigh,
-			Cost:                       resource.MustParse("31220m"),
-			SupportsAtomicProvisioning: true,
-			EstimatedProvisioningTime:  &metav1.Duration{Duration: 3 * time.Minute},
-			NodeTemplate: &v1alpha1.AvailableCapacityNodeTemplate{
-				Labels: map[string]string{
-					"accelerator-type": "nvidia-h100-80gb",
-				},
-				Taints: []corev1.Taint{{
-					Key:    "nvidia.com/gpu",
-					Effect: corev1.TaintEffectNoSchedule,
-				}},
-			},
+			AvailableCount: 200,
+			Availability:   v1alpha1.ConfidenceHigh,
+			Cost:           resource.MustParse("31220m"),
 		},
 	}
 }

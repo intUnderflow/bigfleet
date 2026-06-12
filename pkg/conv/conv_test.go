@@ -277,3 +277,75 @@ func TestMachineRoundTrip_UnboundMachineStaysUnbound(t *testing.T) {
 		t.Errorf("unbound machine grew binding state: %+v", back)
 	}
 }
+
+// M68b demand-ingest validation: the roll-up boundary must reject what
+// it cannot faithfully represent, mirroring the provider-ingest gate
+// (M70b posture). Pre-fix, an out-of-range bucket aliased through the
+// int32→uint8 conversion and a malformed quantity degraded to zero
+// inside pkg/needs vector arithmetic — both silent demand corruption.
+
+func TestNeedsFromRollup_RejectsOutOfRangePenaltyBucket(t *testing.T) {
+	t.Parallel()
+	for _, bucket := range []pb.PenaltyBucket{
+		pb.PenaltyBucket(28),  // one past PENALTY_BUCKET_PINNED
+		pb.PenaltyBucket(-1),  // negative enum from a corrupt frame
+		pb.PenaltyBucket(283), // 283 % 256 = 27 — would alias to Pinned via uint8 wrap
+	} {
+		in := &pb.ClusterCapacityNeeds{
+			ClusterId: "cluster-a",
+			Needs: []*pb.CapacityNeed{{
+				AggregateResources:        map[string]string{"cpu": "4"},
+				MinUnit:                   map[string]string{"cpu": "4"},
+				InterruptionPenaltyBucket: bucket,
+			}},
+		}
+		if _, err := conv.NeedsFromRollup(in); err == nil {
+			t.Errorf("bucket %d: NeedsFromRollup accepted an out-of-range penalty bucket", bucket)
+		}
+	}
+	// Pinned itself is the inclusive upper bound and must pass.
+	in := &pb.ClusterCapacityNeeds{
+		ClusterId: "cluster-a",
+		Needs: []*pb.CapacityNeed{{
+			AggregateResources:       map[string]string{"cpu": "4"},
+			MinUnit:                  map[string]string{"cpu": "4"},
+			ReclamationPenaltyBucket: pb.PenaltyBucket_PENALTY_BUCKET_PINNED,
+		}},
+	}
+	got, err := conv.NeedsFromRollup(in)
+	if err != nil {
+		t.Fatalf("Pinned bucket rejected: %v", err)
+	}
+	if got[0].Profile.ReclamationPenaltyBucket() != needs.PenaltyBucketPinned {
+		t.Errorf("ReclamationPenaltyBucket = %v, want Pinned", got[0].Profile.ReclamationPenaltyBucket())
+	}
+}
+
+func TestNeedsFromRollup_RejectsUnparseableQuantity(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		need *pb.CapacityNeed
+	}{
+		{"aggregate_resources", &pb.CapacityNeed{
+			AggregateResources: map[string]string{"cpu": "not-a-quantity"},
+			MinUnit:            map[string]string{"cpu": "4"},
+		}},
+		{"min_unit", &pb.CapacityNeed{
+			AggregateResources: map[string]string{"cpu": "4"},
+			MinUnit:            map[string]string{"memory": "12XiB"},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := &pb.ClusterCapacityNeeds{
+				ClusterId: "cluster-a",
+				Needs:     []*pb.CapacityNeed{tc.need},
+			}
+			if _, err := conv.NeedsFromRollup(in); err == nil {
+				t.Fatal("NeedsFromRollup accepted an unparseable resource quantity")
+			}
+		})
+	}
+}

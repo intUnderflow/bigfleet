@@ -178,7 +178,6 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 	if u.GetProviderId() != "" {
 		newProviderID = u.GetProviderId()
 	}
-	newEstReady := existing.Status.EstimatedReadyTime
 	newLastError := existing.Status.LastError
 	if u.GetLastError() != "" {
 		newLastError = u.GetLastError()
@@ -186,7 +185,6 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 	if existing.Status.Phase == phase &&
 		nodeRefEqual(existing.Status.NodeRef, newNodeRef) &&
 		existing.Status.ProviderID == newProviderID &&
-		timePtrEqual(existing.Status.EstimatedReadyTime, newEstReady) &&
 		existing.Status.LastError == newLastError &&
 		existing.Status.ProvisioningStartTime != nil {
 		// No observable change — don't burn an apiserver write.
@@ -202,7 +200,6 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 	existing.Status.Phase = phase
 	existing.Status.NodeRef = newNodeRef
 	existing.Status.ProviderID = newProviderID
-	existing.Status.EstimatedReadyTime = newEstReady
 	existing.Status.LastError = newLastError
 	if existing.Status.ProvisioningStartTime == nil {
 		now := metav1.Now()
@@ -221,13 +218,6 @@ func nodeRefEqual(a, b *corev1.ObjectReference) bool {
 		return a == b
 	}
 	return a.Kind == b.Kind && a.Name == b.Name
-}
-
-func timePtrEqual(a, b *metav1.Time) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Equal(b)
 }
 
 // handleAvailableCapacityUpdate upserts an AvailableCapacity CR for

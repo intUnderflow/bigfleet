@@ -385,3 +385,277 @@ func ptrQuantity(s string) *resource.Quantity {
 	q := resource.MustParse(s)
 	return &q
 }
+
+// TestReconciler_TerminalPodDeletesCR pins M68b / ADR-0045: ownerRef GC
+// only fires when the Pod object is deleted, but Succeeded/Failed pods
+// can linger in the apiserver indefinitely — so the controller must
+// delete the CR itself on the terminal transition. With the CR gone the
+// operator's next roll-up (which Lists CRs) shrinks by construction.
+func TestReconciler_TerminalPodDeletesCR(t *testing.T) {
+	t.Parallel()
+	for _, phase := range []corev1.PodPhase{corev1.PodSucceeded, corev1.PodFailed} {
+		phase := phase
+		t.Run(string(phase), func(t *testing.T) {
+			t.Parallel()
+			pod := unschedulablePod("batch-0", true, 8)
+			c, scheme := newFakeClient(t, pod)
+			r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+			// Running pod → CR exists.
+			reconcile(t, r, pod)
+			var list bfv1alpha1.CapacityRequestList
+			if err := c.List(context.Background(), &list); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(list.Items) != 1 {
+				t.Fatalf("CRs before terminal = %d, want 1", len(list.Items))
+			}
+
+			// Pod transitions terminal → reconcile deletes the CR.
+			pod.Status.Phase = phase
+			if err := c.Status().Update(context.Background(), pod); err != nil {
+				t.Fatalf("update pod status: %v", err)
+			}
+			reconcile(t, r, pod)
+			if err := c.List(context.Background(), &list); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(list.Items) != 0 {
+				t.Fatalf("CRs after terminal = %d, want 0 (next roll-up must shrink)", len(list.Items))
+			}
+
+			// Re-reconciling the terminal pod must not resurrect the CR.
+			reconcile(t, r, pod)
+			if err := c.List(context.Background(), &list); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(list.Items) != 0 {
+				t.Fatalf("CRs after re-reconcile = %d, want 0", len(list.Items))
+			}
+		})
+	}
+}
+
+// TestReconciler_NoCRForAlreadyTerminalPod: a pod first seen at a
+// terminal phase never synthesizes demand.
+func TestReconciler_NoCRForAlreadyTerminalPod(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("done-0", true, 8)
+	pod.Status.Phase = corev1.PodSucceeded
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Fatalf("CRs created for already-terminal pod = %d, want 0", len(list.Items))
+	}
+}
+
+// TestReconciler_EffectiveRequest_InitHeavy pins the kube-scheduler
+// effective-request arithmetic (M68b): init containers run serially
+// before the main containers, so an init-heavy pod is sized at the
+// peak init stage, not the sum of everything.
+func TestReconciler_EffectiveRequest_InitHeavy(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("init-heavy", false, 0)
+	pod.Spec.Containers = []corev1.Container{{
+		Name: "main",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{"cpu": resource.MustParse("1"), "memory": resource.MustParse("1Gi")},
+		},
+	}}
+	pod.Spec.InitContainers = []corev1.Container{{
+		Name: "loader",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{"cpu": resource.MustParse("4")},
+		},
+	}}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	res := list.Items[0].Spec.Resources
+	// cpu: max(sum(containers)=1, init peak=4) = 4 — NOT the old 1+4=5.
+	if got := res["cpu"]; got.Cmp(resource.MustParse("4")) != 0 {
+		t.Errorf("cpu = %s, want 4 (max(containers, init peak))", got.String())
+	}
+	// memory: only the main container names it → 1Gi.
+	if got := res["memory"]; got.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("memory = %s, want 1Gi", got.String())
+	}
+}
+
+// TestReconciler_EffectiveRequest_Sidecar: a restartPolicy=Always init
+// container (sidecar) keeps running alongside the main containers, so
+// it joins the running sum AND every later init stage's footprint.
+func TestReconciler_EffectiveRequest_Sidecar(t *testing.T) {
+	t.Parallel()
+	always := corev1.ContainerRestartPolicyAlways
+	pod := unschedulablePod("sidecar-0", false, 0)
+	pod.Spec.Containers = []corev1.Container{{
+		Name: "main",
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{"cpu": resource.MustParse("1")},
+		},
+	}}
+	pod.Spec.InitContainers = []corev1.Container{
+		{
+			Name:          "log-shipper",
+			RestartPolicy: &always,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{"cpu": resource.MustParse("2")},
+			},
+		},
+		{
+			Name: "migrator",
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{"cpu": resource.MustParse("2500m")},
+			},
+		},
+	}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	// running sum = main(1) + sidecar(2) = 3
+	// init peak   = max(sidecar(2), sidecar(2)+migrator(2.5)=4.5) = 4.5
+	// effective   = max(3, 4.5) = 4.5
+	got := list.Items[0].Spec.Resources["cpu"]
+	if got.Cmp(resource.MustParse("4500m")) != 0 {
+		t.Errorf("cpu = %s, want 4500m (init stage incl. sidecar dominates)", got.String())
+	}
+}
+
+// TestReconciler_NodeSelectorMergedIntoRequirements pins M68b item 3:
+// pod.Spec.NodeSelector entries become In requirements on the CR, just
+// as required nodeAffinity does — pre-fix they were silently dropped
+// and a pinned pod produced a CR any machine could satisfy.
+func TestReconciler_NodeSelectorMergedIntoRequirements(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("pinned-0", true, 8)
+	pod.Spec.NodeSelector = map[string]string{
+		"topology.kubernetes.io/zone": "eu-west-1a",
+	}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	reqs := list.Items[0].Spec.Requirements
+	if len(reqs) != 2 {
+		t.Fatalf("requirements = %+v, want affinity expression + nodeSelector entry", reqs)
+	}
+	found := false
+	for _, req := range reqs {
+		if req.Key == "topology.kubernetes.io/zone" &&
+			req.Operator == corev1.NodeSelectorOpIn &&
+			len(req.Values) == 1 && req.Values[0] == "eu-west-1a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("nodeSelector entry not carried as In requirement: %+v", reqs)
+	}
+}
+
+// A nodeSelector-only pod (no nodeAffinity) carries its real
+// constraint instead of the synthetic instance-type Exists fallback.
+func TestReconciler_NodeSelectorOnly_NoSyntheticRequirement(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("pinned-1", false, 8)
+	pod.Spec.NodeSelector = map[string]string{
+		"disktype":                    "ssd",
+		"topology.kubernetes.io/zone": "eu-west-1b",
+	}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	reqs := list.Items[0].Spec.Requirements
+	// Sorted by key for determinism: disktype, then zone.
+	if len(reqs) != 2 || reqs[0].Key != "disktype" || reqs[1].Key != "topology.kubernetes.io/zone" {
+		t.Fatalf("requirements = %+v, want sorted nodeSelector entries only", reqs)
+	}
+	for _, req := range reqs {
+		if req.Operator != corev1.NodeSelectorOpIn || len(req.Values) != 1 {
+			t.Errorf("requirement %q not translated as In [value]: %+v", req.Key, req)
+		}
+	}
+}
+
+// TestReconciler_DropsScheduleAnywaySpread pins M68b item 10: nothing
+// engine-side consumes ScheduleAnyway spread terms (Phase 1 enforces
+// DoNotSchedule only), so the UPC drops them at the demand edge rather
+// than letting them fragment roll-up aggregation.
+func TestReconciler_DropsScheduleAnywaySpread(t *testing.T) {
+	t.Parallel()
+	pod := unschedulablePod("spread-0", true, 8)
+	pod.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{
+		{
+			TopologyKey:       "topology.kubernetes.io/zone",
+			MaxSkew:           1,
+			WhenUnsatisfiable: corev1.DoNotSchedule,
+		},
+		{
+			TopologyKey:       "kubernetes.io/hostname",
+			MaxSkew:           2,
+			WhenUnsatisfiable: corev1.ScheduleAnyway,
+		},
+	}
+	c, scheme := newFakeClient(t, pod)
+	r := &cr.Reconciler{Client: c, Scheme: scheme}
+
+	reconcile(t, r, pod)
+
+	var list bfv1alpha1.CapacityRequestList
+	if err := c.List(context.Background(), &list); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("CRs created = %d, want 1", len(list.Items))
+	}
+	spread := list.Items[0].Spec.TopologySpread
+	if len(spread) != 1 {
+		t.Fatalf("TopologySpread = %+v, want only the DoNotSchedule term", spread)
+	}
+	if spread[0].TopologyKey != "topology.kubernetes.io/zone" ||
+		spread[0].WhenUnsatisfiable != corev1.DoNotSchedule {
+		t.Errorf("kept term = %+v, want the DoNotSchedule zone term", spread[0])
+	}
+}

@@ -346,6 +346,17 @@ var (
 		Name: "bigfleet_shard_machines_rejected_total",
 		Help: "Provider machine records rejected at shard ingest by machine.Invariant (ADR-0046 addendum), by reason (price / interruption_probability / structural).",
 	}, []string{"reason"})
+
+	// ShardRollupsRejected is the demand-side mirror of
+	// ShardMachinesRejected (M68b): roll-ups refused at ingest because
+	// they carried an out-of-range penalty bucket or an unparseable
+	// resource quantity. The cluster keeps acting on its last-known-good
+	// demand. Sustained non-zero = an operator emitting garbage that the
+	// pre-M68b shard would have silently aliased or zeroed.
+	ShardRollupsRejected = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bigfleet_shard_rollups_rejected_total",
+		Help: "Roll-ups rejected at shard ingest validation (M68b): out-of-range penalty bucket or unparseable resource quantity. Last-known-good demand stays active for the cluster.",
+	}, []string{"cluster"})
 )
 
 // Coordinator metrics.

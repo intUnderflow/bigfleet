@@ -67,10 +67,9 @@ type UpcomingNodeStatus struct {
 	// +optional
 	ProvisioningStartTime *metav1.Time `json:"provisioningStartTime,omitempty"`
 
-	// EstimatedReadyTime is when the shard expects the node to be Ready.
-	// Operators use this to age out stuck upcoming nodes.
-	// +optional
-	EstimatedReadyTime *metav1.Time `json:"estimatedReadyTime,omitempty"`
+	// M68b (philosophy-conformance audit): estimatedReadyTime was
+	// removed — nothing ever populated it and the "age out stuck
+	// upcoming nodes" consumer its doc comment named never existed.
 
 	// LastError is populated when Phase == Failed.
 	// +optional

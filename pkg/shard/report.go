@@ -15,8 +15,6 @@ type Summary struct {
 	FreeMachines       int32
 	InstanceTypeCounts map[string]int32
 	ZoneCounts         map[string]int32
-	UtilCPUFraction    float64
-	UtilMemoryFraction float64
 }
 
 // Summary returns a coarse-grained view of the shard's current
@@ -41,9 +39,6 @@ func (s *Shard) Summary() Summary {
 			out.ZoneCounts[m.Profile.Zone]++
 		}
 	}
-	// Utilisation hints are placeholder values until real metrics are
-	// wired (M11 production-readiness). The coordinator doesn't
-	// interpret precise values; soft state for reporting.
 	return out
 }
 

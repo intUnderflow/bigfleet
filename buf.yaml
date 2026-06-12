@@ -21,3 +21,11 @@ lint:
 breaking:
   use:
     - FILE
+    # M68b: dead-signal fields are deleted with their numbers reserved
+    # (the policy in practice since M66.1's AvailableCapacityUpdate
+    # cleanup). Strict FIELD_NO_DELETE would forbid that; the
+    # UNLESS_NUMBER_RESERVED variant keeps the wire-compat guarantee —
+    # a deletion without a reservation still fails the build.
+    - FIELD_NO_DELETE_UNLESS_NUMBER_RESERVED
+  except:
+    - FIELD_NO_DELETE

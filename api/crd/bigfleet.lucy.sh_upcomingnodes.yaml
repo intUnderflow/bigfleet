@@ -110,12 +110,6 @@ spec:
             type: object
           status:
             properties:
-              estimatedReadyTime:
-                description: |-
-                  EstimatedReadyTime is when the shard expects the node to be Ready.
-                  Operators use this to age out stuck upcoming nodes.
-                format: date-time
-                type: string
               lastError:
                 description: LastError is populated when Phase == Failed.
                 type: string

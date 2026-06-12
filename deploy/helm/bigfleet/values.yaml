@@ -127,18 +127,12 @@ shard:
   # operator's (logrotate-style sidecar or pipeline retention).
   auditLog: ""
 
-# rbac toggles whether ClusterRole / ClusterRoleBinding are rendered.
-# Disable if your cluster admin manages RBAC out-of-band.
-rbac:
-  create: true
-
 # serviceAccount.create=true makes the chart mint a ServiceAccount;
 # false reuses an existing one named .Values.serviceAccount.name.
 serviceAccount:
   create: true
   name: ""
 
-# podMonitor wires Prometheus Operator scraping. Off by default to keep
-# the chart's hard dependencies minimal.
-podMonitor:
-  enabled: false
+# M68b: the rbac.create and podMonitor.enabled blocks were removed —
+# no template in this chart consumed them, so toggling them rendered
+# nothing. Whether to BUILD those templates is a separate author call.

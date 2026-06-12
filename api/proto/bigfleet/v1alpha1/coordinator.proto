@@ -205,10 +205,8 @@ message ShardSummary {
   // Per-zone counts. Bounded by zones the shard touches.
   map<string, int32> per_zone_counts = 4;
 
-  // Aggregate utilisation hints. Defined by the operator's reporting
-  // policy; the coordinator does not interpret precise values.
-  double utilisation_cpu_fraction    = 5;
-  double utilisation_memory_fraction = 6;
+  reserved 5;  // utilisation_cpu_fraction — never computed, always 0.0; removed M68b
+  reserved 6;  // utilisation_memory_fraction — never computed, always 0.0; removed M68b
 }
 
 // Shortfall describes a need the shard could not satisfy from its own

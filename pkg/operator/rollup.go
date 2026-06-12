@@ -293,21 +293,33 @@ func profileFromCapacityRequest(cr *bfv1alpha1.CapacityRequest) (needs.Profile, 
 	}
 	spread := make([]needs.TopologySpread, 0, len(cr.Spec.TopologySpread))
 	for _, s := range cr.Spec.TopologySpread {
+		// M68b (philosophy-conformance audit): ScheduleAnyway spread is
+		// consumed by nothing engine-side — Phase 1 enforces
+		// DoNotSchedule only — so it must not reach the roll-up, where
+		// it would fragment Profile aggregation for zero behaviour.
+		// Dropped here so CRs from any source (not just the UPC) get
+		// the same translation. The wire field stays.
+		if whenUnsatisfiableFromCore(s.WhenUnsatisfiable) == needs.WhenUnsatisfiableScheduleAnyway {
+			continue
+		}
 		spread = append(spread, needs.TopologySpread{
 			TopologyKey:       s.TopologyKey,
 			MaxSkew:           s.MaxSkew,
 			WhenUnsatisfiable: whenUnsatisfiableFromCore(s.WhenUnsatisfiable),
 		})
 	}
+	// M68b: penalties bucket via AsApproximateFloat64, not AsInt64 —
+	// AsInt64 reports ok=false for fractional quantities ('500m'), and
+	// the old code's discarded error flattened them to $0, erasing the
+	// sub-dollar bucket the $0.50 boundary exists for. Float error is
+	// dwarfed by the powers-of-2 bucket resolution.
 	intBucket := needs.PenaltyBucketUnspecified
 	if cr.Spec.InterruptionPenalty != nil {
-		v, _ := cr.Spec.InterruptionPenalty.AsInt64()
-		intBucket = needs.BucketForDollars(float64(v))
+		intBucket = needs.BucketForDollars(cr.Spec.InterruptionPenalty.AsApproximateFloat64())
 	}
 	recBucket := needs.PenaltyBucketUnspecified
 	if cr.Spec.ReclamationPenalty != nil {
-		v, _ := cr.Spec.ReclamationPenalty.AsInt64()
-		recBucket = needs.BucketForDollars(float64(v))
+		recBucket = needs.BucketForDollars(cr.Spec.ReclamationPenalty.AsApproximateFloat64())
 	}
 	return needs.NewProfile(reqs, spread, cr.Spec.Priority, intBucket, recBucket), res, nil
 }

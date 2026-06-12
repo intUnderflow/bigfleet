@@ -17,8 +17,8 @@ import (
 // Proposals carry a Mode that selects the broker's transaction
 // semantics (ADR-0029, Omega [1, §3.4]):
 //
-//   - ModeIncremental commits the displaceable + unclaimed subset
-//     and reports the immovable conflicts back.
+//   - ModeIncremental commits the displaceable + unclaimed subset;
+//     machines held by immovable incumbents simply don't commit.
 //
 //   - ModeAllOrNothing aborts if any one machine is held by an
 //     incumbent the proposal cannot displace.
@@ -75,7 +75,7 @@ func (b *Broker) Propose(p Proposal) Result {
 	}
 	var newClaim []machine.ID
 	var displace []displacement
-	var conflicted []machine.ID
+	conflicted := 0
 	for _, mid := range p.Machines {
 		inc, claimed := b.state.claimedBy[mid]
 		if !claimed {
@@ -88,14 +88,14 @@ func (b *Broker) Propose(p Proposal) Result {
 		if inc.precedence.Less(p.Precedence) {
 			displace = append(displace, displacement{mid: mid, old: inc})
 		} else {
-			conflicted = append(conflicted, mid)
+			conflicted++
 		}
 	}
 
 	// 3. Mode-specific commit decision (still no mutations).
 	switch p.Mode {
 	case ModeAllOrNothing:
-		if len(conflicted) > 0 {
+		if conflicted > 0 {
 			metrics.ShardPhase1OCCProposalsTotal.WithLabelValues("conflict").Inc()
 			return Result{Status: StatusConflict, NewSeq: currentSeq}
 		}
@@ -161,10 +161,9 @@ func (b *Broker) Propose(p Proposal) Result {
 	}
 
 	return Result{
-		Status:     StatusCommitted,
-		Committed:  committed,
-		Conflicted: conflicted,
-		Displaced:  displaced,
-		NewSeq:     currentSeq + 1,
+		Status:    StatusCommitted,
+		Committed: committed,
+		Displaced: displaced,
+		NewSeq:    currentSeq + 1,
 	}
 }

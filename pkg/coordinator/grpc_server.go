@@ -93,8 +93,6 @@ type ShardSummarySoft struct {
 	FreeMachines       int32
 	InstanceTypeCounts map[string]int32
 	ZoneCounts         map[string]int32
-	UtilCPUFraction    float64
-	UtilMemoryFraction float64
 }
 
 // ShortfallSoft is the leader-local copy of one outstanding shortfall.
@@ -175,8 +173,6 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 			FreeMachines:       s.GetFreeMachines(),
 			InstanceTypeCounts: cloneIntMap(s.GetPerInstanceTypeCounts()),
 			ZoneCounts:         cloneIntMap(s.GetPerZoneCounts()),
-			UtilCPUFraction:    s.GetUtilisationCpuFraction(),
-			UtilMemoryFraction: s.GetUtilisationMemoryFraction(),
 		}
 	}
 	if len(req.GetShortfalls()) > 0 {

@@ -1303,16 +1303,23 @@ func (s *Shard) applyTransition(id machine.ID, target machine.State, mut func(*m
 		if err := s.inv.Insert(fresh); err != nil {
 			return err
 		}
-		s.notifyNodeState(fresh)
+		s.notifyNodeState(fresh, "")
 		return nil
 	}
+	// M68b (philosophy-conformance audit, state-machine-ledger lens):
+	// capture the binding BEFORE mut runs. The post-Drain mut clears
+	// Machine.Cluster as part of the transition, so without this the
+	// terminal Draining→Idle update could never route to the cluster
+	// whose UpcomingNode GC (Drained → delete) keys on it — every
+	// drained machine leaked a stale Draining-phase UpcomingNode.
+	prevCluster := cur.Cluster
 	if cur.State == target {
 		if mut != nil {
 			mut(&cur)
 			if err := s.inv.Apply(cur); err != nil {
 				return err
 			}
-			s.notifyNodeState(cur)
+			s.notifyNodeState(cur, prevCluster)
 		}
 		return nil
 	}
@@ -1323,19 +1330,26 @@ func (s *Shard) applyTransition(id machine.ID, target machine.State, mut func(*m
 	if err := s.inv.Apply(cur); err != nil {
 		return err
 	}
-	s.notifyNodeState(cur)
+	s.notifyNodeState(cur, prevCluster)
 	return nil
 }
 
-// notifyNodeState pushes a NodeStateUpdate to the operator session
-// for the machine's bound cluster, if any. Best-effort: a missing or
-// disconnected session is silently skipped because the operator will
-// reconcile from full state on reconnect.
-func (s *Shard) notifyNodeState(m machine.Machine) {
-	if m.Cluster == "" {
+// notifyNodeState pushes a NodeStateUpdate to the operator session for
+// the machine's bound cluster — or, when the transition itself cleared
+// the binding, to prevCluster (the binding captured before the
+// mutation) so terminal updates still reach the cluster that owned the
+// machine. Best-effort: a missing or disconnected session is silently
+// skipped because the operator will reconcile from full state on
+// reconnect.
+func (s *Shard) notifyNodeState(m machine.Machine, prevCluster machine.ClusterID) {
+	cluster := m.Cluster
+	if cluster == "" {
+		cluster = prevCluster
+	}
+	if cluster == "" {
 		return
 	}
-	sess := s.lookupSession(m.Cluster)
+	sess := s.lookupSession(cluster)
 	if sess == nil {
 		return
 	}

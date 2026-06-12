@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
@@ -48,7 +49,7 @@ var (
 	upcReconciles = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_unschedulable_pod_controller_reconciles_total",
 		Help: "Count of Reconcile invocations by outcome.",
-	}, []string{"outcome"}) // outcome: cr_created, cr_exists, pod_gone, error
+	}, []string{"outcome"}) // outcome: cr_created, cr_exists, pod_gone, pod_terminal, error
 )
 
 func init() {
@@ -164,6 +165,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		upcReconciles.WithLabelValues("error").Inc()
 		return ctrl.Result{}, err
+	}
+
+	// M68b / ADR-0045: a Succeeded/Failed pod consumes no capacity, so
+	// its demand must not survive into the next roll-up. OwnerRef GC
+	// only fires when the Pod object is *deleted* — terminal pods can
+	// linger in the apiserver indefinitely (completed Jobs, crashed
+	// pods kept for debugging) — so the controller deletes the CR
+	// itself on the terminal transition and never creates one for a
+	// pod that is already terminal at reconcile.
+	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+		if err := r.DeleteAllOf(ctx, &bfv1alpha1.CapacityRequest{},
+			client.InNamespace(pod.Namespace),
+			client.MatchingLabels{LabelOwnedByPod: string(pod.UID)},
+		); err != nil {
+			upcReconciles.WithLabelValues("error").Inc()
+			return ctrl.Result{}, fmt.Errorf("delete CRs for terminal pod: %w", err)
+		}
+		upcReconciles.WithLabelValues("pod_terminal").Inc()
+		return ctrl.Result{}, nil
 	}
 
 	// Idempotent: skip if a CR already exists for this pod.
@@ -316,27 +336,56 @@ func (r *Reconciler) resolveReclamationPenalty(pod *corev1.Pod) *resource.Quanti
 }
 
 func requirementsFromPod(pod *corev1.Pod) []corev1.NodeSelectorRequirement {
-	if pod.Spec.Affinity == nil ||
-		pod.Spec.Affinity.NodeAffinity == nil ||
-		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		// No node affinity — synthesize an Exists requirement on the
-		// instance-type label so the autoscaler still has something to
-		// match against. The shard's MatchProfile will satisfy this with
-		// any machine that has an instance-type set.
-		return []corev1.NodeSelectorRequirement{{
-			Key:      "node.kubernetes.io/instance-type",
-			Operator: corev1.NodeSelectorOpExists,
-		}}
+	var out []corev1.NodeSelectorRequirement
+	hasNodeAffinity := pod.Spec.Affinity != nil &&
+		pod.Spec.Affinity.NodeAffinity != nil &&
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil
+	if hasNodeAffinity {
+		terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+		if len(terms) > 0 {
+			// Take the union of MatchExpressions across the first term —
+			// pods with multiple terms / OR semantics are out of scope
+			// for v1.
+			out = append(out, terms[0].MatchExpressions...)
+		}
 	}
-	terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	if len(terms) == 0 {
+	// M68b / ADR-0045: pod.Spec.NodeSelector was silently dropped — a
+	// pod pinned by nodeSelector produced a CR any machine could
+	// satisfy, so BigFleet could "fulfill" demand the scheduler then
+	// couldn't place. kube-scheduler ANDs nodeSelector with required
+	// nodeAffinity; we translate each entry the same way (key → In
+	// [value]), sorted so the CR — and the roll-up Profile derived from
+	// it — is deterministic.
+	if len(pod.Spec.NodeSelector) > 0 {
+		keys := make([]string, 0, len(pod.Spec.NodeSelector))
+		for k := range pod.Spec.NodeSelector {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, corev1.NodeSelectorRequirement{
+				Key:      k,
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{pod.Spec.NodeSelector[k]},
+			})
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	if hasNodeAffinity {
+		// Affinity block present but no usable expressions — preserve the
+		// historical empty-requirements translation.
 		return nil
 	}
-	// Take the union of MatchExpressions across the first term — pods
-	// with multiple terms / OR semantics are out of scope for v1.
-	out := make([]corev1.NodeSelectorRequirement, 0, len(terms[0].MatchExpressions))
-	out = append(out, terms[0].MatchExpressions...)
-	return out
+	// No constraints at all — synthesize an Exists requirement on the
+	// instance-type label so the autoscaler still has something to
+	// match against. The shard's MatchProfile will satisfy this with
+	// any machine that has an instance-type set.
+	return []corev1.NodeSelectorRequirement{{
+		Key:      "node.kubernetes.io/instance-type",
+		Operator: corev1.NodeSelectorOpExists,
+	}}
 }
 
 // coLocationFromPod projects the source pod's required podAffinity into
@@ -362,22 +411,62 @@ func coLocationFromPod(pod *corev1.Pod) *bfv1alpha1.CoLocationTerm {
 	}
 }
 
+// resourcesFromPod computes the pod's effective resource request using
+// kube-scheduler's arithmetic (upstream PodRequests,
+// k8s.io/kubernetes/pkg/api/v1/resource). M68b / ADR-0045: the previous
+// translation summed init-container requests on top of the main
+// containers, overstating demand — init containers run *serially*,
+// before the main containers, so the scheduler sizes the pod at
+//
+//	max(sum(containers) + sum(sidecars), peak init stage) + overhead
+//
+// where a "sidecar" is an init container with restartPolicy: Always
+// (it keeps running alongside the main containers) and each init
+// stage's footprint is that init container's request plus every
+// sidecar started before it.
 func resourcesFromPod(pod *corev1.Pod) corev1.ResourceList {
-	out := corev1.ResourceList{}
-	add := func(rl corev1.ResourceList) {
-		for k, v := range rl {
-			cur := out[k]
-			cur.Add(v)
-			out[k] = cur
+	reqs := corev1.ResourceList{}
+	for _, c := range pod.Spec.Containers {
+		addResourceList(reqs, c.Resources.Requests)
+	}
+	restartableInit := corev1.ResourceList{}
+	initPeak := corev1.ResourceList{}
+	for _, c := range pod.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			// Sidecar: joins the running set for the pod's lifetime.
+			addResourceList(reqs, c.Resources.Requests)
+			addResourceList(restartableInit, c.Resources.Requests)
+			maxResourceList(initPeak, restartableInit)
+			continue
+		}
+		stage := corev1.ResourceList{}
+		addResourceList(stage, restartableInit)
+		addResourceList(stage, c.Resources.Requests)
+		maxResourceList(initPeak, stage)
+	}
+	maxResourceList(reqs, initPeak)
+	// Pod overhead (RuntimeClass) is part of the scheduler's effective
+	// request; omitting it would understate demand for sandboxed pods.
+	addResourceList(reqs, pod.Spec.Overhead)
+	return reqs
+}
+
+// addResourceList adds each quantity in src into dst (dimension-wise sum).
+func addResourceList(dst, src corev1.ResourceList) {
+	for k, v := range src {
+		cur := dst[k]
+		cur.Add(v)
+		dst[k] = cur
+	}
+}
+
+// maxResourceList raises each dimension of dst to at least src's value.
+func maxResourceList(dst, src corev1.ResourceList) {
+	for k, v := range src {
+		if cur, ok := dst[k]; !ok || v.Cmp(cur) > 0 {
+			dst[k] = v.DeepCopy()
 		}
 	}
-	for _, c := range pod.Spec.InitContainers {
-		add(c.Resources.Requests)
-	}
-	for _, c := range pod.Spec.Containers {
-		add(c.Resources.Requests)
-	}
-	return out
 }
 
 func podPriority(pod *corev1.Pod) int32 {
@@ -390,6 +479,15 @@ func podPriority(pod *corev1.Pod) int32 {
 func topologySpreadFromPod(pod *corev1.Pod) []bfv1alpha1.TopologySpreadConstraint {
 	out := make([]bfv1alpha1.TopologySpreadConstraint, 0, len(pod.Spec.TopologySpreadConstraints))
 	for _, c := range pod.Spec.TopologySpreadConstraints {
+		// M68b (philosophy-conformance audit): ScheduleAnyway terms are
+		// consumed by nothing engine-side — Phase 1 only enforces
+		// DoNotSchedule (pkg/decision/occ candidate filtering) — so
+		// carrying them only fragments roll-up aggregation. Dropped at
+		// the demand edge; the wire field and CRD enum stay for CRs
+		// produced by other sources.
+		if c.WhenUnsatisfiable == corev1.ScheduleAnyway {
+			continue
+		}
 		out = append(out, bfv1alpha1.TopologySpreadConstraint{
 			TopologyKey:       c.TopologyKey,
 			MaxSkew:           c.MaxSkew,

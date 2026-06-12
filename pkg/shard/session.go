@@ -261,7 +261,13 @@ func (sess *operatorSession) rollupWorker(ctx context.Context, sh *Shard) {
 			}
 			domainNeeds, err := conv.NeedsFromRollup(rollup)
 			if err != nil {
-				sh.log.Warn("rollup decode failed", "cluster", sess.cluster, "err", err)
+				// M68b: reject-the-rollup-loudly — same posture as the
+				// provider-ingest gate (validateProviderMachine). The
+				// NeedsTable keeps the cluster's last-known-good demand;
+				// nothing from the bad roll-up is applied.
+				metrics.ShardRollupsRejected.WithLabelValues(string(sess.cluster)).Inc()
+				sh.log.Error("rollup rejected at ingest validation; keeping last-known-good demand (M68b)",
+					"cluster", sess.cluster, "err", err)
 				continue
 			}
 			// ApplyRollup replaces the NeedsTable slice and marks the

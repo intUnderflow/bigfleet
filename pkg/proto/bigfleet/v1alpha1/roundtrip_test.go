@@ -341,8 +341,6 @@ func TestRoundTrip_ShardReport_WithShortfalls(t *testing.T) {
 				"us-east-1a": 200_000,
 				"us-east-1b": 300_000,
 			},
-			UtilisationCpuFraction:    0.18,
-			UtilisationMemoryFraction: 0.31,
 		},
 		Shortfalls: []*bigfleetv1alpha1.Shortfall{
 			{

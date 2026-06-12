@@ -39,26 +39,10 @@ type AvailableCapacitySpec struct {
 	// capacity.
 	Cost resource.Quantity `json:"cost"`
 
-	// SupportsAtomicProvisioning indicates whether the entire AvailableCount
-	// can be provisioned all-or-nothing. Useful for gang-scheduled workloads.
-	// +optional
-	SupportsAtomicProvisioning bool `json:"supportsAtomicProvisioning,omitempty"`
-
-	// EstimatedProvisioningTime is the wall-clock duration the shard
-	// expects to take from request to Ready.
-	// +optional
-	EstimatedProvisioningTime *metav1.Duration `json:"estimatedProvisioningTime,omitempty"`
-
-	// NodeTemplate shows operators what kind of node would result.
-	// +optional
-	NodeTemplate *AvailableCapacityNodeTemplate `json:"nodeTemplate,omitempty"`
-}
-
-type AvailableCapacityNodeTemplate struct {
-	// +optional
-	Labels map[string]string `json:"labels,omitempty"`
-	// +optional
-	Taints []corev1.Taint `json:"taints,omitempty"`
+	// M68b (philosophy-conformance audit): supportsAtomicProvisioning,
+	// estimatedProvisioningTime and nodeTemplate were removed — their
+	// wire fields were deleted in M66.1 (AvailableCapacityUpdate
+	// reserved 7–9), so no shard could ever populate them.
 }
 
 // AvailableCapacityStatus is reserved for future operator-side bookkeeping.

@@ -25,8 +25,6 @@ func (a shardAdapter) Summary() ShardSummary {
 		FreeMachines:       s.FreeMachines,
 		InstanceTypeCounts: s.InstanceTypeCounts,
 		ZoneCounts:         s.ZoneCounts,
-		UtilCPUFraction:    s.UtilCPUFraction,
-		UtilMemoryFraction: s.UtilMemoryFraction,
 	}
 }
 

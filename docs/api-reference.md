@@ -79,7 +79,6 @@ metadata:
 spec:
   machineId: gpu-7f3a
   profile: {...}
-  estimatedReadyTime: "2026-05-01T15:34:00Z"
 ```
 
 ## gRPC services

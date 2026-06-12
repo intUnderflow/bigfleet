@@ -90,8 +90,6 @@ type ShardSummary struct {
 	FreeMachines       int32
 	InstanceTypeCounts map[string]int32
 	ZoneCounts         map[string]int32
-	UtilCPUFraction    float64
-	UtilMemoryFraction float64
 }
 
 // ShardShortfall mirrors pb.Shortfall in domain form.
@@ -304,12 +302,10 @@ func (c *Client) queueAck(id string, outcome pb.InstructAck_Outcome, reason stri
 
 func summaryToProto(s ShardSummary) *pb.ShardSummary {
 	return &pb.ShardSummary{
-		TotalMachines:             s.TotalMachines,
-		FreeMachines:              s.FreeMachines,
-		PerInstanceTypeCounts:     s.InstanceTypeCounts,
-		PerZoneCounts:             s.ZoneCounts,
-		UtilisationCpuFraction:    s.UtilCPUFraction,
-		UtilisationMemoryFraction: s.UtilMemoryFraction,
+		TotalMachines:         s.TotalMachines,
+		FreeMachines:          s.FreeMachines,
+		PerInstanceTypeCounts: s.InstanceTypeCounts,
+		PerZoneCounts:         s.ZoneCounts,
 	}
 }
 

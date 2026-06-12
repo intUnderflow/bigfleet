@@ -192,24 +192,6 @@ func (s *SharedState) DisplaceableBy(mid machine.ID, prec Precedence) bool {
 	return inc.precedence.Less(prec)
 }
 
-// PrecedenceAt reports whether mid is claimed by an incumbent with
-// precedence ≥ prec — i.e. the incumbent is immovable from a
-// prec-priority proposer. Returns false if mid is unclaimed.
-//
-// Workers use this to short-circuit retries: a machine held by an
-// incumbent that the worker cannot displace is a permanent local
-// loss (until the cycle ends), so further retries on that machine
-// would only burn budget.
-func (s *SharedState) PrecedenceAt(mid machine.ID, prec Precedence) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	inc, ok := s.claimedBy[mid]
-	if !ok {
-		return false
-	}
-	return !inc.precedence.Less(prec)
-}
-
 // OwnersForTest returns a snapshot of the claimed-set as a
 // machine→Precedence map. Test-only inspection helper; not on any
 // hot path.

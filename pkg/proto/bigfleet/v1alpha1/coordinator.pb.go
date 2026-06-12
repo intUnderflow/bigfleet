@@ -1143,12 +1143,8 @@ type ShardSummary struct {
 	PerInstanceTypeCounts map[string]int32 `protobuf:"bytes,3,rep,name=per_instance_type_counts,json=perInstanceTypeCounts,proto3" json:"per_instance_type_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// Per-zone counts. Bounded by zones the shard touches.
 	PerZoneCounts map[string]int32 `protobuf:"bytes,4,rep,name=per_zone_counts,json=perZoneCounts,proto3" json:"per_zone_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	// Aggregate utilisation hints. Defined by the operator's reporting
-	// policy; the coordinator does not interpret precise values.
-	UtilisationCpuFraction    float64 `protobuf:"fixed64,5,opt,name=utilisation_cpu_fraction,json=utilisationCpuFraction,proto3" json:"utilisation_cpu_fraction,omitempty"`
-	UtilisationMemoryFraction float64 `protobuf:"fixed64,6,opt,name=utilisation_memory_fraction,json=utilisationMemoryFraction,proto3" json:"utilisation_memory_fraction,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ShardSummary) Reset() {
@@ -1207,20 +1203,6 @@ func (x *ShardSummary) GetPerZoneCounts() map[string]int32 {
 		return x.PerZoneCounts
 	}
 	return nil
-}
-
-func (x *ShardSummary) GetUtilisationCpuFraction() float64 {
-	if x != nil {
-		return x.UtilisationCpuFraction
-	}
-	return 0
-}
-
-func (x *ShardSummary) GetUtilisationMemoryFraction() float64 {
-	if x != nil {
-		return x.UtilisationMemoryFraction
-	}
-	return 0
 }
 
 // Shortfall describes a need the shard could not satisfy from its own
@@ -1936,20 +1918,18 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"shortfalls\x18\x06 \x03(\v2\x1c.bigfleet.v1alpha1.ShortfallR\n" +
 	"shortfalls\x12I\n" +
 	"\x10instruction_acks\x18\a \x03(\v2\x1e.bigfleet.v1alpha1.InstructAckR\x0finstructionAcks\x12#\n" +
-	"\rshard_address\x18\b \x01(\tR\fshardAddress\"\xb1\x04\n" +
+	"\rshard_address\x18\b \x01(\tR\fshardAddress\"\xc3\x03\n" +
 	"\fShardSummary\x12%\n" +
 	"\x0etotal_machines\x18\x01 \x01(\x05R\rtotalMachines\x12#\n" +
 	"\rfree_machines\x18\x02 \x01(\x05R\ffreeMachines\x12s\n" +
 	"\x18per_instance_type_counts\x18\x03 \x03(\v2:.bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntryR\x15perInstanceTypeCounts\x12Z\n" +
-	"\x0fper_zone_counts\x18\x04 \x03(\v22.bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntryR\rperZoneCounts\x128\n" +
-	"\x18utilisation_cpu_fraction\x18\x05 \x01(\x01R\x16utilisationCpuFraction\x12>\n" +
-	"\x1butilisation_memory_fraction\x18\x06 \x01(\x01R\x19utilisationMemoryFraction\x1aH\n" +
+	"\x0fper_zone_counts\x18\x04 \x03(\v22.bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntryR\rperZoneCounts\x1aH\n" +
 	"\x1aPerInstanceTypeCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1a@\n" +
 	"\x12PerZoneCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xb6\x02\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01J\x04\b\x05\x10\x06J\x04\b\x06\x10\a\"\xb6\x02\n" +
 	"\tShortfall\x12N\n" +
 	"\frequirements\x18\x01 \x03(\v2*.bigfleet.v1alpha1.NodeSelectorRequirementR\frequirements\x126\n" +
 	"\adeficit\x18\x02 \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\adeficit\x12\x1a\n" +

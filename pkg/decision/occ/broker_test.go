@@ -34,9 +34,6 @@ func TestBroker_HappyPathCommit(t *testing.T) {
 	if len(r.Committed) != 2 {
 		t.Fatalf("Committed = %v, want 2 machines", r.Committed)
 	}
-	if len(r.Conflicted) != 0 {
-		t.Fatalf("Conflicted = %v, want empty", r.Conflicted)
-	}
 	if r.NewSeq != 1 {
 		t.Fatalf("NewSeq = %d, want 1", r.NewSeq)
 	}
@@ -92,7 +89,8 @@ func TestBroker_IncrementalPartialCommit(t *testing.T) {
 	})
 
 	// Need C proposes [m1, m2, m3] from a different bucket. m2 is
-	// already claimed → partial commit of [m1, m3], m2 conflicted.
+	// already claimed by an immovable (equal-precedence) incumbent →
+	// partial commit of exactly [m1, m3].
 	r := b.Propose(occ.Proposal{
 		Bucket: c, Machines: []machine.ID{"m1", "m2", "m3"}, ObservedSeq: 0,
 		Mode: occ.ModeIncremental,
@@ -101,11 +99,8 @@ func TestBroker_IncrementalPartialCommit(t *testing.T) {
 	if r.Status != occ.StatusCommitted {
 		t.Fatalf("Status = %v, want Committed (partial)", r.Status)
 	}
-	if got := len(r.Committed); got != 2 {
-		t.Fatalf("len(Committed) = %d, want 2", got)
-	}
-	if got := len(r.Conflicted); got != 1 || r.Conflicted[0] != "m2" {
-		t.Fatalf("Conflicted = %v, want [m2]", r.Conflicted)
+	if got := sortedIDs(r.Committed); !equalIDs(got, []machine.ID{"m1", "m3"}) {
+		t.Fatalf("Committed = %v, want [m1 m3] (m2 immovable)", got)
 	}
 	if !s.IsClaimed("m1") || !s.IsClaimed("m3") {
 		t.Fatal("partial-commit machines not claimed")
@@ -124,9 +119,6 @@ func TestBroker_AllOrNothingHappyPath(t *testing.T) {
 
 	if r.Status != occ.StatusCommitted {
 		t.Fatalf("Status = %v, want Committed", r.Status)
-	}
-	if len(r.Conflicted) != 0 {
-		t.Fatalf("AllOrNothing success with non-empty Conflicted: %v", r.Conflicted)
 	}
 	if len(r.Committed) != 3 {
 		t.Fatalf("Committed = %v, want all 3", r.Committed)
