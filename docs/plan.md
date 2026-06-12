@@ -897,6 +897,19 @@ transport TLS (ADR-0048 §scope), per-ordinal shard Certificates for
 multi-shard mTLS, runtime kill-switch toggle via coordinator
 instruction (ADR-0046).
 
+**Philosophy-audit arbitrations (2026-06-12, see the audit run for
+evidence; the loop proceeds on everything not listed here):**
+ADR-0041 foldability ruling (demand-shape vs anticipation — one
+paragraph settles it); ADR-0046 roll-up quarantine vs the
+full-replacement hard rule (keep-with-amended-wording vs delete);
+§9 coordinator shortfall response (schedule as a milestone — papers
+win — or trim the dead plumbing + paper-diff); AvailableCapacity
+(document as the designated smarter-operator input, or deprecate);
+two one-line paper blockquotes (§8 excess timing, §7 bound-to-
+requesting-cluster); reclamation_penalty idle-tiebreak omission
+(paper-diff or fix); machine_id≡node-name identity convention;
+quota subsystem + coordinator instruction pipeline deletion scope.
+
 **Author decisions queue** (the loop parks work on these and
 continues elsewhere; see the production-readiness audit for context):
 
