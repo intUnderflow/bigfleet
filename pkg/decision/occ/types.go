@@ -165,6 +165,16 @@ type NeedResult struct {
 	// parking age (ADR-0042 Addendum) only counts cycles where this is
 	// false — losing claim races is not structural unsatisfiability.
 	SameSatisfiable bool
+	// ClaimedMachines is the Need's complete claimed-set this cycle —
+	// pre-pass-credited Configured/Configuring AND worker-committed
+	// Idle/Speculative, unlike Bootstrap/ProvisionMachines which carry
+	// only the acquired subset. Surfaced for the #325 satisfied-gang
+	// attribution probe: a SATISFIED Same-Need's churn lives entirely in
+	// which machines its claimed-set holds cycle-to-cycle (the M77g
+	// gang domain-choice oscillation), and that set is otherwise dropped
+	// after the barrier walk. Read-only/diagnostic; the engine reasons
+	// over the flattened CycleResult.Claimed, not this per-Need view.
+	ClaimedMachines []machine.ID
 }
 
 // Result is what Propose returns.

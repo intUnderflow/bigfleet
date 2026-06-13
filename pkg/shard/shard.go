@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -738,6 +739,22 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 				"parked", g.parked,
 			)
 		}
+		// #325 / M77g: one line per sampled SATISFIED Same-Need. Across
+		// consecutive probe cycles, a chosen_domain that flips or a
+		// claimed_machines set that churns under static demand is the
+		// gang domain-choice oscillation bigfleet-uber #61/#63 located
+		// among satisfied gangs (invisible to the unsatisfied gang
+		// attribution above). machine_count flags churn the capped
+		// claimed_machines list would otherwise hide.
+		for _, g := range pa.satGangProbe {
+			s.log.Info("satisfied gang attribution",
+				"group", g.group,
+				"cluster", g.cluster,
+				"chosen_domain", g.domain,
+				"machine_count", g.machineCount,
+				"claimed_machines", strings.Join(g.machines, ","),
+			)
+		}
 	}
 
 	// Emit AvailableCapacity hints (paper §6.2). Eventually-consistent;
@@ -1020,6 +1037,15 @@ type phaseAttribution struct {
 	// excess-inventory oscillation signature #58 surfaced — churn that
 	// the unsatisfied-only gang probe is blind to by construction.
 	reclaimProbe []reclaimProbeEntry
+	// satGangProbe samples SATISFIED Same-Needs (#325, the M77g
+	// follow-up to bigfleet-uber #61/#63): their chosen domain and
+	// claimed machine-set. The Bootstrap≈Reclaim oscillation runs while
+	// gangs are satisfied — p1_unsatisfied_same is 0 every cycle — so
+	// the gangProbe above (unsatisfied-only) never emits the oscillating
+	// gangs' chosen_domain. A chosen_domain that flips across
+	// consecutive probe lines, or a claimed-set that churns under static
+	// demand, is the M77g domain-choice oscillation made visible.
+	satGangProbe []satGangProbeEntry
 }
 
 // gangProbeN bounds the per-cycle gang probe so the log line stays
@@ -1043,6 +1069,23 @@ type gangProbeEntry struct {
 	acquired int
 	deficit  string
 	parked   bool
+}
+
+// satGangMachineCap bounds how many claimed machine-IDs each satisfied-
+// gang probe line prints (#325). A served gang can hold thousands of
+// machines; the diagnostic only needs enough IDs per line to tell, by
+// eye, whether the claimed set churns across cycles, so we print the
+// first satGangMachineCap (sorted for cross-cycle comparability) and a
+// total count. Volume stays bounded; the total flags any churn the
+// truncated list might hide.
+const satGangMachineCap = 12
+
+type satGangProbeEntry struct {
+	group        string
+	cluster      string
+	domain       string
+	machineCount int
+	machines     []string // first satGangMachineCap claimed IDs, sorted
 }
 
 // Acquisition parking (ADR-0042 Addendum). parkAfterCycles is the
@@ -1219,6 +1262,42 @@ func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 d
 				fits:         fits,
 			})
 		}
+	}
+	// #325: sample SATISFIED Same-Needs so the M77g oscillation (which
+	// lives entirely among satisfied gangs) becomes observable — the
+	// gangProbe above only fires for unsatisfied Same-Needs, of which
+	// there are none during the bigfleet-uber #61/#63 ping-pong. Same
+	// gangProbeN bound and deterministic (Phase 1 result order) selection
+	// as the unsatisfied probe, so the same gangs stay comparable across
+	// probe cycles.
+	for i := range p1.SatisfiedGangs {
+		if len(pa.satGangProbe) >= gangProbeN {
+			break
+		}
+		g := &p1.SatisfiedGangs[i]
+		group := g.Need.Group
+		if group == "" {
+			group = g.Need.Profile.Fingerprint()[:12]
+		}
+		ids := make([]string, 0, len(g.Machines))
+		for _, mid := range g.Machines {
+			ids = append(ids, string(mid))
+		}
+		// Sort so the same gang's claimed-set renders identically across
+		// cycles when it hasn't churned — a reader compares lines, and
+		// ClaimedFor's map iteration order is otherwise non-deterministic.
+		sort.Strings(ids)
+		count := len(ids)
+		if len(ids) > satGangMachineCap {
+			ids = ids[:satGangMachineCap]
+		}
+		pa.satGangProbe = append(pa.satGangProbe, satGangProbeEntry{
+			group:        group,
+			cluster:      string(g.Need.ClusterID),
+			domain:       g.Domain,
+			machineCount: count,
+			machines:     ids,
+		})
 	}
 	return pa
 }

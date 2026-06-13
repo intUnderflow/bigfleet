@@ -23,6 +23,31 @@ type Phase1Result struct {
 	// demand). One arithmetic, two consumers — the phases cannot
 	// disagree about which machine serves which Need.
 	Claimed map[machine.ID]struct{}
+
+	// SatisfiedGangs carries the chosen domain + claimed machine-set of
+	// every SATISFIED Same-Need this cycle (#325 / the M77g diagnosis).
+	// The existing UnsatisfiedNeed.SameDomain only surfaces the choice
+	// for UNsatisfied gangs; bigfleet-uber #61/#63 established the
+	// Bootstrap≈Reclaim oscillation occurs while gangs are satisfied
+	// (p1_unsatisfied_same=0 every cycle), so the oscillating domain
+	// flip is invisible to the unsatisfied-only probe. This is the
+	// satisfied equivalent: read-only/diagnostic, consumed only by the
+	// flag-gated phase-attribution probe, no engine behaviour rides on
+	// it.
+	SatisfiedGangs []SatisfiedGang
+}
+
+// SatisfiedGang is the per-cycle attribution of one SATISFIED Same-Need
+// (#325): the joint pre-pass's chosen domain and the complete set of
+// machines claimed toward the gang. Mirrors UnsatisfiedNeed.SameDomain
+// for the satisfied case so the M77g field diagnostic can observe,
+// cycle-to-cycle, whether a served gang's chosen_domain flips and
+// whether its claimed machines churn — the anatomy of the static-demand
+// reclaim↔re-bootstrap loop ChooseSameBucket rule 2 was meant to pin.
+type SatisfiedGang struct {
+	Need     needs.Need
+	Domain   string
+	Machines []machine.ID
 }
 
 // UnsatisfiedNeed is a Need whose Phase 1 deficit could not be filled
@@ -111,6 +136,18 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				SameDomain:      r.SameDomain,
 				Acquired:        len(r.BootstrapMachines) + len(r.ProvisionMachines),
 				SameSatisfiable: r.SameSatisfiable,
+			})
+			continue
+		}
+		// #325: a SATISFIED Same-Need — record its domain + full claimed
+		// set for the satisfied-gang probe. This is where the M77g
+		// oscillation hides: p1_unsatisfied_same is 0 every cycle, so the
+		// domain flip never reaches the UnsatisfiedNeed path above.
+		if _, ok := occ.SameRequirementKey(profile); ok {
+			result.SatisfiedGangs = append(result.SatisfiedGangs, SatisfiedGang{
+				Need:     *r.Need,
+				Domain:   r.SameDomain,
+				Machines: r.ClaimedMachines,
 			})
 		}
 	}

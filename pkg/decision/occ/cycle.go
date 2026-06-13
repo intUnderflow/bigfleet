@@ -145,11 +145,16 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r := &results[i]
 		r.BootstrapMachines = nil
 		r.ProvisionMachines = nil
+		r.ClaimedMachines = nil
 		r.SameDomain = state.SameDomainFor(r.Need)
 		r.SameSatisfiable = state.SameSatisfiableFor(r.Need)
 		sumAlloc := []needs.ResourceQty(nil)
 		for _, mid := range state.ClaimedFor(r.Need) {
 			claimed[mid] = struct{}{}
+			// #325: retain the per-Need full claimed-set (every state,
+			// not just acquired Idle/Speculative) so the satisfied-gang
+			// probe can watch a served Same-Need's machine set churn.
+			r.ClaimedMachines = append(r.ClaimedMachines, mid)
 			m, ok := snap.Get(mid)
 			if !ok {
 				continue

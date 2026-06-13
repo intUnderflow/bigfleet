@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -102,5 +103,86 @@ func TestCollectPhaseAttribution(t *testing.T) {
 	}
 	if !reflect.DeepEqual(pa, want) {
 		t.Errorf("collectPhaseAttribution = %+v, want %+v", pa, want)
+	}
+}
+
+// TestCollectPhaseAttribution_SatisfiedGang pins the #325 satisfied-gang
+// probe: a SATISFIED Same-Need (one with a Same key, absent from
+// Phase1Result.Unsatisfied) emits one probe line carrying its
+// chosen_domain and its full claimed machine-set — the observability the
+// M77g diagnosis needs, since the existing gangProbe fires only for
+// UNSATISFIED Same-Needs (p1_unsatisfied_same is 0 during the
+// bigfleet-uber #61/#63 oscillation). The claimed IDs come back sorted so
+// a reader can compare lines cycle-to-cycle for churn.
+func TestCollectPhaseAttribution_SatisfiedGang(t *testing.T) {
+	t.Parallel()
+	snap := inventory.New().Snapshot()
+
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
+	gang := needs.Need{
+		ClusterID:          "c1",
+		Profile:            paProfile(1000, true),
+		AggregateResources: gpuUnit,
+		MinUnit:            gpuUnit,
+		Group:              "trainer-a",
+	}
+	// IDs out of order on purpose — the probe must sort them.
+	p1 := decision.Phase1Result{SatisfiedGangs: []decision.SatisfiedGang{{
+		Need:     gang,
+		Domain:   "rack-7",
+		Machines: []machine.ID{"m-c", "m-a", "m-b"},
+	}}}
+
+	pa := collectPhaseAttribution(snap, []needs.Need{gang}, p1, decision.Phase3Result{})
+
+	want := []satGangProbeEntry{{
+		group:        "trainer-a",
+		cluster:      "c1",
+		domain:       "rack-7",
+		machineCount: 3,
+		machines:     []string{"m-a", "m-b", "m-c"},
+	}}
+	if !reflect.DeepEqual(pa.satGangProbe, want) {
+		t.Errorf("satGangProbe = %+v, want %+v", pa.satGangProbe, want)
+	}
+}
+
+// TestCollectPhaseAttribution_SatisfiedGangCap pins the claimed-machine
+// volume bound (#325): the printed list is capped to satGangMachineCap
+// IDs while machine_count still reports the true total, so a churn the
+// truncated list hides is still flagged by the count.
+func TestCollectPhaseAttribution_SatisfiedGangCap(t *testing.T) {
+	t.Parallel()
+	snap := inventory.New().Snapshot()
+
+	gpuUnit := []needs.ResourceQty{{Name: "nvidia.com/gpu", Quantity: "8"}}
+	gang := needs.Need{ClusterID: "c1", Profile: paProfile(1000, true), AggregateResources: gpuUnit, MinUnit: gpuUnit, Group: "big"}
+	// Two more machines than the cap; zero-padded so sort order is
+	// numeric-stable and the expected prefix is unambiguous.
+	total := satGangMachineCap + 2
+	ids := make([]machine.ID, 0, total)
+	for i := 0; i < total; i++ {
+		ids = append(ids, machine.ID(fmt.Sprintf("m-%03d", i)))
+	}
+	p1 := decision.Phase1Result{SatisfiedGangs: []decision.SatisfiedGang{{
+		Need:     gang,
+		Domain:   "rack-1",
+		Machines: ids,
+	}}}
+
+	pa := collectPhaseAttribution(snap, []needs.Need{gang}, p1, decision.Phase3Result{})
+
+	if len(pa.satGangProbe) != 1 {
+		t.Fatalf("satGangProbe entries = %d, want 1", len(pa.satGangProbe))
+	}
+	got := pa.satGangProbe[0]
+	if got.machineCount != total {
+		t.Errorf("machineCount = %d, want %d (true total, uncapped)", got.machineCount, total)
+	}
+	if len(got.machines) != satGangMachineCap {
+		t.Errorf("printed machines = %d, want %d (capped)", len(got.machines), satGangMachineCap)
+	}
+	if got.machines[0] != "m-000" {
+		t.Errorf("first printed machine = %q, want sorted prefix m-000", got.machines[0])
 	}
 }
