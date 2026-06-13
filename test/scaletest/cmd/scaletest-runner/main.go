@@ -842,10 +842,30 @@ func run(args []string) error {
 	fmt.Fprintf(os.Stderr, "ramp budget: %s (%s) [sanity check; SLO gating runs over the soak window per ADR-0035]\n", rampBudget, rampSource)
 	pfArgs := strings.Join(kArgs(*kubeconfig, "-n", namespace, "port-forward", "svc/grafana", "3000:3000"), " ")
 	fmt.Fprintf(os.Stderr, "live dashboard: kubectl %s  →  http://localhost:3000/d/bigfleet-scaletest\n", pfArgs)
-	if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
-		return fmt.Errorf("steady state: %w", err)
+	if mergedActive {
+		// M77a / ADR-0045: V2 profiles gate on BigFleet's actual
+		// contract — demand covered by bound capacity — not pod-bind
+		// percentage. See waitForSteadyStateV2.
+		if err := waitForSteadyStateV2(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
+			return fmt.Errorf("steady state: %w", err)
+		}
+	} else {
+		if err := waitForSteadyState(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
+			return fmt.Errorf("steady state: %w", err)
+		}
 	}
 	fmt.Fprintln(os.Stderr, "steady state reached; soaking", duration)
+
+	// M77a / ADR-0045 steady-window health: at steady demand Phase 3 is
+	// inert, so the Reclaim action counter must be flat across the soak.
+	// Snapshot it here; the post-soak delta is a gated failing condition
+	// on V2 runs (reclaim churn at steady demand is exactly the defect
+	// class the M67 engine work removed — a non-zero delta is a
+	// regression, not noise).
+	reclaimsAtSteady := -1
+	if mergedActive {
+		reclaimsAtSteady = readReclaimActions(ctx, *kubeconfig, namespace)
+	}
 
 	soakStart := time.Now()
 	// Soak.
@@ -934,6 +954,20 @@ loop:
 	// Pull metrics summary. Same deadline rationale.
 	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 2*time.Minute)
 	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace, *duration)
+	if mergedActive {
+		// Reclaim flatness over the steady window (M77a / ADR-0045).
+		// Raw counter delta, not a rate window: the assertion is
+		// "exactly zero", and rate() extrapolation can both invent and
+		// hide single-digit increments. -1 = unmeasured (one of the two
+		// reads failed); surfaced via unmeasuredGated, not silently
+		// passed.
+		reclaimsAtEnd := readReclaimActions(metricsCtx, *kubeconfig, namespace)
+		if reclaimsAtSteady >= 0 && reclaimsAtEnd >= 0 {
+			metrics["reclaimActionsDuringSoak"] = float64(reclaimsAtEnd - reclaimsAtSteady)
+		} else {
+			metrics["reclaimActionsDuringSoak"] = -1
+		}
+	}
 	cancelMetrics()
 
 	res := runResult{
@@ -969,6 +1003,16 @@ loop:
 				res.RunnerActions[i].AssertError,
 			))
 		}
+	}
+	// M77a / ADR-0045: zero reclaim churn at steady demand is a gated
+	// condition on V2 runs. Demand is full-replacement and the soak
+	// holds it constant (churn replaces Pods 1:1), so Phase 3 — now
+	// shrinkage-only — has nothing to do; any Reclaim emitted during
+	// the steady window is the bootstrap≈reclaim oscillation class
+	// resurfacing.
+	if v, ok := metrics["reclaimActionsDuringSoak"]; ok && v > 0 {
+		res.Failures = append(res.Failures, fmt.Sprintf(
+			"reclaimActionsDuringSoak %.0f > 0 — Phase 3 emitted Reclaims under steady demand (ADR-0045: reclaim follows demand shrinkage only; zero reclaim churn is the M67 contract)", v))
 	}
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas, prof.SLO)
 	res.UnmeasuredSLOs = unmeasuredGated(metrics)
@@ -1249,6 +1293,107 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 	}
 }
 
+// waitForSteadyStateV2 is the steady-state gate for V2 (catalog +
+// substrate) profiles, redefined around the ADR-0045 contract (M77a;
+// spec recorded in plan §12 with the M67 engine work): BigFleet
+// promises demand covered by bound capacity — it does NOT promise pod
+// placement, so a bind-percentage gate asserts a promise the system
+// under test never made. Steady state is, all together:
+//
+//	(a) every kwok pod Ready — the harness is alive;
+//	(b) demand fully ramped: active CRs ≥ 99.9 % of target AND the
+//	    shard's NeedsTable reports demand rows (roll-ups flowing) —
+//	    without this, "no shortfall" is vacuous;
+//	(c) demand covered: bigfleet_shard_shortfalls == 0. The gauge is
+//	    full-replacement per cycle from Phase 2's unresolved set, so
+//	    zero means every Need's deficit was claimable from bound or
+//	    newly-claimed capacity — genuine undersupply (Same gangs short
+//	    of per-zone machines, parked classes) holds it > 0;
+//	(d) acquisitions quiescent: the Bootstrap+Provision emit counter is
+//	    flat for quiesceTicks consecutive polls. Claims count from the
+//	    moment they're made (ADR-0045 §2), so (c) alone can read zero
+//	    while executes are still draining — flat acquisition emission
+//	    is what says fulfillment finished rather than being claimed-
+//	    ahead, and it also catches an emit-fail-re-emit loop that (c)
+//	    is blind to.
+//
+// Pod-bind progress stays on every waiting line — it's the cluster-side
+// telemetry that makes a stuck run diagnosable — but does not gate:
+// satisfied-but-stuck is the cluster's problem (ADR-0045 §4).
+//
+// Fail-fast: with demand at target, a standing shortfall AND frozen
+// acquisitions for plateauTicks means the engine has demand it can
+// neither cover nor make progress against — structurally stuck (seed /
+// catalog shape mismatch, or an engine defect), so fail in 2 minutes
+// instead of burning the ramp budget. This re-keys the legacy frozen-
+// binds plateau detector onto demand-side liveness.
+func waitForSteadyStateV2(ctx context.Context, kubeconfig, ns string, clusterCount int, perClusterTarget int, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	tick := time.NewTicker(10 * time.Second)
+	defer tick.Stop()
+	target := int(0.999 * float64(clusterCount*perClusterTarget))
+	const (
+		quiesceTicks = 3  // × 10s ticker = 30s of covered demand + flat acquisitions
+		plateauTicks = 12 // × 10s ticker = 2 minutes of standing shortfall + no movement
+	)
+	stable, frozen := 0, 0
+	lastAcq := -1
+	active, shortfalls, acq, reclaims, binds := -1, -1, -1, -1, -1
+	for {
+		if time.Now().After(deadline) {
+			// Name the failure shape in the error: covered demand
+			// (shortfalls 0) with acquisitions AND reclaims still moving
+			// is the bootstrap≈reclaim oscillation signature — the class
+			// ADR-0045 removes by construction, observed live on the
+			// first M77a kind run (a3-highgpu-8g pool, machines ping-
+			// ponging between clusters at static demand).
+			return fmt.Errorf("did not reach steady state within %s (last: active %d/%d, shortfalls %d, acquisitions %d, reclaims %d, binds %d — acquisitions+reclaims still moving at covered demand is the ADR-0045 oscillation signature; standing shortfall is genuine undersupply)",
+				budget, active, target, shortfalls, acq, reclaims, binds)
+		}
+		ready, err := countReadyKWOKPods(ctx, kubeconfig, ns)
+		demandRows := -1
+		active, shortfalls, acq, reclaims, binds = -1, -1, -1, -1, -1
+		if err == nil && ready >= clusterCount {
+			active = readActiveCRs(ctx, kubeconfig, ns)
+			shortfalls = readShardShortfalls(ctx, kubeconfig, ns)
+			demandRows = readShardDemandRows(ctx, kubeconfig, ns)
+			acq = readAcquisitionActions(ctx, kubeconfig, ns)
+			reclaims = readReclaimActions(ctx, kubeconfig, ns)
+			binds = readPodBindsSucceeded(ctx, kubeconfig, ns) // reported, never gated
+			demandReady := active >= target && demandRows > 0
+			acqFlat := acq >= 0 && acq == lastAcq
+			if demandReady && shortfalls == 0 && acqFlat {
+				stable++
+				if stable >= quiesceTicks {
+					fmt.Fprintf(os.Stderr, "  steady (ADR-0045): pods %d/%d ready, active %d/%d, shortfalls 0, acquisitions flat at %d for %s, binds %d (reported, not gated)\n",
+						ready, clusterCount, active, target, acq, time.Duration(quiesceTicks)*10*time.Second, binds)
+					return nil
+				}
+			} else {
+				stable = 0
+			}
+			if demandReady && shortfalls > 0 && acqFlat {
+				frozen++
+				if frozen >= plateauTicks {
+					return fmt.Errorf(
+						"demand-side plateau: %d standing shortfall(s) with acquisitions frozen at %d for %s at full demand (active %d/%d, binds %d) — the engine has demand it can neither cover nor make progress against; check seed/catalog shape vs demand, then suspect the engine",
+						shortfalls, acq, time.Duration(plateauTicks)*10*time.Second, active, target, binds)
+				}
+			} else {
+				frozen = 0
+			}
+			lastAcq = acq
+		}
+		fmt.Fprintf(os.Stderr, "  waiting: pods %d/%d ready, active %d/%d, shortfalls %d, demand rows %d, acquisitions %d, binds %d (gate: shortfalls == 0 + acquisitions flat ×%d)\n",
+			ready, clusterCount, active, target, shortfalls, demandRows, acq, binds, quiesceTicks)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
 // countReadyKWOKPods returns the number of kwok-cluster pods whose
 // pod-level Ready condition is true (i.e., ALL containers in the pod
 // are Ready, not just the first). Pre-fix this only inspected
@@ -1337,6 +1482,68 @@ func readPodBindsSucceeded(ctx context.Context, kubeconfig, ns string) int {
 	// to 0 instead of returning no-data. The sum of "scheduler-path
 	// gauge OR pod-shim counter" is whichever path is active.
 	q := `sum(bigfleet_scaletest_node_creator_bound_pods) or on() sum(bigfleet_scaletest_pod_shim_pod_bind_attempts_total{outcome=~"success|bound_by_other"})`
+	v, err := promQuery(queryCtx, kubeconfig, ns, q)
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readShardShortfalls returns the fleet-wide sum of the shard's
+// unresolved-shortfall gauge, or -1 if unavailable. The plain query
+// (no vector(0) fold) is deliberate: bigfleet_shard_shortfalls is
+// registered at shard start via promauto, so an empty result means the
+// shard hasn't been scraped yet — that must read "not steady", not
+// "zero shortfalls".
+func readShardShortfalls(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_shard_shortfalls)`)
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readShardDemandRows returns the total NeedsTable row count across
+// penalty buckets, or -1 if unavailable. > 0 means roll-ups have
+// reached the shard — the precondition that makes "zero shortfalls"
+// meaningful rather than vacuous.
+func readShardDemandRows(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	v, err := promQuery(queryCtx, kubeconfig, ns, `sum(bigfleet_shard_demand_machines)`)
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readAcquisitionActions returns the cumulative count of acquisition
+// actions the decision engine emitted (Bootstrap + Provision), or -1
+// if Prometheus is unreachable. `or on() vector(0)` folds an absent
+// series to 0 — a fully pre-seeded run may legitimately never emit
+// either kind, and CounterVec children don't exist until first
+// increment.
+func readAcquisitionActions(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	q := `sum(bigfleet_shard_actions_total{kind=~"Bootstrap|Provision"}) or on() vector(0)`
+	v, err := promQuery(queryCtx, kubeconfig, ns, q)
+	if err != nil {
+		return -1
+	}
+	return int(v)
+}
+
+// readReclaimActions returns the cumulative count of Reclaim actions
+// the decision engine emitted, or -1 if Prometheus is unreachable.
+// Same absent-series fold as readAcquisitionActions: a healthy steady
+// run never increments the counter, so its series may not exist.
+func readReclaimActions(ctx context.Context, kubeconfig, ns string) int {
+	queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	q := `sum(bigfleet_shard_actions_total{kind="Reclaim"}) or on() vector(0)`
 	v, err := promQuery(queryCtx, kubeconfig, ns, q)
 	if err != nil {
 		return -1
@@ -1703,6 +1910,10 @@ func unmeasuredGated(m map[string]float64) []string {
 		"shardCycleDurationP99Seconds",
 		"operatorRollupP99Seconds",
 		"operatorAckP99Seconds",
+		// V2 runs only (the key is absent on legacy runs): the ADR-0045
+		// zero-reclaim-churn condition. -1 = one of the two counter
+		// reads failed, so the condition was asserted on nothing.
+		"reclaimActionsDuringSoak",
 	}
 	var out []string
 	for _, k := range gated {

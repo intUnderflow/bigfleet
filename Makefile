@@ -134,8 +134,8 @@ prevalidate-kind: prevalidate ## prevalidate + dev-50 on kind (~8 min warm, need
 	else \
 	  echo "kind load skipped — image IDs unchanged"; \
 	fi
-	@echo "[$$(date +%T)] kind rung: dev-50"
-	$(MAKE) scaletest PROFILE=dev-50 DURATION=3m
+	@echo "[$$(date +%T)] kind rung: dev-50 (V2 catalog gate, ADR-0045 steady-state contract)"
+	$(MAKE) scaletest PROFILE=dev-50 SUBSTRATE=example-kind-laptop DURATION=3m
 	@echo "[$$(date +%T)] prevalidate-kind green"
 
 .PHONY: conformance
@@ -180,14 +180,22 @@ scaletest-images: ## Build the two images the scaletest harness needs (bigfleet,
 	docker build --platform=linux/$$ARCH --build-arg TARGETARCH=$$ARCH -t bigfleet:dev -f cmd/bigfleet/Dockerfile . && \
 	docker build --platform=linux/$$ARCH --build-arg TARGETARCH=$$ARCH -t bigfleet-scaletest:dev -f test/scaletest/image/Dockerfile .
 
+# The gate pairing (M77a): dev-50 is a V2 (substrate-agnostic) profile
+# whose canonical substrate is the kind laptop. The substrate default
+# applies only when the profile is dev-50 — legacy bundled profiles
+# (dev-500, uber-*, failover-*) carry their substrate inline and must
+# run without --substrate.
+SCALETEST_PROFILE = $(or $(PROFILE),dev-50)
+SCALETEST_SUBSTRATE = $(or $(SUBSTRATE),$(if $(filter dev-50,$(SCALETEST_PROFILE)),example-kind-laptop))
+
 .PHONY: scaletest
-scaletest: ## Run a scaletest profile end-to-end. PROFILE=<name> picks the profile; SUBSTRATE=<name> pairs a V2 profile with test/scaletest/substrates/<name>.yaml (required for V2 profiles like dev-50); DURATION=Xm overrides the profile's soak window.
+scaletest: ## Run a scaletest profile end-to-end. PROFILE=<name> picks the profile (default dev-50); SUBSTRATE=<name> pairs a V2 profile with test/scaletest/substrates/<name>.yaml (dev-50 defaults to example-kind-laptop; legacy bundled profiles take none); DURATION=Xm overrides the profile's soak window.
 	@mkdir -p test/scaletest/results
 	$(GO) run ./test/scaletest/cmd/scaletest-runner \
-		--profile=test/scaletest/profiles/$(or $(PROFILE),dev-500).yaml \
-		$(if $(SUBSTRATE),--substrate=test/scaletest/substrates/$(SUBSTRATE).yaml,) \
+		--profile=test/scaletest/profiles/$(SCALETEST_PROFILE).yaml \
+		$(if $(SCALETEST_SUBSTRATE),--substrate=test/scaletest/substrates/$(SCALETEST_SUBSTRATE).yaml,) \
 		$(if $(DURATION),--duration=$(DURATION),) \
-		--output=test/scaletest/results/$$(date +%Y%m%d-%H%M%S)-$(or $(PROFILE),dev-500)/
+		--output=test/scaletest/results/$$(date +%Y%m%d-%H%M%S)-$(SCALETEST_PROFILE)/
 
 .PHONY: vet
 vet: ## Run go vet, including every build-tagged test package — tagged code rotted invisibly twice (integration, scale) when nothing compiled it.

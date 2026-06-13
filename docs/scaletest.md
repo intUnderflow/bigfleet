@@ -13,10 +13,14 @@ make scaletest-images
 # Side-load into kind (for local runs); push to your registry otherwise.
 kind load docker-image bigfleet:dev bigfleet-scaletest:dev
 
-# Run the integration gate on laptop.
+# Run the integration gate on laptop (defaults: PROFILE=dev-50,
+# SUBSTRATE=example-kind-laptop — the gate pairing).
+make scaletest DURATION=3m
+# equivalently:
 go run ./test/scaletest/cmd/scaletest-runner \
     --profile=test/scaletest/profiles/dev-50.yaml \
-    --duration=5m \
+    --substrate=test/scaletest/substrates/example-kind-laptop.yaml \
+    --duration=3m \
     --output=./test/scaletest/results/$(date +%Y%m%d-%H%M%S)-dev-50/
 
 # Run a scale test against your own substrate (ADR-0034).
@@ -53,14 +57,14 @@ All profiles run in Pod-mode + the realistic 6-archetype catalog by default (M44
 
 Geometry — number of KWOK clusters, hosts needed, cost — is *derived from your substrate*, not baked into the profile.
 
-### Laptop tier (legacy bundled shape)
+### Laptop tier
 
-| Profile | KWOK clusters × Pods | Machines | Best target |
+| Profile | Geometry (on `example-kind-laptop`) | Machines | Notes |
 |---|---|---|---|
-| `dev-50` | 2 × 2.5K = **5K Pods** | 50 | M5 Max kind, integration gate |
-| `dev-500` | 5 × 10K = **50K Pods** | 500 | M5 Max kind, larger rehearsal |
+| `dev-50` | 2 clusters × 2.5K = **5K Pods** | 50 nominal (≈610 effective, ADR-0044) | V2 + `realistic-dev` catalog; **the per-milestone integration gate** |
+| `dev-500` | 5 × 10K = **50K Pods** | 500 | legacy bundled shape; larger rehearsal, pending M77b deletion |
 
-`dev-50` is the fast integration gate (~5 min, no churn) — proves the real Pod → kube-scheduler → CR → operator → shard → fake-Node → bind chain converges to 100 %. Both are pre-BYO bundled profiles (carry their own substrate inline); pair `5k.yaml + example-kind-laptop.yaml` for the BYO equivalent of `dev-500`.
+`dev-50` is the fast integration gate (~10 min with churned soak) — proves the real Pod → kube-scheduler → CR → operator → shard → fake-Node → bind chain wires up, plus the catalog demand paths (archetype draws, ADR-0041 folding, `Same(rack)`/`Same(zone)` gangs). Since M77a it gates on the ADR-0045 contract — demand covered by bound capacity, zero reclaim churn — not on bind percentage (see "Pass/fail SLOs"). `dev-500` is a pre-BYO bundled profile (carries its own substrate inline); pair `5k.yaml + example-kind-laptop.yaml` for its BYO equivalent.
 
 ### Failover scenarios — static stability
 
@@ -172,6 +176,8 @@ Disable with `--set grafana.enabled=false` if you don't want the deployment (e.g
 
 Per ADR-0035, the runner gates on **steady-state SLO histograms over the soak window**, not on ramp behaviour. With `seed.preBindFraction: 1.0` (the default for the BYO scale profiles) the cluster reaches steady state at install — the load-driver pre-binds the entire target Pod count to Configured-tier fake-Nodes by setting `Spec.NodeName` at create time. The soak window then measures per-CR binding latency for churn replacements, which is what a customer feels.
 
+**What "steady state" means on V2 profiles (M77a / ADR-0045)**: BigFleet's contract is *demand covered by bound capacity* — it does not promise pod placement, so the gate no longer asserts a bind percentage. `waitForSteadyStateV2` requires, together: every kwok pod Ready; active CRs ≥ 99.9 % of target with the shard's NeedsTable reporting demand (`sum(bigfleet_shard_demand_machines) > 0`); `sum(bigfleet_shard_shortfalls) == 0` (Phase 2 left no unresolved deficit — demand is covered); and the acquisition counter (`bigfleet_shard_actions_total{kind=~"Bootstrap|Provision"}`) flat for 30 s (fulfillment finished, not merely claimed-ahead). Pod-bind progress is printed on every waiting line for diagnosability but never gated — satisfied-but-stuck is the cluster's problem (ADR-0045 §4). Two failure modes are detected early: a standing shortfall with frozen acquisitions at full demand fails in 2 minutes (the demand-side plateau detector), and any Reclaim action emitted during the steady window fails the run (`reclaimActionsDuringSoak` in `summary.json` — Phase 3 is shrinkage-only and must be inert at steady demand; movement there is the M67 oscillation class resurfacing).
+
 Ramp time and ramp throughput are still captured in `summary.json` for capacity exploration, but they don't gate pass/fail. The runner does still time out if steady state isn't reached at all (`waitForSteadyState` budget) — that's a sanity check that the harness installed correctly, not an SLO.
 
 | Metric | Threshold | Best observed | Notes |
@@ -193,10 +199,10 @@ as it needs and no further:
 
 | Rung | Where | Command | Time | Catches |
 |---|---|---|---|---|
-| 0.5. Profile preflight | local (`make prevalidate`) / runner default-on | committed-profile test, `pkg/scaletest/preflight` | <1 s | seed-shape vs demand-shape arithmetic: a bind gate that no soak duration can reach (the dev-50 4,800-slots-vs-4,950-gate class). |
+| 0.5. Profile preflight | local (`make prevalidate`) / runner default-on | committed-profile test, `pkg/scaletest/preflight` | <1 s | seed-shape vs demand-shape arithmetic on legacy no-catalog profiles: a bind gate that no soak duration can reach (the 2026-06-11 4,800-slots-vs-4,950-gate class). Catalog-driven (V2) profiles skip it — their seed draws machine shapes from the demand catalog by construction. Empty of gated profiles since M77a; deleted with the legacy demand mode in M77b. |
 | 1. Closed-loop sim | local (`make prevalidate`) | `go test -run ClosedLoop ./sim/...` (`-short` for the quick set) | ~30 s short / ~2.5 min full | decision-engine feedback bugs — supply churn, demand-signal drift, co-location attribution, convergence failures — including `TestClosedLoop_Uber5KCardinality` at full uber-5k decision cardinality (2,580 Needs × 20 clusters), the class that historically cost a 90-minute cloud run apiece. |
 | 2. Hot-path benches | local (`make prevalidate`) | `make bench-hot` | ~10 s warm | per-cycle cost regressions at measured uber-5k cardinality (~2,600 Needs, 93 % co-located; 25K-CR rollups). A blow-up here is a starved shard in the cloud. |
-| 3. Integration gate | **devpod-side, step 0 of every cloud brief** (`make prevalidate-kind` for on-demand local runs) | `dev-50` on kind/k3s, real binaries | ~6 min warm | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end. A stalled fill fails in 2 min (bind-plateau detector), not at the ramp budget. |
+| 3. Integration gate | **devpod-side, step 0 of every cloud brief** (`make prevalidate-kind` for on-demand local runs) | `dev-50` (V2 catalog) + `example-kind-laptop` on kind/k3s, real binaries | ~10 min warm | harness wiring bugs — chart/values drift, label validity, controller plumbing, the Pod → CR → Need → bind chain end to end — plus the catalog demand paths (gangs, folding) and the ADR-0045 contract: demand covered (shortfalls == 0), zero reclaim churn over the steady window. A genuinely stuck engine fails in 2 min (demand-side plateau detector: standing shortfall + frozen acquisitions at full demand), not at the ramp budget. |
 | 4. Cloud | devpod-side | a scale profile on a real substrate | ~25–60 min | substrate-scale effects only: real apiserver/etcd pressure, kube-scheduler throughput, multi-host topology. |
 
 **Every SHA bound for a cloud run passes `make prevalidate` (rungs
@@ -251,7 +257,7 @@ A doomed run should cost 10 minutes, not its full budget.
 
 | Cadence | Profile | Substrate | Where |
 |---|---|---|---|
-| Per-milestone integration gate | `dev-50` | (bundled) | M5 Max kind |
+| Per-milestone integration gate | `dev-50` | `example-kind-laptop` | M5 Max kind |
 | Weekly | `5k` | `example-mid-host` | 1 host |
 | Monthly | `50k` | `example-mid-host` or `example-fat-host` | 8–21 hosts |
 | Quarterly | `500k` | `example-fat-host` | ~200 hosts |

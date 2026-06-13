@@ -19,21 +19,23 @@ import (
 // message.
 //
 // Profiles outside the gated set get the arithmetic LOGGED, not
-// asserted, each with the reason it isn't gated. Shrinking the skip
-// list is part of M50.7 (legacy profile deletion) and M59 (dev-50 →
-// profileV2).
+// asserted, each with the reason it isn't gated. The skip list (and
+// this whole rung) shrinks to nothing with M77b's legacy-demand-mode
+// deletion; until then the test keeps the observed arithmetic visible
+// for the legacy files that still exist.
 func TestCommittedProfiles_MatchingCapacityPreflight(t *testing.T) {
 	const dir = "../../profiles"
 
 	// gated: the runner executes these no-catalog, locally, as a gate —
-	// their arithmetic MUST pass. dev-50 is back in the set: its V2
-	// successor (dev-50-v2.yaml, catalog-driven, arithmetic not
-	// applicable) is parked behind the consumed-capacity engine
-	// investigation, so the legacy single-shape profile remains the
-	// gate the devpods run.
-	gated := map[string]bool{
-		"dev-50.yaml": true,
-	}
+	// their arithmetic MUST pass. Empty since M77a: dev-50 became the
+	// catalog-driven V2 profile (the M67 / ADR-0045 engine fix unparked
+	// it), and a catalog-driven seed draws machine shapes from the same
+	// catalog as its demand, so the single-shape arithmetic doesn't
+	// apply. No remaining no-catalog profile is run locally as a gate.
+	// The map, this test, and pkg/scaletest/preflight survive until
+	// M77b deletes the legacy demand mode along with the profiles in
+	// skipReasons below.
+	gated := map[string]bool{}
 	// skipReasons documents why the rest are observed, not gated.
 	skipReasons := map[string]string{
 		"dev-500.yaml": "kept for occasional manual checks, not a gate; both kine-bound and (recorded here) supply-short on the single-shape arithmetic",
