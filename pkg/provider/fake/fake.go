@@ -89,6 +89,17 @@ type Provider struct {
 	// (Speculative→Idle on Create returns a machine in Idle state, not
 	// Creating). Used by tests that want to skip the staged transitions.
 	instantTransitions bool
+
+	// configureStaged: if true, Configure returns the machine at
+	// Configuring (the transitional state) even when instantTransitions
+	// is set — modelling a provider whose kubelet bootstrap genuinely
+	// takes time. The caller (the closed-loop sim) completes the
+	// Configuring → Configured transition after its bootstrap-dwell
+	// budget elapses, so the engine observes the machine in Configuring
+	// for N cycles (ADR-0051 / M77g: the in-flight dwell is the #64
+	// perturbation). Create / Drain / Delete still honour
+	// instantTransitions.
+	configureStaged bool
 }
 
 // revEntry is one append to the revision log: which machine's
@@ -101,7 +112,11 @@ type revEntry struct {
 // Options configures a fake provider.
 type Options struct {
 	InstantTransitions bool
-	Seed               uint64
+	// ConfigureStaged makes Configure leave the machine at Configuring
+	// even under InstantTransitions (see Provider.configureStaged). The
+	// closed-loop sim's bootstrap-dwell model drives the completion.
+	ConfigureStaged bool
+	Seed            uint64
 }
 
 // New constructs a fake provider with no inventory. Seed via AddSpeculative
@@ -119,6 +134,7 @@ func New(opts Options) *Provider {
 		failNext:           make(map[failKey]error),
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
 		instantTransitions: opts.InstantTransitions,
+		configureStaged:    opts.ConfigureStaged,
 	}
 }
 
@@ -202,7 +218,9 @@ func (p *Provider) AddConfigured(
 		// Seeding it keeps harness-seeded fleets restart-rebuildable over
 		// the wire, where only the echo survives — the Assigned* fields
 		// above only reach the shard on the in-process path.
-		ShardMetadata: machine.EncodeShardMetadata(priority, interruptionPenalty, reclamationPenalty, ""),
+		// ADR-0051 adds the assigned-group key (empty: AddConfigured does
+		// not model a specific gang).
+		ShardMetadata: machine.EncodeShardMetadata(priority, interruptionPenalty, reclamationPenalty, "", ""),
 	}
 	p.rev++
 	p.lastModRev[id] = p.rev
@@ -413,7 +431,10 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, fence provider.Fe
 	op := p.mintOp()
 	p.ops[opKey{id, kind}] = op
 
-	if p.instantTransitions {
+	// configureStaged overrides instant completion for Configure only: the
+	// machine reaches Configuring and stays there until the sim's
+	// bootstrap-dwell budget drives it to Configured (ADR-0051 / M77g).
+	if p.instantTransitions && !(p.configureStaged && kind == opConfigure) {
 		m.State = stable
 	} else {
 		m.State = transitional

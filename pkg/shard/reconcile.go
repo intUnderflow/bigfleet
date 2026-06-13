@@ -141,7 +141,8 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
 		dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
-		dm.ShardMetadata = nil // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
+		dm.AssignedGroup = existing.AssignedGroup // ADR-0051: gang attribution
+		dm.ShardMetadata = nil                    // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
 		_ = s.inv.Apply(dm)
 		return
 	}

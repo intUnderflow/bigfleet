@@ -182,6 +182,22 @@ type Machine struct {
 	// assigned to this Need*, not how many *could match* it.
 	AssignedNeedFingerprint string
 
+	// AssignedGroup is the co-location Group (needs.Need.Group) of the
+	// gang this machine was bootstrapped to serve. Set alongside
+	// AssignedNeedFingerprint at Configure-time; cleared on drain.
+	//
+	// ADR-0051 (M77g): AssignedNeedFingerprint carries only the
+	// Profile.Fingerprint, so two same-profile gangs are indistinguishable
+	// to the Same-domain tiebreak — the cluster-granular CreditableTotal
+	// can't tell "this domain holds *my gang's* machines" from "this
+	// domain holds an equal number of *unrelated* same-class machines."
+	// Recording the gang lets ChooseSameBucket break a capped-coverage tie
+	// on *this gang's own* bound machines, so a served gang's Same-domain
+	// choice is a fixed point through the in-flight bootstrap dwell that is
+	// the #64 perturbation. Read as current state only — no cross-cycle
+	// memory of past domain choices (ADR-0045 "no second ledger").
+	AssignedGroup string
+
 	// Allocatable is the per-machine capacity this hardware actually
 	// provides. Phase 1's aggregate-demand-vs-aggregate-supply math
 	// (ADR-0027) sums Allocatable across matching machines and diffs it,

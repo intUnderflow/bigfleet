@@ -115,6 +115,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				MachineID:     mid,
 				Cluster:       r.Need.ClusterID,
 				SourceProfile: &profile,
+				SourceGroup:   r.Need.Group, // ADR-0051: gang attribution
 				Reason:        "phase1.idle",
 			})
 		}
@@ -125,6 +126,7 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 				MachineID:     mid,
 				Cluster:       r.Need.ClusterID,
 				SourceProfile: &profile,
+				SourceGroup:   r.Need.Group, // ADR-0051: gang attribution
 				Reason:        "phase1.speculative",
 			})
 		}

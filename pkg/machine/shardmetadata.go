@@ -21,6 +21,11 @@ const (
 	ShardMetadataKeyAssignedInterruptionPenalty = "bigfleet.lucy.sh/assigned-interruption-penalty-dollars"
 	ShardMetadataKeyAssignedReclamationPenalty  = "bigfleet.lucy.sh/assigned-reclamation-penalty-dollars"
 	ShardMetadataKeyAssignedNeedFingerprint     = "bigfleet.lucy.sh/assigned-need-fingerprint"
+	// ShardMetadataKeyAssignedGroup carries the co-location Group of the
+	// gang the machine serves (ADR-0051 / M77g). Like the fingerprint, it
+	// is store-and-echo: the provider keeps it verbatim so a restarted
+	// shard rebuilds the gang attribution the Same-domain tiebreak reads.
+	ShardMetadataKeyAssignedGroup = "bigfleet.lucy.sh/assigned-group"
 )
 
 // EncodeShardMetadata builds the shard_metadata map for one assignment.
@@ -28,12 +33,15 @@ const (
 // Configure time; the provider stores the map verbatim and echoes it on
 // Get/List, making it the durable copy a restarted shard decodes back
 // via Machine.DecodeShardMetadata.
-func EncodeShardMetadata(priority int32, interruptionPenaltyDollars, reclamationPenaltyDollars float64, needFingerprint string) map[string]string {
+func EncodeShardMetadata(priority int32, interruptionPenaltyDollars, reclamationPenaltyDollars float64, needFingerprint, assignedGroup string) map[string]string {
 	return map[string]string{
 		ShardMetadataKeyAssignedPriority:            strconv.FormatInt(int64(priority), 10),
 		ShardMetadataKeyAssignedInterruptionPenalty: strconv.FormatFloat(interruptionPenaltyDollars, 'g', -1, 64),
 		ShardMetadataKeyAssignedReclamationPenalty:  strconv.FormatFloat(reclamationPenaltyDollars, 'g', -1, 64),
 		ShardMetadataKeyAssignedNeedFingerprint:     needFingerprint,
+		// ADR-0051: the gang attribution rides as one more store-and-echo
+		// key (empty for non-gang assignments).
+		ShardMetadataKeyAssignedGroup: assignedGroup,
 	}
 }
 
@@ -74,6 +82,9 @@ func (m *Machine) DecodeShardMetadata() error {
 	}
 	if v, ok := md[ShardMetadataKeyAssignedNeedFingerprint]; ok {
 		m.AssignedNeedFingerprint = v
+	}
+	if v, ok := md[ShardMetadataKeyAssignedGroup]; ok {
+		m.AssignedGroup = v
 	}
 	return errors.Join(errs...)
 }

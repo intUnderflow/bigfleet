@@ -52,7 +52,11 @@ func TestConformance_MetadataEchoedOnGetAndList(t *testing.T) {
 
 	md := map[string]string{
 		"bigfleet.lucy.sh/assigned-priority": "900000",
-		"x-conformance/opaque":               "echo-me",
+		// ADR-0051 (M77g): the gang attribution rides as a store-and-echo
+		// key alongside the rest; a provider must echo it verbatim like any
+		// other so a restarted shard rebuilds the Same-domain attribution.
+		"bigfleet.lucy.sh/assigned-group": "topology.bigfleet/rack\x00gang-7",
+		"x-conformance/opaque":            "echo-me",
 	}
 	id := configureToConfigured(t, cli, ctx, "conformance-md", md)
 

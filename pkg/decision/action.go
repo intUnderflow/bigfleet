@@ -74,6 +74,14 @@ type Action struct {
 	// Phase 2 victim scoring. Nil for Reclaim and Preempt.
 	SourceProfile *needs.Profile
 
+	// SourceGroup is the co-location Group of the originating Need (set
+	// for Bootstrap and Provision; empty otherwise). Carried so the shard
+	// can stamp Machine.AssignedGroup at Configure-time — the gang
+	// attribution ADR-0051's Same-domain tiebreak reads. SourceProfile's
+	// fingerprint cannot stand in for it: two same-profile gangs share a
+	// fingerprint but differ by Group.
+	SourceGroup string
+
 	// GracePeriod is set on Reclaim and Preempt actions.
 	GracePeriod time.Duration
 

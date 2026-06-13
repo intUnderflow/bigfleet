@@ -222,7 +222,7 @@ func TestRequirementsToProto_PreservesValues(t *testing.T) {
 // ingest as reason="structural" (the M70b tripwire).
 func TestMachineRoundTrip_ClusterAndShardMetadata(t *testing.T) {
 	t.Parallel()
-	md := machine.EncodeShardMetadata(900_000, 8192, 64, "fp-1")
+	md := machine.EncodeShardMetadata(900_000, 8192, 64, "fp-1", "rack\x00gang-1")
 	md["x-unknown/key"] = "opaque" // unknown keys ride verbatim too
 	m := machine.Machine{
 		ID:      "m-1",

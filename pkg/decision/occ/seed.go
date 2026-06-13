@@ -184,6 +184,14 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 			buckets[i].CreditableCount++
 			buckets[i].Total = VecAdd(buckets[i].Total, vec)
 			buckets[i].CreditableTotal = VecAdd(buckets[i].CreditableTotal, vec)
+			// ADR-0051: machines bound to *this gang* (same Profile
+			// fingerprint AND co-location Group) feed CreditableOwnTotal,
+			// the gang-granular tiebreak ChooseSameBucket reads to pin a
+			// served gang to its own domain. Match on Group, not just
+			// fingerprint: two same-profile gangs share a fingerprint.
+			if m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint() {
+				buckets[i].CreditableOwnTotal = VecAdd(buckets[i].CreditableOwnTotal, vec)
+			}
 			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc})
 		}
 	}

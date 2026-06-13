@@ -9,7 +9,7 @@ func TestShardMetadata_EncodeDecodeRoundTrip(t *testing.T) {
 	t.Parallel()
 	m := Machine{
 		ID:            "m-1",
-		ShardMetadata: EncodeShardMetadata(900_000, 8192, 0.5, "fp-abc"),
+		ShardMetadata: EncodeShardMetadata(900_000, 8192, 0.5, "fp-abc", "rack\x00gang-7"),
 	}
 	if err := m.DecodeShardMetadata(); err != nil {
 		t.Fatalf("DecodeShardMetadata: %v", err)
@@ -25,6 +25,9 @@ func TestShardMetadata_EncodeDecodeRoundTrip(t *testing.T) {
 	}
 	if m.AssignedNeedFingerprint != "fp-abc" {
 		t.Errorf("AssignedNeedFingerprint = %q, want fp-abc", m.AssignedNeedFingerprint)
+	}
+	if m.AssignedGroup != "rack\x00gang-7" {
+		t.Errorf("AssignedGroup = %q, want rack\\x00gang-7", m.AssignedGroup)
 	}
 }
 

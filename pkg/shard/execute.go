@@ -286,6 +286,11 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 	if err := s.applyTransition(a.MachineID, machine.StateConfiguring, func(m *machine.Machine) {
 		m.Cluster = a.Cluster
 		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
+		// ADR-0051: stamp the gang attribution at the moment of Configure
+		// so an in-flight (Configuring) machine counts toward *its own*
+		// gang's Same-domain — the choice is stable through the bootstrap
+		// dwell that is the #64 perturbation.
+		m.AssignedGroup = a.SourceGroup
 	}); err != nil {
 		return formatErr("bootstrap: → Configuring", err)
 	}
@@ -344,7 +349,7 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		// fresh Configure, and the post-Configure transition below stamps
 		// the same values locally — so write-once keeps the provider copy
 		// exact, with no drift window to re-Configure over.
-		ShardMetadata: machine.EncodeShardMetadata(priority, intPen, recPen, a.SourceProfile.Fingerprint()),
+		ShardMetadata: machine.EncodeShardMetadata(priority, intPen, recPen, a.SourceProfile.Fingerprint(), a.SourceGroup),
 	})
 	if err != nil {
 		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
@@ -363,6 +368,7 @@ func (s *Shard) executeBootstrap(ctx context.Context, a decision.Action) error {
 		m.AssignedInterruptionPenaltyDollars = intPen
 		m.AssignedReclamationPenaltyDollars = recPen
 		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
+		m.AssignedGroup = a.SourceGroup // ADR-0051: gang attribution
 	}); err != nil {
 		// Detect the Configuring→Idle race (see errProvisionRacedToIdle
 		// above). If the FSM rejected the transition AND the machine
@@ -445,6 +451,7 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 		m.AssignedInterruptionPenaltyDollars = 0
 		m.AssignedReclamationPenaltyDollars = 0
 		m.AssignedNeedFingerprint = ""
+		m.AssignedGroup = "" // ADR-0051: gang attribution clears with the binding
 		if !drained.Host.Empty() {
 			m.Host = drained.Host
 		}

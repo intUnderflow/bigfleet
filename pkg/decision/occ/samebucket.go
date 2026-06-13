@@ -16,12 +16,23 @@ package occ
 // the Need's cluster, this much". CreditableTotal is what the M77a
 // bound-coverage rule ranks on: the machines bound to the cluster ARE
 // the fulfillment (ADR-0045), so the domain choice must follow them.
+// CreditableOwnTotal (ADR-0051 / M77g) is the sub-total of
+// CreditableTotal contributed by machines bound to *this gang* — the
+// creditable machines whose (Profile.Fingerprint, AssignedGroup) match
+// the Need's (fingerprint, Group). CreditableTotal is cluster-granular
+// (any same-class gang's machines count), so it cannot tell the
+// incumbent domain from a fresh domain holding equal *unrelated*
+// supply; CreditableOwnTotal can. ChooseSameBucket breaks a
+// capped-creditable-coverage tie on it, pinning a served gang to the
+// domain its own bound machines occupy — stable through the bootstrap
+// dwell that is the #64 perturbation.
 type SameBucket struct {
-	Value           string
-	Count           int
-	CreditableCount int
-	Total           []int64
-	CreditableTotal []int64
+	Value              string
+	Count              int
+	CreditableCount    int
+	Total              []int64
+	CreditableTotal    []int64
+	CreditableOwnTotal []int64
 }
 
 // ChooseSameBucket returns the index of the single bucket a
@@ -48,10 +59,18 @@ type SameBucket struct {
 //     the deficit (capped per dimension): the domain where the most of
 //     the Need's bound supply lives wins. ADR-0045: a bound machine IS
 //     the fulfillment, so the domain choice follows the bindings —
-//     never the other way around.
-//  3. Among satisfiable buckets of equal creditable coverage, the
-//     smallest Total — least over-commitment, mirroring the claim
-//     loop's stop-when-covered.
+//     never the other way around. ADR-0051 (M77g) refines the tie WITHIN
+//     this rule: when two satisfiable domains tie at the capped
+//     creditable ceiling, the one holding more of THIS gang's own bound
+//     machines (capped gang-own coverage) wins — because creditable is
+//     cluster-granular and so ties a domain holding the gang's own
+//     machines with one holding an equal count of an unrelated same-class
+//     gang's. Without it the tie fell through to slack (rule 3) and the
+//     gang flipped domains every time the acquirable snapshot moved (the
+//     bootstrap-dwell oscillation).
+//  3. Among satisfiable buckets of equal creditable AND gang-own
+//     coverage, the smallest Total — least over-commitment, mirroring
+//     the claim loop's stop-when-covered.
 //  4. If none is satisfiable, the most-covering Total.
 //  5. Among unsatisfiable buckets of EQUAL coverage, the greatest
 //     creditable coverage (ADR-0042: the incumbent domain, where the
@@ -107,6 +126,7 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 	bestSat := false
 	bestScore := 0.0
 	bestCred := 0.0
+	bestCredOwn := 0.0
 	for i := range buckets {
 		b := &buckets[i]
 		if b.Count == 0 {
@@ -118,6 +138,12 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 		// deficit buys nothing (stop-when-covered), so a domain holding
 		// the whole gang ties with one holding the gang plus strays.
 		cred := sameBucketScore(b.CreditableTotal, deficit, true)
+		// Rule 2b (ADR-0051 / M77g): gang-own coverage, capped the same
+		// way. Distinguishes the incumbent domain — where THIS gang's
+		// bound machines live — from a fresh domain holding equal
+		// *unrelated* same-class supply (which ties cred but contributes
+		// nothing here).
+		credOwn := sameBucketScore(b.CreditableOwnTotal, deficit, true)
 		better := false
 		switch {
 		case best < 0:
@@ -129,6 +155,17 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			// holding more of the Need's bound supply wins before any
 			// size comparison.
 			better = cred > bestCred
+		case sat && credOwn != bestCredOwn:
+			// Rule 2b (ADR-0051 / M77g): both satisfiable and tied on
+			// cluster-granular creditable coverage — the domain holding
+			// more of THIS gang's own bound machines wins, ABOVE the
+			// joint-Total/acquirable-slack tiebreak below. This is the tie
+			// the cluster-granular rule 2 could not break: two domains each
+			// fully cover the gang, one with the gang's own machines, one
+			// with an equal count of a neighbour gang's. Ranking on slack
+			// (rule 3) flipped the gang off its own machines every time the
+			// acquirable snapshot moved — the bootstrap-dwell oscillation.
+			better = credOwn > bestCredOwn
 		case score != bestScore:
 			// Satisfiable pair: smaller total (less over-commitment)
 			// wins. Unsatisfiable pair: larger coverage wins.
@@ -154,6 +191,7 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			bestSat = sat
 			bestScore = score
 			bestCred = cred
+			bestCredOwn = credOwn
 		}
 	}
 	return best

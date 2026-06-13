@@ -183,6 +183,35 @@ type ClosedLoopScenario struct {
 	// False keeps the historical arrival=0 (stable-order) behaviour.
 	RollupArrivalStamps bool
 
+	// BootstrapDwellCycles models the engine's own bootstrap LATENCY
+	// (ADR-0051 / M77g, field-confirmed in bigfleet-uber #64): a machine
+	// the engine bootstraps stays Configuring for this many sim cycles
+	// before completing to Configured/acquirable. 0 (default) keeps the
+	// historical instant Configuring→Configured, so every pre-existing
+	// scenario is byte-identical. With dwell > 0 the acquirable pool
+	// (Idle + Speculative — Configuring is excluded) shrinks while a
+	// bootstrap is in flight and refills when it completes, so the
+	// snapshot the Same-domain tiebreak ranks on genuinely moves every
+	// cycle — the perturbation the offline diagnosis (#63) could not
+	// reproduce because instant transitions froze the pool at
+	// equilibrium. Modelled minimally: a per-machine countdown decremented
+	// each cycle; the fake provider holds Configure at Configuring
+	// (ConfigureStaged) and this loop drives the completion.
+	BootstrapDwellCycles int
+
+	// StampSeededGangAttribution stamps AssignedGroup (+
+	// AssignedNeedFingerprint) on the seeded Configured machines a gang
+	// binds to in the initial fill (ADR-0051 / M77g). A real fleet's
+	// Configured machine that serves gang G was Configured *for* G, so it
+	// carries G's group; the harness's cmd/bigfleet seed cannot know the
+	// load-driver's runtime gang IDs, but the sim's initial fill decides
+	// the gang→machine mapping deterministically and so can stamp it. With
+	// this off (default) seeded gang machines carry no attribution — which
+	// is the production seed's actual limitation, the case the unit pin and
+	// the engine-acquired repro arm exercise separately. False keeps every
+	// pre-existing scenario byte-identical.
+	StampSeededGangAttribution bool
+
 	// ReleasePolicy overrides the shard's M73 idle-hold policy. nil →
 	// the paper-§8 production constants (10m / 1m), which sim cycles
 	// (milliseconds of wall-clock) never cross — so every pre-M73
@@ -787,6 +816,45 @@ func (c *clusterModel) unbind(wl *clWorkload, p *clPod) {
 	}
 }
 
+// gangBinding pairs a machine with the gang (co-location group +
+// Profile fingerprint) currently bound to it.
+type gangBinding struct {
+	id          machine.ID
+	group       string
+	fingerprint string
+}
+
+// gangBindings returns, for every machine hosting at least one Pod of a
+// gang (sameKey != "") workload, the gang's group + fingerprint
+// (ADR-0051 / M77g). Used to stamp AssignedGroup on seeded Configured
+// machines so a pre-bound gang carries the attribution the Same-domain
+// tiebreak reads — mirroring a real fleet, where the machine serving a
+// gang was Configured for it.
+func (c *clusterModel) gangBindings() []gangBinding {
+	out := make([]gangBinding, 0)
+	seen := map[machine.ID]struct{}{}
+	for _, wl := range c.workloads {
+		if wl.shape.sameKey == "" {
+			continue
+		}
+		for _, p := range wl.pods {
+			if p.bound == "" {
+				continue
+			}
+			if _, dup := seen[p.bound]; dup {
+				continue
+			}
+			seen[p.bound] = struct{}{}
+			out = append(out, gangBinding{
+				id:          p.bound,
+				group:       wl.group,
+				fingerprint: wl.shape.profile.Fingerprint(),
+			})
+		}
+	}
+	return out
+}
+
 func (c *clusterModel) podCounts() (bound, pending int) {
 	for _, wl := range c.workloads {
 		for _, p := range wl.pods {
@@ -979,7 +1047,13 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		return nil, fmt.Errorf("closed loop %q: %w", sc.Name, err)
 	}
 
-	prov := fake.New(fake.Options{InstantTransitions: true, Seed: 0xC0FFEE})
+	// BootstrapDwellCycles > 0: hold Configure at Configuring so the
+	// engine observes in-flight bootstraps for N cycles (ADR-0051 / M77g).
+	prov := fake.New(fake.Options{
+		InstantTransitions: true,
+		ConfigureStaged:    sc.BootstrapDwellCycles > 0,
+		Seed:               0xC0FFEE,
+	})
 
 	tmpDir, err := os.MkdirTemp("", "bigfleet-closedloop-"+sc.Name+"-")
 	if err != nil {
@@ -1038,17 +1112,36 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 	for _, m := range models {
 		m.bind(snap)
 	}
+	// ADR-0051 / M77g: stamp the gang attribution onto the seeded
+	// Configured machines the initial fill bound gangs to, so a pre-bound
+	// gang carries AssignedGroup the way a real fleet's serving machine
+	// would. Off by default (production seeds can't know runtime gang IDs).
+	if sc.StampSeededGangAttribution {
+		if err := stampSeededGangAttribution(sh, models); err != nil {
+			return nil, fmt.Errorf("closed loop %q: %w", sc.Name, err)
+		}
+	}
 
 	res := &ClosedLoopResult{
 		Cycles:     make([]CycleStats, 0, sc.Cycles),
 		TargetPods: targetPods,
 	}
+	// dwell tracks machines the engine has bootstrapped that are still
+	// Configuring: id → cycles remaining before completion (ADR-0051 /
+	// M77g). Empty when BootstrapDwellCycles == 0.
+	dwell := map[machine.ID]int{}
 	for cycle := 1; cycle <= sc.Cycles; cycle++ {
 		select {
 		case <-ctx.Done():
 			return res, ctx.Err()
 		default:
 		}
+
+		// Bootstrap-dwell: age the in-flight machines and complete the
+		// ones whose budget elapsed (Configuring → Configured) before this
+		// cycle's Step, so the engine now sees them as acquirable/serving
+		// supply. Honest model of the engine's own bootstrap latency.
+		completeMaturedDwell(sh, dwell)
 
 		for _, ts := range sc.Scales {
 			if ts.Cycle != cycle {
@@ -1091,6 +1184,14 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 				stats.Deletes++
 			}
 		}
+		// Bootstrap-dwell: the machines this cycle's Step just bootstrapped
+		// (Configure held them at Configuring via ConfigureStaged) begin
+		// their dwell countdown (ADR-0051 / M77g). A Reclaim that drains a
+		// still-dwelling machine cancels its countdown — the binding the
+		// dwell would complete is gone.
+		if sc.BootstrapDwellCycles > 0 {
+			recordDwellEntries(actions, dwell, sc.BootstrapDwellCycles)
+		}
 
 		snap = sh.Inventory().Snapshot()
 		stats.ReclaimMatchesShortfall = reclaimMatchesShortfall(actions, snap, sh.Shortfalls())
@@ -1131,6 +1232,76 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		}
 	}
 	return res, nil
+}
+
+// stampSeededGangAttribution writes AssignedGroup + AssignedNeedFingerprint
+// onto each seeded Configured machine a gang bound to in the initial fill
+// (ADR-0051 / M77g). A same-state (Configured → Configured) inventory
+// Apply, so it carries no transition. Mirrors a real fleet where the
+// machine serving gang G holds G's attribution from its Configure.
+func stampSeededGangAttribution(sh *shard.Shard, models []*clusterModel) error {
+	inv := sh.Inventory()
+	for _, m := range models {
+		for _, b := range m.gangBindings() {
+			cur, err := inv.Get(b.id)
+			if err != nil {
+				return fmt.Errorf("stamp gang attribution: get %s: %w", b.id, err)
+			}
+			cur.AssignedGroup = b.group
+			cur.AssignedNeedFingerprint = b.fingerprint
+			if err := inv.Apply(cur); err != nil {
+				return fmt.Errorf("stamp gang attribution: apply %s: %w", b.id, err)
+			}
+		}
+	}
+	return nil
+}
+
+// recordDwellEntries starts a bootstrap-dwell countdown for each machine
+// this cycle's Step bootstrapped (ADR-0051 / M77g). With ConfigureStaged
+// the provider left these machines at Configuring; the countdown is how
+// many further cycles they stay there before completeMaturedDwell drives
+// them to Configured.
+func recordDwellEntries(actions []decision.Action, dwell map[machine.ID]int, n int) {
+	for _, a := range actions {
+		switch a.Kind {
+		case decision.ActionKindBootstrap, decision.ActionKindProvision:
+			dwell[a.MachineID] = n
+		}
+	}
+}
+
+// completeMaturedDwell ages every in-flight (Configuring) machine by one
+// cycle and completes the ones whose budget reached zero: a real forward
+// Configuring → Configured transition through the inventory (ADR-0051 /
+// M77g). A machine no longer Configuring (the engine rolled its bootstrap
+// back to Idle, or a later Reclaim drained it) is dropped from the map —
+// there is nothing to complete.
+func completeMaturedDwell(sh *shard.Shard, dwell map[machine.ID]int) {
+	if len(dwell) == 0 {
+		return
+	}
+	inv := sh.Inventory()
+	for id, left := range dwell {
+		m, err := inv.Get(id)
+		if err != nil || m.State != machine.StateConfiguring {
+			delete(dwell, id) // bootstrap abandoned or machine moved on
+			continue
+		}
+		if left > 1 {
+			dwell[id] = left - 1
+			continue
+		}
+		m.State = machine.StateConfigured
+		if err := inv.Apply(m); err != nil {
+			// Lost a race (e.g. drained between Get and Apply); the next
+			// cycle's reconcile/scan settles it. Drop so we don't retry a
+			// stale record.
+			delete(dwell, id)
+			continue
+		}
+		delete(dwell, id)
+	}
 }
 
 // reclaimMatchesShortfall is the ADR-0040 §4 probe at sim level: count
