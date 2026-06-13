@@ -101,3 +101,88 @@ is the same principle at the granularity the bindings actually have.
 - Phase 3 / reclaim unaffected (it reads the claimed-set, not the
   domain tiebreak); ADR-0042 parking unaffected (it concerns
   unsatisfiable gangs).
+
+## Addendum — the machine-selection layer (M77h)
+
+Pinning the **domain** (above) was necessary but not sufficient. The
+decisive field run (bigfleet-uber #65, on the M77g build) confirmed the
+domain flap was gone — 0 domain flips, 4/16 gangs at a complete fixed
+point — yet the gate stayed red (`reclaimActionsDuringSoak` ≈ 311). The
+residual: **12/16 gangs held their domain but rotated *which machines*
+they claimed within it.** "Domain follows this gang's bindings" was now
+true; "the *machine set* follows this gang's bindings" was not. The
+principle had one more granularity to reach.
+
+### The driver (#65)
+
+The credit/claim pass (`occ.seedSameProfile`) chooses the domain, then
+claims that domain's machines in keep-priority order (Configured before
+Configuring, then price asc / reclamation_penalty desc / ID asc) under
+**stop-when-covered** — claim until the deficit is met, leave the rest
+unclaimed for Phase 3 (ADR-0045: the unclaimed Configured remainder *is*
+the §8 excess). With configure-phase p99 ≈ 9.8 s (~3 cycles) and ~20
+machines persistently `Configuring`, a non-incumbent machine maturing
+`Configuring → Configured` in a gang's domain jumps from the back of the
+walk (the Configuring section) to its sorted position in the Configured
+section. If that position falls inside the first-N-covering subset, it
+**bumps an already-serving incumbent out** of the claimed set → the
+bumped incumbent is unclaimed → Phase 3 reclaims it (correctly, by its
+own contract) → it re-bootstraps → the residual Bootstrap≈Reclaim
+lockstep, at the *machine* granularity rather than the domain
+granularity M77g closed.
+
+### Decision (M77h)
+
+When the claim loop selects which of a gang's coverable machines to
+claim under stop-when-covered, **prefer this gang's own incumbents** —
+the Configured/Configuring machines whose `(AssignedNeedFingerprint,
+AssignedGroup)` match the Need's `(fingerprint, Group)`, the *same*
+attribution this ADR added for the domain tiebreak — before the
+keep-priority sort decides among non-incumbents. `seedSameProfile`
+marks each candidate `own` (it already computes the predicate for
+`CreditableOwnTotal`) and the claim loop applies a **stable** partition
+(`incumbentFirst`) that moves incumbents ahead while preserving, within
+each group, the keep-priority order the bucket walk built. So a gang
+keeps its current machines and only the marginal (deficit) selection
+draws from the sorted fresh pool; a maturing equivalent can no longer
+bump a serving incumbent.
+
+This preserves the §8 release order for genuine excess: when a gang's
+own incumbents themselves exceed the deficit, the stable partition keeps
+them in keep-priority order, so the excess it sheds is still the §8
+release-order tail (the invariant ADR-0045 ties to the unclaimed
+remainder). It reads **current** bindings (`AssignedGroup`) only — no
+memory of past claims — so ADR-0045's no-second-ledger rule holds, the
+same way the domain tiebreak does. No proto/wire change; Phase 3,
+parking, and static stability are untouched (the change is purely the
+claim-pass ordering, and Phase 3 still reclaims exactly the unclaimed
+Configured remainder).
+
+### Reproduction and scope
+
+The SUSTAINED actuation does not reproduce in the offline closed loop —
+it sheds over-coverage once and converges, the same self-damping that
+kept M77f/M77g's offline probes quiet (the deterministic cluster model
+re-anchors and re-binds to a fixed point even when "wrong but stable").
+But the engine-granularity defect the actuation rides on reproduces
+**deterministically, fail-pre / pass-post**: a gang whose domain holds
+its incumbents plus a non-incumbent equivalent that matures across one
+cycle has its claimed set churn pre-fix and stay stable post-fix
+(`occ.TestSeedSameProfile_ClaimedSetStableAcrossMaturation` and the
+single-cycle `_IncumbentKeptOverMaturedEquivalent`). The
+`sim.TestClosedLoop_IncumbencyConverged` guard keeps the converged-state
+property (quiescent under dwell + over-coverage + mixed-attribution
+racks).
+
+This is the final binding-granularity the claim pass has: the engine
+attributes supply at **domain** (M77g) and **machine** (M77h); within a
+machine there is nothing finer to follow. The claimed set is now a fixed
+point through the bootstrap dwell — stable domain *and* stable machine
+set — for a gang served by its own bindings. One residual is known and
+deliberately left: a gang over-covered by *its own* machines (all the
+same attribution) still re-picks which N to keep as an own machine
+matures, because attribution cannot disambiguate equally-attributed
+machines; this is genuine over-coverage that resolves in a single §8
+shed (not perpetual churn) and is not a realistic steady-state demand
+shape (the engine does not bootstrap more machines for an already-covered
+gang). Per ADR-0043 it is not worth a cross-cycle mechanism.

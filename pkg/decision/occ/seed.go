@@ -138,10 +138,15 @@ func SeedConfiguredSupply(state *SharedState, needsByIdx []*needs.Need, retryBud
 // off-domain half next cycle, and it re-bootstrapped scattered — a
 // reclaim↔re-bootstrap oscillation at cycle rate.
 // seedCandidate is one creditable machine in a Same-domain bucket:
-// the ID for the claim and the alloc the claim loop subtracts.
+// the ID for the claim, the alloc the claim loop subtracts, and whether
+// the machine is one of *this gang's* incumbents (carries the gang's
+// (fingerprint, group) — ADR-0051 / M77h). The claim loop prefers
+// incumbents under stop-when-covered so a maturing non-incumbent does
+// not bump an already-serving incumbent out of the claimed subset.
 type seedCandidate struct {
 	id    machine.ID
 	alloc []needs.ResourceQty
+	own   bool
 }
 
 func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *SameSupplyIndex, consumed map[machine.ID]struct{}, n *needs.Need, prec Precedence, sameKey string, retryBudget int) []needs.ResourceQty {
@@ -189,10 +194,13 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 			// the gang-granular tiebreak ChooseSameBucket reads to pin a
 			// served gang to its own domain. Match on Group, not just
 			// fingerprint: two same-profile gangs share a fingerprint.
-			if m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint() {
+			// M77h: the same predicate marks the machine an incumbent for
+			// the claim loop's stop-when-covered preference below.
+			own := m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint()
+			if own {
 				buckets[i].CreditableOwnTotal = VecAdd(buckets[i].CreditableOwnTotal, vec)
 			}
-			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc})
+			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc, own: own})
 		}
 	}
 	// Joint potential: fold in the acquirable half, consumption-aware
@@ -222,7 +230,23 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 	}
 	state.recordSameDomain(n, buckets[best].Value)
 	state.recordSameSatisfiable(n, VecCovers(buckets[best].Total, deficitVec))
-	for _, c := range members[best] {
+	// M77h (ADR-0051 extended to machine granularity): claim this gang's
+	// own incumbents BEFORE the rest under stop-when-covered, so a
+	// freshly-matured equivalent — a Configuring→Configured machine that
+	// re-sorts ahead of an incumbent in keep-priority order — does not
+	// bump an already-serving incumbent out of the first-N-covering
+	// claimed subset (the within-domain churn #65 found after the domain
+	// itself was pinned: bumped incumbents go unclaimed and Phase 3
+	// reclaims them, then they re-bootstrap, the residual Bootstrap≈Reclaim
+	// lockstep). incumbentFirst is a STABLE partition, so within each
+	// partition the existing keep-priority order (Configured before
+	// Configuring, then price asc / reclamation_penalty desc / ID asc) is
+	// preserved — when incumbents themselves exceed the deficit the excess
+	// they shed is still the §8 release-order tail (the paper-§8 invariant
+	// ADR-0045 ties to the unclaimed remainder). Reads current bindings
+	// (AssignedGroup) only — no memory of past claims, so ADR-0045's
+	// no-second-ledger rule holds.
+	for _, c := range incumbentFirst(members[best]) {
 		if needs.IsZero(remaining) {
 			break
 		}
@@ -238,6 +262,52 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 		acquirable.ConsumeAcquirable(n.Profile, sameKey, buckets[best].Value, n.MinUnit, remaining, consumed)
 	}
 	return remaining
+}
+
+// incumbentFirst returns ms reordered so this gang's incumbents
+// (seedCandidate.own) precede the rest, as a STABLE partition: the
+// relative order within each group is unchanged, so each group keeps the
+// keep-priority order the bucket walk built (Configured before
+// Configuring, then price asc / reclamation_penalty desc / ID asc).
+// M77h (ADR-0051): the claim loop's stop-when-covered then keeps a
+// served gang's own machines over freshly-matured equivalents, while a
+// genuinely over-covered gang still sheds its excess incumbents in §8
+// release order. Returns ms unchanged when the partition is a no-op (no
+// incumbents, all incumbents, or already incumbent-first) so the
+// dwell-free / no-attribution paths stay byte-identical and allocate
+// nothing.
+func incumbentFirst(ms []seedCandidate) []seedCandidate {
+	firstNonOwn := -1
+	mixed := false
+	for i := range ms {
+		if !ms[i].own {
+			if firstNonOwn < 0 {
+				firstNonOwn = i
+			}
+			continue
+		}
+		// An incumbent appearing after a non-incumbent means the slice is
+		// not already partitioned — a reorder is needed.
+		if firstNonOwn >= 0 {
+			mixed = true
+			break
+		}
+	}
+	if !mixed {
+		return ms
+	}
+	out := make([]seedCandidate, 0, len(ms))
+	for i := range ms {
+		if ms[i].own {
+			out = append(out, ms[i])
+		}
+	}
+	for i := range ms {
+		if !ms[i].own {
+			out = append(out, ms[i])
+		}
+	}
+	return out
 }
 
 // foldAcquirable merges the shard-wide acquirable half (Idle +
