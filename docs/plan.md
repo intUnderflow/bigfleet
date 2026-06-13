@@ -900,8 +900,9 @@ transport TLS (ADR-0048 §scope), per-ordinal shard Certificates for
 multi-shard mTLS, runtime kill-switch toggle via coordinator
 instruction (ADR-0046).
 
-**Philosophy-audit arbitrations (2026-06-12, see the audit run for
-evidence; the loop proceeds on everything not listed here):**
+**Philosophy-audit arbitrations (2026-06-12; evidence:
+`docs/philosophy-audit-2026-06.md`; the loop proceeds on everything
+not listed here):**
 ADR-0041 foldability ruling (demand-shape vs anticipation — one
 paragraph settles it); ADR-0046 roll-up quarantine vs the
 full-replacement hard rule (keep-with-amended-wording vs delete);
