@@ -8,18 +8,20 @@ package occ
 // string-vector version of this machinery re-parsed resource.Quantity
 // per bucket per Need and starved the shard (see SameSupplyIndex).
 //
-// CreditableCount is the number of candidates contributed by the
+// CreditableCount / CreditableTotal are the contribution of the
 // creditable half of the joint fold — the Need's cluster's Configured/
 // Configuring machines (filled by occ.seedSameProfile, since ADR-0045
 // the only crediting site). The acquirable half (AcquirableTotals)
-// never increments it, so a non-zero value means "this domain is
-// already serving the Need's cluster" — the ADR-0041 rider-3
-// prefer-creditable signal.
+// never touches them, so they mean "this domain is already serving
+// the Need's cluster, this much". CreditableTotal is what the M77a
+// bound-coverage rule ranks on: the machines bound to the cluster ARE
+// the fulfillment (ADR-0045), so the domain choice must follow them.
 type SameBucket struct {
 	Value           string
 	Count           int
 	CreditableCount int
 	Total           []int64
+	CreditableTotal []int64
 }
 
 // ChooseSameBucket returns the index of the single bucket a
@@ -42,26 +44,49 @@ type SameBucket struct {
 //
 //  1. Prefer a satisfiable bucket: Total covers the full remaining
 //     deficit.
-//  2. Among satisfiable buckets, one with creditable supply
-//     (CreditableCount > 0) beats an acquirable-only one.
-//  3. Among satisfiable buckets, the smallest Total — least
-//     over-commitment, mirroring the claim loop's stop-when-covered.
+//  2. Among satisfiable buckets, the greatest CREDITABLE coverage of
+//     the deficit (capped per dimension): the domain where the most of
+//     the Need's bound supply lives wins. ADR-0045: a bound machine IS
+//     the fulfillment, so the domain choice follows the bindings —
+//     never the other way around.
+//  3. Among satisfiable buckets of equal creditable coverage, the
+//     smallest Total — least over-commitment, mirroring the claim
+//     loop's stop-when-covered.
 //  4. If none is satisfiable, the most-covering Total.
-//  5. Among unsatisfiable buckets of EQUAL coverage, one with
-//     creditable supply wins (ADR-0042: the incumbent domain, where
-//     the Need's concentrated partial assembly lives).
+//  5. Among unsatisfiable buckets of EQUAL coverage, the greatest
+//     creditable coverage (ADR-0042: the incumbent domain, where the
+//     Need's concentrated partial assembly lives).
 //  6. Tiebreak: larger Count, then lexicographically smallest Value.
 //
-// Rule 2 is the ADR-0041 rider-3 refinement, deliberately stronger
-// than the ADR's stated last-place tie-break: it sits between the
-// satisfiable test and the score comparison. Sticky-domain semantics —
-// a Need's currently-serving domain must not lose to a fresh
-// acquirable-only domain that merely scores smaller (rule 3) or sorts
-// lower (rule 6) and relocate a healthy gang. Staying put costs
-// nothing: excess machines WITHIN the serving domain are still
-// reclaimed individually by the claim loop's stop-when-covered.
+// Rule 2's history is the M77a gang oscillation (the dev-50 V2 gate's
+// day-one catch). Its two predecessors keyed on creditable PRESENCE
+// only: a satisfiable domain with any creditable supply beat
+// acquirable-only domains (ADR-0041 rider 3), and the rest fell to
+// rule 3's smallest joint total. On a fleet whose cluster supply is
+// spread across domains (zone-round-robin seeds, mixed rack/zone gangs
+// matching the same machines), EVERY domain has some creditable
+// supply, presence never discriminates, and rule 3 decided — ranking
+// on acquirable slack, blind to where the gang's bound machines live.
+// Any inventory mutation re-ranked the argmin, the gang flipped
+// domains, its bound machines became off-domain strays Phase 3
+// faithfully reclaimed, and the reclaim mutated the next domain's
+// totals: the Bootstrap≈Reclaim lockstep ping-pong at static demand.
+// Ranking on creditable COVERAGE pins a served gang to its machines —
+// a fully-bound domain (coverage 1.0) cannot lose to any domain
+// holding less of the gang's supply, whatever the slack around it.
+// Staying put costs nothing: excess machines WITHIN the domain are
+// still released by the claim loop's stop-when-covered. Coverage is
+// deliberately capped at the deficit and nothing sharper: an
+// investigation-era "tightest assembly" key (smallest creditable
+// total among full-coverage buckets, meant to anchor interchangeable
+// same-class gangs to their own assemblies) re-introduced a sustained
+// two-cycle steal loop — a 3-machine rack gang ranked a rack holding
+// exactly 3 of another class's machines "tighter" than the rack
+// holding its own 3 plus a neighbour gang's 6 — so it was measured
+// and removed (sim/gang_fixedpoint_test.go's base-arrival shape).
 //
-// Rule 5 is ADR-0042's unsatisfiable-regime counterpart: switching
+// Rule 5 is ADR-0042's unsatisfiable-regime counterpart, the same
+// coverage refinement applied at equal JOINT coverage: switching
 // domains is reserved for STRICTLY greater coverage. Most-covering
 // (rule 4) keeps the ADR-0040 Addendum's concentrate-then-park
 // behaviour — a 3-Idle domain still beats a 2-Configured one for a
@@ -81,6 +106,7 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 	best := -1
 	bestSat := false
 	bestScore := 0.0
+	bestCred := 0.0
 	for i := range buckets {
 		b := &buckets[i]
 		if b.Count == 0 {
@@ -88,17 +114,21 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 		}
 		sat := VecCovers(b.Total, deficit)
 		score := sameBucketScore(b.Total, deficit, !sat)
+		// Capped like unsatisfiable coverage: bound supply beyond the
+		// deficit buys nothing (stop-when-covered), so a domain holding
+		// the whole gang ties with one holding the gang plus strays.
+		cred := sameBucketScore(b.CreditableTotal, deficit, true)
 		better := false
 		switch {
 		case best < 0:
 			better = true
 		case sat != bestSat:
 			better = sat
-		case sat && (b.CreditableCount > 0) != (buckets[best].CreditableCount > 0):
-			// ADR-0041 rider 3 (see the rule's doc comment): both
-			// satisfiable — the domain already serving the cluster wins
-			// before any size comparison.
-			better = b.CreditableCount > 0
+		case sat && cred != bestCred:
+			// Rule 2 (ADR-0045 / M77a): both satisfiable — the domain
+			// holding more of the Need's bound supply wins before any
+			// size comparison.
+			better = cred > bestCred
 		case score != bestScore:
 			// Satisfiable pair: smaller total (less over-commitment)
 			// wins. Unsatisfiable pair: larger coverage wins.
@@ -107,12 +137,13 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			} else {
 				better = score > bestScore
 			}
-		case (b.CreditableCount > 0) != (buckets[best].CreditableCount > 0):
-			// ADR-0042 (rule 5): only reachable for unsatisfiable pairs
-			// (satisfiable pairs with differing creditable-presence were
-			// caught by rider 3 above) of EQUAL coverage — the incumbent
-			// domain wins; switching needs strictly greater coverage.
-			better = b.CreditableCount > 0
+		case cred != bestCred:
+			// Rule 5 (ADR-0042): only reachable for unsatisfiable pairs
+			// of EQUAL joint coverage (satisfiable pairs with differing
+			// creditable coverage were caught by rule 2 above) — the
+			// domain with more of the partial assembly wins; switching
+			// needs strictly greater joint coverage.
+			better = cred > bestCred
 		case b.Count != buckets[best].Count:
 			better = b.Count > buckets[best].Count
 		default:
@@ -122,6 +153,7 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 			best = i
 			bestSat = sat
 			bestScore = score
+			bestCred = cred
 		}
 	}
 	return best

@@ -36,6 +36,12 @@ import (
 // operator's Same(rack) requirement matches (ADR-0024).
 const sameRackKey = "topology.bigfleet/rack"
 
+// sameZoneKey is the topology key sameZone workloads co-locate on.
+// The engine resolves it from machine.Profile.Zone (lookupAttribute
+// special-cases it), mirroring the realistic catalog's Same(zone)
+// gang archetypes (gpu-training-medium/-large).
+const sameZoneKey = "topology.kubernetes.io/zone"
+
 // defaultZones mirrors the scaletest harness's zone pool.
 var defaultZones = []string{"zone-a", "zone-b", "zone-c"}
 
@@ -63,8 +69,11 @@ type WorkloadShape struct {
 
 	// SameRack marks the shape co-located: each workload object is one
 	// gang, its CRs share a co-location group, and the derived Need
-	// carries a Same requirement on sameRackKey.
+	// carries a Same requirement on sameRackKey. SameZone is the
+	// zone-scoped twin (Same on sameZoneKey). At most one may be set —
+	// a Profile carries at most one Same requirement (ADR-0024).
 	SameRack bool
+	SameZone bool
 }
 
 // WorkloadSpec declares controller-managed workload objects of one
@@ -161,6 +170,18 @@ type ClosedLoopScenario struct {
 	// Scales are mid-run demand changes — the trigger ADR-0045's
 	// shrinkage-only Phase 3 acts on.
 	Scales []TargetScale
+
+	// RollupArrivalStamps models the wire path's arrival semantics
+	// (conv.NeedsFromRollup): every Need row in a rollup carries the
+	// MESSAGE's build timestamp as ArrivalUnixNanos, so each rollup
+	// re-stamps all of the cluster's rows to "now". Operators roll up
+	// independently, so the cross-cluster freshness order races; the
+	// sim models that race deterministically by rotating which
+	// cluster's rollup is "older" each cycle. The shard's NeedsTable
+	// sorts equal-priority rows arrival-asc, so this rotation is
+	// exactly the cross-cluster walk-order flip a real shard sees.
+	// False keeps the historical arrival=0 (stable-order) behaviour.
+	RollupArrivalStamps bool
 
 	// ReleasePolicy overrides the shard's M73 idle-hold policy. nil →
 	// the paper-§8 production constants (10m / 1m), which sim cycles
@@ -329,12 +350,26 @@ func vecSlots(have, want resVec) int {
 // shapeRT is a shape with its derived runtime artifacts: the Need
 // Profile (computed once — NewProfile canonicalises and fingerprints),
 // the per-Pod resource vector in both Need ([]ResourceQty) and bind
-// (resVec) forms.
+// (resVec) forms, and the Same topology key ("" for non-gang shapes).
 type shapeRT struct {
 	spec    *WorkloadShape
 	profile needs.Profile
 	podQty  []needs.ResourceQty
 	podVec  resVec
+	sameKey string
+}
+
+// sameValue resolves the machine's value for the shape's Same key the
+// way the engine's lookupAttribute does: the zone key reads
+// Profile.Zone, anything else reads the label map.
+func (s *shapeRT) sameValue(m *machine.Machine) (string, bool) {
+	switch s.sameKey {
+	case sameZoneKey:
+		return m.Profile.Zone, m.Profile.Zone != ""
+	default:
+		v, ok := m.Profile.Labels[s.sameKey]
+		return v, ok
+	}
 }
 
 // machineMatches is the bind model's nodeAffinity check — the same
@@ -390,8 +425,18 @@ func buildShapes(specs []WorkloadShape, space *vecSpace) (map[string]*shapeRT, e
 				Values: append([]string(nil), sp.Zones...),
 			})
 		}
-		if sp.SameRack {
-			reqs = append(reqs, needs.Requirement{Key: sameRackKey, Operator: needs.OperatorSame})
+		if sp.SameRack && sp.SameZone {
+			return nil, fmt.Errorf("shape %q: SameRack and SameZone are mutually exclusive (ADR-0024: one Same requirement per Profile)", sp.Name)
+		}
+		sameKey := ""
+		switch {
+		case sp.SameRack:
+			sameKey = sameRackKey
+		case sp.SameZone:
+			sameKey = sameZoneKey
+		}
+		if sameKey != "" {
+			reqs = append(reqs, needs.Requirement{Key: sameKey, Operator: needs.OperatorSame})
 		}
 		podVec, err := space.fromMap(sp.PodResources)
 		if err != nil {
@@ -402,8 +447,9 @@ func buildShapes(specs []WorkloadShape, space *vecSpace) (map[string]*shapeRT, e
 			profile: needs.NewProfile(reqs, nil, sp.Priority,
 				needs.BucketForDollars(sp.InterruptionPenaltyDollars),
 				needs.BucketForDollars(sp.ReclamationPenaltyDollars)),
-			podQty: needs.ResourceQtysFromMap(sp.PodResources),
-			podVec: podVec,
+			podQty:  needs.ResourceQtysFromMap(sp.PodResources),
+			podVec:  podVec,
+			sameKey: sameKey,
 		}
 	}
 	return out, nil
@@ -430,11 +476,12 @@ type clWorkload struct {
 	target int // declared replicas
 	next   int // ordinal for deterministically-named recreated Pods
 
-	// rack is the gang's pinned rack: set when the first member binds,
-	// cleared when no member remains bound (the gang re-anchors on
-	// rebind). Mirrors the harness's anchor + rack-faithful pre-bind
-	// (ADR-0040 §3) at the granularity the spec asks for.
-	rack string
+	// anchor is the gang's pinned Same-domain value (rack for SameRack,
+	// zone for SameZone): set when the first member binds, cleared when
+	// no member remains bound (the gang re-anchors on rebind). Mirrors
+	// the harness's anchor + rack-faithful pre-bind (ADR-0040 §3) at
+	// the granularity the spec asks for.
+	anchor string
 
 	pods []*clPod
 }
@@ -478,8 +525,8 @@ func buildClusterModel(spec ClusterSpec, shapes map[string]*shapeRT, space *vecS
 				shape:  sh,
 				target: w.Replicas,
 			}
-			if sh.spec.SameRack {
-				wl.group = sameRackKey + "\x00" + wl.name
+			if sh.sameKey != "" {
+				wl.group = sh.sameKey + "\x00" + wl.name
 			}
 			for i := 0; i < w.Replicas; i++ {
 				wl.pods = append(wl.pods, &clPod{name: fmt.Sprintf("%s-%d", wl.name, i)})
@@ -501,7 +548,7 @@ func buildClusterModel(spec ClusterSpec, shapes map[string]*shapeRT, space *vecS
 
 func bindClass(wl *clWorkload) int {
 	switch {
-	case wl.shape.spec.SameRack:
+	case wl.shape.sameKey != "":
 		return 0
 	case len(wl.shape.spec.InstanceTypes) > 0 || len(wl.shape.spec.Zones) > 0:
 		return 1
@@ -516,7 +563,11 @@ func bindClass(wl *clWorkload) int {
 // unmet-only signal), each contributing a Need with AggregateResources
 // = MinUnit = the Pod's request, grouped by (Profile fingerprint,
 // co-location group) through the real needs.Aggregate.
-func (c *clusterModel) rollup(crPerPod bool) []needs.Need {
+//
+// arrivalNanos is the rollup message's build timestamp, stamped on
+// every row exactly as conv.NeedsFromRollup does on the wire path
+// (0 = unstamped, the historical sim behaviour).
+func (c *clusterModel) rollup(crPerPod bool, arrivalNanos int64) []needs.Need {
 	raw := make([]needs.Need, 0, 64)
 	for _, wl := range c.workloads {
 		for _, p := range wl.pods {
@@ -529,6 +580,7 @@ func (c *clusterModel) rollup(crPerPod bool) []needs.Need {
 				AggregateResources: wl.shape.podQty,
 				MinUnit:            wl.shape.podQty,
 				Group:              wl.group,
+				ArrivalUnixNanos:   arrivalNanos,
 			})
 		}
 	}
@@ -585,7 +637,7 @@ func (c *clusterModel) evictAndReconcile(snap *inventory.Snapshot, controllerMan
 				wl.next++
 			}
 		}
-		if wl.rack != "" {
+		if wl.anchor != "" {
 			bound := false
 			for _, p := range wl.pods {
 				if p.bound != "" {
@@ -594,7 +646,7 @@ func (c *clusterModel) evictAndReconcile(snap *inventory.Snapshot, controllerMan
 				}
 			}
 			if !bound {
-				wl.rack = ""
+				wl.anchor = ""
 			}
 		}
 	}
@@ -602,13 +654,13 @@ func (c *clusterModel) evictAndReconcile(snap *inventory.Snapshot, controllerMan
 }
 
 // bind places pending Pods onto the cluster's Configured machines.
-// Candidate filter: the shape's nodeAffinity sets, plus rack coherence
-// for gangs (first member anchors the gang's rack; later members bind
-// only there — a member that doesn't fit on the anchor rack stays
-// pending, never scattered, mirroring planGroupOntoRack's
-// "one rack or nowhere"). Among candidates the emptiest machine wins
-// (most free Pod-slots; ID tiebreak) — kube-scheduler-style least-
-// allocated spreading.
+// Candidate filter: the shape's nodeAffinity sets, plus Same-domain
+// coherence for gangs (first member anchors the gang's rack/zone;
+// later members bind only there — a member that doesn't fit in the
+// anchor domain stays pending, never scattered, mirroring
+// planGroupOntoRack's "one rack or nowhere"). Among candidates the
+// emptiest machine wins (most free Pod-slots; ID tiebreak) —
+// kube-scheduler-style least-allocated spreading.
 func (c *clusterModel) bind(snap *inventory.Snapshot) {
 	machines := snap.ListByClusterState(c.id, machine.StateConfigured)
 	sort.Slice(machines, func(i, j int) bool { return machines[i].ID < machines[j].ID })
@@ -636,12 +688,12 @@ func (c *clusterModel) bind(snap *inventory.Snapshot) {
 				if !wl.shape.machineMatches(m) {
 					continue
 				}
-				if wl.shape.spec.SameRack {
-					rack, has := m.Profile.Labels[sameRackKey]
+				if wl.shape.sameKey != "" {
+					v, has := wl.shape.sameValue(m)
 					if !has {
 						continue
 					}
-					if wl.rack != "" && rack != wl.rack {
+					if wl.anchor != "" && v != wl.anchor {
 						continue
 					}
 				}
@@ -661,8 +713,8 @@ func (c *clusterModel) bind(snap *inventory.Snapshot) {
 			vecSubInPlace(c.remaining[m.ID], wl.shape.podVec)
 			p.bound = m.ID
 			c.podsByMachine[m.ID] = append(c.podsByMachine[m.ID], p)
-			if wl.shape.spec.SameRack && wl.rack == "" {
-				wl.rack = m.Profile.Labels[sameRackKey]
+			if wl.shape.sameKey != "" && wl.anchor == "" {
+				wl.anchor, _ = wl.shape.sameValue(m)
 			}
 		}
 	}
@@ -700,9 +752,9 @@ func (c *clusterModel) scaleTo(shapeName string, replicas int) {
 			wl.pods = append(wl.pods, &clPod{name: fmt.Sprintf("%s-%d", wl.name, wl.next)})
 			wl.next++
 		}
-		// Gang rack pin: with no bound member left, re-anchor on rebind
-		// (same rule as evictAndReconcile).
-		if wl.rack != "" {
+		// Gang anchor pin: with no bound member left, re-anchor on
+		// rebind (same rule as evictAndReconcile).
+		if wl.anchor != "" {
 			bound := false
 			for _, p := range wl.pods {
 				if p.bound != "" {
@@ -711,7 +763,7 @@ func (c *clusterModel) scaleTo(shapeName string, replicas int) {
 				}
 			}
 			if !bound {
-				wl.rack = ""
+				wl.anchor = ""
 			}
 		}
 	}
@@ -1007,8 +1059,19 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 			}
 		}
 
-		for _, m := range models {
-			sh.ApplyRollup(m.id, m.rollup(sc.CRPerPod))
+		for i, m := range models {
+			arrival := int64(0)
+			if sc.RollupArrivalStamps {
+				// Each cycle every operator rolls up once; their build
+				// timestamps race. Rotating the within-cycle order makes
+				// the race deterministic while still exercising every
+				// cross-cluster ordering — the NeedsTable's
+				// equal-priority arrival-asc sort then flips the seed
+				// walk's cluster interleave cycle to cycle, as it does
+				// on a real shard with independent operators.
+				arrival = int64(cycle)*int64(len(models)) + int64((cycle+i)%len(models)) + 1
+			}
+			sh.ApplyRollup(m.id, m.rollup(sc.CRPerPod, arrival))
 		}
 
 		actions := sh.Step(ctx)

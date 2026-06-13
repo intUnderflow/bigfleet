@@ -183,6 +183,7 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 			buckets[i].Count++
 			buckets[i].CreditableCount++
 			buckets[i].Total = VecAdd(buckets[i].Total, vec)
+			buckets[i].CreditableTotal = VecAdd(buckets[i].CreditableTotal, vec)
 			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc})
 		}
 	}

@@ -39,6 +39,7 @@ func foldSameMachines(ms []synthSameMachine) []occ.SameBucket {
 		out[i].Count++
 		if m.creditable {
 			out[i].CreditableCount++
+			out[i].CreditableTotal = occ.VecAdd(out[i].CreditableTotal, m.alloc)
 		}
 		out[i].Total = occ.VecAdd(out[i].Total, m.alloc)
 	}
