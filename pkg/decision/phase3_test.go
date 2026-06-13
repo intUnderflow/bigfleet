@@ -2,6 +2,7 @@ package decision_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -18,7 +19,17 @@ import (
 func runPhase3(t *testing.T, snap *inventory.Snapshot, demand []needs.Need, ready decision.ClusterReadyFn) decision.Phase3Result {
 	t.Helper()
 	p1 := decision.Phase1(snap, demand)
-	return decision.Phase3(snap, p1.Claimed, ready)
+	// Zero release policy: the reclaim-shaped tests in this file stay
+	// release-free; the M73 release walk has its own tests below.
+	return decision.Phase3(snap, p1.Claimed, ready, decision.ReleasePolicy{}, time.Time{})
+}
+
+// runPhase3Release is runPhase3 with a live release policy and clock —
+// the M73 §8 Idle→Speculative release path.
+func runPhase3Release(t *testing.T, snap *inventory.Snapshot, demand []needs.Need, policy decision.ReleasePolicy, now time.Time) decision.Phase3Result {
+	t.Helper()
+	p1 := decision.Phase1(snap, demand)
+	return decision.Phase3(snap, p1.Claimed, decision.AlwaysReady, policy, now)
 }
 
 // All needs deleted: every configured machine reclaimed.
@@ -513,5 +524,132 @@ func TestPhase3_GateIsPerCluster(t *testing.T) {
 		if a.Cluster != "cluster-reported" {
 			t.Errorf("Phase 3 reclaimed in %q; gate should have skipped non-reported clusters", a.Cluster)
 		}
+	}
+}
+
+// --- M73 / ADR-0049: the §8 Idle → Speculative release walk ---
+
+// idleOfType returns an Idle a3-highgpu-8g machine of the given
+// capacity type for the M73 release tests. Inserting it stamps its
+// idle-since at ~now, so tests steer expiry through the `now` they
+// pass to Phase 3 rather than by faking clocks.
+func idleOfType(id machine.ID, ct machine.CapacityType, price float64) machine.Machine {
+	m := gpuMachineInZone(id, "zone-a", price)
+	m.Profile.CapacityType = ct
+	return m
+}
+
+// deletedIDs extracts the Delete-action machine IDs from a result.
+func deletedIDs(r decision.Phase3Result) map[machine.ID]bool {
+	out := map[machine.ID]bool{}
+	for _, a := range r.Actions {
+		if a.Kind == decision.ActionKindDelete {
+			out[a.MachineID] = true
+		}
+	}
+	return out
+}
+
+// Paper §8 verbatim: bare metal holds forever, on-demand minutes,
+// spot ~1m. At 2 minutes past idle entry only spot has expired; at 11
+// minutes on-demand joins it; the fixed tiers (and an unknown capacity
+// type) are never released at any age.
+func TestPhase3_Release_HoldExpiresPerCapacityType(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	_ = inv.Insert(idleOfType("idle-bm", machine.CapacityTypeBareMetal, 0))
+	_ = inv.Insert(idleOfType("idle-rsv", machine.CapacityTypeReserved, 0))
+	_ = inv.Insert(idleOfType("idle-od", machine.CapacityTypeOnDemand, 1.0))
+	_ = inv.Insert(idleOfType("idle-spot", machine.CapacityTypeSpot, 0.3))
+	_ = inv.Insert(idleOfType("idle-unspec", machine.CapacityTypeUnspecified, 1.0))
+	snap := inv.Snapshot()
+
+	at2m := runPhase3Release(t, snap, nil, decision.DefaultReleasePolicy(), time.Now().Add(2*time.Minute))
+	if got := deletedIDs(at2m); len(got) != 1 || !got["idle-spot"] {
+		t.Fatalf("at +2m: deleted %v, want exactly {idle-spot} (spot ~1m expired, on-demand 10m not)", got)
+	}
+	for _, a := range at2m.Actions {
+		if a.Kind != decision.ActionKindDelete {
+			continue
+		}
+		if a.Cluster != "" || a.GracePeriod != 0 || a.Reason != "phase3.release" {
+			t.Errorf("delete action shape = %+v; want unbound, no grace, reason phase3.release", a)
+		}
+	}
+
+	at11m := runPhase3Release(t, snap, nil, decision.DefaultReleasePolicy(), time.Now().Add(11*time.Minute))
+	got := deletedIDs(at11m)
+	if len(got) != 2 || !got["idle-od"] || !got["idle-spot"] {
+		t.Fatalf("at +11m: deleted %v, want exactly {idle-od, idle-spot}", got)
+	}
+
+	// Fixed capacity never releases — §8 "bare metal: forever";
+	// reserved is paid-for regardless (paper §4); an unspecified
+	// capacity type is held because its cost class is unknown.
+	atForever := runPhase3Release(t, snap, nil, decision.DefaultReleasePolicy(), time.Now().Add(1000*time.Hour))
+	for _, fixed := range []machine.ID{"idle-bm", "idle-rsv", "idle-unspec"} {
+		if deletedIDs(atForever)[fixed] {
+			t.Errorf("%s released; fixed/unknown capacity must hold forever", fixed)
+		}
+	}
+}
+
+// An Idle machine the cycle's claimed-set counts toward a Need is the
+// machine Phase 1 is about to bootstrap; it must never be deleted out
+// from under that commitment, however expired its hold.
+func TestPhase3_Release_ClaimedIdleNeverReleased(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	_ = inv.Insert(idleOfType("idle-claimed", machine.CapacityTypeOnDemand, 1.0))
+	snap := inv.Snapshot()
+
+	r := runPhase3Release(t, snap,
+		[]needs.Need{gpuNeed("cluster-a", gpuProfile(100), 1)},
+		decision.DefaultReleasePolicy(), time.Now().Add(1000*time.Hour))
+	if got := deletedIDs(r); len(got) != 0 {
+		t.Fatalf("deleted %v; the claimed-set must shield Phase 1's bootstrap target", got)
+	}
+}
+
+// The zero-value policy releases nothing — the repo's "zero value =
+// historical behaviour" convention, which keeps every pre-M73 caller
+// and canary byte-identical.
+func TestPhase3_Release_ZeroPolicyReleasesNothing(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	_ = inv.Insert(idleOfType("idle-od", machine.CapacityTypeOnDemand, 1.0))
+	_ = inv.Insert(idleOfType("idle-spot", machine.CapacityTypeSpot, 0.3))
+	snap := inv.Snapshot()
+
+	r := runPhase3Release(t, snap, nil, decision.ReleasePolicy{}, time.Now().Add(1000*time.Hour))
+	if got := len(r.Actions); got != 0 {
+		t.Fatalf("actions = %d, want 0 under the zero policy", got)
+	}
+}
+
+// Reclaim and release coexist in one pass: shrinkage excess drains to
+// Idle (Reclaim) while previously-idled elastic machines past their
+// hold leave entirely (Delete) — §8's two halves in one Phase 3.
+func TestPhase3_Release_CoexistsWithReclaim(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	for i := 0; i < 2; i++ {
+		_ = inv.Insert(configuredVictim(idN(i), "cluster-a", 100, 0, 0))
+	}
+	_ = inv.Insert(idleOfType("idle-spot", machine.CapacityTypeSpot, 0.3))
+	snap := inv.Snapshot()
+
+	r := runPhase3Release(t, snap, nil, decision.DefaultReleasePolicy(), time.Now().Add(2*time.Minute))
+	reclaims, deletes := 0, 0
+	for _, a := range r.Actions {
+		switch a.Kind {
+		case decision.ActionKindReclaim:
+			reclaims++
+		case decision.ActionKindDelete:
+			deletes++
+		}
+	}
+	if reclaims != 2 || deletes != 1 {
+		t.Fatalf("reclaims=%d deletes=%d, want 2 and 1: %+v", reclaims, deletes, r.Actions)
 	}
 }

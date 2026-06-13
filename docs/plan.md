@@ -889,10 +889,15 @@ claimed-set; the m67 repro inverted into the bound-counts contract
 pin) — the original M68 scope dissolved into it as the ADR records;
 M68 was repurposed from the 2026-06-12 philosophy-conformance audit
 (Phase 2 constraint-scope victim eligibility + shortfall-ledger
-summing) and is ✅. M67's dev-50-v2
+summing) and is ✅. M73 ✅ (2026-06-13, ADR-0049): paper §8's release
+half — per-CapacityType idle holds inside Phase 3, idle-since
+tracking in the inventory sidecar, the Delete action kind +
+executeDelete, the hold-window-is-the-rail (no release cap) argument
+with its sim loop-impossibility pins, and the Delete-on-Configured
+conformance check. M67's dev-50-v2
 gate-redefinition tail (the runner's chain-alive bind% gate vs the
 ADR's "demand covered by bound + zero reclaim churn") is the
-remaining follow-up and lands with the M77 gate swap. M73/M77/M78
+remaining follow-up and lands with the M77 gate swap. M77/M78
 now unblocked on the engine side; M76 awaits the substrate choice.
 Every remaining ladder item passes through the author queue below.
 Residual non-blocking follow-ups recorded in their ADRs: Raft

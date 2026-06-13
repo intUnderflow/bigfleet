@@ -18,6 +18,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 )
@@ -34,12 +35,30 @@ import (
 type Inventory struct {
 	mu   sync.RWMutex
 	byID map[machine.ID]machine.Machine
+
+	// idleSince records when each currently-Idle machine was first
+	// observed entering Idle by THIS process — via reclaim/drain
+	// completion, Configuring rollback, seed, or reconcile discovery.
+	// All inventory writes flow through Insert/Apply/Remove, so this
+	// is the single honest stamping point. It feeds the paper §8
+	// Idle → Speculative release (M73): Phase 3 deletes an unclaimed
+	// Idle machine only after its per-CapacityType hold has elapsed.
+	//
+	// Deliberately in-memory and shard-local — no wire/proto field, no
+	// persistence. Restart semantics: a restarted shard rebuilds its
+	// inventory from provider.List, re-stamping every Idle machine at
+	// discovery time, so after a restart machines hold LONGER than
+	// policy, never shorter — conservative in the safe direction (the
+	// failure mode of a lost clock is a delayed release, i.e. a few
+	// extra machine-minutes of spend, never a premature delete).
+	idleSince map[machine.ID]time.Time
 }
 
 // New returns an empty inventory.
 func New() *Inventory {
 	return &Inventory{
-		byID: make(map[machine.ID]machine.Machine),
+		byID:      make(map[machine.ID]machine.Machine),
+		idleSince: make(map[machine.ID]time.Time),
 	}
 }
 
@@ -58,6 +77,9 @@ func (i *Inventory) Insert(m machine.Machine) error {
 		return fmt.Errorf("inventory: machine %s already exists", m.ID)
 	}
 	i.byID[m.ID] = m
+	if m.State == machine.StateIdle {
+		i.idleSince[m.ID] = time.Now()
+	}
 	return nil
 }
 
@@ -80,6 +102,15 @@ func (i *Inventory) Apply(m machine.Machine) error {
 		}
 	}
 	i.byID[m.ID] = m
+	// Idle-since maintenance (M73): stamp on entry to Idle, clear on
+	// exit. A same-state Idle→Idle Apply (reconcile field merges)
+	// preserves the original stamp — the machine never left Idle.
+	switch {
+	case m.State == machine.StateIdle && old.State != machine.StateIdle:
+		i.idleSince[m.ID] = time.Now()
+	case m.State != machine.StateIdle:
+		delete(i.idleSince, m.ID)
+	}
 	return nil
 }
 
@@ -91,6 +122,7 @@ func (i *Inventory) Remove(id machine.ID) error {
 		return fmt.Errorf("inventory: %w: %s", ErrNotFound, id)
 	}
 	delete(i.byID, id)
+	delete(i.idleSince, id)
 	return nil
 }
 
@@ -303,6 +335,14 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		minPriorityByState[state] = stateMin
 	}
 
+	// Idle-since copy for the M73 release walk. O(#idle) per snapshot —
+	// the map only ever holds currently-Idle machines, a small subset
+	// of the fleet outside scale-down windows.
+	idleSince := make(map[machine.ID]time.Time, len(i.idleSince))
+	for id, ts := range i.idleSince {
+		idleSince[id] = ts
+	}
+
 	return &Snapshot{
 		machines:                     machines,
 		byID:                         byID,
@@ -313,6 +353,7 @@ func (i *Inventory) snapshotLocked() *Snapshot {
 		bucketsByClusterState:        clusterStateBuckets,
 		minPriorityByStateInstanceTp: minPriorityByStateInstanceTp,
 		minPriorityByState:           minPriorityByState,
+		idleSince:                    idleSince,
 	}
 }
 
@@ -361,6 +402,11 @@ type Snapshot struct {
 	// the entire state has no preemptable victim. Empty state →
 	// absent (caller treats absent as math.MaxInt32).
 	minPriorityByState map[machine.State]int32
+
+	// idleSince is the per-Idle-machine entry timestamp (see
+	// Inventory.idleSince), copied at snapshot time so the M73 release
+	// walk reads a view consistent with the rest of the snapshot.
+	idleSince map[machine.ID]time.Time
 }
 
 // ListByStateInstanceType returns machines in the given state matching
@@ -526,4 +572,13 @@ func (s *Snapshot) CountByClusterState(cluster machine.ClusterID, state machine.
 		return 0
 	}
 	return len(byState[state])
+}
+
+// IdleSince returns when the machine was first observed entering Idle
+// by this process, or ok = false when no stamp exists (the machine is
+// not Idle, or — defensively — was never stamped; the M73 release walk
+// treats a missing stamp as "hold", never "expired").
+func (s *Snapshot) IdleSince(id machine.ID) (time.Time, bool) {
+	ts, ok := s.idleSince[id]
+	return ts, ok
 }

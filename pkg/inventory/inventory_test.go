@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
@@ -259,5 +260,88 @@ func TestSnapshot_MinAssignedPriority(t *testing.T) {
 	}
 	if got := snap.MinAssignedPriority(machine.StateIdle); got != math.MaxInt32 {
 		t.Errorf("empty StateIdle min = %d, want MaxInt32", got)
+	}
+}
+
+// --- M73 idle-since tracking (the §8 release clock) ---
+
+// TestIdleSince_StampedOnInsertClearedOnExit: the stamp appears when a
+// machine enters Idle (insert or transition), survives same-state
+// re-Applies (reconcile field merges must not reset the clock), and
+// clears the moment the machine leaves Idle — so a machine that
+// returns to Idle later starts a FRESH hold window.
+func TestIdleSince_StampedOnInsertClearedOnExit(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	before := time.Now()
+	if err := inv.Insert(newIdle("m-idle")); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	after := time.Now()
+
+	ts, ok := inv.Snapshot().IdleSince("m-idle")
+	if !ok {
+		t.Fatal("idle insert: no idle-since stamp")
+	}
+	if ts.Before(before) || ts.After(after) {
+		t.Errorf("stamp %v outside insert window [%v, %v]", ts, before, after)
+	}
+
+	// Same-state Apply (reconcile merging fields) preserves the stamp.
+	m, _ := inv.Get("m-idle")
+	m.PricePerHour = 2.5
+	if err := inv.Apply(m); err != nil {
+		t.Fatalf("same-state apply: %v", err)
+	}
+	ts2, ok := inv.Snapshot().IdleSince("m-idle")
+	if !ok || !ts2.Equal(ts) {
+		t.Errorf("same-state apply moved the stamp: %v → %v (ok=%v); the machine never left Idle", ts, ts2, ok)
+	}
+
+	// Leaving Idle clears the stamp.
+	m, _ = inv.Get("m-idle")
+	m.State = machine.StateConfiguring
+	if err := inv.Apply(m); err != nil {
+		t.Fatalf("apply → Configuring: %v", err)
+	}
+	if _, ok := inv.Snapshot().IdleSince("m-idle"); ok {
+		t.Error("stamp survived the exit from Idle")
+	}
+
+	// Returning to Idle (the Configuring rollback edge) re-stamps —
+	// a fresh hold window, never a stale clock.
+	m, _ = inv.Get("m-idle")
+	m.State = machine.StateIdle
+	if err := inv.Apply(m); err != nil {
+		t.Fatalf("apply rollback → Idle: %v", err)
+	}
+	ts3, ok := inv.Snapshot().IdleSince("m-idle")
+	if !ok {
+		t.Fatal("re-entry to Idle: no stamp")
+	}
+	if ts3.Before(ts) {
+		t.Errorf("re-entry stamp %v predates the original %v", ts3, ts)
+	}
+}
+
+// Non-Idle machines never carry a stamp, and Remove drops it with the
+// record.
+func TestIdleSince_OnlyIdleMachinesAndRemoveClears(t *testing.T) {
+	t.Parallel()
+	inv := inventory.New()
+	if err := inv.Insert(newConfigured("m-cfg", "cluster-a")); err != nil {
+		t.Fatalf("insert configured: %v", err)
+	}
+	if _, ok := inv.Snapshot().IdleSince("m-cfg"); ok {
+		t.Error("Configured insert produced an idle-since stamp")
+	}
+	if err := inv.Insert(newIdle("m-idle")); err != nil {
+		t.Fatalf("insert idle: %v", err)
+	}
+	if err := inv.Remove("m-idle"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, ok := inv.Snapshot().IdleSince("m-idle"); ok {
+		t.Error("stamp survived Remove")
 	}
 }

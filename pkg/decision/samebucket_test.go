@@ -2,6 +2,7 @@ package decision
 
 import (
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision/occ"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -312,7 +313,7 @@ func TestSameDomainChoiceParity_Phase1VsPhase3(t *testing.T) {
 	// walk), but this still pins that the chosen domain's Configured
 	// member is kept and the off-domain one reclaimed.
 	p1 := Phase1(snap, []needs.Need{n})
-	p3 := Phase3(snap, p1.Claimed, AlwaysReady)
+	p3 := Phase3(snap, p1.Claimed, AlwaysReady, ReleasePolicy{}, time.Time{})
 	reclaimed := map[machine.ID]bool{}
 	for _, a := range p3.Actions {
 		reclaimed[a.MachineID] = true

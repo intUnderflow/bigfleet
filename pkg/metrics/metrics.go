@@ -94,7 +94,7 @@ var (
 
 	ShardActionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "bigfleet_shard_actions_total",
-		Help: "Count of decision-engine actions emitted, by kind (Bootstrap / Provision / Reclaim / Preempt).",
+		Help: "Count of decision-engine actions emitted, by kind (Bootstrap / Provision / Reclaim / Preempt / Delete).",
 	}, []string{"kind"})
 
 	// ShardInventoryMachines now carries capacity_type and
@@ -293,6 +293,20 @@ var (
 	ShardReclaimsCapped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "bigfleet_shard_reclaims_capped_total",
 		Help: "Reclaim actions deferred by the ADR-0046 per-cluster blast-radius cap. Surplus re-derives next cycle (roll-over, not drop). Sustained non-zero = a mass drain in progress being rate-limited.",
+	})
+
+	// ShardIdleReleases counts Idle machines released back to
+	// Speculative through provider.Delete after their per-CapacityType
+	// idle hold expired (paper §8 Idle→Speculative, M73 / ADR-0049).
+	// Incremented per completed release, so rate() over the cycle
+	// cadence reads as releases-per-cycle. The Create↔Delete money
+	// loop is impossible by construction (release requires a full
+	// unclaimed hold window; acquisition requires a deficit), so this
+	// climbing in lockstep with Provision/Create rates is the signal
+	// that construction has been broken — alert on the pair.
+	ShardIdleReleases = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bigfleet_shard_idle_releases_total",
+		Help: "Idle machines released to Speculative via provider.Delete after their idle hold expired (paper §8, M73). rate() ≈ releases per cycle; sustained lockstep with provision rates would indicate a release/re-buy loop.",
 	})
 
 	// ShardRollupQuarantined is the rail-2 surface: how many

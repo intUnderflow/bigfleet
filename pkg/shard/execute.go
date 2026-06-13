@@ -76,6 +76,8 @@ func (s *Shard) execute(ctx context.Context, a decision.Action) (err error) {
 		return s.executeProvision(ctx, a)
 	case decision.ActionKindReclaim, decision.ActionKindPreempt:
 		return s.executeDrain(ctx, a)
+	case decision.ActionKindDelete:
+		return s.executeDelete(ctx, a)
 	}
 	return fmt.Errorf("unknown action kind: %s", a.Kind)
 }
@@ -139,9 +141,11 @@ func classifyExecuteError(ctx context.Context, err error) string {
 	case strings.Contains(msg, "→ Configuring"),
 		strings.Contains(msg, "→ Creating"),
 		strings.Contains(msg, "→ Draining"),
+		strings.Contains(msg, "→ Deleting"),
 		strings.Contains(msg, "post-Create transition"),
 		strings.Contains(msg, "post-Configure transition"),
-		strings.Contains(msg, "post-Drain transition"):
+		strings.Contains(msg, "post-Drain transition"),
+		strings.Contains(msg, "post-Delete transition"):
 		return "transition_error"
 	case strings.Contains(msg, "LocalBootstrap"),
 		strings.Contains(msg, "requestBootstrap"):
@@ -448,5 +452,58 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 		return formatErr("drain: post-Drain transition", err)
 	}
 	metrics.ShardDrainPhase.Observe(time.Since(drainStart).Seconds())
+	return nil
+}
+
+// executeDelete handles the M73 Idle → Speculative release (paper §8):
+// walks Idle → Deleting → Speculative through provider.Delete. The
+// machine is unbound, so no operator is involved and no grace applies;
+// §7 Delete releases the host entirely while the machine ID survives
+// as a Speculative quota slot. The grpcclient stamps the M71 fencing
+// fields on the wire itself; in-process providers see a zero Fence
+// (same contract as Create/Configure/Drain). Idempotent on retry: a
+// machine already past Idle (a duplicate dispatch racing a completed
+// delete, or a competing Bootstrap that claimed it) is a no-op — the
+// next cycle re-derives against fresh state.
+func (s *Shard) executeDelete(ctx context.Context, a decision.Action) error {
+	cur, err := s.inv.Get(a.MachineID)
+	if err != nil {
+		return formatErr("delete: inventory get", err)
+	}
+	if cur.State != machine.StateIdle {
+		// Already moving (or already released) — nothing to do this
+		// cycle. If the machine went back to Idle later, Phase 3 will
+		// re-derive after a fresh hold window.
+		return nil
+	}
+	if err := s.applyTransition(a.MachineID, machine.StateDeleting, nil); err != nil {
+		return formatErr("delete: → Deleting", err)
+	}
+	ack, err := s.cfg.Provider.Delete(ctx, provider.DeleteRequest{MachineID: a.MachineID})
+	if err != nil {
+		// Includes ErrNotSupported: the policy never emits Delete for
+		// fixed capacity, so a rejection here means the provider's
+		// CapacityType declaration and its Delete support disagree —
+		// a contract violation worth a Failed machine, not a retry.
+		_ = s.applyTransition(a.MachineID, machine.StateFailed, func(m *machine.Machine) {
+			m.LastError = "delete: " + err.Error()
+		})
+		return formatErr("delete: provider.Delete", err)
+	}
+	deleted, mErr := conv.MachineFromProto(conv.MachineToProto(ack.Machine))
+	_ = mErr // round-trip can't fail since we control the source
+	if err := s.applyTransition(a.MachineID, deleted.State, func(m *machine.Machine) {
+		if deleted.State == machine.StateSpeculative {
+			// §7: the host is released entirely; only the quota slot
+			// remains. Cleared here (not from the ack) because a
+			// Speculative record must have an empty host to satisfy
+			// machine.Invariant.
+			m.Host = machine.HostRef{}
+			m.Cluster = ""
+		}
+	}); err != nil {
+		return formatErr("delete: post-Delete transition", err)
+	}
+	metrics.ShardIdleReleases.Inc()
 	return nil
 }

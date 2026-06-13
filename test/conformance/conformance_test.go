@@ -627,3 +627,54 @@ func mustReachState(t *testing.T, cli pb.CapacityProviderClient, ctx context.Con
 	t.Fatalf("machine %s did not reach %s within %v (final state: %s)",
 		id, want, timeout, m.GetState())
 }
+
+// TestConformance_DeleteOnConfigured verifies that Delete on a machine
+// in Configured state is rejected — the state machine has no
+// Configured → Deleting edge (paper §5: Delete releases unbound
+// machines; the M73 release path only ever deletes Idle machines, and
+// providers must refuse to pull a bound machine out from under its
+// cluster). The machine must remain Configured afterwards. As with
+// DrainOnSpeculative, the rejection must not use FAILED_PRECONDITION
+// (reserved for M71 fencing rejections). Unimplemented passes —
+// bare-metal-style providers don't support Delete at all.
+func TestConformance_DeleteOnConfigured(t *testing.T) {
+	cli, close := dial(t)
+	defer close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Walk a fresh machine to Configured.
+	id := pickSpeculative(t, cli, ctx)
+	if _, err := cli.Create(ctx, &pb.CreateRequest{MachineId: id}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_IDLE, 10*time.Second)
+	if _, err := cli.Configure(ctx, &pb.ConfigureRequest{
+		MachineId: id, ClusterId: "conformance-delete-configured",
+		BootstrapBlob: []byte("# conformance delete-on-configured\n"),
+	}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	mustReachState(t, cli, ctx, id, pb.MachineState_MACHINE_STATE_CONFIGURED, 10*time.Second)
+
+	_, err := cli.Delete(ctx, &pb.DeleteRequest{MachineId: id})
+	if err == nil {
+		t.Fatal("expected Delete on Configured to fail")
+	}
+	switch status.Code(err) {
+	case codes.Unimplemented:
+		t.Logf("provider does not implement Delete (Unimplemented) — bare-metal-style provider, OK")
+		return
+	case codes.FailedPrecondition:
+		t.Errorf("invalid transition rejected with FAILED_PRECONDITION — that code is reserved for fencing rejections; use a different code (got %v)", err)
+	}
+
+	// The bound machine must be untouched by the rejected call.
+	m, err := cli.Get(ctx, &pb.MachineRef{Id: id})
+	if err != nil {
+		t.Fatalf("Get after rejected Delete: %v", err)
+	}
+	if m.GetState() != pb.MachineState_MACHINE_STATE_CONFIGURED {
+		t.Errorf("state after rejected Delete = %s, want Configured (no partial transition)", m.GetState())
+	}
+}

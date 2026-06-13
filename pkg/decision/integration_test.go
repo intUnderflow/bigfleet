@@ -3,6 +3,7 @@ package decision_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -217,7 +218,7 @@ func TestIntegration_SameDomain_NoOscillation(t *testing.T) {
 		t.Helper()
 		snap := inv.Snapshot()
 		p1 := decision.Phase1(snap, demand)
-		p3 := decision.Phase3(snap, p1.Claimed, decision.AlwaysReady)
+		p3 := decision.Phase3(snap, p1.Claimed, decision.AlwaysReady, decision.ReleasePolicy{}, time.Time{})
 		for _, a := range p1.Actions {
 			if a.Kind != decision.ActionKindBootstrap {
 				t.Fatalf("unexpected non-Bootstrap Phase 1 action: %+v", a)

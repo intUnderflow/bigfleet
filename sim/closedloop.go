@@ -103,6 +103,12 @@ type SeedPool struct {
 	// machine.
 	Density int
 
+	// IdleCapacityType sets the capacity type of the pool's Idle tier.
+	// Zero value → BareMetal at price 0 (the historical owned-headroom
+	// seed). OnDemand / Spot idle carries the elastic price so M73
+	// release scenarios can seed surplus idle in a releasable tier.
+	IdleCapacityType machine.CapacityType
+
 	// RacksPerZone sizes the synthetic rack pool (rack name embeds the
 	// zone, as in seedZoneRack). 0 → 4.
 	RacksPerZone int
@@ -156,6 +162,14 @@ type ClosedLoopScenario struct {
 	// shrinkage-only Phase 3 acts on.
 	Scales []TargetScale
 
+	// ReleasePolicy overrides the shard's M73 idle-hold policy. nil →
+	// the paper-§8 production constants (10m / 1m), which sim cycles
+	// (milliseconds of wall-clock) never cross — so every pre-M73
+	// scenario is byte-identical. Release scenarios pass short holds;
+	// sim cycles ≈ time, and there is deliberately no production
+	// config surface behind this (ADR-0049).
+	ReleasePolicy *decision.ReleasePolicy
+
 	Cycles int
 }
 
@@ -168,6 +182,7 @@ type CycleStats struct {
 	Provisions int
 	Reclaims   int
 	Preempts   int
+	Deletes    int // M73 idle releases (paper §8 Idle→Speculative)
 
 	Configured  int // shard-wide Configured machines after the cycle
 	BoundPods   int
@@ -188,7 +203,7 @@ type CycleStats struct {
 // assertions sum it over a trailing window: a converged closed loop
 // emits no actions at all.
 func (c CycleStats) Churn() int {
-	return c.Bootstraps + c.Provisions + c.Reclaims + c.Preempts
+	return c.Bootstraps + c.Provisions + c.Reclaims + c.Preempts + c.Deletes
 }
 
 // WorkloadStanding is one workload object's final population.
@@ -845,17 +860,29 @@ func seedClosedLoop(prov *fake.Provider, sh *shard.Shard, sc *ClosedLoopScenario
 				}
 			}
 		}
+		idleCapType := pool.IdleCapacityType
+		if idleCapType == machine.CapacityTypeUnspecified {
+			idleCapType = machine.CapacityTypeBareMetal
+		}
+		// Elastic idle carries the elastic price; fixed idle is owned
+		// hardware at price 0 (the historical seed shape).
+		idlePrice, idleProb := 0.0, 0.0
+		if idleCapType == machine.CapacityTypeOnDemand || idleCapType == machine.CapacityTypeSpot {
+			idlePrice, idleProb = specPricePerHour, specInterruptProb
+		}
 		for i := 0; i < pool.Idle; i++ {
 			id := machine.ID(fmt.Sprintf("clp-%s-idle-%d", pool.Shape, i))
-			profile := mkProfile(machine.CapacityTypeBareMetal)
-			prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
+			profile := mkProfile(idleCapType)
+			prov.AddIdle(id, profile, idleCapType, idlePrice, idleProb)
 			prov.SetAllocatable(id, allocatable)
 			if err := sh.SeedInventory(machine.Machine{
-				ID:          id,
-				State:       machine.StateIdle,
-				Host:        machine.HostRef{Provider: "fake", Ref: string(id)},
-				Profile:     profile,
-				Allocatable: allocatable,
+				ID:                      id,
+				State:                   machine.StateIdle,
+				Host:                    machine.HostRef{Provider: "fake", Ref: string(id)},
+				Profile:                 profile,
+				Allocatable:             allocatable,
+				PricePerHour:            idlePrice,
+				InterruptionProbability: idleProb,
 			}); err != nil {
 				return fmt.Errorf("seed idle %s: %w", id, err)
 			}
@@ -926,6 +953,9 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		LocalBootstrap: func(_ context.Context, cluster machine.ClusterID, _ []needs.Requirement) ([]byte, error) {
 			return []byte("# closed-loop bootstrap for " + string(cluster) + "\n"), nil
 		},
+		// M73: nil keeps the paper-constant holds, which sim wall-clock
+		// never crosses; release scenarios pass short holds.
+		ReleasePolicy: sc.ReleasePolicy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("shard new: %w", err)
@@ -994,6 +1024,8 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 				stats.Reclaims++
 			case decision.ActionKindPreempt:
 				stats.Preempts++
+			case decision.ActionKindDelete:
+				stats.Deletes++
 			}
 		}
 

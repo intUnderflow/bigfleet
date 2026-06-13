@@ -119,7 +119,7 @@ Threshold: **support `since_revision` once your provider exposes more than ~10,0
 
 ## Bare-metal providers
 
-`Delete` is optional for bare-metal-style providers (the machine doesn't get "terminated"; it returns to the free pool when its lifecycle ends). Return `codes.Unimplemented` from `Delete` if your backend doesn't have a meaningful semantic for it. The shard handles this case.
+`Delete` is optional for bare-metal-style providers (the machine doesn't get "terminated"; it returns to the free pool when its lifecycle ends). Return `codes.Unimplemented` from `Delete` if your backend doesn't have a meaningful semantic for it. The shard handles this case — and since M73 its idle-release path only ever emits `Delete` for machines whose `capacity_type` is `ON_DEMAND` or `SPOT` (the paper-§8 hold policy keeps fixed capacity forever), so a provider that declares its capacity types honestly never receives the call. If you do implement `Delete`, it must only succeed on `IDLE` machines: reject it on a bound (`CONFIGURED`) machine — there is no `Configured → Deleting` edge in the state machine, and the rejection must not use `FAILED_PRECONDITION` (reserved for fencing).
 
 ## Deployment shape
 
@@ -142,7 +142,7 @@ make conformance TARGET=localhost:9000
 go test -tags=conformance -count=1 -v -target=localhost:9000 ./test/conformance/...
 ```
 
-The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency on all four lifecycle RPCs, enforce the fencing contract (stale epoch / stale sequence rejected, new epoch resets, unknown shard accepted, reads unaffected), enforce the `shard_metadata` echo contract (verbatim on Get and List, unknown keys preserved, cleared with the binding when Drain completes), exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
+The suite's `TestConformance_*` tests pick a Speculative machine, walk it through Create → Configure → Drain → Delete (skipping Delete if you return Unimplemented), assert idempotency on all four lifecycle RPCs, reject out-of-position lifecycle calls (Drain on Speculative, Delete on Configured), enforce the fencing contract (stale epoch / stale sequence rejected, new epoch resets, unknown shard accepted, reads unaffected), enforce the `shard_metadata` echo contract (verbatim on Get and List, unknown keys preserved, cleared with the binding when Drain completes), exercise the `List` filter behaviour, and verify your label shape. A passing run is what "BigFleet-compatible" means.
 
 ## Reference example
 

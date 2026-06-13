@@ -55,3 +55,4 @@
 | [46](/adr/0046-actuation-safety-rails/) | Accepted | Actuation safety rails — per-cluster reclaim blast-radius cap, empty-roll-up quarantine, global kill switch |
 | [47](/adr/0047-coordinator-raft-join-and-offline-restore/) | Accepted | Coordinator quorum formation by ordinal join; offline snapshot restore as single-voter recovery |
 | [48](/adr/0048-mtls-and-uri-san-identity/) | Accepted | Opt-in file-based mTLS with bigfleet:// URI SAN identity binding — supersedes ADR-0008's transport posture |
+| [49](/adr/0049-idle-speculative-release-hold-window/) | Accepted | Idle→Speculative release (paper §8's other half) — per-CapacityType idle holds inside Phase 3; the hold window is the rail, not a cap |

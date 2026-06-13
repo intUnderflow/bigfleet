@@ -7,7 +7,7 @@ import (
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
 
-// ActionKind discriminates the four kinds of action the decision engine
+// ActionKind discriminates the five kinds of action the decision engine
 // can emit. Each cycle produces a slice of these for the shard to
 // execute asynchronously against the provider and the operator stream.
 type ActionKind uint8
@@ -29,6 +29,13 @@ const (
 	// preemptor. Emitted by Phase 2. The grace period is set by the
 	// priority gap.
 	ActionKindPreempt
+	// ActionKindDelete releases an Idle machine back to Speculative via
+	// provider.Delete — the paper §8 Idle → Speculative lazy release
+	// (M73). Emitted by Phase 3 for unclaimed Idle machines whose
+	// per-CapacityType idle hold (ReleasePolicy) has expired. The
+	// machine is unbound (ADR-0045: it counts for no cluster), so
+	// Cluster is empty and no grace applies.
+	ActionKindDelete
 )
 
 // String returns the canonical name.
@@ -42,6 +49,8 @@ func (k ActionKind) String() string {
 		return "Reclaim"
 	case ActionKindPreempt:
 		return "Preempt"
+	case ActionKindDelete:
+		return "Delete"
 	}
 	return "Unspecified"
 }
@@ -55,6 +64,7 @@ type Action struct {
 	// Cluster the machine is being directed to. For Bootstrap and
 	// Provision, this is the *destination* cluster. For Reclaim and
 	// Preempt, this is the source cluster the machine is leaving.
+	// Empty for Delete (the machine is unbound).
 	Cluster machine.ClusterID
 
 	// SourceProfile is the profile of the originating Need (set for

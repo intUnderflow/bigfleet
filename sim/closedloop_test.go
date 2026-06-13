@@ -137,12 +137,13 @@ func logConverged(t *testing.T, res *sim.ClosedLoopResult, k int) {
 	t.Helper()
 	last := res.Last(k)
 	end := last[len(last)-1]
-	t.Logf("last %d cycles: bootstraps=%d reclaims=%d provisions=%d preempts=%d; end: configured=%d bound=%d pending=%d shortfalls=%d (target pods=%d)",
+	t.Logf("last %d cycles: bootstraps=%d reclaims=%d provisions=%d preempts=%d deletes=%d; end: configured=%d bound=%d pending=%d shortfalls=%d (target pods=%d)",
 		k,
 		res.SumLast(k, func(c sim.CycleStats) int { return c.Bootstraps }),
 		res.SumLast(k, func(c sim.CycleStats) int { return c.Reclaims }),
 		res.SumLast(k, func(c sim.CycleStats) int { return c.Provisions }),
 		res.SumLast(k, func(c sim.CycleStats) int { return c.Preempts }),
+		res.SumLast(k, func(c sim.CycleStats) int { return c.Deletes }),
 		end.Configured, end.BoundPods, end.PendingPods, end.Shortfalls, res.TargetPods)
 }
 
@@ -154,8 +155,8 @@ func dumpTrace(t *testing.T, res *sim.ClosedLoopResult) {
 		if c.Churn() == 0 && c.Evicted == 0 {
 			continue // quiet cycles don't earn a line
 		}
-		t.Logf("cycle %3d: boot=%d prov=%d recl=%d pre=%d evicted=%d configured=%d bound=%d pending=%d shortfalls=%d probe=%d",
-			c.Cycle, c.Bootstraps, c.Provisions, c.Reclaims, c.Preempts,
+		t.Logf("cycle %3d: boot=%d prov=%d recl=%d pre=%d del=%d evicted=%d configured=%d bound=%d pending=%d shortfalls=%d probe=%d",
+			c.Cycle, c.Bootstraps, c.Provisions, c.Reclaims, c.Preempts, c.Deletes,
 			c.Evicted, c.Configured, c.BoundPods, c.PendingPods, c.Shortfalls, c.ReclaimMatchesShortfall)
 	}
 }

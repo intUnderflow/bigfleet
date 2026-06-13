@@ -340,7 +340,14 @@ func (p *Provider) Drain(_ context.Context, req provider.DrainRequest) (provider
 // return ErrNotSupported instead.
 func (p *Provider) Delete(_ context.Context, req provider.DeleteRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opDelete, req.Fence, func(m *machine.Machine) {
-		m.Host = machine.HostRef{}
+		// §7: the host is released when the machine settles back at
+		// Speculative. In the staged-transition mode the Deleting record
+		// keeps its host ref — the real host exists until teardown
+		// finishes, and machine.Invariant requires Deleting to carry one
+		// (M73: the shard ingests these records at reconcile).
+		if m.State == machine.StateSpeculative {
+			m.Host = machine.HostRef{}
+		}
 	})
 }
 

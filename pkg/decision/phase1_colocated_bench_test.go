@@ -3,6 +3,7 @@ package decision_test
 import (
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/decision"
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
@@ -222,6 +223,6 @@ func BenchmarkPhase3_Uber5K_CoLocated(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = decision.Phase3(snap, claimed, decision.AlwaysReady)
+		_ = decision.Phase3(snap, claimed, decision.AlwaysReady, decision.ReleasePolicy{}, time.Time{})
 	}
 }

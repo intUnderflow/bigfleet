@@ -208,6 +208,16 @@ type Config struct {
 	// disables. Rotation / size management is deliberately the
 	// operator's concern (logrotate-style), not the shard's.
 	AuditLogger *slog.Logger
+
+	// ReleasePolicy overrides the per-CapacityType idle-hold policy
+	// for the paper §8 Idle → Speculative release (M73 / ADR-0049).
+	// nil → decision.DefaultReleasePolicy(), the paper constants
+	// (bare metal / reserved: never; on-demand: 10m; spot: ~1m).
+	// Library-level only by design — no binary flag, no chart value
+	// (constants-until-evidence, ADR-0042-Addendum posture); the only
+	// non-default caller is the sim, which passes short holds so
+	// cycle-scale scenarios can cross hold expiry.
+	ReleasePolicy *decision.ReleasePolicy
 }
 
 // Shard is the running controller. Construct via New, then Run.
@@ -581,6 +591,8 @@ func (s *Shard) actionStillApplicable(a decision.Action) bool {
 		return cur.State == machine.StateSpeculative
 	case decision.ActionKindReclaim, decision.ActionKindPreempt:
 		return cur.State == machine.StateConfigured
+	case decision.ActionKindDelete:
+		return cur.State == machine.StateIdle
 	}
 	return true
 }
@@ -677,8 +689,14 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 	// ADR-0045: Phase 3 consumes Phase 1's claimed-set — the single
 	// attribution — and reclaims the unclaimed Configured remainder
 	// (bound capacity in excess of demand). It runs no demand walk of
-	// its own.
-	p3 := decision.Phase3(snap, p1.Claimed, s.FirstRollupReceived)
+	// its own. M73 adds §8's release half to the same pass: unclaimed
+	// Idle machines past their CapacityType hold (the snapshot carries
+	// the idle-since stamps) get Delete actions.
+	relPolicy := decision.DefaultReleasePolicy()
+	if s.cfg.ReleasePolicy != nil {
+		relPolicy = *s.cfg.ReleasePolicy
+	}
+	p3 := decision.Phase3(snap, p1.Claimed, s.FirstRollupReceived, relPolicy, time.Now())
 	if recordMetrics {
 		metrics.ShardCyclePhaseDuration.WithLabelValues("phase3").Observe(time.Since(p3Start).Seconds())
 	}
@@ -1129,10 +1147,15 @@ func formatQtys(qs []needs.ResourceQty) string {
 // the same machine, which shared attribution removed by construction.
 func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 decision.Phase1Result, p3 decision.Phase3Result) phaseAttribution {
 	pa := phaseAttribution{
-		needsTotal: len(demand),
-		// Phase 3 emits Reclaim actions only.
-		p3Reclaim:     len(p3.Actions),
+		needsTotal:    len(demand),
 		p1Unsatisfied: len(p1.Unsatisfied),
+	}
+	// M73: Phase 3 also emits Delete (idle release) actions; this probe
+	// is about reclaim attribution, so it counts Reclaims only.
+	for i := range p3.Actions {
+		if p3.Actions[i].Kind == decision.ActionKindReclaim {
+			pa.p3Reclaim++
+		}
 	}
 	for i := range demand {
 		if _, ok := occ.SameRequirementKey(demand[i].Profile); ok {
@@ -1161,6 +1184,9 @@ func collectPhaseAttribution(snap *inventory.Snapshot, demand []needs.Need, p1 d
 		}
 	}
 	for _, a := range p3.Actions {
+		if a.Kind != decision.ActionKindReclaim {
+			continue
+		}
 		m, ok := snap.Get(a.MachineID)
 		if !ok {
 			continue

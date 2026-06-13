@@ -2,13 +2,16 @@ package decision
 
 import (
 	"sort"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/inventory"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 )
 
 // Phase3Result is the output of a Phase 3 pass: Reclaim actions for
-// the Configured machines a cluster holds in excess of its demand.
+// the Configured machines a cluster holds in excess of its demand,
+// plus Delete actions for the unclaimed Idle machines whose
+// per-CapacityType hold has expired (the §8 release half, M73).
 type Phase3Result struct {
 	Actions []Action
 }
@@ -59,7 +62,19 @@ func AlwaysReady(machine.ClusterID) bool { return true }
 // keep-priority tail, in the paper-§8 release order. The grace rides
 // the ReclaimInstruction to the operator, which bounds the cordon +
 // PDB-respecting eviction with it (ADR-0009 / M69).
-func Phase3(snap *inventory.Snapshot, claimed map[machine.ID]struct{}, clusterReady ClusterReadyFn) Phase3Result {
+//
+// The second walk is §8's other half (M73 / ADR-0049): "Idle →
+// Speculative lazily per provider". An Idle machine that this cycle's
+// claimed-set did not count toward any Need — so Phase 1 is not about
+// to bootstrap it — and that has sat Idle past its CapacityType's hold
+// (policy, measured from the snapshot's IdleSince stamp against now)
+// gets a Delete. The ADR-0036 cluster gate deliberately does NOT apply
+// here: an Idle machine is bound to no cluster and counts for nothing
+// (ADR-0045), so releasing it can never take capacity from anyone —
+// the hold window plus the restart-resets-the-clock stamp semantics
+// are the protection, and the worst case of a wrong release is one
+// re-buy, not a workload death. A zero-value policy releases nothing.
+func Phase3(snap *inventory.Snapshot, claimed map[machine.ID]struct{}, clusterReady ClusterReadyFn, policy ReleasePolicy, now time.Time) Phase3Result {
 	out := Phase3Result{}
 
 	for _, cluster := range clustersWithConfigured(snap) {
@@ -84,6 +99,35 @@ func Phase3(snap *inventory.Snapshot, claimed map[machine.ID]struct{}, clusterRe
 				Reason:      "phase3.excess",
 			})
 		}
+	}
+
+	// §8 release walk (M73). Emission order is the snapshot's
+	// deterministic ID order; no intra-cycle ordering matters because
+	// every expired machine releases this cycle — the hold window, not
+	// a cap, is what spreads releases over time (ADR-0049).
+	for _, m := range snap.ListByState(machine.StateIdle) {
+		if _, kept := claimed[m.ID]; kept {
+			continue
+		}
+		hold, releasable := policy.Hold(m.Profile.CapacityType)
+		if !releasable {
+			continue
+		}
+		since, ok := snap.IdleSince(m.ID)
+		if !ok {
+			// No stamp = hold. Defensive: every inventory write path
+			// stamps Idle entries, but an unstamped machine must err
+			// toward a delayed release, never a premature delete.
+			continue
+		}
+		if now.Sub(since) < hold {
+			continue
+		}
+		out.Actions = append(out.Actions, Action{
+			Kind:      ActionKindDelete,
+			MachineID: m.ID,
+			Reason:    "phase3.release",
+		})
 	}
 
 	return out
