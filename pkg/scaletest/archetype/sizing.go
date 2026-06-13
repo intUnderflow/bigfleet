@@ -1,11 +1,13 @@
 // Seed sizing (ADR-0044): seed machine pools are sized by machine
 // demand, not workload weight. Archetype.Weight is workload-object
-// frequency; machine demand per pod differs by ~density× between
-// cpu-shaped archetypes (which pack `density` Pods per machine) and
-// extended-resource archetypes (which pack exactly one, per M66.2 —
-// device counts do not scale with density). The share math lives here,
-// next to the catalog types, so the shard's seed and the runner's
-// effective-total computation cannot drift.
+// frequency; machine demand per pod differs by the archetype's
+// node-packing density (PodsPerMachine): a cpu-shaped archetype packs
+// ~`density` Pods per machine, a whole-machine training node packs one.
+// ADR-0050 makes this per-archetype (PodsPerNode) rather than the
+// M66.2 "core scales / extended is always 1" special case — see
+// PodsPerMachine. The share math lives here, next to the catalog types,
+// so the shard's seed and the runner's effective-total computation
+// cannot drift.
 //
 // The service-size replica distribution also lives here (moved from
 // the load-driver's package main, ADR-0044 §2): demand generation and
@@ -148,12 +150,24 @@ func bucketMeanCapped(lo, hi, maxN int) float64 {
 }
 
 // PodsPerMachine returns how many of the archetype's Pods one seeded
-// machine hosts: `density` when the archetype requests only core
-// (compressible) resources, 1 when any size bucket requests an
-// extended resource. Device counts do not scale with density (M66.2),
-// so a whole machine goes to each extended-resource Pod — the packing
-// asymmetry ADR-0044's machine shares exist to model.
+// machine hosts.
+//
+// ADR-0050: a per-archetype PodsPerNode is the node-packing density and
+// wins outright when set — it is the explicit "this many of my Pods fit
+// on a node of my class," for GPU shapes as much as CPU ones (an 8-GPU
+// inference node holds 8 gpu:1 Pods → PodsPerNode 8; a whole-machine
+// training node holds 1 gpu:8 Pod → PodsPerNode 1).
+//
+// When PodsPerNode is unset, fall back to M66.2's model: `density` for
+// core-only (compressible) shapes, 1 when any size bucket requests an
+// extended resource (device counts don't scale with density, so a whole
+// machine goes to each extended-resource Pod). This preserves today's
+// behaviour for any archetype that doesn't opt into ADR-0050's
+// per-archetype density.
 func PodsPerMachine(a *Archetype, density int) int {
+	if a.PodsPerNode > 0 {
+		return a.PodsPerNode
+	}
 	maps := []map[string]string{a.Resources}
 	if len(a.SizeBuckets) > 0 {
 		// PickSize ignores the flat Resources map when buckets exist.
@@ -173,6 +187,27 @@ func PodsPerMachine(a *Archetype, density int) int {
 		return 1
 	}
 	return density
+}
+
+// SeedScale returns how the seed should build one machine's Allocatable
+// for this archetype: the per-machine packing factor and whether
+// extended (device) resources scale by it (ADR-0050).
+//
+//   - factor is PodsPerMachine — the number of this archetype's Pods one
+//     node holds.
+//   - scaleExtended is true ONLY when the archetype set PodsPerNode. That
+//     opts it into ADR-0050's node-packing model, where the seed machine
+//     = per-Pod resources × PodsPerNode for ALL resources including GPU
+//     (gpu:1 × 8 = an 8-GPU node hosting 8 inference Pods). Archetypes
+//     that DON'T set PodsPerNode keep M66.2's rule — core resources
+//     scale by `density`, extended resources never scale — so the seed
+//     for an un-densified GPU shape stays a whole-machine 1-Pod node.
+//
+// The two callers (the shard's three seed tiers and the closed-loop sim
+// share this so demand-side packing and seed-side Allocatable can't
+// drift; the share math lives next to the catalog types on purpose).
+func SeedScale(a *Archetype, density int) (factor int, scaleExtended bool) {
+	return PodsPerMachine(a, density), a.PodsPerNode > 0
 }
 
 // podShare returns the unnormalised pod-demand share of one archetype

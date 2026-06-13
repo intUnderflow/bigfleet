@@ -84,6 +84,20 @@ type Archetype struct {
 	// cluster instead of one per archetype).
 	SizeBuckets []SizeBucket `yaml:"sizeBuckets"`
 
+	// PodsPerNode (ADR-0050) — how many of this archetype's Pods a real
+	// node of its class holds. This is the per-archetype node-packing
+	// density that supersedes M66.2's "GPU=1 always": the seed machine =
+	// per-Pod resources × PodsPerNode for ALL resources, GPU included
+	// (an 8-GPU inference node holds 8 gpu:1 Pods → seed gpu:8; a
+	// whole-machine training node holds 1 gpu:8 Pod → seed gpu:8). Unset
+	// / 0 falls back to the global seed density for core-only shapes and
+	// 1 for any extended-resource shape — exactly M66.2's behaviour, so
+	// archetypes that don't set it are unchanged. PodsPerMachine /
+	// MachinesForPods / scaleResourceMap all read it (see sizing.go
+	// SeedScale). ADR-0050 calibrates the realism catalog to a realistic
+	// *machine* fleet by setting this per tier.
+	PodsPerNode int `yaml:"podsPerNode"`
+
 	// MeanLifetimeSeconds (ADR-0015 §2) — exponential-mean CR
 	// lifetime. 0 = effectively immortal (long-running services);
 	// the load-driver doesn't age these. Short-lived archetypes
@@ -233,6 +247,9 @@ func validateArchetypes(field string, arches []Archetype) error {
 		}
 		if a.Weight < 0 {
 			return fmt.Errorf("%s[%d] %q: weight must be ≥ 0", field, i, a.Name)
+		}
+		if a.PodsPerNode < 0 {
+			return fmt.Errorf("%s[%d] %q: podsPerNode must be ≥ 0 (0 = fall back to global density / 1 for extended-resource shapes, ADR-0050)", field, i, a.Name)
 		}
 		if a.SpreadConstraintProb < 0 || a.SpreadConstraintProb > 1 {
 			return fmt.Errorf("%s[%d] %q: spreadConstraintProb must be in [0, 1]", field, i, a.Name)

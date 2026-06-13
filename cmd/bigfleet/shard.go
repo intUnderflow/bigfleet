@@ -163,21 +163,29 @@ func parseStatefulSetOrdinal(podName string) (int, error) {
 // k8s resource.Quantity arithmetic so the canonical-string format the
 // rest of the system expects is preserved. factor <= 1 returns a
 // shallow copy unchanged (preserves the pre-ADR-0022 1:1 behaviour).
-func scaleResourceMap(in map[string]string, factor int) map[string]string {
+//
+// scaleExtended (ADR-0050) decides whether extended (device) resources —
+// nvidia.com/gpu above all — scale by `factor`:
+//   - false: M66.2's rule. Only the compressible core resources scale;
+//     extended resources are physical device counts left untouched. A
+//     density-100 seed multiplying gpu:8 → gpu:800 manufactured machines
+//     no hardware resembles, perturbed ADR-0041's snapshot-dependent
+//     foldability, and contradicted the cloud harness's ~8-GPU nodes.
+//     This is the path for the legacy no-catalog seed and for any
+//     archetype that doesn't set podsPerNode.
+//   - true: ADR-0050's node-packing model. The factor IS the archetype's
+//     PodsPerNode — how many of its Pods one real node of its class holds
+//     — so EVERY resource including GPU scales by it. gpu:1 × 8 = an
+//     8-GPU inference node hosting 8 Pods; gpu:8 × 1 = a whole-machine
+//     training node hosting 1 Pod. The M66.2 phantom-GPU problem can't
+//     return: the factor is the real node packing (1 or 8), never 100.
+func scaleResourceMap(in map[string]string, factor int, scaleExtended bool) map[string]string {
 	if len(in) == 0 || factor <= 1 {
 		return cloneResourceMap(in)
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
-		// M66.2 (complexity audit Action 2): only the compressible
-		// core resources scale with density. Extended resources —
-		// nvidia.com/gpu above all — are physical device counts: a
-		// density-100 seed multiplying gpu:8 to gpu:800 manufactured
-		// machines no hardware resembles, silently perturbed
-		// ADR-0041's snapshot-dependent foldability (gang aggregates
-		// "fit" phantom capacity), and contradicted the cloud
-		// harness's empirically ~8-GPU nodes.
-		if k != "cpu" && k != "memory" && k != "ephemeral-storage" {
+		if !scaleExtended && k != "cpu" && k != "memory" && k != "ephemeral-storage" {
 			out[k] = v
 			continue
 		}
@@ -303,14 +311,18 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	const idleRacksPerZone = 10
 	idleRackCounters := map[string]int{}
 	idleSeeded := 0
-	addIdle := func(profile machine.Profile) {
+	// factor/scaleExtended come from archetype.SeedScale (ADR-0050): the
+	// per-archetype PodsPerNode packing and whether device resources
+	// scale by it. The legacy no-catalog path passes (densityMultiplier,
+	// false) — M66.2's core-only scaling, unchanged.
+	addIdle := func(profile machine.Profile, factor int, scaleExtended bool) {
 		id := machine.ID("idle-" + strconv.Itoa(idleSeeded))
 		prov.AddIdle(id, profile, machine.CapacityTypeBareMetal, 0, 0)
-		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
+		// ADR-0022 / M45.4: Allocatable = factor × per-replica
 		// Profile.Resources. EffectiveAllocatable() falls back to
-		// Profile.Resources when this is nil, so densityMultiplier ≤ 1
+		// Profile.Resources when this is nil, so factor ≤ 1
 		// is a no-op (preserves pre-ADR-0022 1 Pod = 1 machine math).
-		allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+		allocatable := scaleResourceMap(profile.Resources, factor, scaleExtended)
 		prov.SetAllocatable(id, allocatable)
 		_ = sh.SeedInventory(machine.Machine{
 			ID:          id,
@@ -327,6 +339,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		}
 		for ai := range archetypes {
 			a := &archetypes[ai]
+			factor, scaleExtended := archetype.SeedScale(a, densityMultiplier)
 			for n := 0; n < alloc[ai]; n++ {
 				it := a.InstanceTypes[idleSeeded%len(a.InstanceTypes)]
 				z, rack := seedZoneRack(a, idleRackCounters[a.Name], idleRacksPerZone, a.Zones)
@@ -343,7 +356,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					CapacityType: machine.CapacityTypeBareMetal,
 					Resources:    a.PickSize(idleRng),
 					Labels:       labels,
-				})
+				}, factor, scaleExtended)
 			}
 		}
 	} else {
@@ -358,7 +371,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 				Labels: map[string]string{
 					"topology.bigfleet/rack": rack,
 				},
-			})
+			}, densityMultiplier, false)
 		}
 	}
 
@@ -387,13 +400,13 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 	specRng := rand.New(rand.NewSource(int64(shardOrdinal) + 31))
 	specRackCounters := map[string]int{}
 	specSeeded := 0
-	addSpeculative := func(profile machine.Profile) {
+	addSpeculative := func(profile machine.Profile, factor int, scaleExtended bool) {
 		id := machine.ID("spec-" + strconv.Itoa(specSeeded))
 		prov.AddSpeculative(id, profile, machine.CapacityTypeOnDemand, specPricePerHour, specInterruptProb)
-		// ADR-0022 / M45.4: Allocatable = densityMultiplier × per-replica
+		// ADR-0022 / M45.4: Allocatable = factor × per-replica
 		// Profile.Resources, same as the Idle seed — a realized
 		// Speculative slot becomes an Idle machine of this density.
-		allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+		allocatable := scaleResourceMap(profile.Resources, factor, scaleExtended)
 		prov.SetAllocatable(id, allocatable)
 		_ = sh.SeedInventory(machine.Machine{
 			ID:                      id,
@@ -414,6 +427,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		}
 		for ai := range specArches {
 			a := &specArches[ai]
+			factor, scaleExtended := archetype.SeedScale(a, densityMultiplier)
 			for n := 0; n < alloc[ai]; n++ {
 				it := a.InstanceTypes[specSeeded%len(a.InstanceTypes)]
 				z, rack := seedZoneRack(a, specRackCounters[a.Name], specRacksPerZone, a.Zones)
@@ -436,7 +450,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					CapacityType: machine.CapacityTypeOnDemand,
 					Resources:    a.PickSize(specRng),
 					Labels:       labels,
-				})
+				}, factor, scaleExtended)
 			}
 		}
 	} else {
@@ -451,7 +465,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 				Labels: map[string]string{
 					"topology.bigfleet/rack": rack,
 				},
-			})
+			}, densityMultiplier, false)
 		}
 	}
 
@@ -495,11 +509,11 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		for c := shardOrdinal; c < totalClusters; c += clusterStride {
 			cluster := machine.ClusterID("kwok-cluster-" + strconv.Itoa(c))
 			perCluster := 0
-			addConfigured := func(profile machine.Profile, assignedPriority int32, interruptionPenalty, reclamationPenalty float64) {
+			addConfigured := func(profile machine.Profile, assignedPriority int32, interruptionPenalty, reclamationPenalty float64, factor int, scaleExtended bool) {
 				id := machine.ID(fmt.Sprintf("conf-s%d-c%d-i%d", shardOrdinal, c, perCluster))
 				prov.AddConfigured(id, profile, machine.CapacityTypeBareMetal, 0, 0, cluster, assignedPriority, interruptionPenalty, reclamationPenalty)
 				// ADR-0022 / M45.4: see Idle seed comment above.
-				allocatable := scaleResourceMap(profile.Resources, densityMultiplier)
+				allocatable := scaleResourceMap(profile.Resources, factor, scaleExtended)
 				prov.SetAllocatable(id, allocatable)
 				_ = sh.SeedInventory(machine.Machine{
 					ID:                                 id,
@@ -518,6 +532,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 			if len(archetypes) > 0 {
 				for ai := range archetypes {
 					a := &archetypes[ai]
+					factor, scaleExtended := archetype.SeedScale(a, densityMultiplier)
 					for n := 0; n < confAlloc[ai]; n++ {
 						it := a.InstanceTypes[idx%len(a.InstanceTypes)]
 						z, rackName := seedZoneRack(a, rackCounters[a.Name], racksPerZone, a.Zones)
@@ -552,7 +567,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 							CapacityType: machine.CapacityTypeBareMetal,
 							Resources:    machineResources,
 							Labels:       labels,
-						}, a.MaxPriority(), a.InterruptionPenalty, a.ReclamationPenalty)
+						}, a.MaxPriority(), a.InterruptionPenalty, a.ReclamationPenalty, factor, scaleExtended)
 					}
 				}
 			} else {
@@ -563,7 +578,7 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 						Zone:         zones[idx%len(zones)],
 						CapacityType: machine.CapacityTypeBareMetal,
 						Resources:    resources[it],
-					}, 1000000, 8192, 65536)
+					}, 1000000, 8192, 65536, densityMultiplier, false)
 				}
 			}
 		}

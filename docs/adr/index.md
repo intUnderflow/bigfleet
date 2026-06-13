@@ -56,3 +56,4 @@
 | [47](/adr/0047-coordinator-raft-join-and-offline-restore/) | Accepted | Coordinator quorum formation by ordinal join; offline snapshot restore as single-voter recovery |
 | [48](/adr/0048-mtls-and-uri-san-identity/) | Accepted | Opt-in file-based mTLS with bigfleet:// URI SAN identity binding — supersedes ADR-0008's transport posture |
 | [49](/adr/0049-idle-speculative-release-hold-window/) | Accepted | Idle→Speculative release (paper §8's other half) — per-CapacityType idle holds inside Phase 3; the hold window is the rail, not a cap |
+| [50](/adr/0050-realism-catalog-is-machine-calibrated/) | Accepted | Realism catalog (realistic.yaml) calibrated to a realistic MACHINE fleet via per-archetype node-packing density; GPU inference densified (8/node), training whole-machine (1); amends M66.2 + ADR-0044 (author decision) |

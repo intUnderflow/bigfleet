@@ -1,4 +1,57 @@
 # Production-realistic workload archetypes for the scaletest harness.
+#
+# ADR-0050: this catalog is calibrated to a realistic MACHINE fleet, not
+# a realistic pod-count distribution. BigFleet allocates machines; the
+# cloud realism baseline (M78) measures machine-allocation SLOs, so the
+# fleet's *machine* mix is the calibration target and the pod-count
+# distribution is now a DERIVED property. The reason a pod-realistic
+# catalog can't double as machine-realistic: for a whole-machine GPU
+# gang, pod-share IS machine-share (1 pod/node), while commodity pods
+# pack ~100/node — a 100x spread that means a realistic ~7% GPU *pod*
+# share mechanically implies a ~90% GPU *machine* fleet, which no
+# production fleet resembles. See the ADR for the full derivation.
+#
+# Weights are back-solved from a target machine mix:
+#     weight  proportional to  machineShare x podsPerNode / E[replicas]
+# where podsPerNode is the per-archetype node-packing density (the
+# podsPerNode field, ADR-0050) and E[replicas] is the mean workload-
+# object size (21.375 for non-gang from the service-size distribution in
+# pkg/scaletest/archetype/sizing.go; mean(groupSizeRange) for gangs).
+# The spread is large by construction (tiny-stateless ~16000 :
+# gpu-training-large 1) — that is expected, not a bug: a whole-machine
+# gang needs a tiny object frequency to occupy a few percent of the
+# fleet. The chosen normalization keeps gpu-training-medium and
+# gpu-training-large representable as positive integers (large = 1, its
+# coarsest representable weight).
+#
+# Target machine mix vs realized (the regression pin
+# TestRealisticCatalog_MachineMix in pkg/scaletest/archetype asserts the
+# realized column stays within tolerance of target):
+#
+#   archetype             podsPerNode  weight   target%   realized%
+#   tiny-stateless           100       16073     64.5       64.5
+#   cpu-service              100        2755      11.1       11.1
+#   cpu-batch                100        1378       5.5        5.5
+#   critical-realtime        100         230       0.9        0.9
+#   memory-cache             100        2000       1.5        1.5
+#   stateful-db              100        2000       1.5        1.5
+#   gpu-inference              8         100       5.0        5.0
+#   gpu-training-small         1          32       3.0        3.0
+#   gpu-training-medium        1          18       4.0        4.05
+#   gpu-training-large         1           1       3.0        3.0
+#   ----------------------------------------------------------------
+#   general compute (tiny+service+batch+critical) ~82%; gang DBs ~3%;
+#   GPU (inference + training) ~15% machine-share. The DERIVED pod mix
+#   that falls out is ~75% tiny-stateless and <1% GPU pods — the
+#   ADR-0050 divergence made concrete.
+#
+# gpu-training-large is the lumpy term (ADR-0050 Consequences): at ~3%
+# machine-share and a 64-256-machine gang, its expected count in a
+# 5,000-machine fleet is ~1 gang, so a probabilistic weighted draw gives
+# 0/1/2 gangs (~+/-100% variance, bimodal baseline). Included here at
+# weight 1; the open follow-up is to move it to a burst/event scenario
+# and keep it out of the steady baseline.
+#
 # Calibrated against industry production workload patterns: bottom-
 # heavy long tail of tiny stateless services, smaller "interesting"
 # tier of GPU / stateful / critical work.
@@ -43,7 +96,17 @@
 #
 # Schema (per-archetype):
 #   name                  : human-readable label
-#   weight                : relative fleet frequency by Pod count
+#   weight                : relative workload-object frequency. NOT a
+#                           machine-share and NOT a pod-share directly;
+#                           back-solved from the target machine mix per
+#                           ADR-0050 (see the table above).
+#   podsPerNode           : ADR-0050 node-packing density — how many of
+#                           this archetype's Pods one real node of its
+#                           class holds. The seed machine = per-Pod
+#                           resources x podsPerNode for ALL resources
+#                           (GPU included). Unset/0 falls back to the
+#                           global density for core-only shapes and 1 for
+#                           extended-resource shapes (pre-ADR-0050).
 #   instanceTypes         : `node.kubernetes.io/instance-type In [...]`
 #   zones                 : `topology.kubernetes.io/zone In [...]`
 #   sizeBuckets           : per-CR resources picked weighted-random.
@@ -76,7 +139,10 @@ archetypes:
   # spread-from-template templates apply zone-spread to ~45% of
   # them — best-effort spread, since these are commodity replicas.
   - name: tiny-stateless
-    weight: 70
+    # ADR-0050: podsPerNode unset → global density (100). weight
+    # back-solved for ~64.5% machine-share (82% general-compute split
+    # 70:12:6:1 across the four cpu archetypes).
+    weight: 16073
     instanceTypes: [m6i.large, m6i.xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -98,7 +164,8 @@ archetypes:
   # the overhead is a smaller relative bump on a 2-CPU app container.
   # Spread on 75% — most production services explicitly spread for HA.
   - name: cpu-service
-    weight: 12
+    # ADR-0050: podsPerNode unset → global density (100). ~11.1% share.
+    weight: 2755
     instanceTypes: [m6i.xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -120,7 +187,8 @@ archetypes:
   # no sidecar inflation on their resource shape. Only ~15% carry
   # spread; most batch is spread-tolerant.
   - name: cpu-batch
-    weight: 6
+    # ADR-0050: podsPerNode unset → global density (100). ~5.5% share.
+    weight: 1378
     instanceTypes: [c6i.4xlarge, c6i.8xlarge, n2-standard-32]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -143,7 +211,10 @@ archetypes:
   # allowPartial: true. Spread is N/A because Same(rack) and
   # zone-spread on the same key are contradictory per bigfleet.md §8.
   - name: memory-cache
-    weight: 3
+    # ADR-0050: podsPerNode unset → global density (100); density-packed
+    # cpu/mem gang. weight back-solved for ~1.5% machine-share (E =
+    # mean(groupSizeRange) = 4).
+    weight: 2000
     instanceTypes: [r6i.xlarge, r6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -163,7 +234,9 @@ archetypes:
   # operator picks different anchor racks per shard during emission;
   # we don't model that here, see scale-test follow-on.)
   - name: stateful-db
-    weight: 3
+    # ADR-0050: podsPerNode unset → global density (100); ~1.5% share
+    # (E = mean(groupSizeRange) = 4).
+    weight: 2000
     instanceTypes: [r6i.2xlarge, r6i.4xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -180,9 +253,20 @@ archetypes:
   # Latency-sensitive single-GPU inference servers. Long-lived. ~50%
   # carry zone-spread (replicas distributed for capacity-zone
   # resilience).
+  #
+  # ADR-0050: podsPerNode 8 — gpu:1 inference Pods packed onto an 8-GPU
+  # node (MIG / time-slice / multi-GPU box). The seed machine becomes
+  # gpu:8, cpu:64, mem:256 (8 x the per-Pod shape, GPU scaled too). This
+  # is the ONE GPU tier where pod-realism and machine-realism reconcile:
+  # a realistic inference pod-share maps to 1/8 the machines. instanceTypes
+  # are therefore 8-GPU nodes (a3/a2-highgpu-8g) — the previous 1-GPU
+  # nodes (a3/a2-highgpu-1g, 1 Pod/node) were the un-densified model this
+  # replaces, which forced ~1 machine per inference Pod and inflated the
+  # GPU machine-share.
   - name: gpu-inference
-    weight: 2
-    instanceTypes: [a3-highgpu-1g, a2-highgpu-1g]
+    weight: 100
+    podsPerNode: 8
+    instanceTypes: [a3-highgpu-8g, a2-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
       - { weight: 100, resources: { cpu: "8", memory: "32Gi", nvidia.com/gpu: "1" } }
@@ -201,7 +285,12 @@ archetypes:
   # 2-8 GPUs is the dominant gang size for ad-hoc training. Not
   # marked allowPartial: partial fills break gang scheduling.
   - name: gpu-training-small
-    weight: 2
+    # ADR-0050: podsPerNode 1 — a gpu:8 Pod takes a whole 8-GPU node
+    # (node = the Pod). Genuinely whole-machine: pod-share IS
+    # machine-share, so calibrated in machine terms. ~3% machine-share
+    # (E = mean(groupSizeRange) = 5).
+    weight: 32
+    podsPerNode: 1
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -222,7 +311,10 @@ archetypes:
   # gpu-training-large). Still disproportionate OCC conflict impact:
   # one single-machine conflict aborts the whole proposal.
   - name: gpu-training-medium
-    weight: 2  # rounded from 1.5%
+    # ADR-0050: podsPerNode 1 — whole-machine gang, ~4% machine-share
+    # (E = mean(groupSizeRange) = 12).
+    weight: 18
+    podsPerNode: 1
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -245,7 +337,14 @@ archetypes:
   # structurally-unsatisfiable gang population behind the ADR-0042
   # layer (complexity audit §3 pool 2).
   - name: gpu-training-large
-    weight: 1  # rounded from 0.3%; minimum representable at integer weights
+    # ADR-0050: podsPerNode 1 — whole-machine gang. Target ~3%
+    # machine-share, but at a 64-256-machine gang that is ~1 concurrent
+    # gang in a 5,000-machine fleet, so weight 1 (its coarsest integer)
+    # realizes a high-variance, bimodal share (0/1/2 gangs). Known
+    # follow-up: move large foundation-training to a burst/event
+    # scenario and drop it from the steady baseline.
+    weight: 1
+    podsPerNode: 1
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
@@ -261,7 +360,9 @@ archetypes:
   # Top priority — control plane, telemetry hot path, safety-critical
   # services. Always carries strict zone-spread (HA-critical).
   - name: critical-realtime
-    weight: 1  # rounded from 0.2%; minimum representable
+    # ADR-0050: podsPerNode unset → global density (100). ~0.9% share
+    # (the "1" slice of the 70:12:6:1 general-compute split).
+    weight: 230
     instanceTypes: [c6i.4xlarge, m6i.2xlarge]
     zones: [zone-a, zone-b, zone-c]
     sizeBuckets:
