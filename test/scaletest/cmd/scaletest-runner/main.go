@@ -64,6 +64,10 @@ type profileFile struct {
 	LoadProfile struct {
 		Target          int `yaml:"target"`
 		DurationSeconds int `yaml:"durationSeconds"`
+		// SettleSeconds is the runtime view of profileV2.LoadProfile.
+		// SettleSeconds, copied across in the merge path. See the doc
+		// comment on the profileV2 field for semantics.
+		SettleSeconds int `yaml:"settleSeconds"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the ramp-to-steady-state deadline. Format
 	// is any time.ParseDuration string ("30m", "1h45m"). Empty / unset
@@ -102,6 +106,14 @@ type sloOverrides struct {
 	ShardCycleDurationP99Seconds     float64 `yaml:"shardCycleDurationP99Seconds"`
 	OperatorRollupP99Seconds         float64 `yaml:"operatorRollupP99Seconds"`
 	OperatorAckP99Seconds            float64 `yaml:"operatorAckP99Seconds"`
+	// MaxReclaimActionsDuringSoak bounds the Reclaim-action count over
+	// the measured soak window (V2 runs only). Default 0 preserves the
+	// original "zero reclaims" assertion. A positive value accepts the
+	// engine's structurally non-zero endogenous async-actuation reclaim
+	// floor (bigfleet-uber #65-69), which is proven coverage-harmless;
+	// a regression (sustained high churn, far above the bound) still
+	// trips. Author-owned posture number, like ReclaimGrace.
+	MaxReclaimActionsDuringSoak int `yaml:"maxReclaimActionsDuringSoak"`
 }
 
 type runnerAction struct {
@@ -203,6 +215,20 @@ type profileV2 struct {
 		RampSeconds    int     `yaml:"rampSeconds"`
 		SoakSeconds    int     `yaml:"soakSeconds"`
 		ChurnPerMinute float64 `yaml:"churnPerMinute"`
+		// SettleSeconds delays the start of the reclaim-action
+		// measurement window by this many seconds after soakStart, so
+		// the window covers the SETTLED portion of the soak rather than
+		// the post-fill settling transient. The fleet keeps actuating
+		// for 1-2 min after "steady declared" (ADR-0021 async execute);
+		// that decaying tail dominates a full-soak integral and inflates
+		// the reclaim count even though steady-state churn is much lower
+		// (bigfleet-uber #65-69). Only the reclaim baseline snapshot
+		// moves; bind-latency / cycle / rollup SLOs are unaffected.
+		// Default 0 = snapshot at soakStart (current behaviour, every
+		// other profile unchanged). Guard: a value ≥ soakSeconds falls
+		// back to the soakStart snapshot so a misconfig can't leave the
+		// window empty.
+		SettleSeconds int `yaml:"settleSeconds"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the rampSeconds-derived deadline. Same
 	// semantics as profileFile.RampBudget (M22). Empty → use
@@ -708,6 +734,7 @@ func run(args []string) error {
 		prof.KWOK.ClusterCount = cfg.ClusterCount
 		prof.LoadProfile.Target = cfg.PodsPerCluster
 		prof.LoadProfile.DurationSeconds = pv2.LoadProfile.SoakSeconds
+		prof.LoadProfile.SettleSeconds = pv2.LoadProfile.SettleSeconds
 		prof.RampBudget = pv2.RampBudget
 		prof.RunnerActions = pv2.RunnerActions
 		prof.SLO = pv2.SLO
@@ -856,14 +883,33 @@ func run(args []string) error {
 	}
 	fmt.Fprintln(os.Stderr, "steady state reached; soaking", duration)
 
-	// M77a / ADR-0045 steady-window health: at steady demand Phase 3 is
-	// inert, so the Reclaim action counter must be flat across the soak.
-	// Snapshot it here; the post-soak delta is a gated failing condition
-	// on V2 runs (reclaim churn at steady demand is exactly the defect
-	// class the M67 engine work removed — a non-zero delta is a
-	// regression, not noise).
+	// M77a / ADR-0045 steady-window health: the Reclaim action counter is
+	// measured across the soak; the post-soak delta is a gated failing
+	// condition on V2 runs. The engine has a structurally non-zero
+	// endogenous async-actuation reclaim floor (ADR-0021 async execute,
+	// proven coverage-harmless in bigfleet-uber #65-69), so the gate is
+	// bounded-reclaim (CHANGE 2 below), not zero. The fleet also keeps
+	// settling 1-2 min after "steady declared", and that decaying tail
+	// inflates a full-soak integral; loadProfile.settleSeconds delays the
+	// baseline snapshot so the measured window is the SETTLED portion of
+	// the soak (de-tail). Default 0 = snapshot here at soakStart (every
+	// other profile unchanged). When set, the snapshot is taken later via
+	// the one-shot settle timer in the soak select-loop below.
+	//
+	// settleActive is gated on a sane configuration: settle > 0 and
+	// strictly less than the soak duration. A settle ≥ soak would leave
+	// the window empty/unmeasured, so we clamp to the soakStart snapshot
+	// and warn (a misconfig must not silently disable the gate).
+	settleDelay := time.Duration(prof.LoadProfile.SettleSeconds) * time.Second
+	settleActive := mergedActive && settleDelay > 0 && settleDelay < *duration
+	if mergedActive && settleDelay > 0 && !settleActive {
+		fmt.Fprintf(os.Stderr,
+			"WARNING: loadProfile.settleSeconds %s ≥ soak duration %s — "+
+				"reclaim window would be empty; falling back to soakStart snapshot\n",
+			settleDelay, *duration)
+	}
 	reclaimsAtSteady := -1
-	if mergedActive {
+	if mergedActive && !settleActive {
 		reclaimsAtSteady = readReclaimActions(ctx, *kubeconfig, namespace)
 	}
 
@@ -916,6 +962,19 @@ func run(args []string) error {
 	failFastDelay := 10 * time.Minute
 	failFastTimer := time.NewTimer(failFastDelay)
 	failFastFired := false
+	// De-tail (CHANGE 1): when settleActive, snapshot the reclaim
+	// baseline at soakStart+settleDelay instead of pre-soak, so the
+	// measured window is the SETTLED tail of the soak. One-shot: the
+	// channel is nil when inactive, which makes its select case block
+	// forever (never selected) — the standard nil-channel idiom. The
+	// snapshot runs on the main soak goroutine (no concurrent writer to
+	// reclaimsAtSteady), so a plain assignment is race-free.
+	var settleTimerC <-chan time.Time
+	if settleActive {
+		settleTimer := time.NewTimer(settleDelay)
+		defer settleTimer.Stop()
+		settleTimerC = settleTimer.C
+	}
 loop:
 	for {
 		select {
@@ -924,6 +983,15 @@ loop:
 				<-failFastTimer.C
 			}
 			break loop
+		case <-settleTimerC:
+			// Settle mark reached: take the baseline now. The post-soak
+			// delta then covers only the settled window. A failed read
+			// leaves the -1 sentinel, surfaced via unmeasuredGated.
+			settleTimerC = nil // one-shot
+			reclaimsAtSteady = readReclaimActions(ctx, *kubeconfig, namespace)
+			fmt.Fprintf(os.Stderr,
+				"reclaim baseline snapshot taken at settle mark (+%s into soak); "+
+					"measuring the settled window\n", settleDelay)
 		case <-failFastTimer.C:
 			failFastFired = true
 			ok, reason := soakFailFastCheck(ctx, *kubeconfig, namespace, prof.SLO)
@@ -955,12 +1023,16 @@ loop:
 	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 2*time.Minute)
 	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace, *duration)
 	if mergedActive {
-		// Reclaim flatness over the steady window (M77a / ADR-0045).
-		// Raw counter delta, not a rate window: the assertion is
-		// "exactly zero", and rate() extrapolation can both invent and
-		// hide single-digit increments. -1 = unmeasured (one of the two
-		// reads failed); surfaced via unmeasuredGated, not silently
-		// passed.
+		// Reclaim count over the steady window (M77a / ADR-0045).
+		// Raw counter delta, not a rate window: rate()/increase()
+		// extrapolation can both invent and hide single-digit
+		// increments, so we read the absolute counter at the baseline
+		// (soakStart, or the settle mark when settleSeconds is set —
+		// CHANGE 1) and again here at end, and subtract. -1 =
+		// unmeasured (a read failed, or the soak ended before the
+		// settle mark fired); surfaced via unmeasuredGated, not
+		// silently passed. The bound is applied in the assertion below
+		// (CHANGE 2).
 		reclaimsAtEnd := readReclaimActions(metricsCtx, *kubeconfig, namespace)
 		if reclaimsAtSteady >= 0 && reclaimsAtEnd >= 0 {
 			metrics["reclaimActionsDuringSoak"] = float64(reclaimsAtEnd - reclaimsAtSteady)
@@ -1004,15 +1076,31 @@ loop:
 			))
 		}
 	}
-	// M77a / ADR-0045: zero reclaim churn at steady demand is a gated
-	// condition on V2 runs. Demand is full-replacement and the soak
-	// holds it constant (churn replaces Pods 1:1), so Phase 3 — now
-	// shrinkage-only — has nothing to do; any Reclaim emitted during
-	// the steady window is the bootstrap≈reclaim oscillation class
-	// resurfacing.
-	if v, ok := metrics["reclaimActionsDuringSoak"]; ok && v > 0 {
+	// M77a / ADR-0045: bounded reclaim churn over the steady window is a
+	// gated condition on V2 runs. The contract is BOUNDED-reclaim, not
+	// zero:
+	//   - Zero is unachievable on the async engine. ADR-0021's async
+	//     execute means the fleet self-perturbs at a structurally
+	//     non-zero rate; bigfleet-uber #65-69 diagnosed this floor as a
+	//     coverage-harmless endogenous self-perturbation (#67), not the
+	//     bootstrap≈reclaim oscillation defect M67 removed, and measured
+	//     it robust at ~340 over a 180s soak un-de-tailed (#69).
+	//   - That ~340 is inflated by the post-fill settling transient: the
+	//     reclaim RATE decays through the soak (1.91/s soak-average vs
+	//     0.52-0.86/s at soak-END), because the gate opens its window at
+	//     "steady declared" while the fleet keeps settling 1-2 min. The
+	//     settle window (CHANGE 1, loadProfile.settleSeconds) removes
+	//     that settling-transient inflation by snapshotting the baseline
+	//     after the fleet has settled.
+	//   - The bound (slo.maxReclaimActionsDuringSoak) accepts the
+	//     residual steady floor. It is still a real gate: a regression —
+	//     the bootstrap≈reclaim oscillation resurfacing as sustained high
+	//     churn, far above the bound — still trips it. Default 0 keeps
+	//     the original zero-reclaim assertion for every other profile.
+	if v, ok := metrics["reclaimActionsDuringSoak"]; ok && v > float64(prof.SLO.MaxReclaimActionsDuringSoak) {
 		res.Failures = append(res.Failures, fmt.Sprintf(
-			"reclaimActionsDuringSoak %.0f > 0 — Phase 3 emitted Reclaims under steady demand (ADR-0045: reclaim follows demand shrinkage only; zero reclaim churn is the M67 contract)", v))
+			"reclaimActionsDuringSoak %.0f > %d — Phase 3 reclaim churn over the steady window exceeded the bound (ADR-0045: reclaim follows demand shrinkage only; the bound accepts the proven async-actuation floor, bigfleet-uber #65-69)",
+			v, prof.SLO.MaxReclaimActionsDuringSoak))
 	}
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas, prof.SLO)
 	res.UnmeasuredSLOs = unmeasuredGated(metrics)

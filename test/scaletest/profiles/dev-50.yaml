@@ -32,8 +32,15 @@
 # covered by bound capacity, NOT pod placement):
 #   - steady state = shard shortfalls == 0 with demand at target and
 #     acquisitions quiescent (waitForSteadyStateV2);
-#   - zero Reclaim actions across the steady window (Phase 3 inert at
-#     steady demand — the M67 contract);
+#   - BOUNDED Reclaim actions across the SETTLED soak window (ADR-0035
+#     amendment): the baseline is snapshotted settleSeconds into the
+#     soak (de-tailing the post-fill settling transient), and the count
+#     is bounded by slo.maxReclaimActionsDuringSoak rather than asserted
+#     zero — zero is unachievable on the async engine (ADR-0021), whose
+#     endogenous async-actuation reclaim floor is proven coverage-
+#     harmless (bigfleet-uber #65-69). A regression — the M67
+#     bootstrap≈reclaim oscillation resurfacing as sustained churn far
+#     above the bound — still trips it;
 #   - the ADR-0035 steady-state SLOs below.
 # Pod-bind progress is reported throughout but never gated: satisfied-
 # but-stuck is the cluster's problem (ADR-0045 §4).
@@ -77,6 +84,15 @@ loadProfile:
   # Short soak: correctness gate. The runner sizes its SLO rate
   # windows to the soak (M60 sloWindow).
   soakSeconds: 180
+  # De-tail the reclaim measurement (ADR-0035 amendment). The fleet
+  # keeps settling 1-2 min after "steady declared" (ADR-0021 async
+  # execute); that decaying post-fill transient dominates a full-soak
+  # reclaim integral. settleSeconds delays the reclaim baseline
+  # snapshot 90s into the 180s soak, so the gate measures the SETTLED
+  # last 90s — steady-state churn, not the settling transient. Only the
+  # reclaim baseline moves; bind-latency / cycle / rollup SLOs are
+  # unaffected. See bigfleet-uber #65-69.
+  settleSeconds: 90
   # Fraction of target per minute: 0.024 × 2,500/cluster = 1 evict/s
   # per cluster, the evict → controller-recreate → re-bind loop the
   # bind-latency SLO measures.
@@ -91,3 +107,14 @@ slo:
   operatorAckP99Seconds: 30
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
+  # Bounded-reclaim gate (ADR-0035 amendment, replaces the zero-reclaim
+  # assertion). Zero reclaims is unachievable on the async engine: the
+  # endogenous async-actuation floor (ADR-0021 async execute) is
+  # structurally non-zero and proven coverage-harmless (bigfleet-uber
+  # #65-69 / #67). PROVISIONAL posture number, AUTHOR-OWNED (like
+  # ReclaimGrace): the de-tailed settled rate is ~0.5-0.86/s, so over
+  # the 90s settled window that is ~45-77 reclaims; 150 is ~2-3× margin,
+  # far below a regression (sustained oscillation churn = thousands).
+  # Re-tune to the actual de-tailed value once the validation re-run
+  # measures it.
+  maxReclaimActionsDuringSoak: 150

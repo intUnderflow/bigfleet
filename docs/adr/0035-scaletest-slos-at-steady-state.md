@@ -130,6 +130,26 @@ None. This ADR changes test methodology; the BigFleet system-under-test contract
 
 The lesson worth landing: **ramp behaviour is not an SLO.** Capacity-exploration metrics and SLO metrics serve different purposes; conflating them produces investigation rabbit holes (M48 → OC3 → #30 → #33 → #34) that don't serve the user.
 
+## Amendment (2026-06-14): reclaim measurement — settle window + bounded floor
+
+M77a added a steady-window reclaim-flatness gate on top of this ADR's per-CR SLOs: snapshot the Reclaim-action counter at "steady declared", and fail the run if the post-soak delta is non-zero (the bootstrap≈reclaim oscillation class M67 / [ADR-0045] removed must not resurface). Two empirical findings from the bigfleet-uber #65-69 diagnosis chain make both the *when* and the *what* of that gate wrong as originally written, and this amendment corrects them. They are the reclaim-side analogue of this ADR's headline lesson — measure the SLO in the regime it is defined for (steady state), not in a transient.
+
+### (a) Measure at steady state, not in the post-fill settling transient
+
+This ADR pre-seeds inventory so the cluster reaches steady state *at install* — but that is steady **demand**, not a settled **fleet**. [ADR-0021]'s persistent execute pool decouples action execution from the cycle barrier, so after "steady declared" the fleet keeps actuating for 1–2 min as in-flight Create/Drain/Delete settle. The reclaim **rate decays through the soak**: #65-69 measured ~1.91 reclaims/s soak-average against 0.52–0.86/s at the soak's *end*. A full-soak integral is dominated by that settling tail, exactly the ramp-vs-steady-state conflation this ADR was written to kill — one level down, on the reclaim counter instead of the bind ramp.
+
+The reclaim baseline snapshot therefore moves: `loadProfile.settleSeconds` (default 0 = unchanged) delays it to `soakStart + settleSeconds`, so the measured window is the **settled** portion of the soak. The mechanism is a one-shot timer in the runner's soak select-loop; it stays a raw absolute-counter delta (read at the settle mark, read again at end, subtract) — no `rate()`/`increase()` extrapolation, which can both invent and hide single-digit increments. Only the reclaim baseline moves; the per-CR binding-latency, cycle, rollup, and ack SLOs are unaffected. A `settleSeconds ≥` the soak duration is a misconfig that would empty the window, so it clamps to the `soakStart` snapshot and warns.
+
+### (b) The reclaim SLO is bounded, not zero
+
+The original gate asserted **zero** reclaims over the window. Zero is structurally unachievable on the async engine: [ADR-0021]'s async execute means the fleet self-perturbs at a non-zero rate independent of demand churn. #67 diagnosed this floor as a **coverage-harmless endogenous self-perturbation** — bind coverage stays whole; it is the engine breathing, not the oscillation defect M67 removed — and #69 measured it robust at ~340 over a 180 s soak un-de-tailed. A zero assertion against a structurally non-zero floor is a permanently-red gate that tells you nothing.
+
+The gate becomes **bounded-reclaim**: `slo.maxReclaimActionsDuringSoak` (default 0 = the original zero assertion, every other profile unchanged) caps the count over the settled window. The bound accepts the residual steady floor while staying a real gate — a regression (the bootstrap≈reclaim oscillation resurfacing as sustained churn far above the bound) still trips it. The bound is an author-owned posture number, in the same class as `ReclaimGrace`: dev-50 sets it provisionally to 150 (~2–3× the de-tailed steady estimate of ~45–77 over its 90 s settled window), pending the validation re-run that measures the actual de-tailed value.
+
+### Scope
+
+Harness-only, consistent with this ADR's Goal 5 (no system-under-test change). The settle window and the bound live entirely in `test/scaletest/cmd/scaletest-runner/main.go` and the profile YAML; `pkg/decision` and `pkg/shard` are untouched. See [ADR-0045] for the attribution model the reclaim contract sits on, and [ADR-0021] for the async-actuation source of the floor.
+
 ## References
 
 - [ADR-0014] SLO posture: binding latency, not cycle wall-clock.
@@ -138,9 +158,13 @@ The lesson worth landing: **ramp behaviour is not an SLO.** Capacity-exploration
 - [ADR-0028] Cycle-p99 is regime-parametric.
 - [ADR-0032] Realistic catalog production-calibrated workload distribution.
 - [ADR-0033] Phase 1 supply-credit must respect bind readiness (rejected; superseded by this ADR's reframe).
+- [ADR-0021] Persistent execute pool — the async-actuation source of the non-zero reclaim floor (Amendment).
+- [ADR-0045] Consumed capacity in the attribution model — the reclaim contract the steady-window gate sits on (Amendment).
 [ADR-0014]: ./0014-slo-posture-binding-latency-not-cycle-wall-clock.md
 [ADR-0017]: ./0017-per-cr-binding-latency-vs-fingerprint-fanout.md
+[ADR-0021]: ./0021-persistent-execute-pool.md
 [ADR-0026]: ./0026-scaletest-models-speculative-tier.md
 [ADR-0028]: ./0028-cycle-p99-is-regime-parametric.md
 [ADR-0032]: ./0032-realistic-catalog-production-calibration.md
 [ADR-0033]: ./0033-phase1-supply-credit-respects-bind-readiness.md
+[ADR-0045]: ./0045-consumed-capacity-in-the-attribution-model.md
