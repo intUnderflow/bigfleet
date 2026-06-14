@@ -148,6 +148,18 @@ type TargetScale struct {
 	Replicas int
 }
 
+// FaultEvent is a single incumbent loss: fail Count Configured machines
+// of cluster Cluster at the start of cycle Cycle (before that cycle's
+// rollups derive), via the provider's FailMachine (the M38 spot-reclaim /
+// hardware-fault path). The victims are the cluster's Configured machines
+// in deterministic ID order so the same scenario fails the same machines
+// every run.
+type FaultEvent struct {
+	Cycle   int
+	Cluster machine.ClusterID
+	Count   int
+}
+
 // ClosedLoopScenario declares one closed-loop run.
 type ClosedLoopScenario struct {
 	Name     string
@@ -170,6 +182,16 @@ type ClosedLoopScenario struct {
 	// Scales are mid-run demand changes — the trigger ADR-0045's
 	// shrinkage-only Phase 3 acts on.
 	Scales []TargetScale
+
+	// Faults are mid-run incumbent losses: at cycle Cycle, fail Count
+	// Configured machines of cluster Cluster in the provider (the M38
+	// FailMachine path — spot reclaim / hardware fault discovered via
+	// List). The shard's reconcile ingests StateFailed, the cluster model
+	// evicts the lost machine's Pods, and the next Phase 1 re-derives the
+	// gang's now-uncovered deficit. STATIC demand otherwise: this is the
+	// single perturbation the pre-Configuring-runway over-acquire
+	// hypothesis turns on (the dev-50 #66 churn injector at sim speed).
+	Faults []FaultEvent
 
 	// RollupArrivalStamps models the wire path's arrival semantics
 	// (conv.NeedsFromRollup): every Need row in a rollup carries the
@@ -198,6 +220,32 @@ type ClosedLoopScenario struct {
 	// each cycle; the fake provider holds Configure at Configuring
 	// (ConfigureStaged) and this loop drives the completion.
 	BootstrapDwellCycles int
+
+	// ProvisionDwellCycles models the engine's PRE-Configuring (host
+	// provisioning) latency — the Speculative → Creating → Idle runway a
+	// real provider's Create traverses (boot, image pull, kubelet join).
+	// A machine the engine Provisions (Speculative source) stays in
+	// Creating for this many sim cycles before reaching Idle, where the
+	// next cycle's Phase 1 can Bootstrap it (Idle → Configuring). 0
+	// (default) keeps the historical instant Create → Idle, so every
+	// pre-existing scenario is byte-identical.
+	//
+	// Why this is distinct from BootstrapDwellCycles and why it matters:
+	// Configuring IS a state the Phase 1 Same-domain coverage walk counts
+	// (pkg/decision/occ/seed.go: Configured + Configuring), and
+	// executeBootstrap stamps AssignedGroup at Idle→Configuring — so a
+	// machine in the BOOTSTRAP dwell is visible to its own gang's
+	// coverage and the dwell self-damps. Creating is counted by NEITHER
+	// the coverage walk (not in {Configured,Configuring}) NOR the
+	// acquirable pool (foldAcquirable folds only Idle+Speculative), and
+	// executeProvision leaves it with NO AssignedGroup. A machine in the
+	// PROVISION dwell is therefore INVISIBLE: the gang that triggered its
+	// acquisition still sees the full deficit (ADR-0045 re-derives from
+	// scratch, no memory of the in-flight acquisition) and acquires
+	// again. Modelled the same shape as BootstrapDwellCycles: a
+	// per-machine countdown the loop drives, with the fake provider
+	// holding Create at Creating (CreateStaged).
+	ProvisionDwellCycles int
 
 	// StampSeededGangAttribution stamps AssignedGroup (+
 	// AssignedNeedFingerprint) on the seeded Configured machines a gang
@@ -1052,6 +1100,7 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 	prov := fake.New(fake.Options{
 		InstantTransitions: true,
 		ConfigureStaged:    sc.BootstrapDwellCycles > 0,
+		CreateStaged:       sc.ProvisionDwellCycles > 0,
 		Seed:               0xC0FFEE,
 	})
 
@@ -1130,6 +1179,13 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 	// Configuring: id → cycles remaining before completion (ADR-0051 /
 	// M77g). Empty when BootstrapDwellCycles == 0.
 	dwell := map[machine.ID]int{}
+	// createDwell is the pre-Configuring twin: machines the engine has
+	// Provisioned that are still Creating (Speculative→Idle in flight),
+	// id → cycles remaining before Creating→Idle. Empty when
+	// ProvisionDwellCycles == 0. A machine in here is INVISIBLE to its
+	// gang's coverage walk and carries no AssignedGroup — the runway the
+	// over-acquire turns on.
+	createDwell := map[machine.ID]int{}
 	for cycle := 1; cycle <= sc.Cycles; cycle++ {
 		select {
 		case <-ctx.Done():
@@ -1137,6 +1193,14 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 		default:
 		}
 
+		// Provision-dwell: age the in-flight Creating machines and complete
+		// the matured ones (Creating → Idle) before this cycle's Step, so a
+		// finished host provisioning becomes acquirable Idle this cycle.
+		// Runs before the bootstrap-dwell completion so a machine cannot
+		// traverse both dwells in a single cycle (Creating→Idle here,
+		// Idle→Configuring would be this cycle's Step, the bootstrap dwell
+		// then starts next cycle) — the honest one-stage-per-cycle runway.
+		completeMaturedCreateDwell(prov, createDwell)
 		// Bootstrap-dwell: age the in-flight machines and complete the
 		// ones whose budget elapsed (Configuring → Configured) before this
 		// cycle's Step, so the engine now sees them as acquirable/serving
@@ -1149,6 +1213,12 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 			}
 			for _, m := range models {
 				m.scaleTo(ts.Shape, ts.Replicas)
+			}
+		}
+
+		for _, fe := range sc.Faults {
+			if fe.Cycle == cycle {
+				injectFaults(prov, sh, fe)
 			}
 		}
 
@@ -1184,13 +1254,24 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 				stats.Deletes++
 			}
 		}
+		// Provision-dwell: the machines this cycle's Step just Provisioned
+		// (Create held them at Creating via CreateStaged) begin their
+		// Creating countdown. A Provision NEVER reaches Configuring this
+		// cycle (executeProvision hands off to bootstrap only when Create
+		// returned Idle), so when the provision dwell is on it is recorded
+		// here, not in the bootstrap dwell below.
+		if sc.ProvisionDwellCycles > 0 {
+			recordCreateDwellEntries(actions, createDwell, sc.ProvisionDwellCycles)
+		}
 		// Bootstrap-dwell: the machines this cycle's Step just bootstrapped
 		// (Configure held them at Configuring via ConfigureStaged) begin
 		// their dwell countdown (ADR-0051 / M77g). A Reclaim that drains a
 		// still-dwelling machine cancels its countdown — the binding the
-		// dwell would complete is gone.
+		// dwell would complete is gone. Only Bootstrap (Idle source) reaches
+		// Configuring; with the provision dwell on, a Provision left the
+		// machine at Creating and is excluded here.
 		if sc.BootstrapDwellCycles > 0 {
-			recordDwellEntries(actions, dwell, sc.BootstrapDwellCycles)
+			recordBootstrapDwellEntries(actions, dwell, sc.BootstrapDwellCycles, sc.ProvisionDwellCycles > 0)
 		}
 
 		snap = sh.Inventory().Snapshot()
@@ -1257,17 +1338,75 @@ func stampSeededGangAttribution(sh *shard.Shard, models []*clusterModel) error {
 	return nil
 }
 
-// recordDwellEntries starts a bootstrap-dwell countdown for each machine
-// this cycle's Step bootstrapped (ADR-0051 / M77g). With ConfigureStaged
-// the provider left these machines at Configuring; the countdown is how
-// many further cycles they stay there before completeMaturedDwell drives
-// them to Configured.
-func recordDwellEntries(actions []decision.Action, dwell map[machine.ID]int, n int) {
+// recordBootstrapDwellEntries starts a bootstrap-dwell countdown for each
+// machine this cycle's Step bootstrapped (ADR-0051 / M77g). With
+// ConfigureStaged the provider left these machines at Configuring; the
+// countdown is how many further cycles they stay there before
+// completeMaturedDwell drives them to Configured.
+//
+// provisionDwellOn excludes Provision actions: when the provision dwell is
+// active a Provision leaves the machine at Creating (CreateStaged), not
+// Configuring, so it belongs in the create dwell, not here. With it off, a
+// Provision completes Create→Idle instantly and then hands off to
+// bootstrap in the same Step (executeProvision), landing at Configuring —
+// so it dwells here exactly as a Bootstrap does (the historical behaviour,
+// preserved byte-for-byte).
+func recordBootstrapDwellEntries(actions []decision.Action, dwell map[machine.ID]int, n int, provisionDwellOn bool) {
 	for _, a := range actions {
 		switch a.Kind {
-		case decision.ActionKindBootstrap, decision.ActionKindProvision:
+		case decision.ActionKindBootstrap:
 			dwell[a.MachineID] = n
+		case decision.ActionKindProvision:
+			if !provisionDwellOn {
+				dwell[a.MachineID] = n
+			}
 		}
+	}
+}
+
+// recordCreateDwellEntries starts a create (pre-Configuring) dwell
+// countdown for each machine this cycle's Step Provisioned. With
+// CreateStaged the provider left these machines at Creating; the countdown
+// is how many further cycles they stay there before
+// completeMaturedCreateDwell drives them to Idle.
+func recordCreateDwellEntries(actions []decision.Action, createDwell map[machine.ID]int, n int) {
+	for _, a := range actions {
+		if a.Kind == decision.ActionKindProvision {
+			createDwell[a.MachineID] = n
+		}
+	}
+}
+
+// completeMaturedCreateDwell ages every in-flight (Creating) machine by one
+// cycle and completes the ones whose budget reached zero by advancing the
+// PROVIDER's staged Create to Idle (CompleteStaged). Driving the provider —
+// the host-lifecycle source of truth — rather than poking inventory
+// directly is what keeps the subsequent Bootstrap's provider.Configure RPC
+// valid: the next cycle's reconcileFull pulls the now-Idle provider record
+// into inventory through the normal forward Creating→Idle transition. (The
+// bootstrap dwell pokes inventory because Configured is terminal until a
+// Drain, and a backward Configured→Configuring reconcile is rejected by the
+// FSM; Creating→Idle is NOT terminal — a Configure follows — so the
+// provider must actually advance.) The completed machine is acquirable Idle
+// with NO cluster, NO AssignedGroup — exactly the state executeProvision
+// leaves it in before its later Idle→Configuring. A machine the provider no
+// longer holds in Creating (a Failed injection) is dropped.
+func completeMaturedCreateDwell(prov *fake.Provider, createDwell map[machine.ID]int) {
+	if len(createDwell) == 0 {
+		return
+	}
+	for id, left := range createDwell {
+		m, err := prov.Get(context.Background(), id)
+		if err != nil || m.State != machine.StateCreating {
+			delete(createDwell, id) // provisioning abandoned or machine moved on
+			continue
+		}
+		if left > 1 {
+			createDwell[id] = left - 1
+			continue
+		}
+		prov.CompleteStaged(id) // Creating → Idle in the provider; reconcile syncs inventory
+		delete(createDwell, id)
 	}
 }
 
@@ -1301,6 +1440,29 @@ func completeMaturedDwell(sh *shard.Shard, dwell map[machine.ID]int) {
 			continue
 		}
 		delete(dwell, id)
+	}
+}
+
+// injectFaults removes fe.Count of the cluster's Configured machines from
+// the provider (a hard host loss — terminated / spot-reclaimed node). The
+// victims are chosen in deterministic ID order from the current inventory
+// snapshot, so the perturbation is reproducible. The shard's next full
+// reconcile detects the absent machines and removes them from inventory;
+// the cluster model then evicts their Pods and the gang re-derives its
+// now-uncovered deficit. (RemoveMachine, not FailMachine: the inventory FSM
+// rejects an in-place Configured→Failed, so a clean removal is the
+// reconcile-ingestible incumbent-loss model — see RemoveMachine.)
+func injectFaults(prov *fake.Provider, sh *shard.Shard, fe FaultEvent) {
+	snap := sh.Inventory().Snapshot()
+	victims := snap.SortedClusterStateBucket(fe.Cluster, machine.StateConfigured)
+	n := fe.Count
+	for i := range victims {
+		if n <= 0 {
+			break
+		}
+		if prov.RemoveMachine(victims[i].ID) {
+			n--
+		}
 	}
 }
 

@@ -100,6 +100,21 @@ type Provider struct {
 	// perturbation). Create / Drain / Delete still honour
 	// instantTransitions.
 	configureStaged bool
+
+	// createStaged: the pre-Configuring (provision) twin of
+	// configureStaged. If true, Create returns the machine at Creating
+	// (the transitional Speculative→Idle state) even under
+	// instantTransitions — modelling a provider whose host provisioning
+	// genuinely takes time (boot, image pull, join). The closed-loop sim
+	// completes the Creating → Idle transition after its provision-dwell
+	// budget elapses, so the engine observes the machine in Creating for
+	// N cycles. Creating is a state the Phase 1 Same-domain coverage walk
+	// (seed.go: Configured+Configuring only) does NOT count, and which
+	// executeProvision leaves with NO gang attribution (AssignedGroup is
+	// stamped only at the later Idle→Configuring) — the invisible runway
+	// the over-acquire hypothesis turns on. Configure / Drain / Delete
+	// still honour instantTransitions.
+	createStaged bool
 }
 
 // revEntry is one append to the revision log: which machine's
@@ -116,7 +131,11 @@ type Options struct {
 	// even under InstantTransitions (see Provider.configureStaged). The
 	// closed-loop sim's bootstrap-dwell model drives the completion.
 	ConfigureStaged bool
-	Seed            uint64
+	// CreateStaged makes Create leave the machine at Creating even under
+	// InstantTransitions (see Provider.createStaged). The closed-loop
+	// sim's provision-dwell model drives the Creating→Idle completion.
+	CreateStaged bool
+	Seed         uint64
 }
 
 // New constructs a fake provider with no inventory. Seed via AddSpeculative
@@ -135,6 +154,7 @@ func New(opts Options) *Provider {
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
 		instantTransitions: opts.InstantTransitions,
 		configureStaged:    opts.ConfigureStaged,
+		createStaged:       opts.CreateStaged,
 	}
 }
 
@@ -287,6 +307,69 @@ func (p *Provider) FailMachine(id machine.ID, reason string) bool {
 	return true
 }
 
+// RemoveMachine deletes a machine from the provider entirely, modelling a
+// hard host loss the autoscaler discovers via the next List (the machine
+// vanishes — a terminated / spot-reclaimed node whose Configured→Failed the
+// FSM does not model as an in-place transition). The shard's full reconcile
+// removes the absent machine from inventory; the cluster whose Pods it
+// hosted then sees them evicted and the gang re-derives its deficit.
+// Returns false if the machine was already absent. (M38 FailMachine keeps
+// the record present-but-Failed, which the reconcile transition check
+// cannot apply onto a Configured machine — so a clean removal is the
+// ingestible incumbent-loss model.)
+func (p *Provider) RemoveMachine(id machine.ID) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.machines[id]; !ok {
+		return false
+	}
+	delete(p.machines, id)
+	p.rev++
+	// No revLog append for a deletion: the incremental delta path keys on
+	// present records, and the closed-loop sim reconciles full (removal is
+	// detected by the snapshot-walk, not the delta). lastModRev is left as
+	// the last mutation; a fresh List simply omits the id.
+	delete(p.lastModRev, id)
+	return true
+}
+
+// CompleteStaged advances a machine the provider is holding in a staged
+// transitional state (Creating under CreateStaged, Configuring under
+// ConfigureStaged) to that op's stable target, applying the same
+// post-effect the instant completion would have — most importantly the
+// host that comes into being when provisioning settles at Idle. The
+// closed-loop sim's dwell models call this when a per-machine dwell budget
+// elapses, so the provider (the host-lifecycle source of truth) advances
+// first and the shard's reconcile then pulls the new stable state into
+// inventory through the normal forward transition. Returns false (no-op)
+// if the machine is absent or not in the expected staged state — the dwell
+// record is then simply dropped.
+//
+// Only the two staged forward transitions are modelled (Creating→Idle,
+// Configuring→Configured); a real provider's Drain/Delete completion does
+// not ride this hook.
+func (p *Provider) CompleteStaged(id machine.ID) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m, ok := p.machines[id]
+	if !ok {
+		return false
+	}
+	switch m.State {
+	case machine.StateCreating:
+		m.State = machine.StateIdle
+		m.Host = machine.HostRef{Provider: "fake", Ref: string(id)}
+	case machine.StateConfiguring:
+		m.State = machine.StateConfigured
+	default:
+		return false
+	}
+	p.rev++
+	p.lastModRev[id] = p.rev
+	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
+	return true
+}
+
 // RandomConfiguredMachine returns the ID of a randomly-selected machine
 // in StateConfigured, or "" if none exist. Used by the M38 failure
 // injector to pick victims. Iteration order over the map is random by
@@ -322,10 +405,17 @@ func (p *Provider) ConfiguredCount() int {
 	return n
 }
 
-// Create implements provider.Provider.
+// Create implements provider.Provider. The host comes into being only
+// when provisioning settles at Idle: a machine still Creating (the
+// CreateStaged path) has no host yet, so the post-effect sets the host
+// only once the record has reached the stable Idle target — mirroring
+// Delete's symmetric "clear host at Speculative" guard, and keeping the
+// staged Creating record's empty-host invariant intact (machine.go).
 func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opCreate, req.Fence, func(m *machine.Machine) {
-		m.Host = machine.HostRef{Provider: "fake", Ref: string(req.MachineID)}
+		if m.State == machine.StateIdle {
+			m.Host = machine.HostRef{Provider: "fake", Ref: string(req.MachineID)}
+		}
 	})
 }
 
@@ -431,10 +521,15 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, fence provider.Fe
 	op := p.mintOp()
 	p.ops[opKey{id, kind}] = op
 
-	// configureStaged overrides instant completion for Configure only: the
-	// machine reaches Configuring and stays there until the sim's
-	// bootstrap-dwell budget drives it to Configured (ADR-0051 / M77g).
-	if p.instantTransitions && !(p.configureStaged && kind == opConfigure) {
+	// configureStaged / createStaged override instant completion for their
+	// respective op: the machine reaches the transitional state and stays
+	// there until the sim's dwell budget drives it to the stable target.
+	// configureStaged: Configuring (bootstrap dwell, ADR-0051 / M77g).
+	// createStaged: Creating (provision/pre-Configuring dwell — the
+	// invisible runway seed.go's coverage walk does not count).
+	staged := (p.configureStaged && kind == opConfigure) ||
+		(p.createStaged && kind == opCreate)
+	if p.instantTransitions && !staged {
 		m.State = stable
 	} else {
 		m.State = transitional
