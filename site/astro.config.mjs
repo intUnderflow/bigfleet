@@ -53,7 +53,56 @@ export default defineConfig({
         {
           label: "Internals",
           collapsed: true,
-          autogenerate: { directory: "internals" },
+          items: [
+            { label: "Overview & reading order", link: "/internals/readme/" },
+            {
+              label: "Decision & capacity",
+              items: [
+                { label: "Decision engine (3 phases)", link: "/internals/decision-engine/" },
+                { label: "Phase 1 — OCC assign", link: "/internals/phase1-occ/" },
+                { label: "Machine state machine", link: "/internals/machine-lifecycle/" },
+                { label: "NeedsTable & aggregation", link: "/internals/needs-table/" },
+              ],
+            },
+            {
+              label: "Shard & coordinator",
+              items: [
+                { label: "Shard hot path", link: "/internals/shard-hot-path/" },
+                { label: "Coordinator (Raft)", link: "/internals/coordinator-raft/" },
+                { label: "Static stability", link: "/internals/static-stability/" },
+              ],
+            },
+            {
+              label: "Protocols & identity",
+              items: [
+                { label: "Wire protocols & CRDs", link: "/internals/wire-protocols/" },
+                { label: "Provider protocol", link: "/internals/provider-protocol/" },
+                { label: "Fencing & mTLS identity", link: "/internals/fencing-and-identity/" },
+              ],
+            },
+            {
+              label: "Operator & lifecycle",
+              items: [
+                { label: "Operator & pod controller", link: "/internals/operator-and-controllers/" },
+              ],
+            },
+            {
+              label: "Scale & testing",
+              items: [
+                { label: "Scale-test harness", link: "/internals/scaletest-harness/" },
+                { label: "Testing & validation ladder", link: "/internals/testing-and-validation/" },
+              ],
+            },
+            {
+              label: "Cross-cutting",
+              items: [
+                { label: "Data flow (end-to-end)", link: "/internals/data-flow/" },
+                { label: "Domain-attribution saga", link: "/internals/domain-attribution/" },
+                { label: "Observability & metrics", link: "/internals/observability/" },
+              ],
+            },
+            { label: "ADR decision map", link: "/internals/decision-map/" },
+          ],
         },
         {
           label: "Background",
