@@ -312,6 +312,21 @@ function realisticSection() {
 }
 
 async function main() {
+  // test/scaletest/results/ is gitignored (raw per-run data, dev-box-local).
+  // On a fresh clone / CI build host (e.g. Cloudflare Pages) it is absent, so
+  // fall back to the committed docs/scaletest-results.md + .svg snapshots
+  // instead of hard-failing the whole site build with ENOENT.
+  try {
+    await fs.access(resultsDir);
+  } catch {
+    console.error(
+      `scaletest-sync: ${resultsDir} not present — keeping the committed ` +
+        `docs/scaletest-results.md and docs/scaletest-progress.svg as-is ` +
+        `(skipping regeneration).`,
+    );
+    return;
+  }
+
   const runs = await readRuns();
   const progression = progressionRuns(runs);
 
