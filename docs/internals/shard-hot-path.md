@@ -19,7 +19,7 @@ superseded — this page flags it rather than papering over it.
 
 Static stability is the load-bearing safety property of the whole system: **clusters keep
 running with BigFleet entirely down, and shards run autonomously while the coordinator is
-unreachable or mid-failover** (CLAUDE.md hard rules; paper §6). The architectural rule that
+unreachable or mid-failover** (paper §6). The architectural rule that
 makes that defensible is a single import constraint — the shard's hot path has no
 compile-time path to the coordinator. There is then *nothing to block on* when the
 coordinator is down, because there is no call from the cycle into coordinator code.
@@ -427,7 +427,7 @@ shard's own state:
   Profile and can't act on per-gang identity.
 
 Topology constraints never cross shard boundaries: a `Same`-rack request unsatisfiable
-in-shard becomes a shortfall and is reported up; it is *never* resolved cross-shard (CLAUDE.md
+in-shard becomes a shortfall and is reported up; it is *never* resolved cross-shard (a BigFleet
 hard rule). The coordinator may rebalance *supply* between shards, but it does not resolve one
 shard's topology constraint using another's machines.
 

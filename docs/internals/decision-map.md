@@ -14,12 +14,12 @@ wins and this page is stale. Likewise, the prose deep-dives under [`README.md`](
 subsystem.
 
 When a code path here disagrees with a higher authority, the higher authority wins **and the
-divergence is documented** (not papered over). The source-of-truth ordering (from
-[`../../CLAUDE.md`](../../CLAUDE.md)) is:
+divergence is documented** (not papered over). The source-of-truth ordering (see
+[`../index.md`](../index.md)'s "When the docs disagree") is:
 
 1. The two papers — [`../papers/bigfleet.md`](../papers/bigfleet.md),
    [`../papers/fleet-scale-kubernetes.md`](../papers/fleet-scale-kubernetes.md).
-2. Author decisions in [`../adr/`](../adr/) and [`../../CLAUDE.md`](../../CLAUDE.md).
+2. Author decisions in [`../adr/`](../adr/).
 3. [`../plan.md`](../plan.md).
 4. The code.
 
@@ -84,7 +84,7 @@ understand why the current code looks the way it does (a row's "implemented in" 
 - **ADR-0042-addendum is the parking cautionary tale.** It is the single largest pool of unforced
   engine complexity — built rigorously against a demand shape *one catalog archetype fabricated*. That
   is exactly what **ADR-0043** ("harness-observed triggers get a demand-realism check before mechanism
-  ships") exists to catch; ADR-0043 is codified as the working-discipline rule at `CLAUDE.md:97`, and
+  ships") exists to catch; ADR-0043 is codified as a working-discipline rule, and
   ADR-0050 / ADR-0044 are downstream "fix the harness and re-measure" applications of it.
 
 - **The Phase-1 engine arc: ADR-0022 → 0027 → 0028 → 0029 (→ 0030, 0031 proposed).** `Need.Count` is
@@ -187,7 +187,7 @@ implementation paths are exact.
 | [0035](../adr/0035-scaletest-slos-at-steady-state.md) | Scaletest SLOs are measured at steady state under churn, not at ramp | Accepted *(supersedes ADR-0033 + M22 ramp-gating; amended 2026-06-14)* | Gate pass/fail on steady-state per-CR binding-latency / cycle / rollup SLOs during a churn soak, inventory pre-seeded + Pods pre-bound at install; ramp becomes observational. 2026-06-14 amendment: reclaim baseline at `soakStart+settleSeconds`, bounded `maxReclaimActionsDuringSoak` gate (accepting the ADR-0021 async floor). Harness-only. | Ramp throughput is dominated by downstream kube-scheduler behaviour and is not the SLO; conflating ramp with the SLO produced a multi-week rabbit hole. | `test/scaletest/cmd/scaletest-runner/main.go`, `test/scaletest/cmd/load-driver/main.go`, `test/scaletest/profiles/dev-50.yaml`, `test/scaletest/profiles/5k.yaml` | *(runner gate verified by read; no dedicated `*_test.go`)* |
 | [0037](../adr/0037-scaletest-node-affinity-dimensions-are-realistic.md) | Drop synthetic team/app label axes from the catalog | Accepted | The catalog's node-affinity dimensions must mirror real production (instance-type, zone, hardware only); synthetic ownership axes (`team`, `app`) removed from `realistic.yaml`. The `labelAxes` mechanism is retained for a future real axis. | Routing synthetic fingerprint cardinality through Pod nodeAffinity made kube-scheduler reject 98.6% of placements (bind plateaued at 9.5%); team/app are ownership labels, not node-affinity dimensions. | `test/scaletest/profiles/archetypes/realistic.yaml`, `pkg/scaletest/archetype/archetype.go` | `pkg/scaletest/archetype/archetype_test.go` |
 | [0038](../adr/0038-scaletest-workloads-are-controller-managed.md) | Scaletest workloads are controller-managed objects, not bare Pods | Accepted | Load-driver creates Deployments (stateless) / StatefulSets (stateful), one per archetype fingerprint per cluster; the kwok apiserver runs the deployment/replicaset/statefulset controllers so evicted Pods recreate. No BigFleet change. | Bare Pods don't survive eviction, so every Phase 3 reclaim permanently destroyed demand (CR cascade-GC'd) → a self-sustaining Bootstrap+Reclaim cascade. | `test/scaletest/cmd/load-driver/main.go`, `test/scaletest/image/entrypoint-apiserver.sh`, `test/scaletest/image/Dockerfile` | `test/scaletest/cmd/load-driver/main_test.go` |
-| [0043](../adr/0043-demand-realism-check-before-mechanism.md) | Harness-observed triggers get a demand-realism check before mechanism ships | Accepted | Any ADR motivated by harness-observed evidence must contain a "Demand realism" section (what demand triggers it, would production emit it, if not fix the harness and re-measure first) before designing mechanism. A gate, not a formality; incident/paper-triggered ADRs exempt. | The single largest pool of unforced engine complexity (the ADR-0042 parking layer) was built against a demand shape one catalog archetype fabricated. | **spec-only** — codified as a working-discipline rule at `CLAUDE.md:97`; first applied in `docs/adr/0044-machine-count-aware-seed-sizing.md` | — |
+| [0043](../adr/0043-demand-realism-check-before-mechanism.md) | Harness-observed triggers get a demand-realism check before mechanism ships | Accepted | Any ADR motivated by harness-observed evidence must contain a "Demand realism" section (what demand triggers it, would production emit it, if not fix the harness and re-measure first) before designing mechanism. A gate, not a formality; incident/paper-triggered ADRs exempt. | The single largest pool of unforced engine complexity (the ADR-0042 parking layer) was built against a demand shape one catalog archetype fabricated. | **spec-only** — codified as a working-discipline rule; first applied in `docs/adr/0044-machine-count-aware-seed-sizing.md` | — |
 | [0044](../adr/0044-machine-count-aware-seed-sizing.md) | Seed machine pools are sized by machine demand, not workload weight | Accepted *(follows from ADR-0043; harness-scope)* | Seed machine shares derive from pod demand: `machineShare ∝ podShare/podsPerMachine`, `podsPerMachine` = density for core-resource archetypes / 1 when any bucket requests an extended resource; gang archetypes get a per-zone floor of `max(GroupSizeRange)`. | Weight-proportional pools underweight whole-machine archetypes' supply by ~density×, so GPU gangs were short 120–238 machines/zone every cycle on a fleet with ample aggregate capacity. | `pkg/scaletest/archetype/sizing.go`, `pkg/scaletest/archetype/archetype.go`, `test/scaletest/cmd/load-driver/main.go`, `test/scaletest/profiles/archetypes/realistic.yaml` | `pkg/scaletest/archetype/sizing_test.go`, `pkg/scaletest/archetype/archetype_test.go`, `pkg/scaletest/archetype/realistic_mix_test.go`, `test/scaletest/cmd/load-driver/main_test.go` |
 | [0050](../adr/0050-realism-catalog-is-machine-calibrated.md) | The realism catalog is calibrated to a realistic machine fleet, via per-archetype packing density | Accepted *(M78 first step; harness-scope)* | Calibrate `realistic.yaml` to a realistic *machine* fleet (~15% GPU), back-solving weights as `machineShare × podsPerNode / E[replicas]`; replace M66.2's "GPU density = 1" with a per-archetype `PodsPerNode` (cpu/mem = 100, GPU inference = 8, GPU training = 1). | For a whole-machine GPU workload pod-share IS machine-share, so a realistic ~7% GPU *pod* mix implies an unrealistic ~90% GPU *machine* fleet — failing ADR-0043's realism test. | `pkg/scaletest/archetype/archetype.go`, `pkg/scaletest/archetype/sizing.go`, `test/scaletest/profiles/archetypes/realistic.yaml`, `test/scaletest/cmd/scaletest-runner/main.go`, `pkg/scaletest/preflight/preflight.go` | `pkg/scaletest/archetype/sizing_test.go`, `pkg/scaletest/archetype/realistic_mix_test.go` |
 
@@ -202,7 +202,7 @@ implementation paths are exact.
 
 | ADR | Title | Status | Decision | Why | Implemented in | Guarded by |
 |---|---|---|---|---|---|---|
-| [0001](../adr/0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | Record significant (hard-to-reverse) decisions as sequentially-numbered immutable Markdown ADRs in `docs/adr/`; changing direction means a new superseding ADR, not editing an accepted one. | A discoverable, reviewable audit trail of why each path was chosen, recoverable without spelunking commit history. | `docs/adr/`, `docs/adr/index.md` *(process ADR; the index convention is enforced by the `CLAUDE.md` hard rule "update `docs/adr/index.md` with every ADR")* | — |
+| [0001](../adr/0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | Record significant (hard-to-reverse) decisions as sequentially-numbered immutable Markdown ADRs in `docs/adr/`; changing direction means a new superseding ADR, not editing an accepted one. | A discoverable, reviewable audit trail of why each path was chosen, recoverable without spelunking commit history. | `docs/adr/`, `docs/adr/index.md` *(process ADR; the index convention is enforced by the project convention that every ADR adds a row to `docs/adr/index.md`)* | — |
 
 ---
 
@@ -214,5 +214,3 @@ implementation paths are exact.
   attribution arc (companion deep-dive for the Capacity model & attribution group).
 - [`../adr/`](../adr/) and [`../adr/index.md`](../adr/index.md) — the ADRs themselves and the
   **canonical status table** (this page defers to the index on status).
-- [`../../CLAUDE.md`](../../CLAUDE.md) — the working brief, the hard rules every decision here upholds,
-  and the source-of-truth ordering.

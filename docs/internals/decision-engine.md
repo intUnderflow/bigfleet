@@ -28,7 +28,7 @@ The phases also share one arithmetic to avoid the failure that motivated ADR-004
 
 ## The locked formulas
 
-These are in `pkg/decision/cost.go` and `pkg/machine/machine.go`, fixed by CLAUDE.md / paper §16 / ADR-0029. They are not pluggable; the package doc-comment says so in as many words (`cost.go:1-8`).
+These are in `pkg/decision/cost.go` and `pkg/machine/machine.go`, fixed by paper §16 / ADR-0029. They are not pluggable; the package doc-comment says so in as many words (`cost.go:1-8`).
 
 **Effective cost** (`machine.go:297-302`):
 

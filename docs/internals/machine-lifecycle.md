@@ -18,7 +18,7 @@ deliberate (see [Why plain Go structs](#why-plain-go-structs-not-proto)).
 
 `State` is a `uint8` (`pkg/machine/machine.go:29`). There are **eight** values, but the
 operative set the engine reasons about is **seven** — the eighth, `StateUnspecified`, is the
-zero value and is never a legal resting state for a real machine. CLAUDE.md's shorthand
+zero value and is never a legal resting state for a real machine. The project's shorthand
 ("3 stable + 4 transitional + Failed" = 7) counts the seven real states; concepts.md and the
 `State` doc comment (`machine.go:28`) say "eight" because they count `StateUnspecified` itself.
 The code adds `StateUnspecified = iota` as the guard zero value so that a
@@ -232,7 +232,7 @@ costs money and should be released. This is the same axis that decides whether t
 ## The cost formula and its input bounds
 
 `EffectiveCost(interruptionPenaltyDollars)` (`pkg/machine/machine.go:297`) is the **locked**
-formula (CLAUDE.md, ADR-0029, paper §16):
+formula (ADR-0029, paper §16):
 
 ```
 effective_cost = price_per_hour + (interruption_probability × interruption_penalty_dollars)
@@ -322,8 +322,8 @@ Conversion to/from the wire protos happens once, at the gRPC boundary, in **`pkg
 > conversion happens "in pkg/api/conv (added in M3 when the shard speaks gRPC)." There is no
 > `pkg/api/conv`; the conversion package is **`pkg/conv`** (`conv.go`). The comment predates the
 > package's final location. The doc above cites the correct path; the source comment should be
-> corrected to `pkg/conv` in a follow-up. (Per CLAUDE.md "paper/plan wins, fix the code, note the
-> divergence" — this is a code/comment divergence, noted here.)
+> corrected to `pkg/conv` in a follow-up. (Per the project's divergence policy — higher source
+> wins; fix the code and note the divergence — this is a code/comment divergence, noted here.)
 
 ---
 

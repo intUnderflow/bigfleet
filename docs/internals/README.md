@@ -6,10 +6,10 @@ These pages also assume you have skimmed the [BigFleet paper](https://lucy.sh/bi
 
 ## Source-of-truth ordering
 
-Every page applies the same authority order (from [`../../CLAUDE.md`](../../CLAUDE.md)). When code and a higher source disagree, the higher source wins **and the page documents the divergence explicitly** rather than papering over it:
+Every page applies the same authority order (from [`../index.md`](../index.md)). When code and a higher source disagree, the higher source wins **and the page documents the divergence explicitly** rather than papering over it:
 
 1. The two papers — [`../papers/bigfleet.md`](../papers/bigfleet.md), [`../papers/fleet-scale-kubernetes.md`](../papers/fleet-scale-kubernetes.md).
-2. Author decisions in [`../adr/`](../adr/) and [`../../CLAUDE.md`](../../CLAUDE.md).
+2. Author decisions in [`../adr/`](../adr/).
 3. [`../plan.md`](../plan.md).
 4. The code.
 
@@ -85,4 +85,4 @@ The threads that run through every subsystem.
 
 ---
 
-If you find a divergence between any of these pages and a higher source-of-truth, fix the code or the page and note it — the ordering above is enforced in [`../../CLAUDE.md`](../../CLAUDE.md). Back to the documentation landing page: [`../index.md`](../index.md).
+If you find a divergence between any of these pages and a higher source-of-truth, fix the code or the page and note it — the ordering above is the project's source-of-truth policy. Back to the documentation landing page: [`../index.md`](../index.md).

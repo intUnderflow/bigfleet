@@ -48,4 +48,4 @@ Order of authority (highest first):
 3. The plan (`plan.md`).
 4. Everything else.
 
-If you find a divergence, file a PR — the source-of-truth ordering is enforced in [`../CLAUDE.md`](../CLAUDE.md).
+If you find a divergence, file a PR — the order above is the project's source-of-truth policy.

@@ -4,9 +4,12 @@ BigFleet is the reference implementation of a fleet-level infrastructure autosca
 (see [`docs/papers/bigfleet.md`](docs/papers/bigfleet.md) and
 [`docs/papers/fleet-scale-kubernetes.md`](docs/papers/fleet-scale-kubernetes.md)). This
 guide is the practical contributor brief: what blocks a PR, how the dev loop works, and
-where things live. Read [`CLAUDE.md`](CLAUDE.md) first — it is the working brief and these
-rules are drawn from it. For the architecture, start at [`docs/index.md`](docs/index.md);
-for the code-level deep dives, [`docs/internals/`](docs/internals/).
+where things live. New here? Start with the two papers in
+[`docs/papers/`](docs/papers/), then the implementation plan
+([`docs/plan.md`](docs/plan.md)) and the architecture decision records
+([`docs/adr/`](docs/adr/)). For the architecture overview, the doc landing page is
+[`docs/index.md`](docs/index.md); for the code-level deep dives,
+[`docs/internals/`](docs/internals/).
 
 ---
 
@@ -19,7 +22,7 @@ paper over it.**
    [`docs/papers/fleet-scale-kubernetes.md`](docs/papers/fleet-scale-kubernetes.md). Read
    them before recommending design, especially before touching `api/proto/` or
    `pkg/decision/`. Don't rely on web summaries; they hallucinate.
-2. **Author decisions** — [`docs/adr/`](docs/adr/) and [`CLAUDE.md`](CLAUDE.md). An ADR can
+2. **Author decisions** — [`docs/adr/`](docs/adr/). An ADR can
    supersede a paper on a specific point; the ADR header records this.
 3. **The plan** — [`docs/plan.md`](docs/plan.md), the living implementation target.
 4. **The code.**
@@ -117,7 +120,7 @@ compiled it, so `vet`/`verify` compile every tagged package deliberately).
 
 ### e2e and scale as you go
 
-Don't batch validation to the end (ADR / CLAUDE working discipline):
+Don't batch validation to the end (project working discipline):
 
 - **e2e-as-we-go** — from M3 onwards, every milestone shipping real code is exercised
   against a real cluster via `kind` before being declared done. `make e2e` (needs `kind`,
@@ -170,8 +173,9 @@ An out-of-tree provider runs `make conformance TARGET=addr:port` to claim compat
   [`machine-lifecycle.md`](docs/internals/machine-lifecycle.md),
   [`shard-hot-path.md`](docs/internals/shard-hot-path.md),
   [`scaletest-harness.md`](docs/internals/scaletest-harness.md).
-- **Repo navigation table** — [`CLAUDE.md`](CLAUDE.md) §"Repo navigation" maps every
-  package and command to what it does. The high-signal entries:
+- **Repo navigation table** — the [`README.md`](README.md) repo-layout section and
+  [`docs/internals/README.md`](docs/internals/README.md) map every package and command to
+  what it does. The high-signal entries:
 
 | Path | What's there |
 |------|--------------|

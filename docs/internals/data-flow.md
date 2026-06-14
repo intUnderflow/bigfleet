@@ -410,6 +410,6 @@ preemption claims it next cycle in Phase 1.
 
 If any claim here drifts from the code, the code citation is the anchor — fix the page or the code
 and note it, per the source-of-truth ordering in [`README.md`](README.md) and
-[`../../CLAUDE.md`](../../CLAUDE.md). For the interior of the one box this page treated as a unit,
+[`../index.md`](../index.md). For the interior of the one box this page treated as a unit,
 continue to [`decision-engine.md`](decision-engine.md); for the concurrency model that runs it,
 [`shard-hot-path.md`](shard-hot-path.md).
