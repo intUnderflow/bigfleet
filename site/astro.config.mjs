@@ -51,6 +51,11 @@ export default defineConfig({
           ],
         },
         {
+          label: "Internals",
+          collapsed: true,
+          autogenerate: { directory: "internals" },
+        },
+        {
           label: "Background",
           items: [
             { label: "Implementation plan", link: "/plan/" },
