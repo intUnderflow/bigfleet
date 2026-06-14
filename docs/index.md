@@ -20,6 +20,14 @@ Start here.
 - [`provider-author-guide.md`](provider-author-guide.md) — implementing a `CapacityProvider`
 - [`api-reference.md`](api-reference.md) — CRDs and gRPC services
 
+## Internals (implementation deep-dives)
+
+Code-level documentation that bridges the high-level guides above to the source — for contributors and maintainers, not end users.
+
+- [`internals/`](internals/README.md) — the internals index: subsystem deep-dives grouped by area (decision engine, shard hot path, coordinator, protocols, operator, scale-test harness, cross-cutting)
+- [`internals/decision-map.md`](internals/decision-map.md) — every ADR mapped to where it lives in code and which tests guard it
+- [`internals/data-flow.md`](internals/data-flow.md) — read-this-first trace of the full control loop, from unschedulable pod to bound node
+
 ## Scale-test history
 
 - [`../test/scaletest/results/README.md`](../test/scaletest/results/README.md) — baseline table per profile + how to add new runs
