@@ -15,41 +15,7 @@ The design rationale is the two papers — *BigFleet* and *Fleet-Scale Kubernete
 
 ## The whole chain, at altitude
 
-```
- Kubernetes cluster                  │ BigFleet shard (autonomous)          │ Provider (out-of-tree)
- ───────────────────────────────────┼──────────────────────────────────────┼───────────────────────
- Pod created                         │                                      │
-   │  (UPC controller, 1 CR / Pod)   │                                      │
-   ▼                                 │                                      │
- CapacityRequest CR  ──────────┐     │                                      │
-                               │     │                                      │
- operator.rollupLoop (every 10s)     │                                      │
-   list CRs → aggregate → build │    │                                      │
-   ClusterCapacityNeeds (full   │    │                                      │
-   replacement, ~2KB)           │    │                                      │
-   │                            │    │                                      │
-   ▼  Shard.Session stream (operator dials OUT, one bidi stream)            │
-   OperatorMessage{rollup} ─────┼───▶│ Session recv → rollupWorker          │
-                                │    │   NeedsFromRollup → NeedsTable.Replace│
-                                │    │   triggerCycle()                     │
-                                │    │     │                                │
-                                │    │     ▼  runCycle (~1s cadence)         │
-                                │    │   reconcile  ◀── List ────────────────│  inventory truth
-                                │    │   Phase 1 (assign) ─┐                 │
-                                │    │   Phase 2 (preempt) │ → []Action      │
-                                │    │   Phase 3 (reclaim) ─┘                │
-                                │    │     │                                │
-                                │    │     ▼ executeWorker pool              │
-   BootstrapRequest ◀───────────┼─────  executeBootstrap:                   │
-   render blob                  │    │     Idle→Configuring                 │
-   BootstrapBlobResponse ───────┼───▶│     ── Create ───────────────────────▶│ Speculative→Creating→Idle
-                                │    │     ── Configure(blob) ──────────────▶│ Idle→Configuring→Configured
-   UpcomingNode CR  ◀───────────┼───── NodeStateUpdate (per transition)     │
-   kubelet joins, Node Ready    │    │                                      │
-                                │    │   (later: demand drops)              │
-   cordon + PDB-evict ◀─────────┼───── ReclaimInstruction (Phase 3 excess)  │
-                                │    │     ── Drain ────────────────────────▶│ Configured→Draining→Idle
-```
+![End-to-end flow across three lanes — Kubernetes cluster, the autonomous BigFleet shard, and the out-of-tree provider: a pod becomes a CapacityRequest, the operator rolls up demand over the Shard.Session stream, the shard's cycle runs Phase 1/2/3 and drives provider Create/Configure, and node state plus reclaim instructions flow back.](./data-flow-diagram.svg)
 
 Three ownership boundaries, never crossed the wrong way:
 

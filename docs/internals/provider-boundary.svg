@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 668 474" role="img" aria-label="The provider boundary: the decision engine and shard call the in-process provider.Provider interface in domain types; it is implemented either by the test-only in-process fake or by grpcclient.Client, which dials an out-of-tree provider process over gRPC and mTLS." font-family="ui-sans-serif, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <style>
+    .bg{fill:#f7f8fa;stroke:#cfd5dc;} .accent{fill:#e6efff;stroke:#2c5fb8;} .pool{fill:#f0ece4;stroke:#b8a672;}
+    .label{fill:#1a1d21;} .muted{fill:#5a6168;} .accentText{fill:#1f4488;}
+    .arrow{stroke:#5a6168;fill:none;} .arrowhead{fill:#5a6168;} .annot{fill:#5a6168;font-style:italic;}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#1f2226;stroke:#4a525c;} .accent{fill:#1d2c4a;stroke:#6e9bdc;} .pool{fill:#2a261d;stroke:#7a6e4b;}
+      .label{fill:#e6e8eb;} .muted{fill:#9aa3ad;} .accentText{fill:#9bbef0;}
+      .arrow{stroke:#9aa3ad;} .arrowhead{fill:#9aa3ad;} .annot{fill:#9aa3ad;}
+    }
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" stroke="none"/></marker></defs>
+
+  <!-- Top: decision engine / shard reconcile -->
+  <rect class="accent" x="190" y="16" width="260" height="56" rx="8" stroke-width="1.5"/>
+  <text class="label" x="320" y="40" text-anchor="middle" font-size="13" font-weight="600">decision engine</text>
+  <text class="label" x="320" y="58" text-anchor="middle" font-size="13" font-weight="600">shard reconcile</text>
+
+  <!-- arrow: Go calls -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 320 72 L 320 104" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="332" y="92" font-size="11">Go calls</text>
+
+  <!-- provider.Provider interface -->
+  <rect class="accent" x="190" y="106" width="260" height="56" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="320" y="139" text-anchor="middle" font-size="13" font-weight="600">provider.Provider</text>
+  <text class="annot" x="464" y="138" font-size="11">domain types — no proto, no gRPC</text>
+
+  <!-- split arrows down to the two impls -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 320 162 L 320 184 L 150 184 L 150 224" marker-end="url(#arrow)"/>
+    <path d="M 320 162 L 320 184 L 490 184 L 490 224" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- left: fake -->
+  <rect class="bg" x="32" y="226" width="236" height="64" rx="8" stroke-width="1.5"/>
+  <text class="label" x="150" y="252" text-anchor="middle" font-size="13" font-weight="600">pkg/provider/fake</text>
+  <text class="muted" x="150" y="272" text-anchor="middle" font-size="11">in-process, test-only</text>
+
+  <!-- right: grpcclient -->
+  <rect class="bg" x="372" y="226" width="236" height="64" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="252" text-anchor="middle" font-size="13" font-weight="600">pkg/provider/grpcclient.Client</text>
+  <text class="muted" x="490" y="272" text-anchor="middle" font-size="11">dials out, fences, converts proto&#8596;domain</text>
+
+  <!-- arrow down from grpcclient: gRPC + mTLS -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 490 290 L 490 392" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="502" y="345" font-size="11">gRPC + mTLS</text>
+
+  <!-- out-of-tree provider process -->
+  <rect class="pool" x="372" y="394" width="236" height="64" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="420" text-anchor="middle" font-size="13" font-weight="600">out-of-tree provider process</text>
+  <text class="muted" x="490" y="440" text-anchor="middle" font-size="11">separate repo; pb.CapacityProviderServer</text>
+</svg>

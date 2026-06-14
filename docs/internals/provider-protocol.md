@@ -8,20 +8,7 @@ There is a proto service (`bigfleet.v1alpha1.CapacityProvider`, `api/proto/bigfl
 
 This split is what makes the fake possible. The fake (`pkg/provider/fake`) implements `provider.Provider` directly, in process, with no gRPC at all — the decision engine, the shard, and the closed-loop simulator all drive it as a plain Go object. The same split is what makes the gRPC client (`pkg/provider/grpcclient`) the *only* in-tree code that talks to a real provider over the wire.
 
-```
-decision engine / shard reconcile
-            │  (Go calls)
-            ▼
-   provider.Provider          ← domain types, no proto, no gRPC
-   ┌────────┴─────────┐
-   │                  │
-pkg/provider/fake   pkg/provider/grpcclient.Client
-(in-process,        (dials out, fences, converts proto↔domain)
- test-only)               │  gRPC + mTLS
-                          ▼
-              out-of-tree provider process
-              (separate repo; pb.CapacityProviderServer)
-```
+![The provider boundary: the decision engine and shard call the in-process provider.Provider interface in domain types; it is implemented either by the test-only in-process fake or by grpcclient.Client, which is the only in-tree code that dials an out-of-tree provider process over gRPC + mTLS.](./provider-boundary.svg)
 
 ## Six RPCs, no `Watch` — reconcile is `List + Get`
 

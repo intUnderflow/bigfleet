@@ -6,24 +6,7 @@ This is the code-level companion to [`docs/scaletest.md`](../scaletest.md). The 
 
 There are two physically distinct test stacks. They share exactly one thing — `pkg/scaletest/archetype`, the workload catalog — so demand and supply describe the same fleet on both.
 
-```
-                 ┌─────────────────────────────────────────────────────┐
-   synthetic     │  Go simulator: in-process, no gRPC, no kube, no time │
-   (Go, fast)    │  cmd/fauxctl + sim/  · pkg/decision/shard/needs/...  │
-                 │  fake provider (pkg/provider/fake), shard.Step driven│
-                 │  synchronously. Millions of machines, deterministic. │
-                 └─────────────────────────────────────────────────────┘
-                                       │ shares
-                                       ▼
-                          pkg/scaletest/archetype   (the catalog)
-                                       ▲ shares
-                 ┌─────────────────────────────────────────────────────┐
-   real-protocol │  kind / cloud e2e: N Pods per cluster, each cluster  │
-   (kube, slow)  │  a Pod bundling KWOK apiserver + real kube-scheduler │
-                 │  + bigfleet operator + load-driver. Real CRD/gRPC/   │
-                 │  Raft. test/scaletest/{chart,cmd,image,profiles}     │
-                 └─────────────────────────────────────────────────────┘
-```
+![Two scale-test stacks — a fast in-process Go simulator and a slow real-protocol kind/cloud e2e — that share exactly one component, the pkg/scaletest/archetype workload catalog, so demand and supply describe the same fleet on both.](./scaletest-stacks.svg)
 
 The split exists because the two layers catch different bug classes and cost different amounts:
 

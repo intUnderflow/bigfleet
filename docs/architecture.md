@@ -6,38 +6,7 @@ This is the synthesis. The full design is in the [BigFleet paper](https://lucy.s
 
 BigFleet is two tiers and three component types:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  COORDINATOR (Tier 1)                                       │
-│  - Raft-replicated (3 replicas, single region)              │
-│  - Owns: shard membership, cluster→shard map,               │
-│    topology-domain→shard assignments, quotas, providers     │
-│  - Does not make provisioning decisions                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ unary RPCs (rebalance instructions
-                           │ ride on shard-pulled ReportShard)
-        ┌──────────────────┼──────────────────┐
-        ▼                  ▼                  ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  SHARD       │   │  SHARD       │   │  SHARD       │
-│  (Tier 2)    │   │              │   │              │   ...
-│  - Hot path  │   │              │   │              │
-│  - Inventory │   │              │   │              │
-│  - Decision  │   │              │   │              │
-│    engine    │   │              │   │              │
-└──┬─────┬─────┘   └──┬─────┬─────┘   └──┬─────┬─────┘
-   │     │            │     │            │     │
-   │     ▼            │     ▼            │     ▼
-   │  PROVIDER        │  PROVIDER        │  PROVIDER
-   │  (out-of-tree)   │  (out-of-tree)   │  (out-of-tree)
-   │                  │                  │
-   ▼                  ▼                  ▼
-OPERATOR           OPERATOR           OPERATOR
-(per cluster)      (per cluster)      (per cluster)
-   │                  │                  │
-   ▼                  ▼                  ▼
-[ Kubernetes ]     [ Kubernetes ]     [ Kubernetes ]
-```
+![BigFleet's two tiers: a Raft-replicated coordinator over several autonomous shards; each shard runs the decision engine and drives an out-of-tree provider, while a per-cluster operator bridges each Kubernetes cluster to its shard.](./architecture-shape.svg)
 
 ### Coordinator (Tier 1)
 

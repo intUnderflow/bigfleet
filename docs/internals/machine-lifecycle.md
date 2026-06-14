@@ -67,19 +67,7 @@ enforces the full grid (`pkg/machine/machine.go:315`):
 `Configured(A) → Configured(B)`. The paper (§5) states the canonical path:
 `Configured → Drain → Idle → Bootstrap → Configured(new cluster)`.
 
-```
-                Create                Configure
-  Speculative ─────────▶ Creating ───────────────▶ Idle ──────────▶ Configuring
-       ▲                    │                       ▲  ▲                 │
-       │ Delete             │ (timeout)             │  │                 │ (timeout / rollback)
-       │                    ▼                       │  │      ┌──────────┼──────────┐
-   Deleting ◀── Idle      Failed                    │  │      ▼          ▼          ▼
-  (cloud only)             ▲ ▲ ▲                  Draining  Configured  Failed     Idle
-       │                   │ │ │                     ▲          │              (rollback,
-       │ (timeout)         │ │ └── Draining          │          │ Drain          M44.4)
-       ▼                   │ └──── Deleting          └──────────┘
-     Failed                └────── Creating
-```
+![The machine state machine: three stable states (Speculative, Idle, Configured) with Idle as the hub, four transitional states (Creating, Configuring, Draining, Deleting), and the terminal Failed state; edges are labelled by the provider RPC or timeout that drives them.](./machine-states.svg)
 
 The legal edges are encoded as a static map, `validTransitions` (`pkg/machine/machine.go:235`):
 

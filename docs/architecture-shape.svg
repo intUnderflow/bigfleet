@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 732" role="img" aria-label="BigFleet's two tiers: a Raft-replicated coordinator over several autonomous shards; each shard runs the decision engine and drives an out-of-tree provider, while a per-cluster operator bridges each Kubernetes cluster to its shard." font-family="ui-sans-serif, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <style>
+    .bg{fill:#f7f8fa;stroke:#cfd5dc;} .accent{fill:#e6efff;stroke:#2c5fb8;} .pool{fill:#f0ece4;stroke:#b8a672;}
+    .label{fill:#1a1d21;} .muted{fill:#5a6168;} .accentText{fill:#1f4488;}
+    .arrow{stroke:#5a6168;fill:none;} .arrowhead{fill:#5a6168;} .annot{fill:#5a6168;font-style:italic;}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#1f2226;stroke:#4a525c;} .accent{fill:#1d2c4a;stroke:#6e9bdc;} .pool{fill:#2a261d;stroke:#7a6e4b;}
+      .label{fill:#e6e8eb;} .muted{fill:#9aa3ad;} .accentText{fill:#9bbef0;}
+      .arrow{stroke:#9aa3ad;} .arrowhead{fill:#9aa3ad;} .annot{fill:#9aa3ad;}
+    }
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" stroke="none"/></marker></defs>
+
+  <!-- Coordinator (Tier 1) -->
+  <rect class="accent" x="40" y="20" width="900" height="120" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="64" y="48" font-size="14" font-weight="600">COORDINATOR</text>
+  <text class="muted" x="200" y="48" font-size="12">Tier 1</text>
+  <text class="muted" x="64" y="74" font-size="12">Raft-replicated (3 replicas, single region)</text>
+  <text class="muted" x="64" y="96" font-size="12">Owns: shard membership, cluster&#8594;shard map, topology-domain&#8594;shard assignments, quotas, providers</text>
+  <text class="muted" x="64" y="118" font-size="12">Does not make provisioning decisions</text>
+
+  <!-- Down annotation -->
+  <text class="annot" x="500" y="172" font-size="11">unary RPCs (rebalance instructions ride on shard-pulled ReportShard)</text>
+
+  <!-- Fan-out arrows from coordinator to shards -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 490 140 L 490 188 L 170 188 L 170 222" marker-end="url(#arrow)"/>
+    <path d="M 490 140 L 490 222" marker-end="url(#arrow)"/>
+    <path d="M 490 140 L 490 188 L 810 188 L 810 222" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Three shard columns -->
+  <!-- Shard A -->
+  <rect class="accent" x="60" y="224" width="220" height="130" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="84" y="252" font-size="14" font-weight="600">SHARD</text>
+  <text class="muted" x="200" y="252" font-size="12">Tier 2</text>
+  <text class="muted" x="84" y="280" font-size="12">Hot path</text>
+  <text class="muted" x="84" y="302" font-size="12">Inventory</text>
+  <text class="muted" x="84" y="324" font-size="12">Decision engine</text>
+
+  <!-- Shard B -->
+  <rect class="accent" x="380" y="224" width="220" height="130" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="404" y="252" font-size="14" font-weight="600">SHARD</text>
+  <text class="muted" x="404" y="280" font-size="12">Hot path</text>
+  <text class="muted" x="404" y="302" font-size="12">Inventory</text>
+  <text class="muted" x="404" y="324" font-size="12">Decision engine</text>
+
+  <!-- Shard C -->
+  <rect class="accent" x="700" y="224" width="220" height="130" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="724" y="252" font-size="14" font-weight="600">SHARD</text>
+  <text class="muted" x="724" y="280" font-size="12">Hot path</text>
+  <text class="muted" x="724" y="302" font-size="12">Inventory</text>
+  <text class="muted" x="724" y="324" font-size="12">Decision engine</text>
+
+  <!-- More shards ellipsis -->
+  <text class="muted" x="945" y="296" font-size="20" font-weight="600">&#8230;</text>
+
+  <!-- Shard -> Provider arrows -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 170 354 L 170 392" marker-end="url(#arrow)"/>
+    <path d="M 490 354 L 490 392" marker-end="url(#arrow)"/>
+    <path d="M 810 354 L 810 392" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Providers (out-of-tree) -->
+  <rect class="pool" x="60" y="394" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="170" y="424" text-anchor="middle" font-size="13" font-weight="600">PROVIDER</text>
+  <text class="muted" x="170" y="448" text-anchor="middle" font-size="11">out-of-tree</text>
+
+  <rect class="pool" x="380" y="394" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="424" text-anchor="middle" font-size="13" font-weight="600">PROVIDER</text>
+  <text class="muted" x="490" y="448" text-anchor="middle" font-size="11">out-of-tree</text>
+
+  <rect class="pool" x="700" y="394" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="810" y="424" text-anchor="middle" font-size="13" font-weight="600">PROVIDER</text>
+  <text class="muted" x="810" y="448" text-anchor="middle" font-size="11">out-of-tree</text>
+
+  <!-- Shard -> Operator arrows: branch left in the gap above the provider, run down past it, into the operator -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 100 354 L 100 374 L 44 374 L 44 525 L 110 525 L 110 540" marker-end="url(#arrow)"/>
+    <path d="M 420 354 L 420 374 L 364 374 L 364 525 L 430 525 L 430 540" marker-end="url(#arrow)"/>
+    <path d="M 740 354 L 740 374 L 684 374 L 684 525 L 750 525 L 750 540" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Operators (per cluster) -->
+  <rect class="bg" x="60" y="542" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="170" y="572" text-anchor="middle" font-size="13" font-weight="600">OPERATOR</text>
+  <text class="muted" x="170" y="596" text-anchor="middle" font-size="11">per cluster</text>
+
+  <rect class="bg" x="380" y="542" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="572" text-anchor="middle" font-size="13" font-weight="600">OPERATOR</text>
+  <text class="muted" x="490" y="596" text-anchor="middle" font-size="11">per cluster</text>
+
+  <rect class="bg" x="700" y="542" width="220" height="74" rx="8" stroke-width="1.5"/>
+  <text class="label" x="810" y="572" text-anchor="middle" font-size="13" font-weight="600">OPERATOR</text>
+  <text class="muted" x="810" y="596" text-anchor="middle" font-size="11">per cluster</text>
+
+  <!-- Operator -> Kubernetes arrows -->
+  <g class="arrow" stroke-width="1.5" stroke-linecap="round">
+    <path d="M 170 616 L 170 654" marker-end="url(#arrow)"/>
+    <path d="M 490 616 L 490 654" marker-end="url(#arrow)"/>
+    <path d="M 810 616 L 810 654" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Kubernetes -->
+  <rect class="bg" x="60" y="656" width="220" height="60" rx="8" stroke-width="1.5"/>
+  <text class="label" x="170" y="692" text-anchor="middle" font-size="13" font-weight="600">Kubernetes</text>
+
+  <rect class="bg" x="380" y="656" width="220" height="60" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="692" text-anchor="middle" font-size="13" font-weight="600">Kubernetes</text>
+
+  <rect class="bg" x="700" y="656" width="220" height="60" rx="8" stroke-width="1.5"/>
+  <text class="label" x="810" y="692" text-anchor="middle" font-size="13" font-weight="600">Kubernetes</text>
+</svg>

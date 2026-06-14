@@ -35,14 +35,7 @@ prefixed `github.com/intUnderflow/bigfleet/pkg/coordinator`
 The dependency arrow points the *other* way, which is how the shard still gets coordinator
 service without importing it:
 
-```
-                       imports
-   pkg/shard/coordclient ───────▶ pkg/shard   (adapter.go: ViewFromShard(*shard.Shard))
-            │                          ▲
-            │ imports                   │ never imports coordclient or coordinator
-            ▼                          │
-   pkg/proto (Coordinator gRPC)    cmd/bigfleet wires both, in separate goroutines
-```
+![Dependency direction: pkg/shard/coordclient imports pkg/shard (and pkg/proto), but pkg/shard never imports coordclient or the coordinator — so the hot path has no coordinator dependency, and cmd/bigfleet wires both in separate goroutines.](./shard-coordclient-deps.svg)
 
 `coordclient` lives in a *sub-package the hot path does not import*
 (`pkg/shard/coordclient/coordclient.go:1-12`). It depends on `pkg/shard` (to read the
@@ -282,12 +275,7 @@ walks transitional states and calls the matching provider RPC, using `applyTrans
 (`shard.go:1399-1440`) which validates against the legal-transition table
 (`validTransitions`, `machine.go:235-247`) and emits a `NodeStateUpdate` (§5) on every change.
 
-```
-Provision (Speculative→Configured):  Speculative ─Create─▶ Creating ─▶ Idle ─(hand off to Bootstrap)
-Bootstrap (Idle→Configured):         Idle ─▶ Configuring ─[blob fetch]─Configure─▶ Configured
-Reclaim/Preempt (Configured→Idle):   Configured ─[notify operator]─▶ Draining ─Drain─▶ Idle
-Delete  (Idle→Speculative, M73 §7):  Idle ─▶ Deleting ─Delete─▶ Speculative
-```
+![The four transition flows the shard executes: Provision (Speculative→Creating→Idle), Bootstrap (Idle→Configuring→Configured), Reclaim/Preempt (Configured→Draining→Idle), and Delete (Idle→Deleting→Speculative), each edge labelled by the provider RPC that drives it.](./shard-transitions.svg)
 
 - **`executeProvision`** (`execute.go:181-235`): `Speculative → Creating`, `provider.Create`,
   reflect the ack's host/profile/price/interruption into inventory. The Create ack is where

@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 52 1000 438" role="img" aria-label="The BigFleet machine state machine: three stable states (Speculative, Idle, Configured) with Idle as the hub, four transitional states (Creating, Configuring, Draining, Deleting), and the terminal Failed state; edges are labelled by the provider RPC or timeout that drives them." font-family="ui-sans-serif, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <style>
+    .bg{fill:#f7f8fa;stroke:#cfd5dc;} .accent{fill:#e6efff;stroke:#2c5fb8;} .pool{fill:#f0ece4;stroke:#b8a672;}
+    .label{fill:#1a1d21;} .muted{fill:#5a6168;} .accentText{fill:#1f4488;}
+    .arrow{stroke:#5a6168;fill:none;} .arrowhead{fill:#5a6168;} .annot{fill:#5a6168;font-style:italic;}
+    .fail{fill:#fbeaea;stroke:#c0584e;} .term{fill:#1a1d21;}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#1f2226;stroke:#4a525c;} .accent{fill:#1d2c4a;stroke:#6e9bdc;} .pool{fill:#2a261d;stroke:#7a6e4b;}
+      .label{fill:#e6e8eb;} .muted{fill:#9aa3ad;} .accentText{fill:#9bbef0;}
+      .arrow{stroke:#9aa3ad;} .arrowhead{fill:#9aa3ad;} .annot{fill:#9aa3ad;} .fail{fill:#3a2422;stroke:#d08a82;}
+    }
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" stroke="none"/></marker></defs>
+
+  <!-- ============ EDGES (drawn first, under nodes) ============ -->
+  <g class="arrow" stroke-width="1.5">
+    <!-- Top spine: Speculative -> Creating -> Idle -> Configuring -> Configured -->
+    <path d="M 135 96 L 230 96" marker-end="url(#arrow)"/>
+    <path d="M 355 96 L 450 96" marker-end="url(#arrow)"/>
+    <path d="M 575 96 L 670 96" marker-end="url(#arrow)"/>
+    <path d="M 795 96 L 890 96" marker-end="url(#arrow)"/>
+
+    <!-- Configured -> Draining (down the right edge) -->
+    <path d="M 925 122 L 925 250" marker-end="url(#arrow)"/>
+    <!-- Draining -> Idle (back to hub, enters Idle's bottom-right) -->
+    <path d="M 865 276 Q 650 276 650 200 Q 650 122 562 122" marker-end="url(#arrow)"/>
+
+    <!-- Idle -> Deleting (down then left) -->
+    <path d="M 480 122 L 480 196 Q 480 222 452 222 L 325 222" marker-end="url(#arrow)"/>
+    <!-- Deleting -> Speculative (cloud only, left then up) -->
+    <path d="M 205 222 L 95 222 Q 67 222 67 196 L 67 122" marker-end="url(#arrow)"/>
+
+    <!-- Configuring -> Idle (rollback, M44.4) — short hop just below the spine -->
+    <path d="M 700 122 Q 700 168 628 168 Q 530 168 524 122" marker-end="url(#arrow)"/>
+
+    <!-- Transitionals -> Failed (terminal) -->
+    <!-- Creating -> Failed -->
+    <path d="M 270 122 L 270 400 Q 270 448 318 448 L 430 448" marker-end="url(#arrow)"/>
+    <!-- Deleting -> Failed -->
+    <path d="M 245 248 L 245 392 Q 245 448 300 448 L 430 448" marker-end="url(#arrow)"/>
+    <!-- Configuring -> Failed -->
+    <path d="M 760 122 L 760 400 Q 760 448 712 448 L 600 448" marker-end="url(#arrow)"/>
+    <!-- Draining -> Failed -->
+    <path d="M 905 302 L 905 408 Q 905 448 855 448 L 600 448" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- ============ EDGE LABELS ============ -->
+  <g class="annot" font-size="11" text-anchor="middle">
+    <text x="185" y="88">Create</text>
+    <text x="405" y="88">success</text>
+    <text x="625" y="88">Configure</text>
+    <text x="845" y="88">success</text>
+    <text x="950" y="195">Drain</text>
+    <text x="688" y="232">success</text>
+    <text x="494" y="162" text-anchor="start">Delete</text>
+    <text x="150" y="214">cloud only</text>
+    <text x="628" y="188">rollback (M44.4)</text>
+  </g>
+  <g class="annot" font-size="10">
+    <text x="282" y="380" text-anchor="start">timeout</text>
+    <text x="748" y="380" text-anchor="end">timeout</text>
+  </g>
+
+  <!-- ============ NODES ============ -->
+  <!-- Speculative (stable) -->
+  <rect class="accent" x="15" y="70" width="120" height="52" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="75" y="101" text-anchor="middle" font-size="13" font-weight="600">Speculative</text>
+
+  <!-- Creating (transitional) -->
+  <rect class="bg" x="230" y="70" width="125" height="52" rx="8" stroke-width="1.5"/>
+  <text class="label" x="292" y="101" text-anchor="middle" font-size="13" font-weight="600">Creating</text>
+
+  <!-- Idle (stable, HUB) -->
+  <rect class="accent" x="450" y="70" width="125" height="52" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="512" y="101" text-anchor="middle" font-size="13" font-weight="600">Idle</text>
+
+  <!-- Configuring (transitional) -->
+  <rect class="bg" x="670" y="70" width="125" height="52" rx="8" stroke-width="1.5"/>
+  <text class="label" x="732" y="101" text-anchor="middle" font-size="13" font-weight="600">Configuring</text>
+
+  <!-- Configured (stable) -->
+  <rect class="accent" x="865" y="70" width="120" height="52" rx="8" stroke-width="1.5"/>
+  <text class="accentText" x="925" y="101" text-anchor="middle" font-size="13" font-weight="600">Configured</text>
+
+  <!-- Draining (transitional) -->
+  <rect class="bg" x="865" y="250" width="120" height="52" rx="8" stroke-width="1.5"/>
+  <text class="label" x="925" y="281" text-anchor="middle" font-size="13" font-weight="600">Draining</text>
+
+  <!-- Deleting (transitional) -->
+  <rect class="bg" x="205" y="196" width="120" height="52" rx="8" stroke-width="1.5"/>
+  <text class="label" x="265" y="227" text-anchor="middle" font-size="13" font-weight="600">Deleting</text>
+
+  <!-- Failed (terminal) -->
+  <rect class="fail" x="430" y="422" width="120" height="52" rx="8" stroke-width="1.5"/>
+  <text class="label" x="490" y="453" text-anchor="middle" font-size="13" font-weight="600">Failed</text>
+</svg>
