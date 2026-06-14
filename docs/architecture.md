@@ -59,7 +59,7 @@ The shard is BigFleet's heart. One process, one decision engine, one inventory s
 
 Each shard holds:
 
-- **Inventory** — every machine the shard owns, in one of seven states (see `pkg/machine`). In-memory, refilled from the provider's `List` on startup and reconciled every cycle.
+- **Inventory** — every machine the shard owns, in one of eight states (see `pkg/machine`). In-memory, refilled from the provider's `List` on startup and reconciled every cycle.
 - **NeedsTable** — every cluster's last-known full demand, priority-sorted. Each rollup is a full replacement; never partial.
 - **Sessions** — one bidi gRPC stream per managed cluster. Operator-initiated; the shard never opens an outbound connection to a cluster.
 - **Decision engine** — three-phase synchronous loop. Runs every cycle (default 1 s).

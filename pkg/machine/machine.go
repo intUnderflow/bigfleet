@@ -6,7 +6,7 @@
 // types. The shard's hot path runs over millions of records; we want
 // value semantics, no proto runtime overhead, and small struct footprints.
 // Conversion to/from the wire protos happens at the gRPC boundary in
-// pkg/api/conv (added in M3 when the shard speaks gRPC).
+// pkg/conv.
 package machine
 
 import (

@@ -146,7 +146,7 @@ const (
 //
 // Unsatisfied=true plus Deficit captures the residual that the
 // worker couldn't cover before exhausting its retry budget or its
-// candidate pool. The shortfall buffer (`pkg/shortfall`) consumes
+// candidate pool. The shortfall buffer in `pkg/shard` consumes
 // these.
 type NeedResult struct {
 	Need              *needs.Need

@@ -66,7 +66,7 @@ These are the easy ways to ship a wrong implementation. Each has a reason.
 | `pkg/needs/` | NeedsTable: priority-sorted, full-replacement per cluster |
 | `pkg/inventory/` | In-memory machine inventory per shard |
 | `pkg/decision/` | Worker loop: Phase 1 (assign) / Phase 2 (inversions) / Phase 3 (reclaim). Cost / victim score / drain grace |
-| `pkg/shortfall/` | Shortfall buffer, aging, escalation |
+| _shortfall_ | No standalone package: the buffer/aging/escalation live in `pkg/shard/`; the deficit that records a shortfall is derived in `pkg/decision/` |
 | `pkg/shard/` | Shard controller. Hot path. **Must not import `pkg/coordinator`.** |
 | `pkg/coordinator/` | Global coordinator. Raft (`hashicorp/raft`) + BoltDB. Cluster→shard, domain→shard, quota |
 | `pkg/provider/` | Provider client + plugin registry. `provider/fake/` is the only in-tree provider, test-only |

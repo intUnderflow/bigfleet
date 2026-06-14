@@ -31,7 +31,7 @@ Penalties (interruption and reclamation) are quantised to powers of 2 from $0.50
 
 ### Shortfall
 
-Unsatisfied demand. When Phase 1 cannot satisfy a Need (no idle inventory, provider out of capacity, topology unsatisfiable within a shard), the residual count becomes a shortfall. Shortfalls age and escalate; they're surfaced as a metric (`bigfleet_shard_shortfalls`) and as `CapacityRequest.status.phase=Shortfall`. `pkg/shortfall`.
+Unsatisfied demand. When Phase 1 cannot satisfy a Need (no idle inventory, provider out of capacity, topology unsatisfiable within a shard), the residual count becomes a shortfall. Shortfalls age and escalate; they're surfaced as a metric (`bigfleet_shard_shortfalls`) and as `CapacityRequest.status.phase=Shortfall`. The buffer and aging live in `pkg/shard`; the deficit that records a shortfall is derived in `pkg/decision` (Phase 1/2).
 
 ## Cost and victim selection
 
@@ -66,7 +66,7 @@ victim_score = interruption_penalty + reclamation_penalty
 
 ## Machine state machine
 
-`pkg/machine` defines seven states:
+`pkg/machine` defines eight states (three stable, four transitional, one terminal):
 
 | State | Meaning | Stable? |
 |---|---|---|
