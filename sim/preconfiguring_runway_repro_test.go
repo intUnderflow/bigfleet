@@ -133,6 +133,20 @@ func TestPreConfiguringRunway_OverAcquireRepro(t *testing.T) {
 			// more distinct machines than its deficit.
 			t.Logf("  over-acquire ratio (post-fault acq actions ÷ deficit=1) = %d", acq)
 
+			// GATE (was Logf-only): pin the over-acquire law. A single
+			// 1-machine loss legitimately costs 1 acquisition; each cycle
+			// the replacement spends in the INVISIBLE Creating runway adds
+			// one spurious re-Provision, so acq = dwell+1. This pins the
+			// DEFECT — when the Creating runway is counted (the fix), acq
+			// must drop to 1 for every dwell and this assertion flips to
+			// the fix's acceptance criterion.
+			if acq != dwell+1 {
+				t.Errorf("over-acquire law broken: acq=%d, want dwell+1=%d (dwell=%d)", acq, dwell+1, dwell)
+			}
+			if end.Shortfalls != 0 {
+				t.Errorf("coverage must always be met: shortfalls=%d (dwell=%d)", end.Shortfalls, dwell)
+			}
+
 			dumpTrace(t, res)
 		})
 	}
@@ -161,6 +175,11 @@ func TestPreConfiguringRunway_RepeatedChurn(t *testing.T) {
 		{4, 2},
 		{4, 3},
 	}
+	type armResult struct {
+		dwell, period int
+		reclPerLoss   float64
+	}
+	var results []armResult
 	for _, a := range arms {
 		a := a
 		t.Run(dwellName(a.dwell)+"-period"+itoa(a.period), func(t *testing.T) {
@@ -191,8 +210,34 @@ func TestPreConfiguringRunway_RepeatedChurn(t *testing.T) {
 				dwell, a.period, d, nFaults, acq, provs, boots, recls, end.Configured, end.BoundPods, res.TargetPods, end.Shortfalls)
 			t.Logf("  per-loss: provisions/loss=%.2f reclaims/loss=%.2f (floor: 1.0 provision/loss, 0 reclaim/loss)",
 				float64(provs)/float64(nFaults), float64(recls)/float64(nFaults))
+			results = append(results, armResult{dwell: a.dwell, period: a.period, reclPerLoss: float64(recls) / float64(nFaults)})
 			dumpTrace(t, res)
 		})
+	}
+
+	// GATE: the pre-Configuring (Creating) runway lifts reclaims/loss
+	// above the instant-Create (dwell0) floor — the sustained
+	// Bootstrap≈Reclaim signature (#66/#74). The dwell0 control is the
+	// async-actuation/timing floor and must stay small; every dwell>0 arm
+	// must exceed it. POST-FIX (Creating counted) the dwell>0 arms drop
+	// BACK to the floor — i.e. this assertion flips, and that flip is the
+	// fix's acceptance criterion.
+	var floor float64
+	for _, r := range results {
+		if r.dwell == 0 {
+			floor = r.reclPerLoss
+		}
+	}
+	if floor > 0.25 {
+		t.Errorf("dwell0 (instant-Create) reclaims/loss=%.2f unexpectedly high — the residual floor is more than the async-actuation timing floor", floor)
+	}
+	for _, r := range results {
+		if r.dwell == 0 {
+			continue
+		}
+		if r.reclPerLoss <= floor {
+			t.Errorf("dwell=%d period=%d reclaims/loss=%.2f did not exceed the dwell0 floor %.2f — the runway over-acquire signature is absent (mechanism drift, or fixed: flip this gate)", r.dwell, r.period, r.reclPerLoss, floor)
+		}
 	}
 }
 
@@ -248,6 +293,14 @@ func TestPreConfiguringRunway_BurstReachesConfigured(t *testing.T) {
 			t.Logf("dwell=%d burst-lost=%d: prov=%d boot=%d recl=%d | end configured=%d bound=%d/%d",
 				dwell, lost, provs, boots, recls, end.Configured, end.BoundPods, res.TargetPods)
 			t.Logf("  over-acquire (prov ÷ deficit=%d) = %.2f; reclaims = %d", lost, float64(provs)/float64(lost), recls)
+			// GATE: a ONE-TIME deficit (even >1) over-acquires, but the
+			// surplus parks at Idle and never reaches Configured — so ZERO
+			// reclaims. This pins that a SUSTAINED deficit is what drives
+			// the surplus to Configured (the RepeatedChurn arm); without it
+			// the runway over-acquire is reclaim-free.
+			if recls != 0 {
+				t.Errorf("one-time deficit must not reclaim: recl=%d (dwell=%d)", recls, dwell)
+			}
 			dumpTrace(t, res)
 		})
 	}
