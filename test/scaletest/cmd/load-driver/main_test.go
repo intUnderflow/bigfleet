@@ -720,3 +720,44 @@ bursts:
 		t.Errorf("parsed burst = %+v, want {600 gpu-training-large 1 600 1.0}", b)
 	}
 }
+
+// TestPreBindPlateau pins the bigfleet-uber #73 yield logic: a fill that
+// keeps making progress never plateaus; one stalled at a floor below
+// want/10 plateaus after `passes` non-improving polls; one stuck high
+// (never below want/10) never plateaus (that's a different failure the
+// 45-min valve backstops, not the endogenous-churn floor).
+func TestPreBindPlateau(t *testing.T) {
+	const want = 1000
+
+	// Still-progressing fill: every poll sets a new low → never plateaus.
+	p := newPreBindPlateau(want, 3)
+	for _, u := range []int{900, 700, 500, 300, 150, 50} {
+		if p.observe(u) {
+			t.Fatalf("plateau declared while still progressing at unbound=%d", u)
+		}
+	}
+	// Now stalled above the established floor (50 < want/10=100): three
+	// non-improving polls trip it.
+	if p.observe(60) {
+		t.Fatal("stall=1 should not plateau yet")
+	}
+	if p.observe(55) {
+		t.Fatal("stall=2 should not plateau yet")
+	}
+	if !p.observe(70) {
+		t.Fatal("stall=3 past the established floor (over 90 pct filled) should plateau")
+	}
+
+	// Stuck high: min never drops below want/10, so stalling must NOT
+	// plateau — preBind keeps trying / the valve backstops.
+	q := newPreBindPlateau(want, 2)
+	if q.observe(500) { // new low (from want+1), min=500
+		t.Fatal("first observe is always a new low")
+	}
+	if q.observe(500) { // stall=1, but min 500 >= want/10 100
+		t.Fatal("stuck at 50% filled must not plateau")
+	}
+	if q.observe(520) { // stall=2 >= passes, but min 500 >= 100
+		t.Fatal("stuck above want/10 must not plateau regardless of stall")
+	}
+}

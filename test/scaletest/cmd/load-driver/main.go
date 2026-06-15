@@ -1379,6 +1379,45 @@ const preBindConcurrency = 64
 // declare done on "0 unbound" until the live Pod count has reached the
 // target — otherwise it could exit before the controllers have created
 // every Pod.
+// preBindPlateauPasses is how many consecutive ~2s polls with no new
+// unbound-count low mark the initial fill as plateaued (~60s at the 2s
+// poll interval). Long enough that a still-progressing fill — which keeps
+// setting new lows — never trips it.
+const preBindPlateauPasses = 30
+
+// preBindPlateau detects when the initial fill has stalled at a floor it
+// cannot pass — the #66/#67 endogenous-churn equilibrium, where BigFleet
+// reclaims machines as fast as preBind rebinds, so the unbound count never
+// reaches zero. Once the fleet is >90% filled (min below want/10) and
+// `passes` consecutive polls set no new low, preBind should yield to the
+// steady phase instead of retrying to a 100% the floor makes unreachable
+// (bigfleet-uber #73: a never-returning preBind starved the steady-churn
+// phase and the burst).
+type preBindPlateau struct {
+	want   int
+	passes int
+	min    int
+	stall  int
+}
+
+func newPreBindPlateau(want, passes int) *preBindPlateau {
+	return &preBindPlateau{want: want, passes: passes, min: want + 1}
+}
+
+// observe records the current unbound count and reports whether the fill
+// has plateaued. Call only after the workload controllers have created
+// every Pod (len(allPods) >= want) so the creation ramp's rising unbound
+// count doesn't pollute the floor.
+func (p *preBindPlateau) observe(unbound int) bool {
+	if unbound < p.min {
+		p.min = unbound
+		p.stall = 0
+		return false
+	}
+	p.stall++
+	return p.min < p.want/10 && p.stall >= p.passes
+}
+
 func (d *driver) preBindInitialPods(ctx context.Context) {
 	d.log.Info("pre-bind: binding initial Pods to fake-Nodes as they appear")
 	// Safety valve only — the loop exits as soon as every initial Pod is
@@ -1386,6 +1425,7 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 	// pre-bind rate (bigfleet-uber #43).
 	deadline := time.Now().Add(45 * time.Minute)
 	want := d.activeCount()
+	plateau := newPreBindPlateau(want, preBindPlateauPasses)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -1504,6 +1544,17 @@ func (d *driver) preBindInitialPods(ctx context.Context) {
 		wg.Wait()
 		if b := bound.Load(); b > 0 {
 			d.log.Info("pre-bind progress", "bound_this_pass", b, "still_unbound", int64(len(unbound.Items))-b)
+		}
+		// bigfleet-uber #73: yield to the steady phase once the fill has
+		// plateaued at the endogenous-churn floor — retrying to a 100%
+		// the floor makes unreachable would loop to the 45-min valve,
+		// starving steady churn + the burst. Only checked once the
+		// controllers have created every Pod (len(allPods) >= want), so
+		// the creation ramp's rising unbound count can't pollute the floor.
+		if len(allPods.Items) >= want && plateau.observe(len(unbound.Items)) {
+			d.log.Info("pre-bind: fill plateaued at the endogenous-churn floor; yielding to steady-state",
+				"unbound_floor", plateau.min, "want", want)
+			return
 		}
 		if time.Now().After(deadline) {
 			d.log.Warn("pre-bind: deadline reached with Pods still unbound")
