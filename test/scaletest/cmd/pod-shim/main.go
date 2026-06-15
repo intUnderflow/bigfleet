@@ -75,7 +75,7 @@ const fieldIndexPodNodeName = "spec.nodeName"
 var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Name:    "bigfleet_scaletest_pod_bind_latency_seconds",
 	Help:    "BigFleet-internal binding latency: wall-clock from Pod.metadata.creationTimestamp to the bigfleet-scaletest-pod-shim issuing the binding subresource Create on a fake Node. Per-Pod granularity. Records every Pod, including initial-fill thundering-herd ramps. ADR-0018: the harness fake provider returns instantly, so this measures BigFleet's contribution only.",
-	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12), // 0.05s, 0.1s, 0.2s, ... 102.4s
+	Buckets: prometheus.ExponentialBuckets(0.05, 2, 16), // M79.4: was 12 (top 102.4s, saturated #77); 16 -> top 1638.4s
 })
 
 // podBindLatencySteadySeconds is the SLO-bearing histogram. Records
@@ -87,9 +87,11 @@ var podBindLatencySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 // bursts, not a 50K-Pod cold start). Excluding the fill keeps the SLO
 // honest about what users actually feel.
 var podBindLatencySteadySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
-	Name:    "bigfleet_scaletest_pod_bind_latency_steady_seconds",
-	Help:    "BigFleet-internal binding latency for STEADY-STATE Pods only — those carrying bigfleet.lucy.sh/steady-state=true (created by the load-driver after the cluster reached its target Pod count). The runner's SLO gates on this rather than the all-Pods histogram so the cluster's initial-fill thundering herd doesn't dominate the p99.",
-	Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+	Name: "bigfleet_scaletest_pod_bind_latency_steady_seconds",
+	Help: "BigFleet-internal binding latency for STEADY-STATE Pods only — those carrying bigfleet.lucy.sh/steady-state=true (created by the load-driver after the cluster reached its target Pod count). The runner's SLO gates on this rather than the all-Pods histogram so the cluster's initial-fill thundering herd doesn't dominate the p99.",
+	// M79.4: widened 12->16 in lockstep with the load-driver emitter of
+	// this SAME metric name (le-sets must agree for sum-by-le quantiles).
+	Buckets: prometheus.ExponentialBuckets(0.05, 2, 16),
 })
 
 // M44.4 chain-drop diagnostic counters. The 50K-Pod-mode cloud run
@@ -130,12 +132,12 @@ var (
 	upcomingToNodeLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "bigfleet_scaletest_pod_shim_upcoming_to_node_latency_seconds",
 		Help:    "Wall-clock from UpcomingNode CR creation to fake-Node Create succeeding in this pod-shim. Captures the reconciler's queue + per-event handler time; a flat distribution here means the fake-Node controller is keeping up, a long tail means controller-runtime queueing.",
-		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 16), // M79.4: 12->16 (top 102.4s->1638.4s)
 	})
 	nodeToBoundLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "bigfleet_scaletest_pod_shim_node_to_bound_latency_seconds",
 		Help:    "Wall-clock from fake-Node creation to successful Bind for the Pod that ends up on it. Includes Watches(Node) re-enqueue, podBinder Reconcile queueing, candidate-Node scan, claim Patch, and the /binding RPC. The 'how long does pod-shim sit on a Ready Node before getting a Pod onto it?' question.",
-		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 16), // M79.4: 12->16 (top 102.4s->1638.4s)
 	})
 )
 

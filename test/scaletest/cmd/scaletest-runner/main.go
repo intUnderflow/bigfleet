@@ -1795,6 +1795,14 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// healthy, what's the user-facing latency of an arriving
 		// Pod?"
 		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`,
+		// M79.4: non-saturating cross-check for the p99 above. The p99 is a
+		// histogram_quantile, which CANNOT exceed the top finite bucket — so
+		// a p99 sitting on the top le reads as a clean number even when the
+		// true tail is far higher (this silently produced bigfleet-uber #77's
+		// bogus "76-102s" on the old 102.4s ceiling). This gauge is the raw
+		// running max; if it greatly exceeds the p99, the histogram is
+		// saturating and the p99 must not be trusted as the real tail.
+		"internalBindingLatencyMaxSeconds": `max(bigfleet_scaletest_pod_bind_latency_steady_max_seconds)`,
 		// Drop Q: pod-shim chain breakdown. Together with shardProvisioning*
 		// (Phase 1 emit → Bootstrap complete) these localise where the
 		// internalBindingLatencyP99Seconds tail lives. UpcomingNode-to-Node

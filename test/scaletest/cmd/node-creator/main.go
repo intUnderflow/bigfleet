@@ -65,9 +65,10 @@ var (
 	// In the ADR-0023 split this is the only chain stage the
 	// node-creator owns; everything downstream is kube-scheduler.
 	upcomingToNodeLatency = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "bigfleet_scaletest_node_creator_upcoming_to_node_latency_seconds",
-		Help:    "Wall-clock from UpcomingNode CR creation to fake-Node Create succeeding. A flat distribution means node-creator is keeping up; a long tail means controller-runtime queueing or apiserver write contention.",
-		Buckets: []float64{0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4, 12.8, 25.6, 51.2, 102.4},
+		Name: "bigfleet_scaletest_node_creator_upcoming_to_node_latency_seconds",
+		Help: "Wall-clock from UpcomingNode CR creation to fake-Node Create succeeding. A flat distribution means node-creator is keeping up; a long tail means controller-runtime queueing or apiserver write contention.",
+		// M79.4: was top le 102.4s (saturated under #77's tail); widened to 1638.4s.
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 16),
 	})
 	// boundPods is updated by a polling goroutine that lists Pods
 	// with `spec.nodeName!=""` and reports the count. Acts as the

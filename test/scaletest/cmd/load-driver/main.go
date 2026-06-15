@@ -260,9 +260,26 @@ var (
 	// after the steady phase began, which is the churn/burst population
 	// by construction.
 	bindLatencySteady = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "bigfleet_scaletest_pod_bind_latency_steady_seconds",
-		Help:    "BigFleet-internal binding latency for steady-state Pods: wall-clock from Pod.metadata.creationTimestamp to the load-driver observing spec.nodeName set, for Pods created after the steady phase began (initial-fill and pre-bound Pods are excluded). Emitted by the load-driver in kube-scheduler mode; pod-shim emits the same histogram on the legacy path.",
-		Buckets: prometheus.ExponentialBuckets(0.05, 2, 12),
+		Name: "bigfleet_scaletest_pod_bind_latency_steady_seconds",
+		Help: "BigFleet-internal binding latency for steady-state Pods: wall-clock from Pod.metadata.creationTimestamp to the load-driver observing spec.nodeName set, for Pods created after the steady phase began (initial-fill and pre-bound Pods are excluded). Emitted by the load-driver in kube-scheduler mode; pod-shim emits the same histogram on the legacy path.",
+		// M79.4: widened from (0.05,2,12) [top le 102.4s] to (0.05,2,16)
+		// [top le 1638.4s ~27min]. bigfleet-uber #77's "p99 76-102s" sat
+		// EXACTLY on the old 102.4s ceiling -> histogram_quantile cannot
+		// exceed the top finite le, so a real tail above ~51s was reported
+		// as a pegged 102.4 and silently mis-read as an engine breach. The
+		// new buckets are a superset (same start/factor) so dashboards keep
+		// working; bindLatencySteadyMax below is the non-saturating cross-check.
+		Buckets: prometheus.ExponentialBuckets(0.05, 2, 16),
+	})
+
+	// bindLatencySteadyMax is the non-saturating companion to the bucketed
+	// histogram above: a running max of the same observation. A histogram
+	// p99 sitting on its top bucket is indistinguishable from one many
+	// times higher; this gauge makes saturation impossible to miss. The
+	// runner reads it alongside the p99 (M79.4, after #77).
+	bindLatencySteadyMax = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bigfleet_scaletest_pod_bind_latency_steady_max_seconds",
+		Help: "Running max of steady-state Pod bind latency (creationTimestamp -> spec.nodeName), non-saturating. Cross-check for the bucketed pod_bind_latency_steady histogram: if its p99 sits on the top bucket, read this for the true tail. Monotonic within a run.",
 	})
 
 	// Drop U: per-phase wall-clock start time. Combined with time() in
@@ -951,7 +968,9 @@ func (d *driver) watchSteadyBinds(ctx context.Context) {
 				return
 			}
 			if lat, ok := steadyBindLatency(pod, cut); ok {
-				bindLatencySteady.Observe(lat.Seconds())
+				s := lat.Seconds()
+				bindLatencySteady.Observe(s)
+				observeBindLatencyMax(s)
 			}
 		},
 	})
@@ -989,6 +1008,23 @@ func steadyBindLatency(pod *corev1.Pod, cutoff time.Time) (time.Duration, bool) 
 		return 0, false
 	}
 	return time.Since(pod.CreationTimestamp.Time), true
+}
+
+// bindLatencyMax tracks the running max bind latency under its own lock so
+// the bindLatencySteadyMax gauge never saturates the way the histogram can
+// (M79.4). Set only ratchets up; the gauge mirrors it.
+var (
+	bindLatencyMaxMu      sync.Mutex
+	bindLatencyMaxSeconds float64
+)
+
+func observeBindLatencyMax(s float64) {
+	bindLatencyMaxMu.Lock()
+	if s > bindLatencyMaxSeconds {
+		bindLatencyMaxSeconds = s
+		bindLatencySteadyMax.Set(s)
+	}
+	bindLatencyMaxMu.Unlock()
 }
 
 // markSteadyState flips the steady-state metric the first time the
