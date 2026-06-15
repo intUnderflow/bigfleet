@@ -1,3 +1,13 @@
+# ⚠ DEPRECATED (2026-06-15) — do not use for the realism baseline.
+# This is the legacy V1 flat-seed profile (seedMachines, no archetypes):
+# it CANNOT produce a per-archetype machine mix, so it can't be the
+# realism uber-5k. The canonical realism uber-5k is the V2 `5k.yaml`
+# + the ADR-0050 `realistic` catalog + a substrate (validated clean in
+# bigfleet-uber #72 / M78). Kept only as a flat-seed compatibility shape;
+# slated for deletion with the rest of the legacy uber-*/scaleway-*
+# profiles in M50.7 (the full legacy sweep + public uber-* naming
+# convention is an author-directed cleanup).
+#
 # uber-5k — 5K-machine fleet, 500K aggregated Pods at density=100.
 #
 # Topology: 2 hosts × 10 kwok clusters per host = 20 clusters total,
