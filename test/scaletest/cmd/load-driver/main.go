@@ -707,9 +707,10 @@ func (d *driver) runBursts(ctx context.Context, startedAt time.Time) {
 		}
 		var arch *archetype.Archetype
 		if b.Archetype != "" {
-			// archByName indexes the FULL demand catalog including
-			// burstOnly archetypes (only NewPicker skips those), so a
-			// burst can name an archetype the steady draw never produces.
+			// archByName indexes demandArchetypes() — the full Archetypes
+			// list (incl. burstOnly entries; only NewPicker filters those
+			// for the steady draw) unless the profile sets DemandArchetypes.
+			// So a burst can name an archetype the steady draw never produces.
 			arch = d.archByName[b.Archetype]
 			if arch == nil {
 				d.log.Warn("burst archetype not found in catalog; falling back to steady picker", "archetype", b.Archetype)
@@ -848,6 +849,13 @@ func (d *driver) rampExtra(ctx context.Context, extra int, forced *archetype.Arc
 // drainBurst deletes every workload object created by a burst. The
 // objects' controllers tear down their Pods, returning demand to the
 // pre-burst target.
+// drainBurst deletes EVERY workload tagged burst=true. This is correct for
+// a single burst or non-overlapping bursts (each has drained before the next
+// fires), but it does NOT distinguish which burst created which objects — so
+// two bursts with OVERLAPPING [fireAt,drainAt) windows would have the first
+// drain delete the second's still-in-flight objects. No profile uses
+// overlapping bursts today; a future one that does must give pendingBurst its
+// own object set instead of this whole-tag sweep.
 func (d *driver) drainBurst(ctx context.Context) {
 	d.mu.Lock()
 	var names []string
