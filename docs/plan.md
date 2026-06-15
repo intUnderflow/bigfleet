@@ -931,3 +931,27 @@ continues elsewhere; see the production-readiness audit for context):
    unmet telemetry — YAGNI). M68 dissolves into the M67 deletion.
 3. M76 — which substrate the reference provider targets.
 4. uber-500k and above — external approval, per standing policy.
+5. **Steady pod-bind p99 tail (uber-5k publish gate; bigfleet-uber #77,
+   2026-06-15).** On the ADR-0052-fixed engine the over-acquire is gone
+   and all engine SLOs are clean, but the steady **pod-bind p99 is
+   76–102s vs the ≤15s SLO** (p50/p90 pass). It is *not* the over-acquire
+   (≈0 at Create-latency=0). The #77 verdict attributed it to a 327s
+   "provision stage", but that is the **saturated** `shard_provisioning_
+   latency` histogram (top bucket = 0.01·2¹⁵ = 327.68s; Help: "per-CR
+   granularity not preserved … fingerprint-level fan-out") — a category
+   error for per-pod bind. The trustworthy per-machine stages (configure
+   0.56s, node-creation 1.6s, pod-shim work 0.76s) are all fast, so the
+   tail lives in the unmeasured gap: demand-recognition (rollup interval)
+   + cold-provision of the *specific churned shape* (the profile has warm
+   headroom: speculativeMultiplier 3, idleHeadroomFraction 0.2 — so not
+   gross-utilization starvation). **Decision (ADR-0043 order):** (a)
+   realism — is the churn-rate / rollup-interval / shape-headroom regime
+   production-real? (b) SLO posture — ≤15s p99 for a cold-provision
+   rebind under churn is physically tight (Create + 3-cycle bootstrap ≈
+   12–15s); reframe to p50/p90 or a regime-aware target (ADR-0028
+   precedent)? (c) engine — only if (a)+(b) say regime+target are right,
+   and after re-instrumenting the saturating metric. The bind-SLO-pass
+   *publish claim* for uber-5k is parked on this; the engine baseline
+   (over-acquire fixed, SLOs clean, 0 shortfalls) stands. Loop's teed-up
+   diagnostic (fork-agnostic, doesn't pre-commit): a Docker-free
+   closed-loop sim characterization of the tail's composition.
