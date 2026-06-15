@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1340" role="img" aria-label="BigFleet complete system map: control plane (coordinator Raft group, off the hot path) over an autonomous data plane (clusters, operators, shards, providers, capacity pool)." font-family="ui-sans-serif, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+  <style>
+    .bg{fill:#f7f8fa;stroke:#cfd5dc;} .accent{fill:#e6efff;stroke:#2c5fb8;} .pool{fill:#f0ece4;stroke:#b8a672;}
+    .sub{fill:#ffffff;stroke:#cfd5dc;} .label{fill:#1a1d21;} .muted{fill:#5a6168;} .accentText{fill:#1f4488;}
+    .arrow{stroke:#5a6168;fill:none;} .arrowhead{fill:#5a6168;} .annot{fill:#5a6168;font-style:italic;}
+    .ctrl{stroke:#2c5fb8;fill:none;stroke-dasharray:5 3;} .ctrlhead{fill:#2c5fb8;} .group{fill:none;stroke:#cfd5dc;stroke-dasharray:3 3;}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#1f2226;stroke:#4a525c;} .accent{fill:#1d2c4a;stroke:#6e9bdc;} .pool{fill:#2a261d;stroke:#7a6e4b;}
+      .sub{fill:#262a2f;stroke:#4a525c;} .label{fill:#e6e8eb;} .muted{fill:#9aa3ad;} .accentText{fill:#9bbef0;}
+      .arrow{stroke:#9aa3ad;} .arrowhead{fill:#9aa3ad;} .annot{fill:#9aa3ad;}
+      .ctrl{stroke:#6e9bdc;} .ctrlhead{fill:#6e9bdc;} .group{stroke:#4a525c;}
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" stroke="none"/></marker>
+    <marker id="ctrlarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" class="ctrlhead" stroke="none"/></marker>
+  </defs>
+
+  <!-- ================= TITLE ================= -->
+  <text class="label" x="36" y="40" font-size="22" font-weight="700">BigFleet — complete system map</text>
+  <text class="muted" x="36" y="62" font-size="13">Control plane (Raft coordinator, off the hot path) over an autonomous data plane. Data-plane edges solid grey; control-plane edges blue dashed.</text>
+
+  <!-- ================= PLANE DIVIDER ================= -->
+  <line x1="36" y1="618" x2="1764" y2="618" class="group" stroke-width="1.5"/>
+  <rect class="accent" x="36" y="80" width="240" height="26" rx="6" stroke-width="1.2" opacity="0.55"/>
+  <text class="accentText" x="48" y="98" font-size="13" font-weight="600">CONTROL PLANE — off the hot path</text>
+  <rect class="bg" x="36" y="628" width="232" height="26" rx="6" stroke-width="1.2" opacity="0.65"/>
+  <text class="label" x="48" y="646" font-size="13" font-weight="600">DATA PLANE — autonomous (static stability)</text>
+
+  <!-- legend -->
+  <g>
+    <rect class="sub" x="1384" y="80" width="380" height="62" rx="8" stroke-width="1.2"/>
+    <text class="label" x="1398" y="100" font-size="12" font-weight="600">Legend</text>
+    <line x1="1398" y1="116" x2="1436" y2="116" class="arrow" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text class="muted" x="1444" y="120" font-size="11">data plane (gRPC / k8s API)</text>
+    <line x1="1398" y1="132" x2="1436" y2="132" class="ctrl" stroke-width="1.6" marker-end="url(#ctrlarrow)"/>
+    <text class="muted" x="1444" y="136" font-size="11">control plane (ReportShard / Raft / admin)</text>
+  </g>
+
+  <!-- ============================================================= -->
+  <!-- ===================== CONTROL PLANE ========================= -->
+  <!-- ============================================================= -->
+
+  <!-- Coordinator group container -->
+  <rect class="group" x="372" y="118" width="980" height="478" rx="14" stroke-width="1.4"/>
+  <text class="accentText" x="392" y="142" font-size="15" font-weight="600">Coordinator (Tier 1) — single Raft group, single region</text>
+  <text class="muted" x="392" y="160" font-size="11">pkg/coordinator · hashicorp/raft + BoltDB · slow-changing, ~few MB · the cycle hot path NEVER reads this · Raft = log + snapshots (leader→followers) + votes/acks (TCP :7791)</text>
+
+  <!-- Leader replica -->
+  <rect class="accent" x="396" y="180" width="430" height="392" rx="12" stroke-width="2"/>
+  <text class="accentText" x="411" y="204" font-size="14" font-weight="600">Coordinator leader replica (AZ-a)</text>
+  <text class="muted" x="411" y="221" font-size="10.5">the only replica that serves RPCs · leader-only by construction</text>
+
+  <rect class="sub" x="411" y="234" width="400" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="421" y="251" font-size="11" font-weight="600">gRPC server + Coordinator.Apply (write path)</text>
+  <text class="muted" x="421" y="266" font-size="10">leader-only · 5s timeout · followers → FailedPrecondition (redirect)</text>
+
+  <rect class="sub" x="411" y="282" width="400" height="46" rx="6" stroke-width="1"/>
+  <text class="label" x="421" y="299" font-size="11" font-weight="600">FSM (raft.FSM over *State) — 7 Command kinds</text>
+  <text class="muted" x="421" y="314" font-size="10">AddShard · RemoveShard · BindCluster · AssignDomain ·</text>
+  <text class="muted" x="421" y="325" font-size="10">UnassignDomain · SetQuota · UpsertProvider</text>
+
+  <!-- Replicated State sub-box -->
+  <rect class="accent" x="411" y="338" width="400" height="158" rx="8" stroke-width="1.4"/>
+  <text class="accentText" x="421" y="356" font-size="12" font-weight="600">Replicated State (FSM *State, RWMutex)</text>
+  <rect class="sub" x="421" y="364" width="380" height="22" rx="4" stroke-width="0.9"/>
+  <text class="label" x="429" y="379" font-size="10">shards map — membership / registry (ID, addr, heartbeat)</text>
+  <rect class="sub" x="421" y="389" width="380" height="22" rx="4" stroke-width="0.9"/>
+  <text class="label" x="429" y="404" font-size="10">clusterToShard — first-contact-wins binding (visible copy)</text>
+  <rect class="sub" x="421" y="414" width="380" height="22" rx="4" stroke-width="0.9"/>
+  <text class="label" x="429" y="429" font-size="10">domainToShard — per-topology-domain (~100K), never crosses</text>
+  <rect class="sub" x="421" y="439" width="380" height="22" rx="4" stroke-width="0.9"/>
+  <text class="label" x="429" y="454" font-size="10">quotas (provider,region) — per-shard speculative slices</text>
+  <rect class="sub" x="421" y="464" width="380" height="22" rx="4" stroke-width="0.9"/>
+  <text class="label" x="429" y="479" font-size="10">providers — out-of-tree provider registry (name, addr, region)</text>
+
+  <rect class="sub" x="411" y="504" width="400" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="421" y="521" font-size="10.5" font-weight="600">soft state (leader-LOCAL, not replicated)</text>
+  <text class="muted" x="421" y="536" font-size="10">latestSummary · latestShortfalls · pending[] queue · FSM.seq fence</text>
+
+  <!-- BoltDB / snapshot persistence -->
+  <rect class="sub" x="411" y="550" width="400" height="14" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="421" y="560" font-size="9.5">BoltDB raft-log.db + raft-stable.db · FileSnapshotStore (30s / thr 1024) · snapshot export every 5min → SnapshotExportDir</text>
+
+  <!-- Followers -->
+  <rect class="accent" x="848" y="180" width="240" height="178" rx="12" stroke-width="1.6"/>
+  <text class="accentText" x="862" y="204" font-size="13" font-weight="600">Follower replica #1 (AZ-b)</text>
+  <text class="muted" x="862" y="222" font-size="10">non-leader voter · rejects client/shard</text>
+  <text class="muted" x="862" y="236" font-size="10">RPCs with FailedPrecondition</text>
+  <rect class="sub" x="862" y="246" width="212" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="872" y="263" font-size="10" font-weight="600">FSM / State copy</text>
+  <text class="muted" x="872" y="278" font-size="9.5">applies same Commands · election-eligible</text>
+  <rect class="sub" x="862" y="298" width="212" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="872" y="315" font-size="10" font-weight="600">on failover → promote</text>
+  <text class="muted" x="872" y="330" font-size="9.5">resumes export · fresh fence seq under new term</text>
+
+  <rect class="accent" x="848" y="378" width="240" height="178" rx="12" stroke-width="1.6"/>
+  <text class="accentText" x="862" y="402" font-size="13" font-weight="600">Follower replica #2 (AZ-c)</text>
+  <text class="muted" x="862" y="420" font-size="10">non-leader voter · same as #1</text>
+  <text class="muted" x="862" y="434" font-size="10">quorum member</text>
+  <rect class="sub" x="862" y="444" width="212" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="872" y="461" font-size="10" font-weight="600">FSM / State copy</text>
+  <text class="muted" x="872" y="476" font-size="9.5">applies same Commands · election-eligible</text>
+  <rect class="sub" x="862" y="496" width="212" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="872" y="513" font-size="10" font-weight="600">RequestVote / AppendEntries</text>
+  <text class="muted" x="872" y="528" font-size="9.5">grants votes · acks commits</text>
+
+  <!-- Raft replication edges leader <-> followers. Down-edge (log+snapshots) at top, up-edge (votes/acks) below. -->
+  <g class="ctrl" stroke-width="1.6" stroke-linecap="round">
+    <path d="M 826 244 L 848 244" marker-end="url(#ctrlarrow)"/>
+    <path d="M 848 268 L 826 268" marker-end="url(#ctrlarrow)"/>
+    <path d="M 826 464 L 848 464" marker-end="url(#ctrlarrow)"/>
+    <path d="M 848 488 L 826 488" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="837" y="238" font-size="9.5" transform="rotate(-90 837 238)" text-anchor="end">Raft</text>
+  <text class="annot" x="837" y="458" font-size="9.5" transform="rotate(-90 837 458)" text-anchor="end">Raft</text>
+
+  <!-- bigfleetctl admin client -->
+  <rect class="bg" x="1112" y="180" width="216" height="200" rx="12" stroke-width="1.6"/>
+  <text class="label" x="1126" y="204" font-size="13" font-weight="600">bigfleetctl</text>
+  <text class="muted" x="1126" y="221" font-size="10">admin client · operational tool,</text>
+  <text class="muted" x="1126" y="234" font-size="10">not a runtime component</text>
+  <rect class="sub" x="1126" y="244" width="188" height="60" rx="6" stroke-width="1"/>
+  <text class="label" x="1136" y="261" font-size="10" font-weight="600">admin RPCs (leader-only)</text>
+  <text class="muted" x="1136" y="276" font-size="9.5">AssignDomain · UnassignDomain ·</text>
+  <text class="muted" x="1136" y="289" font-size="9.5">RemoveShard · ListShards · ListQuotas ·</text>
+  <text class="muted" x="1136" y="300" font-size="9.5">ListDomainAssignments</text>
+  <rect class="sub" x="1126" y="312" width="188" height="56" rx="6" stroke-width="1"/>
+  <text class="label" x="1136" y="329" font-size="10" font-weight="600">SnapshotSave (DR, M75)</text>
+  <text class="muted" x="1136" y="344" font-size="9.5">server-stream: meta frame +</text>
+  <text class="muted" x="1136" y="356" font-size="9.5">1 MiB state chunks · leader-only</text>
+
+  <!-- bigfleetctl -> leader edge: route below the followers (empty band y~584) to avoid crossing them -->
+  <g class="ctrl" stroke-width="1.6" stroke-linecap="round">
+    <path d="M 1220 380 L 1220 584 L 611 584 L 611 572" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="1208" y="578" font-size="10" text-anchor="end">admin gRPC + SnapshotSave · opt-in mTLS (bigfleet://admin) · leader-only</text>
+
+  <!-- ============================================================= -->
+  <!-- ====================== DATA PLANE =========================== -->
+  <!-- ============================================================= -->
+
+  <!-- ============ CLUSTERS (left) ============ -->
+  <rect class="group" x="36" y="672" width="356" height="608" rx="14" stroke-width="1.4"/>
+  <text class="label" x="54" y="696" font-size="14" font-weight="600">Kubernetes clusters (managed) — N</text>
+  <text class="muted" x="54" y="712" font-size="10.5">unschedulable demand drives BigFleet · BigFleet is NOT a scheduler</text>
+
+  <!-- Cluster 1 (expanded) -->
+  <rect class="bg" x="54" y="726" width="320" height="430" rx="11" stroke-width="1.6"/>
+  <text class="label" x="68" y="748" font-size="13" font-weight="600">Cluster #1</text>
+  <rect class="sub" x="68" y="758" width="292" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="78" y="774" font-size="10" font-weight="600">Pods / workloads</text>
+  <text class="muted" x="78" y="789" font-size="9.5">resource requests · nodeAffinity · podAffinity</text>
+  <text class="muted" x="78" y="799" font-size="9.5">(co-location) · PriorityClass · penalty annots</text>
+
+  <rect class="sub" x="68" y="808" width="292" height="34" rx="6" stroke-width="1"/>
+  <text class="label" x="78" y="824" font-size="10" font-weight="600">kube-scheduler</text>
+  <text class="muted" x="78" y="837" font-size="9.5">binds Pod → Node · BigFleet never places pods</text>
+
+  <rect class="sub" x="68" y="848" width="292" height="34" rx="6" stroke-width="1"/>
+  <text class="label" x="78" y="864" font-size="10" font-weight="600">kubelet / Nodes</text>
+  <text class="muted" x="78" y="877" font-size="9.5">registers Node from bootstrap blob (join creds)</text>
+
+  <rect class="sub" x="68" y="888" width="292" height="34" rx="6" stroke-width="1"/>
+  <text class="label" x="78" y="904" font-size="10" font-weight="600">kube-apiserver</text>
+  <text class="muted" x="78" y="917" font-size="9.5">stores CRs · serves operator's informer cache</text>
+
+  <rect class="sub" x="68" y="928" width="142" height="42" rx="6" stroke-width="1"/>
+  <text class="label" x="78" y="944" font-size="9.5" font-weight="600">PriorityClasses</text>
+  <text class="muted" x="78" y="957" font-size="9">penalty defaults</text>
+  <text class="muted" x="78" y="966" font-size="9">(YAML, M16)</text>
+  <rect class="sub" x="218" y="928" width="142" height="42" rx="6" stroke-width="1"/>
+  <text class="label" x="228" y="944" font-size="9.5" font-weight="600">PodDisruptionBudgets</text>
+  <text class="muted" x="228" y="957" font-size="9">honoured on drain</text>
+  <text class="muted" x="228" y="966" font-size="9">(429 → retried)</text>
+
+  <!-- UPC inside cluster panel -->
+  <rect class="bg" x="68" y="980" width="292" height="100" rx="9" stroke-width="1.4"/>
+  <text class="label" x="78" y="998" font-size="11" font-weight="600">bigfleet-unschedulable-pod-controller (UPC)</text>
+  <text class="muted" x="78" y="1012" font-size="9.5">OPTIONAL · 1 CR per Pod (ADR-0039, NOT per-unsched)</text>
+  <rect class="sub" x="78" y="1020" width="272" height="24" rx="5" stroke-width="0.9"/>
+  <text class="muted" x="86" y="1036" font-size="9.5">Pod watcher / reconciler · buildCRForPod · status stamper</text>
+  <rect class="sub" x="78" y="1048" width="272" height="24" rx="5" stroke-width="0.9"/>
+  <text class="muted" x="86" y="1064" font-size="9.5">terminal-Pod GC (DeleteAllOf, ADR-0045) · idempotent (Pod UID)</text>
+
+  <!-- CRs inside cluster panel -->
+  <rect class="bg" x="68" y="1090" width="292" height="56" rx="9" stroke-width="1.4"/>
+  <text class="label" x="78" y="1107" font-size="10.5" font-weight="600">CRs (kube-apiserver objects)</text>
+  <text class="muted" x="78" y="1121" font-size="9">CapacityRequest (namespaced, user-writable, 1/Pod): requirements (std ops) ·</text>
+  <text class="muted" x="78" y="1132" font-size="9">resources · priority · interruption+reclamation penalty · coLocation → Same</text>
+  <text class="muted" x="78" y="1142" font-size="9">AvailableCapacity + UpcomingNode (cluster-scoped, operator read-back)</text>
+
+  <!-- Cluster 2 + 3 (collapsed) -->
+  <rect class="bg" x="54" y="1166" width="156" height="100" rx="11" stroke-width="1.4"/>
+  <text class="label" x="68" y="1186" font-size="12" font-weight="600">Cluster #2</text>
+  <text class="muted" x="68" y="1204" font-size="9.5">same internals:</text>
+  <text class="muted" x="68" y="1217" font-size="9.5">pods · scheduler ·</text>
+  <text class="muted" x="68" y="1230" font-size="9.5">UPC · CRs · operator</text>
+  <text class="muted" x="68" y="1250" font-size="9.5">own outbound stream</text>
+
+  <rect class="bg" x="218" y="1166" width="156" height="100" rx="11" stroke-width="1.4"/>
+  <text class="label" x="232" y="1186" font-size="12" font-weight="600">Cluster #3 … N</text>
+  <text class="muted" x="232" y="1204" font-size="9.5">fan-in: each cluster</text>
+  <text class="muted" x="232" y="1217" font-size="9.5">dials its chosen shard</text>
+  <text class="muted" x="232" y="1230" font-size="9.5">(operator-chosen,</text>
+  <text class="muted" x="232" y="1243" font-size="9.5">permanent on first</text>
+  <text class="muted" x="232" y="1256" font-size="9.5">contact)</text>
+
+  <!-- ============ OPERATOR (per-cluster agent) ============ -->
+  <rect class="bg" x="420" y="672" width="356" height="608" rx="14" stroke-width="1.6"/>
+  <text class="label" x="438" y="696" font-size="14" font-weight="600">BigFleet operator (per-cluster)</text>
+  <text class="muted" x="438" y="712" font-size="10.5">cmd/operator · pkg/operator · OUTBOUND-ONLY (no inbound listener)</text>
+  <text class="muted" x="438" y="727" font-size="10.5">holds exactly ONE bidi Shard.Session · reconnect loop (500ms→30s)</text>
+
+  <rect class="sub" x="438" y="740" width="320" height="46" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="757" font-size="10.5" font-weight="600">Shard.Session stream client (cli.Session)</text>
+  <text class="muted" x="448" y="772" font-size="9.5">Hello(cluster_id, v1alpha1) → sendLoop / recvLoop /</text>
+  <text class="muted" x="448" y="782" font-size="9.5">rollupLoop under errGroup · mTLS URI SAN bind (ADR-0048)</text>
+
+  <rect class="sub" x="438" y="792" width="320" height="48" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="809" font-size="10.5" font-weight="600">send queues</text>
+  <text class="muted" x="448" y="824" font-size="9.5">pendingRollup (single-slot, coalesce-by-replace) ·</text>
+  <text class="muted" x="448" y="834" font-size="9.5">outbox (bounded 256, drop-newest: bootstrap resp / reclaim ack)</text>
+
+  <rect class="sub" x="438" y="846" width="320" height="48" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="863" font-size="10.5" font-weight="600">recvLoop dispatch</text>
+  <text class="muted" x="448" y="878" font-size="9.5">apiserver-writing handlers bounded (sem 32) ·</text>
+  <text class="muted" x="448" y="888" font-size="9.5">BootstrapRequest bypasses bound (CPU-only render)</text>
+
+  <rect class="sub" x="438" y="900" width="320" height="48" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="917" font-size="10.5" font-weight="600">rollupLoop (every 10s + on connect)</text>
+  <text class="muted" x="448" y="932" font-size="9.5">lists CRs (informer cache) · buildRollup aggregates by</text>
+  <text class="muted" x="448" y="942" font-size="9.5">(fingerprint, co-loc group) · full-replacement ClusterCapacityNeeds</text>
+
+  <rect class="sub" x="438" y="954" width="320" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="971" font-size="10.5" font-weight="600">Same translation + penalty bucketing</text>
+  <text class="muted" x="448" y="986" font-size="9.5">coLocation → protobuf-only Same (minted here) ·</text>
+  <text class="muted" x="448" y="995" font-size="9.5">dollars → powers-of-2 PenaltyBucket (interruption + reclamation)</text>
+
+  <rect class="sub" x="438" y="1004" width="320" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="1021" font-size="10.5" font-weight="600">BootstrapRenderer (ADR-0011)</text>
+  <text class="muted" x="448" y="1036" font-size="9.5">Helm-values text/template (file mount, parsed once) ·</text>
+  <text class="muted" x="448" y="1045" font-size="9.5">render error → response.Error → shard shortfall</text>
+
+  <rect class="sub" x="438" y="1054" width="320" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="1071" font-size="10.5" font-weight="600">reclaim handler (ADR-0009)</text>
+  <text class="muted" x="448" y="1086" font-size="9.5">cordon inline → ack-after-cordon-before-drain →</text>
+  <text class="muted" x="448" y="1095" font-size="9.5">async drainOneNode: policy/v1 eviction, PDB-respecting</text>
+
+  <rect class="sub" x="438" y="1104" width="320" height="44" rx="6" stroke-width="1"/>
+  <text class="label" x="448" y="1121" font-size="10.5" font-weight="600">CR writers (node state / availability / ack)</text>
+  <text class="muted" x="448" y="1136" font-size="9.5">UpcomingNode (MergeFrom, delete@Drained) · AvailableCapacity</text>
+  <text class="muted" x="448" y="1145" font-size="9.5">(sha256 name) · markAcknowledged (merge-patch, Pending→Ack)</text>
+
+  <rect class="sub" x="438" y="1154" width="320" height="30" rx="6" stroke-width="1"/>
+  <text class="muted" x="448" y="1173" font-size="9.5">controller-runtime cache client (in-process informer) · in-cluster k8s API</text>
+
+  <!-- ============ SHARDS (center) ============ -->
+  <rect class="group" x="804" y="672" width="540" height="608" rx="14" stroke-width="1.4"/>
+  <text class="accentText" x="822" y="696" font-size="14" font-weight="600">Shards (data plane) — horizontally scaled, ~500K machines each</text>
+  <text class="muted" x="822" y="712" font-size="10.5">autonomous cycles · pkg/shard MUST NOT import pkg/coordinator · topology never crosses shard boundary</text>
+
+  <!-- Shard #1 expanded -->
+  <rect class="accent" x="822" y="726" width="392" height="492" rx="12" stroke-width="2"/>
+  <text class="accentText" x="836" y="748" font-size="13" font-weight="600">Shard #1 (fully expanded)</text>
+
+  <rect class="sub" x="836" y="758" width="364" height="30" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="772" font-size="10" font-weight="600">Session server (Shard.Session endpoint)</text>
+  <text class="muted" x="846" y="783" font-size="9">validates Hello (mTLS SAN) · ≤1 session/cluster</text>
+
+  <rect class="sub" x="836" y="794" width="178" height="42" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="810" font-size="10" font-weight="600">NeedsTable (pkg/needs)</text>
+  <text class="muted" x="846" y="823" font-size="9">per-cluster, full-replacement,</text>
+  <text class="muted" x="846" y="832" font-size="9">priority-sorted Snapshot</text>
+  <rect class="sub" x="1022" y="794" width="178" height="42" rx="6" stroke-width="1"/>
+  <text class="label" x="1032" y="810" font-size="10" font-weight="600">Inventory (pkg/inventory)</text>
+  <text class="muted" x="1032" y="823" font-size="9">in-memory machines, 8 states,</text>
+  <text class="muted" x="1032" y="832" font-size="9">fresh Snapshot()/cycle (RLock)</text>
+
+  <rect class="sub" x="836" y="842" width="364" height="32" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="857" font-size="10" font-weight="600">reconcile loop (List + Get → Inventory · no Watch)</text>
+  <text class="muted" x="846" y="869" font-size="9">full or incremental (since_revision cursor) · runs before phases</text>
+
+  <rect class="sub" x="836" y="880" width="364" height="28" rx="6" stroke-width="1"/>
+  <text class="muted" x="846" y="893" font-size="9">cycle: snapshot NeedsTable + Inventory once · NormalizeDemand folds</text>
+  <text class="muted" x="846" y="903" font-size="9">sub-machine Same-gangs (ADR-0041) · stampParkedNeeds (ADR-0042)</text>
+
+  <!-- Decision engine box -->
+  <rect class="accent" x="836" y="914" width="364" height="118" rx="8" stroke-width="1.4"/>
+  <text class="accentText" x="846" y="931" font-size="11" font-weight="600">decision engine cycle (runCycleCapturing)</text>
+  <rect class="sub" x="846" y="938" width="344" height="28" rx="5" stroke-width="0.9"/>
+  <text class="label" x="854" y="951" font-size="9.5" font-weight="600">Phase 1 — assign (Omega-style OCC)</text>
+  <text class="muted" x="854" y="962" font-size="8.8">SeedConfiguredSupply → workers race pools → Claimed + Unsatisfied (Bootstrap/Provision)</text>
+  <rect class="sub" x="846" y="970" width="344" height="28" rx="5" stroke-width="0.9"/>
+  <text class="label" x="854" y="983" font-size="9.5" font-weight="600">Phase 2 — preempt inversions</text>
+  <text class="muted" x="854" y="994" font-size="8.8">consumes P1.Unsatisfied · VictimScore-sorted Preempt · residual → Unresolved</text>
+  <rect class="sub" x="846" y="1002" width="344" height="28" rx="5" stroke-width="0.9"/>
+  <text class="label" x="854" y="1015" font-size="9.5" font-weight="600">Phase 3 — reclaim + release (shrinkage-only)</text>
+  <text class="muted" x="854" y="1026" font-size="8.8">consumes P1.Claimed · Reclaim non-Claimed (ADR-0045) · Idle→Speculative Delete (M73)</text>
+
+  <rect class="sub" x="836" y="1038" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="1054" font-size="9.5" font-weight="600">actuation rails (ADR-0046)</text>
+  <text class="muted" x="846" y="1067" font-size="8.8">reclaim cap · empty-rollup</text>
+  <text class="muted" x="846" y="1076" font-size="8.8">quarantine · kill switch / dry-run</text>
+  <rect class="sub" x="1022" y="1038" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="1032" y="1054" font-size="9.5" font-weight="600">shortfall buffer (report.go)</text>
+  <text class="muted" x="1032" y="1067" font-size="8.8">aging ledger, top-100 ·</text>
+  <text class="muted" x="1032" y="1076" font-size="8.8">fed by P2.Unresolved</text>
+
+  <rect class="sub" x="836" y="1084" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="1100" font-size="9.5" font-weight="600">executeWorker pool (ADR-0021)</text>
+  <text class="muted" x="846" y="1113" font-size="8.8">off the cycle barrier · own</text>
+  <text class="muted" x="846" y="1122" font-size="8.8">per-action ctx · ExecuteTimeout 30s</text>
+  <rect class="sub" x="1022" y="1084" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="1032" y="1100" font-size="9.5" font-weight="600">fencing (pkg/fencing)</text>
+  <text class="muted" x="1032" y="1113" font-size="8.8">CoordinatorTerm hwm · Epoch</text>
+  <text class="muted" x="1032" y="1122" font-size="8.8">(persisted) · Sequence (per-proc)</text>
+
+  <rect class="sub" x="836" y="1130" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="1146" font-size="9.5" font-weight="600">provider client (grpcclient)</text>
+  <text class="muted" x="846" y="1159" font-size="8.8">dial-out · stamps fencing</text>
+  <text class="muted" x="846" y="1168" font-size="8.8">token on mutating RPCs</text>
+  <rect class="sub" x="1022" y="1130" width="178" height="40" rx="6" stroke-width="1"/>
+  <text class="label" x="1032" y="1146" font-size="9.5" font-weight="600">coordclient (OFF hot path)</text>
+  <text class="muted" x="1032" y="1159" font-size="8.8">own goroutine · imports pkg/shard,</text>
+  <text class="muted" x="1032" y="1168" font-size="8.8">NEVER reverse · only coord-aware code</text>
+
+  <rect class="sub" x="836" y="1176" width="364" height="32" rx="6" stroke-width="1"/>
+  <text class="label" x="846" y="1191" font-size="9.5" font-weight="600">AvailableCapacity emit · UpcomingNode notify</text>
+  <text class="muted" x="846" y="1202" font-size="8.8">one AC hint per (cluster, demanded fingerprint) · NodeStateUpdate on transition</text>
+
+  <!-- Shard #2 + #3 collapsed -->
+  <rect class="accent" x="822" y="1228" width="190" height="44" rx="10" stroke-width="1.6"/>
+  <text class="accentText" x="836" y="1247" font-size="12" font-weight="600">Shard #2</text>
+  <text class="muted" x="836" y="1262" font-size="9.5">same internals · own clusters · own provider dial</text>
+  <rect class="accent" x="1024" y="1228" width="190" height="44" rx="10" stroke-width="1.6"/>
+  <text class="accentText" x="1038" y="1247" font-size="12" font-weight="600">Shard #3 … M</text>
+  <text class="muted" x="1038" y="1262" font-size="9.5">uber-1m = 2 shards × 500K · all report to ONE coordinator</text>
+
+  <!-- ============ PROVIDER + POOL (right) ============ -->
+  <rect class="group" x="1432" y="672" width="332" height="608" rx="14" stroke-width="1.4"/>
+  <text class="label" x="1450" y="696" font-size="14" font-weight="600">Providers + capacity pool</text>
+  <text class="muted" x="1450" y="712" font-size="10.5">out-of-tree backends · six RPCs only, no Watch</text>
+
+  <!-- in-tree shard-side client/adapter -->
+  <rect class="pool" x="1450" y="726" width="296" height="92" rx="11" stroke-width="1.6"/>
+  <text class="label" x="1462" y="744" font-size="11" font-weight="600">in-tree shard-side bridge</text>
+  <rect class="sub" x="1462" y="752" width="272" height="26" rx="5" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="769" font-size="9">grpcclient.Client — only in-tree code on the wire · stamps fence · mTLS</text>
+  <rect class="sub" x="1462" y="782" width="272" height="14" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="792" font-size="8.5">grpcadapter.Server — wraps Go provider as server (conformance self-test)</text>
+  <rect class="sub" x="1462" y="800" width="272" height="14" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="810" font-size="8.5">fake.CapacityProvider — in-memory, test-only, NEVER deployed (ref impl)</text>
+
+  <!-- CapacityProvider -->
+  <rect class="pool" x="1450" y="830" width="296" height="158" rx="11" stroke-width="1.6"/>
+  <text class="label" x="1462" y="848" font-size="12" font-weight="600">CapacityProvider (out-of-tree)</text>
+  <text class="muted" x="1462" y="862" font-size="9.5">provider.proto · async-accept, idempotent, fenced</text>
+  <rect class="sub" x="1462" y="870" width="272" height="24" rx="5" stroke-width="0.9"/>
+  <text class="label" x="1470" y="886" font-size="9.5" font-weight="600">Create · Configure · Drain · Delete (mutating, fenced)</text>
+  <rect class="sub" x="1462" y="898" width="272" height="24" rx="5" stroke-width="0.9"/>
+  <text class="label" x="1470" y="914" font-size="9.5" font-weight="600">Get · List (reads, NO token · since_revision cursor)</text>
+  <rect class="sub" x="1462" y="926" width="272" height="24" rx="5" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="942" font-size="9">per-shard (epoch,seq) fence hwm → FAILED_PRECONDITION (zombie)</text>
+  <rect class="sub" x="1462" y="954" width="272" height="26" rx="5" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="970" font-size="9">provider-declared price + interruption_probability · metadata echo</text>
+  <text class="muted" x="1470" y="978" font-size="8.5">actuates real hosts (cloud-init / ignition / PXE)</text>
+
+  <!-- Capacity pool -->
+  <rect class="pool" x="1450" y="1000" width="296" height="262" rx="11" stroke-width="1.6"/>
+  <text class="label" x="1462" y="1018" font-size="12" font-weight="600">Capacity pool of Machines</text>
+  <text class="muted" x="1462" y="1032" font-size="9.5">pkg/machine · 8-state · ID stable · provider source-of-truth</text>
+  <text class="muted" x="1462" y="1046" font-size="9">effective_cost = price + prob × interruption_penalty (locked)</text>
+
+  <rect class="sub" x="1462" y="1054" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="label" x="1470" y="1068" font-size="9">Speculative (quota slot, host=nil)</text>
+  <rect class="sub" x="1462" y="1078" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="1092" font-size="9">Creating (Speculative→Idle)</text>
+  <rect class="sub" x="1462" y="1102" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="label" x="1470" y="1116" font-size="9">Idle (real host, cluster="")</text>
+  <rect class="sub" x="1462" y="1126" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="1140" font-size="9">Configuring (Idle→Configured, cluster known)</text>
+  <rect class="sub" x="1462" y="1150" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="label" x="1470" y="1164" font-size="9">Configured (host + cluster set; bound)</text>
+  <rect class="sub" x="1462" y="1174" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="1188" font-size="9">Draining (Configured→Idle) · Deleting (Idle→Spec, cloud)</text>
+  <rect class="sub" x="1462" y="1198" width="272" height="20" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="1212" font-size="9">Failed (transition timed out; terminal-pending-cleanup)</text>
+  <rect class="sub" x="1462" y="1222" width="272" height="32" rx="4" stroke-width="0.9"/>
+  <text class="muted" x="1470" y="1235" font-size="9">real hosts: cloud instances / bare-metal / spot</text>
+  <text class="muted" x="1470" y="1247" font-size="9">the provider actuates (bootstrap_blob applied)</text>
+
+  <!-- ===================== DATA-PLANE EDGES ===================== -->
+
+  <!-- cluster -> operator (rollup demand) : cluster panel right edge to operator left edge -->
+  <g class="arrow" stroke-width="1.8" stroke-linecap="round">
+    <path d="M 374 940 L 420 940" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="397" y="932" font-size="10" text-anchor="middle">CRs (k8s API,</text>
+  <text class="annot" x="397" y="956" font-size="10" text-anchor="middle">informer cache)</text>
+
+  <!-- operator -> shard : DATA (rollups up). operator right edge to shard #1 left edge -->
+  <g class="arrow" stroke-width="2" stroke-linecap="round">
+    <path d="M 776 812 L 822 812" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="799" y="792" font-size="10" text-anchor="middle">DIAL OUT ·</text>
+  <text class="annot" x="799" y="804" font-size="10" text-anchor="middle">rollups (full-repl)</text>
+
+  <!-- shard -> operator : DATA (frames down) -->
+  <g class="arrow" stroke-width="2" stroke-linecap="round">
+    <path d="M 822 1006 L 776 1006" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="799" y="1024" font-size="10" text-anchor="middle">Shard.Session</text>
+  <text class="annot" x="799" y="1036" font-size="10" text-anchor="middle">frames (down)</text>
+
+  <!-- shard <-> provider : DATA reconcile reads + mutations. shard right edge to bridge left edge -->
+  <g class="arrow" stroke-width="2" stroke-linecap="round">
+    <path d="M 1214 858 L 1450 770" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="1332" y="800" font-size="10" text-anchor="middle">Create/Configure/Drain/</text>
+  <text class="annot" x="1332" y="812" font-size="10" text-anchor="middle">Delete (fenced) · List/Get</text>
+
+  <!-- provider -> shard : acks + snapshots -->
+  <g class="arrow" stroke-width="2" stroke-linecap="round">
+    <path d="M 1450 904 L 1214 970" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="1332" y="958" font-size="10" text-anchor="middle">TransitionAck · Machine</text>
+  <text class="annot" x="1332" y="970" font-size="10" text-anchor="middle">List/Get (+revision)</text>
+
+  <!-- provider -> pool : actuation -->
+  <g class="arrow" stroke-width="1.8" stroke-linecap="round">
+    <path d="M 1588 988 L 1588 1000" marker-end="url(#arrow)"/>
+  </g>
+  <text class="annot" x="1596" y="996" font-size="10">actuate</text>
+  <!-- pool -> provider : observed -->
+  <g class="arrow" stroke-width="1.8" stroke-linecap="round">
+    <path d="M 1620 1000 L 1620 988" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- ===================== CONTROL-PLANE EDGES (cross-plane) ===================== -->
+
+  <!-- shard coordclient -> coordinator leader : ReportShard (PULL). Out the RIGHT of coordclient, up the lane (x=1372), over the divider, to the leader. -->
+  <g class="ctrl" stroke-width="2" stroke-linecap="round">
+    <path d="M 1200 1150 L 1372 1150 L 1372 596 L 740 596 L 740 572" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="1366" y="1140" font-size="10" text-anchor="end">ReportShard ▲</text>
+
+  <!-- coordinator leader -> shard : ReportAck / instructions ride the response (down). Lane x=1408. -->
+  <g class="ctrl" stroke-width="2" stroke-linecap="round">
+    <path d="M 660 572 L 660 668 L 1408 668 L 1408 1130 L 1202 1130" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="1402" y="1098" font-size="10" text-anchor="end">▼ ReportAck</text>
+
+  <!-- shards #2/#3 -> coordinator (fan-in, all report to one). Up the same lane then over. -->
+  <g class="ctrl" stroke-width="1.6" stroke-linecap="round">
+    <path d="M 1012 1250 L 1344 1250 L 1344 608 L 580 608 L 580 572" marker-end="url(#ctrlarrow)"/>
+    <path d="M 1214 1250 L 1328 1250 L 1328 620 L 620 620 L 620 572" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="560" y="600" font-size="10" text-anchor="end">all shards → ONE coordinator</text>
+
+  <!-- Control-plane protocol callout (top-right empty space) -->
+  <rect class="sub" x="1356" y="400" width="408" height="186" rx="10" stroke-width="1.2"/>
+  <line x1="1370" y1="430" x2="1402" y2="430" class="ctrl" stroke-width="1.6" marker-end="url(#ctrlarrow)"/>
+  <text class="accentText" x="1410" y="424" font-size="12.5" font-weight="600">shard ↔ coordinator (the ONLY coupling)</text>
+  <text class="muted" x="1370" y="448" font-size="10">The data plane's only coordinator touchpoint is one</text>
+  <text class="muted" x="1370" y="462" font-size="10">shard-initiated unary RPC — there is no push channel.</text>
+  <text class="label" x="1370" y="482" font-size="10.5" font-weight="600">ReportShard (shard PULLS, ~30s, leader-only):</text>
+  <text class="muted" x="1370" y="497" font-size="10">ShardSummary + top-100 Shortfalls + instruction_acks + addr.</text>
+  <text class="muted" x="1370" y="511" font-size="10">First report self-registers → AddShard (ADR-0006).</text>
+  <text class="label" x="1370" y="531" font-size="10.5" font-weight="600">ReportAck (rides the response):</text>
+  <text class="muted" x="1370" y="546" font-size="10">coordinator_term + instructions — AssignDomain,</text>
+  <text class="muted" x="1370" y="560" font-size="10">ReassignSpeculative, CrossShardDrain, TransferOwnership.</text>
+  <text class="muted" x="1370" y="574" font-size="10">Every instruction (coord_term, seq)-fenced &amp; idempotent.</text>
+
+  <!-- Apply write path leader -> state (internal, already inside leader box; small annotation) -->
+  <g class="ctrl" stroke-width="1.4" stroke-linecap="round">
+    <path d="M 700 274 L 700 282" marker-end="url(#ctrlarrow)"/>
+  </g>
+  <text class="annot" x="710" y="280" font-size="9.5">Apply → FSM</text>
+
+</svg>

@@ -13,6 +13,26 @@ The design rationale is the two papers — *BigFleet* and *Fleet-Scale Kubernete
 [`../papers/`](../papers/)); the timing posture is [ADR-0014](../adr/0014-slo-posture-binding-latency-not-cycle-wall-clock.md)
 / [ADR-0018](../adr/0018-internal-vs-user-facing-binding-latency.md) / [ADR-0020](../adr/0020-internal-binding-latency-slo-respects-rollup-interval.md).
 
+## The complete system map
+
+Before the step-by-step trace, here is the whole system at rest — every component, down to its
+internal sub-components, and every relationship between them, on one canvas. The **control plane**
+(the Raft coordinator and the state it owns) sits in the top band, deliberately *off the hot path*;
+the **data plane** below it — clusters → operators → shards → providers → the machine pool — keeps
+running autonomously even with the coordinator entirely down. Data-plane edges are solid grey;
+control-plane edges (`ReportShard`, Raft replication, admin RPCs) are blue dashed. Two relationships
+are worth tracing explicitly because they are easy to get wrong: every shard reports to the **one**
+coordinator, but `ReportShard` is a shard-*initiated* pull — rebalance and topology-domain
+assignment instructions ride back on the response and are acked on the next call, so there is no
+coordinator→shard push channel; and `pkg/shard` never imports `pkg/coordinator` — the only coupling
+is the off-hot-path `coordclient`, which is exactly what lets the data plane survive coordinator
+failover.
+
+![Complete BigFleet system map: a single-region Raft coordinator group (leader plus two followers, owning shard membership, the cluster-to-shard and topology-domain-to-shard maps, quota, and the provider registry) forms the control plane above an autonomous data plane in which per-cluster operators dial outbound Shard.Session streams to horizontally-scaled shards, each running the Phase 1/2/3 decision engine over its own inventory and NeedsTable and driving an out-of-tree provider's six RPCs to actuate the machine pool; every shard reports to the one coordinator via ReportShard while the data plane keeps running.](./system-map.svg)
+
+The rest of this page is the same picture in motion: one datum — a single pod's worth of demand —
+moving through these components over time.
+
 ## The whole chain, at altitude
 
 ![End-to-end flow across three lanes — Kubernetes cluster, the autonomous BigFleet shard, and the out-of-tree provider: a pod becomes a CapacityRequest, the operator rolls up demand over the Shard.Session stream, the shard's cycle runs Phase 1/2/3 and drives provider Create/Configure, and node state plus reclaim instructions flow back.](./data-flow-diagram.svg)

@@ -8,6 +8,8 @@ BigFleet is two tiers and three component types:
 
 ![BigFleet's two tiers: a Raft-replicated coordinator over several autonomous shards; each shard runs the decision engine and drives an out-of-tree provider, while a per-cluster operator bridges each Kubernetes cluster to its shard.](./architecture-shape.svg)
 
+For the exhaustive version — every internal component and every relationship on one canvas, including the full shard↔coordinator control plane — see the [complete system map](internals/data-flow.md#the-complete-system-map).
+
 ### Coordinator (Tier 1)
 
 Three replicas, hashicorp/raft over BoltDB, single region. Holds the slow-changing fleet state every shard needs but no shard owns:
