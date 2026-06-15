@@ -39,8 +39,8 @@ var (
 	// uninstrumented. Buckets bias toward sub-second since most
 	// transitions complete inside a single cycle in the harness.
 	ShardProvisioningLatency = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "bigfleet_shard_provisioning_latency_seconds",
-		Help:    "Wall-clock from first rollup observing a (cluster, profile fingerprint) to a matching machine reaching Configured. Per-CR granularity is not preserved; this measures fingerprint-level fan-out latency.",
+		Name: "bigfleet_shard_provisioning_latency_seconds",
+		Help: "Wall-clock from first rollup observing a (cluster, profile fingerprint) to a matching machine reaching Configured. Per-CR granularity is not preserved; this measures fingerprint-level fan-out latency.",
 		// M79.5: widened 16->20 (top finite le 327.68s -> 5242.88s ~87min).
 		// bigfleet-uber #78 found this histogram pegged on its 327.68s ceiling
 		// under sustained churn — same saturation bug class as the #77 bind
