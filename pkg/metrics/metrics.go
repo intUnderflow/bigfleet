@@ -41,7 +41,14 @@ var (
 	ShardProvisioningLatency = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "bigfleet_shard_provisioning_latency_seconds",
 		Help:    "Wall-clock from first rollup observing a (cluster, profile fingerprint) to a matching machine reaching Configured. Per-CR granularity is not preserved; this measures fingerprint-level fan-out latency.",
-		Buckets: prometheus.ExponentialBuckets(0.01, 2, 16),
+		// M79.5: widened 16->20 (top finite le 327.68s -> 5242.88s ~87min).
+		// bigfleet-uber #78 found this histogram pegged on its 327.68s ceiling
+		// under sustained churn — same saturation bug class as the #77 bind
+		// histogram (M79.4). This metric is the reprovision back-edge (the
+		// cap-immune residual that keeps the bind tail at ~410s); it must not
+		// saturate or the back-edge can't be localized. Superset of the old
+		// buckets (same start/factor) so dashboards keep working.
+		Buckets: prometheus.ExponentialBuckets(0.01, 2, 20),
 	})
 
 	// Drop R: instrument the gap between Idle→Configuring and
