@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
@@ -115,6 +116,21 @@ type Provider struct {
 	// the over-acquire hypothesis turns on. Configure / Drain / Delete
 	// still honour instantTransitions.
 	createStaged bool
+
+	// createLatency is scaletest-only (#66/#74): when >0, a freshly Created
+	// machine is held at Creating for this wall-clock duration before
+	// auto-advancing to Idle, modelling a real cloud provider's provisioning
+	// lead time. New() also forces createStaged on when this is set, so
+	// Create lands at Creating. 0 (the default) is byte-identical to today:
+	// no wall-clock path, no creatingSince write. The sim never sets this —
+	// it drives staged completion deterministically via CompleteStaged.
+	createLatency time.Duration
+
+	// creatingSince records, per machine, the wall-clock instant it entered
+	// Creating under createLatency. Only written when createLatency>0;
+	// AdvanceReadyCreating drains entries whose dwell has elapsed. Guarded
+	// by p.mu.
+	creatingSince map[machine.ID]time.Time
 }
 
 // revEntry is one append to the revision log: which machine's
@@ -135,7 +151,13 @@ type Options struct {
 	// InstantTransitions (see Provider.createStaged). The closed-loop
 	// sim's provision-dwell model drives the Creating→Idle completion.
 	CreateStaged bool
-	Seed         uint64
+	// CreateLatency is scaletest-only; 0 = instant (Create settles directly
+	// at Idle, the default). >0 holds a freshly Created machine at Creating
+	// for this wall-clock duration before auto-advancing to Idle, modelling
+	// a real cloud provider's provisioning lead time. Used by the #66/#74
+	// pre-Configuring-runway A/B; never set by the sim.
+	CreateLatency time.Duration
+	Seed          uint64
 }
 
 // New constructs a fake provider with no inventory. Seed via AddSpeculative
@@ -145,16 +167,23 @@ func New(opts Options) *Provider {
 	if seed == 0 {
 		seed = 0xDEADBEEFCAFEBABE
 	}
+	// #66/#74: a wall-clock Create latency implies the staged-Create
+	// behaviour — Create must leave the machine at Creating for the dwell to
+	// be observable. Enabling createStaged here means the caller only sets
+	// the one knob.
+	createStaged := opts.CreateStaged || opts.CreateLatency > 0
 	return &Provider{
 		machines:           make(map[machine.ID]*machine.Machine),
 		lastModRev:         make(map[machine.ID]int),
 		ops:                make(map[opKey]string),
 		fenceHWM:           make(map[string]fenceMark),
 		failNext:           make(map[failKey]error),
+		creatingSince:      make(map[machine.ID]time.Time),
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
 		instantTransitions: opts.InstantTransitions,
 		configureStaged:    opts.ConfigureStaged,
-		createStaged:       opts.CreateStaged,
+		createStaged:       createStaged,
+		createLatency:      opts.CreateLatency,
 	}
 }
 
@@ -351,6 +380,13 @@ func (p *Provider) RemoveMachine(id machine.ID) bool {
 func (p *Provider) CompleteStaged(id machine.ID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.completeStagedLocked(id)
+}
+
+// completeStagedLocked is the body of CompleteStaged, factored out so the
+// wall-clock latency advancer (AdvanceReadyCreating) can reuse it without
+// re-acquiring p.mu. Caller holds p.mu.
+func (p *Provider) completeStagedLocked(id machine.ID) bool {
 	m, ok := p.machines[id]
 	if !ok {
 		return false
@@ -368,6 +404,57 @@ func (p *Provider) CompleteStaged(id machine.ID) bool {
 	p.lastModRev[id] = p.rev
 	p.revLog = append(p.revLog, revEntry{rev: p.rev, id: id})
 	return true
+}
+
+// AdvanceReadyCreating settles every machine whose wall-clock Create dwell
+// has elapsed (creatingSince+createLatency <= now) and which is still at
+// Creating, advancing it to Idle exactly as CompleteStaged does. Returns the
+// number advanced. `now` is a parameter so the advance is deterministically
+// unit-testable. Scaletest-only (#66/#74): with createLatency==0 the
+// creatingSince map is never populated, so this is an empty-map no-op.
+func (p *Provider) AdvanceReadyCreating(now time.Time) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for id, since := range p.creatingSince {
+		if since.Add(p.createLatency).After(now) {
+			continue // dwell not yet elapsed
+		}
+		// completeStagedLocked is a no-op (and returns false) if the machine
+		// has left Creating by some other path; either way the dwell record
+		// is consumed.
+		if p.completeStagedLocked(id) {
+			n++
+		}
+		delete(p.creatingSince, id)
+	}
+	return n
+}
+
+// RunCreateLatencyAdvancer drives AdvanceReadyCreating on a wall-clock ticker
+// until ctx is done. No-op when createLatency<=0 (the default / sim path), so
+// nothing schedules and behaviour is byte-identical. Scaletest-only (#66/#74).
+func (p *Provider) RunCreateLatencyAdvancer(ctx context.Context) {
+	if p.createLatency <= 0 {
+		return
+	}
+	interval := p.createLatency
+	if interval > 500*time.Millisecond {
+		interval = 500 * time.Millisecond
+	}
+	if interval < 100*time.Millisecond {
+		interval = 100 * time.Millisecond
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.AdvanceReadyCreating(time.Now())
+		}
+	}
 }
 
 // RandomConfiguredMachine returns the ID of a randomly-selected machine
@@ -415,6 +502,14 @@ func (p *Provider) Create(_ context.Context, req provider.CreateRequest) (provid
 	return p.applyTransition(req.MachineID, opCreate, req.Fence, func(m *machine.Machine) {
 		if m.State == machine.StateIdle {
 			m.Host = machine.HostRef{Provider: "fake", Ref: string(req.MachineID)}
+		}
+		// #66/#74 scaletest-only: stamp the wall-clock instant this machine
+		// entered Creating so the latency advancer can settle it at Idle
+		// after the configured dwell. Runs under p.mu (postEffect is called
+		// inside applyTransition's lock). createLatency==0 (the default and
+		// the sim path) never reaches here, keeping behaviour byte-identical.
+		if p.createLatency > 0 && m.State == machine.StateCreating {
+			p.creatingSince[req.MachineID] = time.Now()
 		}
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/provider"
@@ -464,5 +465,68 @@ func TestFake_AddConfigured_SeedsShardMetadataEcho(t *testing.T) {
 		check.AssignedInterruptionPenaltyDollars != 8192 ||
 		check.AssignedReclamationPenaltyDollars != 65536 {
 		t.Errorf("seeded echo decodes to %+v, want (1000000, 8192, 65536)", check)
+	}
+}
+
+// #66/#74: with CreateLatency>0 the fake holds a freshly Created machine at
+// Creating until its wall-clock dwell elapses, then AdvanceReadyCreating
+// settles it at Idle (host set) — modelling a real cloud provider's
+// provisioning lead time for the pre-Configuring-runway A/B.
+func TestCreateLatency_HoldsThenAdvances(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true, CreateLatency: 50 * time.Millisecond})
+	ctx := context.Background()
+	p.AddSpeculative("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+
+	if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := p.Get(ctx, "m-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != machine.StateCreating {
+		t.Fatalf("after Create: state=%s, want Creating (held by latency)", got.State)
+	}
+
+	// Dwell not yet elapsed: advancing at the present instant settles nothing.
+	if n := p.AdvanceReadyCreating(time.Now()); n != 0 {
+		t.Fatalf("AdvanceReadyCreating(now) = %d, want 0 (dwell not elapsed)", n)
+	}
+	got, _ = p.Get(ctx, "m-1")
+	if got.State != machine.StateCreating {
+		t.Fatalf("state=%s, want still Creating before dwell elapses", got.State)
+	}
+
+	// Past the dwell: the machine settles at Idle with a host.
+	if n := p.AdvanceReadyCreating(time.Now().Add(time.Second)); n != 1 {
+		t.Fatalf("AdvanceReadyCreating(now+1s) = %d, want 1", n)
+	}
+	got, _ = p.Get(ctx, "m-1")
+	if got.State != machine.StateIdle {
+		t.Fatalf("state=%s, want Idle after dwell elapses", got.State)
+	}
+	if got.Host.Empty() {
+		t.Errorf("Host empty after settling at Idle, want a fake host ref")
+	}
+}
+
+// #66/#74: CreateLatency=0 is the default and must be byte-identical to
+// today — Create settles directly at Idle with no Creating dwell.
+func TestCreateLatency_ZeroIsInstant(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true, CreateLatency: 0})
+	ctx := context.Background()
+	p.AddSpeculative("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
+
+	if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := p.Get(ctx, "m-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != machine.StateIdle {
+		t.Errorf("CreateLatency=0: state=%s, want Idle immediately (no Creating dwell)", got.State)
 	}
 }

@@ -674,7 +674,22 @@ func runShard(args []string) error {
 		prov = pc
 		logger.Info("dialing out-of-tree provider", "addr", *providerAddr, "shard_id", *shardID, "epoch", epoch.Value())
 	} else {
-		fakeProv = fake.New(fake.Options{InstantTransitions: true})
+		// #66/#74 scaletest-only: BIGFLEET_FAKE_CREATE_LATENCY models a real
+		// cloud provider's provisioning lead time — Create lands the machine
+		// at Creating and the advancer settles it at Idle after this
+		// wall-clock dwell. Empty / unparseable / 0 leaves the instant
+		// default (byte-identical to today). The advancer goroutine is
+		// started below once ctx exists.
+		var createLatency time.Duration
+		if raw := os.Getenv("BIGFLEET_FAKE_CREATE_LATENCY"); raw != "" {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				logger.Warn("ignoring unparseable BIGFLEET_FAKE_CREATE_LATENCY", "value", raw, "err", err)
+			} else {
+				createLatency = d
+			}
+		}
+		fakeProv = fake.New(fake.Options{InstantTransitions: true, CreateLatency: createLatency})
 		prov = fakeProv
 	}
 
@@ -777,6 +792,18 @@ func runShard(args []string) error {
 	// fine for the 1e-8 to 1e-7 range that matches production.
 	if *failureRatePerSec > 0 {
 		go runFailureInjector(ctx, fakeProv, *failureRatePerSec, logger)
+	}
+
+	// #66/#74 scaletest-only: the wall-clock Create-latency advancer settles
+	// machines held at Creating once their dwell elapses. RunCreateLatencyAdvancer
+	// no-ops unless BIGFLEET_FAKE_CREATE_LATENCY configured a positive dwell.
+	if fakeProv != nil {
+		if raw := os.Getenv("BIGFLEET_FAKE_CREATE_LATENCY"); raw != "" {
+			if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+				logger.Info("fake provider Create latency enabled (scaletest)", "latency", d)
+				go fakeProv.RunCreateLatencyAdvancer(ctx)
+			}
+		}
 	}
 
 	// Coordinator client: registers this shard with the coordinator
