@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 	"time"
@@ -330,6 +331,43 @@ func TestDrawReplicasSameZoneUsesGroupSizeRange(t *testing.T) {
 	}
 	if n := drawReplicas(rng, a, false, 10); n != 10 {
 		t.Fatalf("sameZone draw with remaining=10 = %d, want 10 (truncated final group)", n)
+	}
+}
+
+// TestShouldBurst gates the demand-side burst trigger (#327 / ADR-0015
+// §3). Selectivity 1.0 always fires; 0.0 never fires; the decision is
+// deterministic per (clusterID, atSeconds) so a driver restart re-arms
+// the same bursts; and a fractional selectivity admits roughly its
+// fraction of clusters.
+func TestShouldBurst(t *testing.T) {
+	always := burstSpec{AtSeconds: 600, Selectivity: 1.0}
+	never := burstSpec{AtSeconds: 600, Selectivity: 0.0}
+	if !shouldBurst("kwok-cluster-0", always) {
+		t.Error("selectivity 1.0 must always fire")
+	}
+	if shouldBurst("kwok-cluster-0", never) {
+		t.Error("selectivity 0.0 must never fire")
+	}
+
+	// Deterministic: same inputs → same decision.
+	half := burstSpec{AtSeconds: 600, Selectivity: 0.5}
+	first := shouldBurst("kwok-cluster-7", half)
+	for i := 0; i < 100; i++ {
+		if shouldBurst("kwok-cluster-7", half) != first {
+			t.Fatal("shouldBurst is not deterministic for fixed (clusterID, atSeconds)")
+		}
+	}
+
+	// Roughly its fraction of clusters fire (loose bounds — it's a hash,
+	// not an RNG, so this only guards against all-in / all-out bugs).
+	fired := 0
+	for i := 0; i < 1000; i++ {
+		if shouldBurst(fmt.Sprintf("kwok-cluster-%d", i), half) {
+			fired++
+		}
+	}
+	if fired < 300 || fired > 700 {
+		t.Errorf("selectivity 0.5 fired %d/1000 clusters, want ~500", fired)
 	}
 }
 

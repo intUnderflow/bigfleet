@@ -209,6 +209,49 @@ func TestRenderHelmValues_TinyScalePrometheusFootprint(t *testing.T) {
 	}
 }
 
+// TestRenderHelmValues_BurstsPlumbThrough is the #327 V2-plumbing pin:
+// loadProfile.bursts from a V2 profile must reach the rendered
+// loadProfile map (the chart toYaml's that map verbatim into the
+// load-driver's profile.yaml, which parses bursts as burstSpec). Without
+// the profileV2.LoadProfile.Bursts field + this render step, a bursts:
+// block would be silently dropped. The absence case asserts no stray key
+// for profiles without bursts.
+func TestRenderHelmValues_BurstsPlumbThrough(t *testing.T) {
+	t.Parallel()
+	p, s, cfg := fixtureMerged(t)
+
+	// Absence: no bursts → no loadProfile.bursts key (default chart shape).
+	noBurst := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	lp, _ := noBurst["loadProfile"].(map[string]any)
+	if _, ok := lp["bursts"]; ok {
+		t.Errorf("loadProfile.bursts present with no bursts configured: %v", lp["bursts"])
+	}
+
+	// Presence: a gpu-training-large gang burst round-trips into the
+	// rendered loadProfile and survives a YAML marshal (what the chart
+	// consumes).
+	p.LoadProfile.Bursts = []profileBurst{{
+		AtSeconds: 600, Archetype: "gpu-training-large",
+		ExtraTarget: 1, DurationSeconds: 600, Selectivity: 1.0,
+	}}
+	withBurst := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	lp2, _ := withBurst["loadProfile"].(map[string]any)
+	bursts, ok := lp2["bursts"].([]profileBurst)
+	if !ok || len(bursts) != 1 {
+		t.Fatalf("loadProfile.bursts = %#v, want one profileBurst", lp2["bursts"])
+	}
+	if bursts[0].Archetype != "gpu-training-large" || bursts[0].ExtraTarget != 1 {
+		t.Errorf("rendered burst = %+v, want gpu-training-large extraTarget 1", bursts[0])
+	}
+	b, err := yaml.Marshal(withBurst)
+	if err != nil {
+		t.Fatalf("marshal rendered values with bursts: %v", err)
+	}
+	if !strings.Contains(string(b), "gpu-training-large") {
+		t.Errorf("marshalled values missing the burst archetype:\n%s", string(b))
+	}
+}
+
 // TestRenderHelmValues_YAMLRoundTrip confirms the rendered values
 // round-trip through gopkg.in/yaml.v3 cleanly — i.e. helm will
 // accept the output without parse errors. Helm-template smoke test

@@ -629,6 +629,13 @@ func (d *driver) run(ctx context.Context) error {
 		fireAt  time.Time
 		drainAt time.Time
 		spec    burstSpec
+		// arch is the resolved burst archetype (#327): a burst event names
+		// an archetype to inject — typically a burstOnly one (e.g.
+		// gpu-training-large) that the steady demand picker excludes.
+		// Resolved from the full catalog at schedule time. nil = no name
+		// given → the burst draws from the steady picker (legacy ADR-0015
+		// §3 behaviour).
+		arch    *archetype.Archetype
 		extraOn bool
 	}
 	bursts := make([]*pendingBurst, 0, len(d.prof.Bursts))
@@ -637,10 +644,21 @@ func (d *driver) run(ctx context.Context) error {
 		if !shouldBurst(d.clusterID, b) {
 			continue
 		}
+		var arch *archetype.Archetype
+		if b.Archetype != "" {
+			// archByName indexes the FULL demand catalog including
+			// burstOnly archetypes (only NewPicker skips those), so a
+			// burst can name an archetype the steady draw never produces.
+			arch = d.archByName[b.Archetype]
+			if arch == nil {
+				d.log.Warn("burst archetype not found in catalog; falling back to steady picker", "archetype", b.Archetype)
+			}
+		}
 		pb := &pendingBurst{
 			fireAt:  startedAt.Add(time.Duration(b.AtSeconds) * time.Second),
 			drainAt: startedAt.Add(time.Duration(b.AtSeconds+b.DurationSeconds) * time.Second),
 			spec:    b,
+			arch:    arch,
 		}
 		bursts = append(bursts, pb)
 		d.log.Info("burst scheduled", "archetype", b.Archetype, "at_s", b.AtSeconds, "extra", b.ExtraTarget, "duration_s", b.DurationSeconds)
@@ -685,7 +703,7 @@ func (d *driver) run(ctx context.Context) error {
 				if !pb.extraOn && !now.Before(pb.fireAt) && now.Before(pb.drainAt) {
 					pb.extraOn = true
 					d.log.Info("burst firing", "archetype", pb.spec.Archetype, "extra", pb.spec.ExtraTarget)
-					if err := d.rampExtra(ctx, pb.spec.ExtraTarget); err != nil {
+					if err := d.rampExtra(ctx, pb.spec.ExtraTarget, pb.arch); err != nil {
 						d.log.Warn("burst ramp failed", "err", err)
 					}
 				}
@@ -740,7 +758,7 @@ func (d *driver) rampTo(ctx context.Context, want int, burst bool) error {
 			return ctx.Err()
 		}
 		remaining := want - d.activeCount()
-		if err := d.createWorkload(ctx, burst, remaining); err != nil {
+		if err := d.createWorkload(ctx, burst, remaining, nil); err != nil {
 			errs.WithLabelValues("create").Inc()
 			d.log.Warn("create failed", "err", err)
 			time.Sleep(50 * time.Millisecond)
@@ -755,15 +773,30 @@ func (d *driver) rampTo(ctx context.Context, want int, burst bool) error {
 
 // rampExtra creates burst workload objects whose replica counts sum to
 // at least `extra`. They are tagged burst=true so drainBurst removes
-// exactly them.
-func (d *driver) rampExtra(ctx context.Context, extra int) error {
+// exactly them. forced, when non-nil, pins every burst object to that
+// archetype (#327: a burst event names the archetype to inject — a
+// burstOnly one such as gpu-training-large that the steady picker
+// excludes); when nil the burst draws from the steady demand picker
+// (legacy ADR-0015 §3 behaviour for un-named bursts).
+func (d *driver) rampExtra(ctx context.Context, extra int, forced *archetype.Archetype) error {
 	added := 0
 	for added < extra {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		before := d.activeCount()
-		if err := d.createWorkload(ctx, true, extra-added); err != nil {
+		// A forced GANG burst (#327: gpu-training-large is a 64-256-node
+		// atomic gang) must NOT be truncated to the remaining headroom —
+		// a partial gang is not the workload being modelled. Pass
+		// remaining=0 (uncapped) so each gang object draws its full
+		// PickGroupSize; the loop then exits after one full gang once
+		// added ≥ extra (so extraTarget:1 = one whole gang). Non-gang
+		// bursts keep the steady ramp's land-on-target truncation.
+		remaining := extra - added
+		if isGang(forced) {
+			remaining = 0
+		}
+		if err := d.createWorkload(ctx, true, remaining, forced); err != nil {
 			errs.WithLabelValues("create").Inc()
 			d.log.Warn("burst create failed", "err", err)
 			time.Sleep(50 * time.Millisecond)
@@ -939,13 +972,21 @@ func (d *driver) churn(ctx context.Context, n int) {
 // records it in the workloads map, and updates gauges. `remaining`, when
 // positive, caps the replica count so the ramp doesn't badly overshoot
 // the target on its final object; 0 means no cap.
-func (d *driver) createWorkload(ctx context.Context, burst bool, remaining int) error {
+//
+// When forced is non-nil it is the archetype to emit (the burst path,
+// #327 — a burst event names a specific archetype, typically a burstOnly
+// one excluded from the steady picker); when nil the archetype is drawn
+// weighted-random from the steady demand picker.
+func (d *driver) createWorkload(ctx context.Context, burst bool, remaining int, forced *archetype.Archetype) error {
 	d.mu.Lock()
 	d.seq++
 	seq := d.seq
 	d.mu.Unlock()
 
-	a := d.picker.Pick(d.rng)
+	a := forced
+	if a == nil {
+		a = d.picker.Pick(d.rng)
+	}
 	archName := ""
 	if a != nil {
 		archName = a.Name

@@ -87,6 +87,24 @@ test.
   ADR-0015 §3); the steady baseline keeps general + DBs + inference +
   small/medium training. Implemented first with large included at low
   weight; the sim measures the actual variance and we decide.
+  **DONE (#327):** gpu-training-large is now `burstOnly` in
+  realistic.yaml — a new archetype flag that excludes it from the steady
+  draw (`NewPicker`), the steady seed (`podShare`/`machineShares`/
+  `MachineAllocation`/`MachinesForPods`), and its gang floor
+  (`gangFloor`), while keeping its full definition so a burst event can
+  reference it by name. weight:0 alone was insufficient: the per-gang
+  floor (max(groupSizeRange) × zones) is applied regardless of weight, so
+  a weight-0 gang would still seed a whole zone-floor of Configured
+  machines the steady demand never asks for (a seed↔demand mismatch →
+  Phase 3 reclaim every cycle). Foundation training is now injected by a
+  burst event in the 5k.yaml realism profile (`loadProfile.bursts`, one
+  64–256-node gang mid-soak, live-filled from the Speculative pool). The
+  steady GPU machine-share fell ~15%→~12.4%, still inside the realistic
+  band. The load-driver's burst path was taught to honour
+  `bursts[].archetype` (it previously drew from the steady picker), and
+  the V2 profile path was given a `loadProfile.bursts` field (the chart
+  toYaml's it through to the load-driver) so the burst is not silently
+  dropped.
 - Within the cpu tier, pod-share realism is preserved (the 70%-tiny
   shape) — that part of the author's hope holds, because those
   archetypes are a small, density-packed machine-share regardless.

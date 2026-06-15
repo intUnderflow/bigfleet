@@ -212,8 +212,14 @@ func SeedScale(a *Archetype, density int) (factor int, scaleExtended bool) {
 
 // podShare returns the unnormalised pod-demand share of one archetype
 // (ADR-0044 §1): Weight × E[replicas per workload object]. Weight ≤ 0
-// counts as 1, matching NewPicker.
+// counts as 1, matching NewPicker. A BurstOnly archetype (#327)
+// contributes 0 — it is not part of the steady draw, so it must carry no
+// steady pod- or machine-demand share (machineShares / MachinesForPods /
+// catalogPodShares all build on podShare).
 func podShare(a *Archetype) float64 {
+	if a.BurstOnly {
+		return 0
+	}
 	w := a.Weight
 	if w <= 0 {
 		w = 1
@@ -235,8 +241,14 @@ func machineShares(arches []Archetype, density int) []float64 {
 // gangFloor returns the per-zone gang floor for one archetype:
 // max(GroupSizeRange) machines per zone (ADR-0044 §3 — without it the
 // largest gang the catalog can draw is unsatisfiable by construction),
-// or 0 for non-gang archetypes. zones < 1 counts as 1.
+// or 0 for non-gang archetypes. zones < 1 counts as 1. A BurstOnly
+// archetype (#327) has no steady gang floor — its gang is provisioned
+// live by the burst event, not pre-seeded — so it returns 0 even though
+// it is a gang. This is the floor that weight:0 alone cannot suppress.
 func gangFloor(a *Archetype, zones int) int {
+	if a.BurstOnly {
+		return 0
+	}
 	if !isGang(a) {
 		return 0
 	}
@@ -278,6 +290,13 @@ func MachineAllocation(arches []Archetype, density, totalMachines int, zones fun
 	fracs := make([]int, 0, len(arches)) // indices, sorted by remainder below
 	rems := make([]float64, len(arches))
 	for i, s := range shares {
+		// BurstOnly archetypes (#327) carry zero steady share (podShare
+		// is 0) — keep them at count 0 and out of the remainder draw so
+		// no stray machine lands on them; the returned slice stays
+		// index-aligned with arches (callers index alloc[i]).
+		if arches[i].BurstOnly {
+			continue
+		}
 		q := float64(totalMachines) * s / total
 		counts[i] = int(q)
 		rems[i] = q - float64(counts[i])
@@ -287,7 +306,7 @@ func MachineAllocation(arches []Archetype, density, totalMachines int, zones fun
 	sort.SliceStable(fracs, func(x, y int) bool {
 		return rems[fracs[x]] > rems[fracs[y]]
 	})
-	for j := 0; j < totalMachines-assigned; j++ {
+	for j := 0; len(fracs) > 0 && j < totalMachines-assigned; j++ {
 		counts[fracs[j%len(fracs)]]++
 	}
 

@@ -26,31 +26,35 @@
 #
 # Target machine mix vs realized (the regression pin
 # TestRealisticCatalog_MachineMix in pkg/scaletest/archetype asserts the
-# realized column stays within tolerance of target):
+# realized column stays within tolerance of target). gpu-training-large
+# is now burstOnly (#327) so it contributes 0 to the steady mix; the
+# remaining shares renormalize up slightly:
 #
 #   archetype             podsPerNode  weight   target%   realized%
-#   tiny-stateless           100       16073     64.5       64.5
-#   cpu-service              100        2755      11.1       11.1
-#   cpu-batch                100        1378       5.5        5.5
-#   critical-realtime        100         230       0.9        0.9
+#   tiny-stateless           100       16073     66.4       66.4
+#   cpu-service              100        2755      11.4       11.4
+#   cpu-batch                100        1378       5.7        5.7
+#   critical-realtime        100         230       0.95       0.95
 #   memory-cache             100        2000       1.5        1.5
 #   stateful-db              100        2000       1.5        1.5
-#   gpu-inference              8         100       5.0        5.0
-#   gpu-training-small         1          32       3.0        3.0
-#   gpu-training-medium        1          18       4.0        4.05
-#   gpu-training-large         1           1       3.0        3.0
+#   gpu-inference              8         100       5.2        5.2
+#   gpu-training-small         1          32       3.1        3.1
+#   gpu-training-medium        1          18       4.2        4.2
+#   gpu-training-large         1           — burstOnly: 0 steady share —
 #   ----------------------------------------------------------------
-#   general compute (tiny+service+batch+critical) ~82%; gang DBs ~3%;
-#   GPU (inference + training) ~15% machine-share. The DERIVED pod mix
-#   that falls out is ~75% tiny-stateless and <1% GPU pods — the
-#   ADR-0050 divergence made concrete.
+#   general compute (tiny+service+batch+critical) ~84%; gang DBs ~3%;
+#   GPU (inference + training-small + training-medium) ~12.4% machine-
+#   share. The DERIVED pod mix that falls out is ~75% tiny-stateless and
+#   <1% GPU pods — the ADR-0050 divergence made concrete.
 #
-# gpu-training-large is the lumpy term (ADR-0050 Consequences): at ~3%
-# machine-share and a 64-256-machine gang, its expected count in a
-# 5,000-machine fleet is ~1 gang, so a probabilistic weighted draw gives
-# 0/1/2 gangs (~+/-100% variance, bimodal baseline). Included here at
-# weight 1; the open follow-up is to move it to a burst/event scenario
-# and keep it out of the steady baseline.
+# gpu-training-large was the lumpy term (ADR-0050 Consequences): at a
+# 64-256-machine atomic gang its expected count in a 5,000-machine fleet
+# is ~1 gang, so a probabilistic weighted draw gave 0/1/2 gangs
+# (~+/-100% variance, bimodal baseline). #327 moves it OUT of the steady
+# baseline: it is now burstOnly (see its block below), modelled as an
+# occasional burst event in the 5k.yaml realism profile rather than a
+# steady-catalog archetype. Foundation-model training is rare and
+# bursty, so a burst is the realistic shape.
 #
 # Calibrated against industry production workload patterns: bottom-
 # heavy long tail of tiny stateless services, smaller "interesting"
@@ -127,6 +131,16 @@
 #                           every Need is partial-fill-tolerant by
 #                           default.)
 #   groupSizeRange        : [min, max] machines per Same-rack group
+#   burstOnly             : when true (#327), the archetype is excluded
+#                           from the steady model entirely — steady demand
+#                           draw, steady seed allocation, AND its gang
+#                           floor — and exists only to be referenced by
+#                           name from a burst event (load-driver
+#                           bursts[].archetype). Its full definition is
+#                           kept so the burst's live-filled machines size
+#                           from it. Use for rare/bursty workloads whose
+#                           steady presence would be lumpy/bimodal (e.g.
+#                           a 64-256-node foundation-training gang).
 #   spreadConstraintProb  : probability that a per-CR draw carries
 #                           the SpreadConstraint below. 0.0 = never.
 #   spreadConstraint      : topologyKey + maxSkew + whenUnsatisfiable.
@@ -336,14 +350,32 @@ archetypes:
   # physically impossible placement and fabricated the perpetual
   # structurally-unsatisfiable gang population behind the ADR-0042
   # layer (complexity audit §3 pool 2).
+  #
+  # #327 (ADR-0050 follow-up): now burstOnly. At a 64-256-machine atomic
+  # gang this is ~1 concurrent gang in a 5,000-machine fleet, so a
+  # probabilistic weighted draw realized 0/1/2 gangs — a bimodal,
+  # ~±100%-variance steady share that made the realistic machine mix
+  # lumpy (ADR-0050 Consequences; bigfleet-uber #71/#72). Foundation-
+  # model training is rare and bursty, so it is now modelled as an
+  # OCCASIONAL BURST, not a steady-catalog archetype: a burst event (see
+  # the 5k.yaml realism profile, loadProfile.bursts) injects one gang
+  # mid-run, live-filled from the Speculative pool — a job arriving and
+  # BigFleet provisioning its gang from spare capacity. burstOnly: true
+  # keeps the full definition here (so the burst sizes its machines from
+  # these resources) but excludes it from the steady draw, the steady
+  # seed, AND its gang floor. weight:0 alone would NOT suffice — the
+  # per-gang floor (max(groupSizeRange) × zones) is applied regardless of
+  # weight, so a weight-0 gang would still seed ~768 Configured
+  # machines/cluster the steady demand never asks for (a seed-vs-demand
+  # mismatch → Phase 3 reclaims the seed every cycle; see the header
+  # drift warning).
   - name: gpu-training-large
-    # ADR-0050: podsPerNode 1 — whole-machine gang. Target ~3%
-    # machine-share, but at a 64-256-machine gang that is ~1 concurrent
-    # gang in a 5,000-machine fleet, so weight 1 (its coarsest integer)
-    # realizes a high-variance, bimodal share (0/1/2 gangs). Known
-    # follow-up: move large foundation-training to a burst/event
-    # scenario and drop it from the steady baseline.
+    # ADR-0050: podsPerNode 1 — whole-machine gang (PodsPerMachine stays
+    # 1 by definition; only burstOnly changes). weight is retained for
+    # documentation but is moot under burstOnly (it never enters the
+    # steady draw or seed share).
     weight: 1
+    burstOnly: true
     podsPerNode: 1
     instanceTypes: [a3-highgpu-8g]
     zones: [zone-a, zone-b, zone-c]

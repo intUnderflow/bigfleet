@@ -34,6 +34,27 @@ loadProfile:
   rampSeconds: 1800
   soakSeconds: 1800
   churnPerMinute: 0.02
+  # #327 (ADR-0050 follow-up): foundation-model training is modelled as
+  # an OCCASIONAL BURST, not a steady-catalog archetype. gpu-training-large
+  # is burstOnly in realistic.yaml (excluded from the steady draw, seed,
+  # and gang floor), so this burst event is the ONLY source of its demand.
+  # One 64-256-node atomic gang arrives ~10 min into the soak, lives ~10
+  # min (modelling a foundation-training job arriving, running, then
+  # completing), and drains. atSeconds is offset from the load-driver's
+  # steady-churn start, which aligns with the runner's soak window.
+  # extraTarget:1 = one full gang (the load-driver does not truncate a
+  # forced gang to remaining headroom). selectivity:1.0 makes the event
+  # deterministic/reproducible — a deliberate burst, not a probabilistic
+  # steady draw, which is exactly what escapes the prior 0/1/2-gang
+  # bimodality. The gang live-fills from the Speculative pool (the seed
+  # has ample): a job appears, BigFleet provisions its gang from spare
+  # capacity.
+  bursts:
+    - atSeconds: 600
+      archetype: gpu-training-large
+      extraTarget: 1
+      durationSeconds: 600
+      selectivity: 1.0
 
 # 60m hard ceiling on the ramp-to-steady-state wait. The actual
 # expected ramp depends on substrate.cluster.bindThroughputPodsPerSec;

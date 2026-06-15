@@ -83,17 +83,20 @@ func TestRealisticCatalog_MachineMix(t *testing.T) {
 		targetPct float64
 		tolPct    float64
 	}
+	// #327: gpu-training-large is now burstOnly — it contributes 0 to the
+	// steady mix, so the remaining shares renormalize up slightly (tiny
+	// 64.5→66.4, cpu-service 11.1→11.4, etc.). It is asserted at exactly
+	// 0 below, not listed as a steady target.
 	targets := []want{
-		{"tiny-stateless", 64.5, 1.0},
-		{"cpu-service", 11.1, 0.5},
-		{"cpu-batch", 5.5, 0.5},
-		{"critical-realtime", 0.9, 0.3},
+		{"tiny-stateless", 66.4, 1.0},
+		{"cpu-service", 11.4, 0.5},
+		{"cpu-batch", 5.7, 0.5},
+		{"critical-realtime", 0.95, 0.3},
 		{"memory-cache", 1.5, 0.3},
 		{"stateful-db", 1.5, 0.3},
-		{"gpu-inference", 5.0, 0.5},
-		{"gpu-training-small", 3.0, 0.5},
-		{"gpu-training-medium", 4.0, 0.5},
-		{"gpu-training-large", 3.0, 0.5},
+		{"gpu-inference", 5.2, 0.5},
+		{"gpu-training-small", 3.1, 0.5},
+		{"gpu-training-medium", 4.2, 0.5},
 	}
 
 	t.Log("ADR-0050 realized machine-demand mix (via ExpectedReplicas / PodsPerMachine):")
@@ -110,11 +113,21 @@ func TestRealisticCatalog_MachineMix(t *testing.T) {
 		}
 	}
 
+	// #327: gpu-training-large is burstOnly, so it must contribute ZERO
+	// to the steady machine mix — no draw, no seed, no gang floor. This is
+	// the assertion that catches a burstOnly regression (e.g. the gang
+	// floor creeping back, which weight:0 alone could not suppress).
+	if got, ok := machine["gpu-training-large"]; !ok {
+		t.Error("gpu-training-large missing from catalog (its definition must remain for the burst event)")
+	} else if got != 0 {
+		t.Errorf("gpu-training-large (burstOnly) steady machine-share = %.4f%%, want exactly 0", got*100)
+	}
+
 	// The headline ADR-0050 assertion: total GPU machine-share is a sane,
-	// realistic fraction (~15%), not the ~92% the pre-ADR-0050 catalog
-	// produced and not the ~88% a draw-fix-only change reached. The 10-20%
-	// band is the regression guard; the per-tier checks above pin the
-	// shape within it.
+	// realistic fraction. #327 dropped gpu-training-large from the steady
+	// mix, so this fell ~15%→~12.4% — still well inside the 10-20%
+	// regression-guard band and nowhere near the ~92% the pre-ADR-0050
+	// catalog produced. The per-tier checks above pin the shape within it.
 	gpu := machine["gpu-inference"] + machine["gpu-training-small"] +
 		machine["gpu-training-medium"] + machine["gpu-training-large"]
 	t.Logf("  GPU machine-share total = %.3f%%", gpu*100)
@@ -123,11 +136,12 @@ func TestRealisticCatalog_MachineMix(t *testing.T) {
 	}
 
 	// General-compute (the cpu tier) should be the bulk of the fleet
-	// (~82%) — the realistic shape BigFleet baselines against.
+	// (~84% after #327's renormalization) — the realistic shape BigFleet
+	// baselines against.
 	general := machine["tiny-stateless"] + machine["cpu-service"] +
 		machine["cpu-batch"] + machine["critical-realtime"]
-	if general < 0.78 || general > 0.86 {
-		t.Errorf("general-compute machine-share = %.2f%%, want ~82%% ([78%%, 86%%])", general*100)
+	if general < 0.78 || general > 0.88 {
+		t.Errorf("general-compute machine-share = %.2f%%, want ~84%% ([78%%, 88%%])", general*100)
 	}
 
 	// Derived pod mix — reported, not asserted as a target (ADR-0050: the

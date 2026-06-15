@@ -121,6 +121,28 @@ type Archetype struct {
 	SameZone       bool   `yaml:"sameZone"`
 	GroupSizeRange [2]int `yaml:"groupSizeRange"`
 
+	// BurstOnly (#327, ADR-0050 follow-up) — when true, the archetype
+	// exists in the catalog ONLY to be referenced by name from a burst
+	// event (load-driver bursts[].archetype); it contributes NOTHING to
+	// the steady-state model. It is excluded from the steady demand draw
+	// (NewPicker skips it), from steady seed allocation (podShare returns
+	// 0, so machineShares / MachineAllocation / MachinesForPods give it
+	// no machines), and from its gang floor (gangFloor returns 0). Its
+	// full definition — resources, group size, penalties — is preserved
+	// so the burst's live-filled machines size correctly from it.
+	//
+	// Why this is needed and weight:0 is not: the seed applies a per-gang
+	// floor (gangFloor = max(GroupSizeRange) × zones) regardless of
+	// weight, so a weight-0 gang archetype would still seed a whole
+	// zone-floor of Configured machines the steady demand never asks for
+	// — a seed-vs-demand mismatch that makes Phase 3 reclaim the seed
+	// every cycle (the realistic.yaml header warns this drift = the test
+	// measures reprovisioning). gpu-training-large is burstOnly: at a
+	// 64-256-node atomic gang it is bimodal in a 5k fleet (0 or 1 gang),
+	// so foundation-model training is modelled as an occasional burst,
+	// not a steady-catalog archetype.
+	BurstOnly bool `yaml:"burstOnly"`
+
 	// LabelAxes (M35 / Item 2) — per-archetype label dimensions
 	// that multiply per-CR fingerprint cardinality. Each axis
 	// declares a Key (the label name on the Configured machine /
@@ -298,13 +320,19 @@ type Picker struct {
 
 // NewPicker builds a weighted-random picker over the catalog. Returns
 // nil when the catalog is empty (callers fall back to legacy single-
-// shape behaviour).
+// shape behaviour). BurstOnly archetypes (#327) are skipped: they are
+// never part of the steady demand draw, only referenced by name from a
+// burst event. A picker over a catalog of only burstOnly archetypes is
+// therefore nil.
 func NewPicker(arches []Archetype) *Picker {
 	if len(arches) == 0 {
 		return nil
 	}
 	p := &Picker{}
 	for i := range arches {
+		if arches[i].BurstOnly {
+			continue
+		}
 		w := arches[i].Weight
 		if w <= 0 {
 			w = 1
@@ -312,6 +340,9 @@ func NewPicker(arches []Archetype) *Picker {
 		p.full += w
 		p.cum = append(p.cum, p.full)
 		p.by = append(p.by, &arches[i])
+	}
+	if len(p.by) == 0 {
+		return nil
 	}
 	return p
 }

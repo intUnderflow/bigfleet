@@ -121,6 +121,32 @@ type runnerAction struct {
 	Action    string `yaml:"action"`
 }
 
+// profileBurst mirrors the load-driver's burstSpec (ADR-0015 §3,
+// test/scaletest/cmd/load-driver/main.go) — the runner does not interpret
+// these; it copies the fields into the rendered loadProfile so the chart
+// passes them through to the load-driver's profile.yaml verbatim. #327.
+//
+//   - AtSeconds:       offset from the load-driver's own start (NOT the
+//     runner's soak start).
+//   - Archetype:       the archetype name to inject; resolved against the
+//     full catalog including burstOnly archetypes.
+//   - ExtraTarget:     extra Pods worth of demand; for a gang archetype
+//     ExtraTarget:1 yields one full gang (the load-driver does not
+//     truncate a forced gang to remaining headroom).
+//   - DurationSeconds: how long before the burst objects are drained
+//     (0 = never drain — the gang lives for the rest of the run).
+//   - Selectivity:     fraction of clusters that participate (a Bernoulli
+//     trial per driver). 1.0 = every cluster; for a single-gang
+//     foundation-training event a small selectivity models one cluster's
+//     job arriving.
+type profileBurst struct {
+	AtSeconds       int     `yaml:"atSeconds"`
+	Archetype       string  `yaml:"archetype"`
+	ExtraTarget     int     `yaml:"extraTarget"`
+	DurationSeconds int     `yaml:"durationSeconds"`
+	Selectivity     float64 `yaml:"selectivity"`
+}
+
 // substrateFile is the runtime-side half of ADR-0034: it describes the
 // hosts the scale test will run on, the per-cluster apiserver operating
 // point, and the kwok-pod resource budget. Orthogonal to profileFile,
@@ -229,6 +255,19 @@ type profileV2 struct {
 		// back to the soakStart snapshot so a misconfig can't leave the
 		// window empty.
 		SettleSeconds int `yaml:"settleSeconds"`
+		// Bursts (#327, ADR-0015 §3) are passed through verbatim to the
+		// load-driver's profile (the chart toYaml's the whole loadProfile
+		// map into profile.yaml, which the load-driver parses with the
+		// same field). A burst event injects ExtraTarget extra Pods worth
+		// of a NAMED archetype at AtSeconds-from-driver-start, then drains
+		// after DurationSeconds. The realism profile (5k.yaml) uses this
+		// to inject one gpu-training-large gang mid-run — foundation-model
+		// training modelled as an occasional burst rather than a
+		// steady-catalog archetype (it is burstOnly in realistic.yaml, so
+		// the burst is the ONLY source of that demand). Without this field
+		// a bursts: block in a V2 profile would be silently dropped — the
+		// V2 struct, not the chart, is the gate.
+		Bursts []profileBurst `yaml:"bursts"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the rampSeconds-derived deadline. Same
 	// semantics as profileFile.RampBudget (M22). Empty → use
@@ -516,6 +555,9 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			"preBind":         p.Seed.PreBind,
 			"archetypes":      archetypes,
 		},
+		// loadProfile.bursts is added below (only when the profile sets
+		// them) so the default chart values are unchanged for profiles
+		// without bursts.
 		"operator": map[string]any{
 			"qps":            200,
 			"burst":          400,
@@ -539,6 +581,14 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 
 	if p.RampBudget != "" {
 		values["rampBudget"] = p.RampBudget
+	}
+	// #327: thread burst events into the load-driver's profile. The chart
+	// toYaml's the whole loadProfile map into profile.yaml, so setting
+	// bursts here is all that's needed — the load-driver already parses
+	// the bursts field (burstSpec). Only set it when present so profiles
+	// without bursts render exactly as before.
+	if len(p.LoadProfile.Bursts) > 0 {
+		values["loadProfile"].(map[string]any)["bursts"] = p.LoadProfile.Bursts
 	}
 	if len(p.RunnerActions) > 0 {
 		values["runnerActions"] = p.RunnerActions

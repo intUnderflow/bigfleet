@@ -273,6 +273,85 @@ func TestMachinesForPods(t *testing.T) {
 	}
 }
 
+// TestBurstOnly_ExcludedFromSteadyModel pins #327: a burstOnly archetype
+// contributes nothing to the steady-state model — not to the draw
+// (NewPicker), the share math (podShare / machineShares /
+// MachinesForPods), the allocation (MachineAllocation), or its gang floor
+// (gangFloor) — while a non-burstOnly archetype is unchanged.
+func TestBurstOnly_ExcludedFromSteadyModel(t *testing.T) {
+	t.Parallel()
+	// A normal gang plus a burstOnly gang with an identical (large) shape.
+	// Without burstOnly the second would dominate via its gang floor.
+	burst := Archetype{
+		Name: "burst-gang", Weight: 1, InstanceTypes: []string{"g"},
+		Zones: []string{"zone-a", "zone-b", "zone-c"}, SameZone: true,
+		GroupSizeRange: [2]int{64, 256}, BurstOnly: true,
+		Resources: map[string]string{"nvidia.com/gpu": "8"},
+	}
+	arches := []Archetype{
+		{Name: "cpu", Weight: 100, InstanceTypes: []string{"c"}, Resources: map[string]string{"cpu": "2"}},
+		burst,
+	}
+
+	// podShare: zero for burstOnly.
+	if got := podShare(&arches[1]); got != 0 {
+		t.Errorf("podShare(burstOnly) = %g, want 0", got)
+	}
+	if podShare(&arches[0]) == 0 {
+		t.Error("podShare(non-burstOnly) must be non-zero")
+	}
+
+	// machineShares: zero for burstOnly.
+	if got := machineShares(arches, 100)[1]; got != 0 {
+		t.Errorf("machineShares[burstOnly] = %g, want 0", got)
+	}
+
+	// gangFloor: zero for burstOnly even though it IS a gang.
+	if got := gangFloor(&arches[1], 3); got != 0 {
+		t.Errorf("gangFloor(burstOnly gang) = %d, want 0", got)
+	}
+	// Sanity: drop burstOnly and the same shape floors at 256×3.
+	notBurst := burst
+	notBurst.BurstOnly = false
+	if got := gangFloor(&notBurst, 3); got != 256*3 {
+		t.Errorf("gangFloor(non-burstOnly gang) = %d, want %d", got, 256*3)
+	}
+
+	// MachineAllocation: burstOnly gets exactly 0, and the non-burstOnly
+	// archetype still absorbs the full nominal total (no leakage).
+	alloc := MachineAllocation(arches, 100, 1000, archZones)
+	if alloc[1] != 0 {
+		t.Errorf("MachineAllocation[burstOnly] = %d, want 0 (no draw share, no gang floor)", alloc[1])
+	}
+	if alloc[0] != 1000 {
+		t.Errorf("MachineAllocation[cpu] = %d, want 1000 (burstOnly takes none)", alloc[0])
+	}
+
+	// MachinesForPods: identical with and without the burstOnly archetype
+	// — it adds neither share-derived machines nor a gang floor.
+	withBurst := MachinesForPods(arches, 100, 5000)
+	withoutBurst := MachinesForPods(arches[:1], 100, 5000)
+	if withBurst != withoutBurst {
+		t.Errorf("MachinesForPods with burstOnly = %d, without = %d; burstOnly must add nothing", withBurst, withoutBurst)
+	}
+
+	// NewPicker: burstOnly is never drawn; a catalog of only burstOnly is
+	// a nil picker.
+	rng := rand.New(rand.NewSource(1))
+	p := NewPicker(arches)
+	if p == nil {
+		t.Fatal("picker nil for a catalog with a drawable archetype")
+	}
+	for i := 0; i < 5000; i++ {
+		if got := p.Pick(rng); got.Name == "burst-gang" {
+			t.Fatal("NewPicker drew a burstOnly archetype")
+		}
+	}
+	if NewPicker([]Archetype{burst}) != nil {
+		t.Error("NewPicker over only-burstOnly archetypes must be nil")
+	}
+}
+
 func TestIsStateful(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
