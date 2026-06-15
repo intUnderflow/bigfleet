@@ -952,6 +952,27 @@ continues elsewhere; see the production-readiness audit for context):
    precedent)? (c) engine — only if (a)+(b) say regime+target are right,
    and after re-instrumenting the saturating metric. The bind-SLO-pass
    *publish claim* for uber-5k is parked on this; the engine baseline
-   (over-acquire fixed, SLOs clean, 0 shortfalls) stands. Loop's teed-up
-   diagnostic (fork-agnostic, doesn't pre-commit): a Docker-free
-   closed-loop sim characterization of the tail's composition.
+   (over-acquire fixed, SLOs clean, 0 shortfalls) stands.
+   **RESOLVED to data (bigfleet-uber #78 A/B, 2026-06-16):** BigFleet's
+   per-decision engine is CLEAN in both arms (shardCycle 0.255s,
+   node-materialization 1.6s, scheduler attempt *compute* 0.51s, 0
+   shortfalls, no oversubscription). The #77 "76–102s" was histogram
+   saturation; de-saturated, the real uncapped pod-bind p99 is
+   hundreds-to-1300s. The tail decomposes into **(i) kube-scheduler
+   retry/backoff amplification** — cap-mitigable 3–5× (sli_duration p99
+   1310→328s with `schedulerPodMaxBackoffSeconds=1`), NOT BigFleet's, and
+   **(ii) the reprovision back-edge** — cap-immune ~410s residual (a
+   churn-reclaimed pod can't bind until a replacement machine reaches
+   Configured; = the genuine reprovision physics). Instrumentation fixed:
+   M79.4 widened the bind histograms + added a raw-max gauge; M79.5
+   widened the saturating shard provisioning-latency histogram so the
+   back-edge is now measurable. **Recommendation (author to confirm):**
+   (1) cap the scheduler backoff for SLO runs (removes the non-BigFleet
+   amplifier); (2) reframe the steady bind-SLO p99 to a regime-aware /
+   p50–p90 target — p50 6.4s / p90 51.2s pass; the p99 is reprovision-
+   bound by physics, and the engine is proven clean, so this is the honest
+   call now (it was NOT earlier, before the engine was exonerated);
+   (3) OPTIONAL, non-blocking: characterize + optimize the reprovision
+   back-edge throughput (now measurable) as a separate engine project — it
+   is not a publish blocker. On confirm, uber-5k (#258) publishes on the
+   reframed SLO + capped backoff.
