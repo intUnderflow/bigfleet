@@ -469,6 +469,86 @@ func TestSeedConfiguredSupply_OnlyCreditsMatchingMachines(t *testing.T) {
 	}
 }
 
+// creatingMachine constructs an unbound Speculative→Creating machine
+// (no Host, no Cluster per machine.Invariant) carrying a fingerprint
+// attribution, for the ADR-0052 (#66/#74) own-Creating credit tests.
+// cpu=4, matches the smallProfile m5.large pin.
+func creatingMachine(id machine.ID, fingerprint string) machine.Machine {
+	return machine.Machine{
+		ID:    id,
+		State: machine.StateCreating,
+		Profile: machine.Profile{
+			InstanceType: "m5.large",
+			Resources:    map[string]string{"cpu": "4"},
+		},
+		AssignedNeedFingerprint: fingerprint,
+	}
+}
+
+// ADR-0052: the shard counts its OWN in-flight Creating machine — one it
+// provisioned for this Need, carrying the Need's fingerprint — against the
+// deficit, so it does not re-Provision the same runway every cycle. The
+// non-Same arm credits by fingerprint; Creating is unbound, so it is
+// credited shard-wide, not from the Need's cluster bucket.
+func TestSeedConfiguredSupply_CreditsOwnCreating(t *testing.T) {
+	t.Parallel()
+	profile := smallProfile(100)
+	state := freshStateWith(creatingMachine("m-creating", profile.Fingerprint()))
+
+	n := needs.Need{
+		ClusterID:          "c1",
+		Profile:            profile,
+		AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+		MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+	}
+	results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+	if !state.IsClaimed("m-creating") {
+		t.Fatal("own-attributed Creating machine not credited by the pre-pass (ADR-0052)")
+	}
+	if !needs.IsZero(results[0].Deficit) {
+		t.Errorf("deficit = %v, want zero (own in-flight Creating absorbs it)", results[0].Deficit)
+	}
+}
+
+// A Creating machine that is not THIS Need's own commitment counts for
+// nobody — the ADR-0052 own-only guard. Without it, crediting arbitrary
+// in-flight supply would be the "in-flight discounting" of unattributed
+// machines that ADR-0045 forbids by name. Both an unattributed Creating
+// machine and one stamped for a different Need (here distinguished only by
+// fingerprint — the machine's profile still matches, so the own-predicate
+// is the sole rejecter) must be skipped.
+func TestSeedConfiguredSupply_IgnoresNonOwnCreating(t *testing.T) {
+	t.Parallel()
+	profile := smallProfile(100)
+	otherFP := smallProfile(100, "c5.large").Fingerprint()
+	for _, tc := range []struct {
+		name        string
+		fingerprint string
+	}{
+		{"unattributed (no fingerprint)", ""},
+		{"attributed to a different Need", otherFP},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := freshStateWith(creatingMachine("m-creating", tc.fingerprint))
+			n := needs.Need{
+				ClusterID:          "c1",
+				Profile:            profile,
+				AggregateResources: []needs.ResourceQty{{Name: "cpu", Quantity: "4"}},
+				MinUnit:            []needs.ResourceQty{{Name: "cpu", Quantity: "1"}},
+			}
+			results := occ.SeedConfiguredSupply(state, []*needs.Need{&n}, 10)
+			if state.IsClaimed("m-creating") {
+				t.Error("non-own Creating machine credited; ADR-0052 own-only guard broken")
+			}
+			if needs.IsZero(results[0].Deficit) {
+				t.Error("deficit zero despite no own-attributed in-flight supply")
+			}
+		})
+	}
+}
+
 // clusterSameMachine constructs a cluster-bound machine (Configured or
 // Configuring) carrying a rack label, for the ADR-0040 Same-domain
 // seed tests. cpu=4 per machine.
