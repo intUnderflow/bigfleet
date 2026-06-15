@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -681,5 +683,40 @@ func TestSteadyBindLatency(t *testing.T) {
 	}
 	if lat < 30*time.Second || lat > time.Minute {
 		t.Fatalf("latency = %v, want ~30s (now - creationTimestamp)", lat)
+	}
+}
+
+// TestLoadProfile_BurstsParse pins the last plumbing link the
+// bigfleet-uber #73 burst-never-fired finding could have broken: the
+// chart's `toYaml .Values.loadProfile` writes a bursts: block into the
+// load-driver's profile.yaml, and loadProfile must round-trip it into
+// d.prof.Bursts (with selectivity preserved — a 0 there makes
+// shouldBurst skip every cluster). Runner-side render is covered by
+// scaletest-runner's TestBursts_RealProfile_PlumbThrough.
+func TestLoadProfile_BurstsParse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	const y = `target: 25000
+churnPerMinute: 0.02
+bursts:
+  - atSeconds: 600
+    archetype: gpu-training-large
+    extraTarget: 1
+    durationSeconds: 600
+    selectivity: 1.0
+`
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadProfile(path)
+	if err != nil {
+		t.Fatalf("loadProfile: %v", err)
+	}
+	if len(p.Bursts) != 1 {
+		t.Fatalf("parsed %d bursts, want 1: %#v", len(p.Bursts), p.Bursts)
+	}
+	b := p.Bursts[0]
+	if b.AtSeconds != 600 || b.Archetype != "gpu-training-large" || b.ExtraTarget != 1 || b.DurationSeconds != 600 || b.Selectivity != 1.0 {
+		t.Errorf("parsed burst = %+v, want {600 gpu-training-large 1 600 1.0}", b)
 	}
 }

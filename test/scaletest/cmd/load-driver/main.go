@@ -550,6 +550,10 @@ func (d *driver) run(ctx context.Context) error {
 	// driver lifetime, across ramp and steady-state churn.
 	go d.anchorGangGroups(ctx)
 
+	// startedAt anchors the burst schedule to the driver's own start
+	// (ADR-0015 §3 / #327 atSeconds semantics).
+	startedAt := time.Now()
+
 	// Phase 1: ramp to target — create the workload objects. Their
 	// controllers create Pods WITHOUT Spec.NodeName, so each Pod goes
 	// Unschedulable → UPC → CapacityRequest. This establishes the
@@ -572,6 +576,15 @@ func (d *driver) run(ctx context.Context) error {
 			d.log.Info("demand saturated; wrote demand-ready file", "path", d.demandReadyFile)
 		}
 	}
+
+	// Burst events fire on a wall-clock timeline from startedAt, in their
+	// own goroutine launched BEFORE the (potentially never-returning)
+	// initial fill below: a preBind fleet that settles below 100% — the
+	// #66/#67 endogenous-churn equilibrium — leaves preBindInitialPods
+	// retrying for the whole run, so a burst sequenced after it never
+	// fires (bigfleet-uber #73). Bursts are independent demand; they do
+	// not depend on the fill completing.
+	go d.runBursts(ctx, startedAt)
 
 	// M52.B (ADR-0035): pre-bind the initial Pods to fake-Nodes,
 	// bypassing the slow kube-scheduler ramp. Patient retry — fake-
@@ -622,55 +635,16 @@ func (d *driver) run(ctx context.Context) error {
 	churnAccum := 0.0
 	d.log.Info("steady state", "churn_per_tick", perTickFloat)
 
-	// ADR-0015 §3: schedule burst events that this pod participates in.
-	// shouldBurst is deterministic so a pod restart re-arms the same
-	// bursts it had originally been chosen for.
-	type pendingBurst struct {
-		fireAt  time.Time
-		drainAt time.Time
-		spec    burstSpec
-		// arch is the resolved burst archetype (#327): a burst event names
-		// an archetype to inject — typically a burstOnly one (e.g.
-		// gpu-training-large) that the steady demand picker excludes.
-		// Resolved from the full catalog at schedule time. nil = no name
-		// given → the burst draws from the steady picker (legacy ADR-0015
-		// §3 behaviour).
-		arch    *archetype.Archetype
-		extraOn bool
-	}
-	bursts := make([]*pendingBurst, 0, len(d.prof.Bursts))
-	startedAt := time.Now()
-	for _, b := range d.prof.Bursts {
-		if !shouldBurst(d.clusterID, b) {
-			continue
-		}
-		var arch *archetype.Archetype
-		if b.Archetype != "" {
-			// archByName indexes the FULL demand catalog including
-			// burstOnly archetypes (only NewPicker skips those), so a
-			// burst can name an archetype the steady draw never produces.
-			arch = d.archByName[b.Archetype]
-			if arch == nil {
-				d.log.Warn("burst archetype not found in catalog; falling back to steady picker", "archetype", b.Archetype)
-			}
-		}
-		pb := &pendingBurst{
-			fireAt:  startedAt.Add(time.Duration(b.AtSeconds) * time.Second),
-			drainAt: startedAt.Add(time.Duration(b.AtSeconds+b.DurationSeconds) * time.Second),
-			spec:    b,
-			arch:    arch,
-		}
-		bursts = append(bursts, pb)
-		d.log.Info("burst scheduled", "archetype", b.Archetype, "at_s", b.AtSeconds, "extra", b.ExtraTarget, "duration_s", b.DurationSeconds)
-	}
-
+	// Burst events are handled by runBursts in its own goroutine (launched
+	// above, before the blocking initial fill); the steady loop below is
+	// churn + lifetime aging only.
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case now := <-tick.C:
+		case <-tick.C:
 			// Drop X: accumulator carries the fractional remainder so
 			// e.g. perTickFloat=0.33 emits one churn every ~3 ticks
 			// instead of being floored to zero (or, previously, ceiled
@@ -695,9 +669,73 @@ func (d *driver) run(ctx context.Context) error {
 			}
 			// ADR-0015 §2: per-archetype lifetime aging.
 			d.ageByLifetime(ctx)
-			// ADR-0015 §3: ramp / drain bursts. extraOn flips while
-			// the burst is active; the burst's extra workload objects
-			// are created on the rising edge and deleted on the
+		}
+	}
+}
+
+// pendingBurst is one scheduled burst event in flight (ADR-0015 §3, #327).
+type pendingBurst struct {
+	fireAt  time.Time
+	drainAt time.Time
+	spec    burstSpec
+	// arch is the resolved burst archetype: a burst names an archetype to
+	// inject — typically a burstOnly one (e.g. gpu-training-large) the
+	// steady demand picker excludes. nil = no name → draw from the steady
+	// picker (legacy ADR-0015 §3 behaviour).
+	arch    *archetype.Archetype
+	extraOn bool
+}
+
+// runBursts schedules and fires the profile's burst events on a wall-clock
+// timeline anchored at startedAt (the driver's own start, per ADR-0015 §3 /
+// #327). It MUST run in its own goroutine launched before the blocking
+// initial fill (rampTo + preBindInitialPods): a preBind fleet that settles
+// below 100% — the #66/#67 endogenous-churn equilibrium — leaves
+// preBindInitialPods retrying for the whole run, so anything sequenced after
+// it never executes. bigfleet-uber #73 caught exactly that — the
+// gpu-training-large burst never fired because it sat behind a preBind that
+// never returned. Burst objects are tagged burst=true; drainBurst removes
+// exactly them, and d.workloads is mutex-guarded so concurrency with the
+// steady churn loop is safe.
+func (d *driver) runBursts(ctx context.Context, startedAt time.Time) {
+	// shouldBurst is deterministic from (clusterID, atSeconds) so a driver
+	// restart re-arms the same bursts it was originally chosen for.
+	bursts := make([]*pendingBurst, 0, len(d.prof.Bursts))
+	for _, b := range d.prof.Bursts {
+		if !shouldBurst(d.clusterID, b) {
+			continue
+		}
+		var arch *archetype.Archetype
+		if b.Archetype != "" {
+			// archByName indexes the FULL demand catalog including
+			// burstOnly archetypes (only NewPicker skips those), so a
+			// burst can name an archetype the steady draw never produces.
+			arch = d.archByName[b.Archetype]
+			if arch == nil {
+				d.log.Warn("burst archetype not found in catalog; falling back to steady picker", "archetype", b.Archetype)
+			}
+		}
+		bursts = append(bursts, &pendingBurst{
+			fireAt:  startedAt.Add(time.Duration(b.AtSeconds) * time.Second),
+			drainAt: startedAt.Add(time.Duration(b.AtSeconds+b.DurationSeconds) * time.Second),
+			spec:    b,
+			arch:    arch,
+		})
+		d.log.Info("burst scheduled", "archetype", b.Archetype, "at_s", b.AtSeconds, "extra", b.ExtraTarget, "duration_s", b.DurationSeconds)
+	}
+	if len(bursts) == 0 {
+		return
+	}
+
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			// extraOn flips while the burst is active; the extra workload
+			// objects are created on the rising edge and deleted on the
 			// falling edge.
 			for _, pb := range bursts {
 				if !pb.extraOn && !now.Before(pb.fireAt) && now.Before(pb.drainAt) {

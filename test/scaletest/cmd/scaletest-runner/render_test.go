@@ -252,6 +252,65 @@ func TestRenderHelmValues_BurstsPlumbThrough(t *testing.T) {
 	}
 }
 
+// TestBursts_RealProfile_PlumbThrough is the #327 end-to-end pin that
+// TestRenderHelmValues_BurstsPlumbThrough missed: that test hand-sets
+// p.LoadProfile.Bursts on a fixture, so it never exercises the parse +
+// merge path. This one loads the REAL committed 5k.yaml and asserts the
+// gpu-training-large burst survives every stage the production run takes
+// — parse → merge → render → marshal (what the chart toYaml's into the
+// load-driver's profile.yaml). bigfleet-uber #73 (the burst never fired
+// in cloud) is the reason this test exists; if the burst silently drops
+// at any stage, the first assertion below names it.
+func TestBursts_RealProfile_PlumbThrough(t *testing.T) {
+	t.Parallel()
+
+	// Stage 1 — parse: the committed bursts block must land in the struct.
+	pv2, err := readProfileV2("../../profiles/5k.yaml")
+	if err != nil {
+		t.Fatalf("read 5k.yaml: %v", err)
+	}
+	if len(pv2.LoadProfile.Bursts) != 1 {
+		t.Fatalf("5k.yaml loadProfile.bursts parsed to %d entries, want 1: %#v",
+			len(pv2.LoadProfile.Bursts), pv2.LoadProfile.Bursts)
+	}
+	b0 := pv2.LoadProfile.Bursts[0]
+	if b0.Archetype != "gpu-training-large" || b0.Selectivity != 1.0 || b0.ExtraTarget != 1 {
+		t.Errorf("parsed burst = %+v, want {gpu-training-large selectivity 1.0 extraTarget 1}", b0)
+	}
+
+	// Stage 2 — merge + render: the burst must reach the rendered values.
+	sub, err := readSubstrate("../../substrates/example-fat-host.yaml")
+	if err != nil {
+		t.Fatalf("read substrate: %v", err)
+	}
+	cfg, err := merge(pv2, sub)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	arch, typed, err := loadCatalogArchetypes("../../profiles/5k.yaml", pv2.Catalog.Archetypes)
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	values := renderHelmValues(pv2, sub, cfg, arch, typed)
+	lp, ok := values["loadProfile"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered values missing loadProfile map: %#v", values["loadProfile"])
+	}
+	if _, ok := lp["bursts"]; !ok {
+		t.Fatalf("rendered loadProfile dropped bursts: %#v", lp)
+	}
+
+	// Stage 3 — marshal: the load-driver parses this YAML, so the burst
+	// archetype must survive the round-trip the chart's toYaml performs.
+	out, err := yaml.Marshal(values)
+	if err != nil {
+		t.Fatalf("marshal rendered values: %v", err)
+	}
+	if !strings.Contains(string(out), "gpu-training-large") {
+		t.Errorf("marshalled values missing burst archetype:\n%s", out)
+	}
+}
+
 // TestRenderHelmValues_YAMLRoundTrip confirms the rendered values
 // round-trip through gopkg.in/yaml.v3 cleanly — i.e. helm will
 // accept the output without parse errors. Helm-template smoke test
