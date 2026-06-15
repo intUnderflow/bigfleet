@@ -39,9 +39,10 @@ func TestCommittedProfiles_MatchingCapacityPreflight(t *testing.T) {
 	// skipReasons documents why the rest are observed, not gated.
 	skipReasons := map[string]string{
 		"dev-500.yaml": "kept for occasional manual checks, not a gate; both kine-bound and (recorded here) supply-short on the single-shape arithmetic",
-		"uber-":        "legacy files pending M50.7 deletion; the operating runs use an injected archetype catalog, so single-shape arithmetic does not describe them",
-		"scaleway-":    "legacy files pending M50.7 deletion; no longer run (uber substrate only)",
-		"failover-":    "failover drills exercise control-plane recovery, not the bind gate",
+		// M50.7: the legacy V1 uber-*/scaleway-* profiles are deleted; the
+		// canonical realism profiles are the V2 {5k,50k,…}.yaml + a
+		// substrate. No exemption needed for files that no longer exist.
+		"failover-": "failover drills exercise control-plane recovery, not the bind gate",
 	}
 
 	entries, err := os.ReadDir(dir)
