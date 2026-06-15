@@ -315,6 +315,13 @@ func (m Machine) EffectiveCost(interruptionPenaltyDollars float64) float64 {
 func (m *Machine) Invariant() error {
 	switch m.State {
 	case StateSpeculative, StateCreating:
+		// Host and Cluster stay forbidden: neither state is bound. ADR-0052
+		// (#66/#74) permits AssignedGroup + AssignedNeedFingerprint on a
+		// Creating machine — Go-only fields, not on the wire — so the shard's
+		// own in-flight provision commitment counts toward its Need's
+		// coverage (seed.go). They are not checked here precisely because
+		// they are permitted; the binding (Host/Cluster) is what "not bound"
+		// forbids.
 		if !m.Host.Empty() {
 			return fmt.Errorf("machine %s: %s state must have empty host", m.ID, m.State)
 		}

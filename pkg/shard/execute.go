@@ -189,8 +189,16 @@ func (s *Shard) executeProvision(ctx context.Context, a decision.Action) error {
 	if cur.State != machine.StateSpeculative {
 		return fmt.Errorf("provision: machine %s in state %s; expected Speculative", a.MachineID, cur.State)
 	}
-	// Speculative → Creating
-	if err := s.applyTransition(a.MachineID, machine.StateCreating, nil); err != nil {
+	// Speculative → Creating. ADR-0052 (#66/#74): stamp the gang
+	// attribution at the moment of Create — one machine-state earlier than
+	// the Configure-time stamp below — so the shard's own in-flight
+	// Creating machine counts toward *its own* Need's coverage in the
+	// seed.go walk. Without this the pre-Configuring runway is invisible
+	// supply and the gang re-Provisions every cycle (over-acquire = dwell+1).
+	if err := s.applyTransition(a.MachineID, machine.StateCreating, func(m *machine.Machine) {
+		m.AssignedNeedFingerprint = a.SourceProfile.Fingerprint()
+		m.AssignedGroup = a.SourceGroup
+	}); err != nil {
 		return formatErr("provision: → Creating", err)
 	}
 	ack, err := s.cfg.Provider.Create(ctx, provider.CreateRequest{MachineID: a.MachineID})

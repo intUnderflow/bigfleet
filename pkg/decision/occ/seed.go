@@ -109,6 +109,22 @@ func SeedConfiguredSupply(state *SharedState, needsByIdx []*needs.Need, retryBud
 					remaining = needs.SubResources(remaining, alloc)
 				}
 			}
+			// ADR-0052 (#66/#74): credit the shard's OWN in-flight Creating
+			// machines — those this Need provisioned, carrying its
+			// fingerprint attribution. Creating is unbound (no cluster), so
+			// it is shard-wide, not in the cluster bucket above; an
+			// unattributed Creating machine matches nobody. Crediting it
+			// keeps the gang from re-Provisioning the same in-flight runway
+			// every cycle (the over-acquire). Creating is NOT in the
+			// acquirable pool, so it is never double-counted.
+			// CountByState is O(1); guard the per-Need walk so the common
+			// steady state (no machine mid-Creating) costs nothing — no
+			// ListByState slice allocation.
+			if !needs.IsZero(remaining) && snap.CountByState(machine.StateCreating) > 0 {
+				remaining = creditOwnCreating(state, snap, n, prec, retryBudget, remaining, func(m machine.Machine) bool {
+					return m.AssignedNeedFingerprint == profile.Fingerprint()
+				})
+			}
 		}
 
 		results[idx] = NeedResult{
@@ -117,6 +133,38 @@ func SeedConfiguredSupply(state *SharedState, needsByIdx []*needs.Need, retryBud
 		}
 	}
 	return results
+}
+
+// creditOwnCreating credits the non-Same arm's share of ADR-0052: the
+// shard's own in-flight Creating machines matching own(m) (here:
+// fingerprint-own) count toward this Need's coverage. Creating machines
+// are unbound (no cluster) so they are walked shard-wide via ListByState,
+// not the cluster bucket. Same claim semantics as the Configured/
+// Configuring credit above: claim + subtract under stop-when-covered, so
+// the deficit the workers fill shrinks by the in-flight commitment. The
+// Same arm credits Creating inline in seedSameProfile's bucket walk.
+func creditOwnCreating(state *SharedState, snap *inventory.Snapshot, n *needs.Need, prec Precedence, retryBudget int, remaining []needs.ResourceQty, own func(machine.Machine) bool) []needs.ResourceQty {
+	for _, m := range snap.ListByState(machine.StateCreating) {
+		if needs.IsZero(remaining) {
+			break
+		}
+		if state.IsClaimed(m.ID) {
+			continue
+		}
+		if !own(m) {
+			continue
+		}
+		if !matchProfile(n.Profile, m) {
+			continue
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		if !needs.Covers(alloc, n.MinUnit) {
+			continue
+		}
+		state.SeedClaim(m.ID, n, prec, retryBudget)
+		remaining = needs.SubResources(remaining, alloc)
+	}
+	return remaining
 }
 
 // seedSameProfile is SeedConfiguredSupply's Same-Profile arm
@@ -158,49 +206,74 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 	index := make(map[string]int)
 	var buckets []SameBucket
 	var members [][]seedCandidate
+	// addCreditable folds one matching, unclaimed, MinUnit-covering machine
+	// into its Same-domain bucket as creditable supply. Shared by the
+	// cluster-scoped Configured/Configuring walk and the ADR-0052 shard-wide
+	// own-Creating walk below so the two paths cannot diverge.
+	addCreditable := func(m machine.Machine) {
+		if state.IsClaimed(m.ID) {
+			return
+		}
+		if !matchProfile(n.Profile, m) {
+			return
+		}
+		alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
+		vec := acquirable.ParseVec(alloc)
+		if !VecCovers(vec, minUnitVec) {
+			return
+		}
+		v, ok := lookupAttribute(sameKey, m)
+		if !ok {
+			return
+		}
+		i, exists := index[v]
+		if !exists {
+			i = len(buckets)
+			index[v] = i
+			buckets = append(buckets, SameBucket{Value: v})
+			members = append(members, nil)
+		}
+		buckets[i].Count++
+		buckets[i].CreditableCount++
+		buckets[i].Total = VecAdd(buckets[i].Total, vec)
+		buckets[i].CreditableTotal = VecAdd(buckets[i].CreditableTotal, vec)
+		// ADR-0051: machines bound to *this gang* (same Profile
+		// fingerprint AND co-location Group) feed CreditableOwnTotal,
+		// the gang-granular tiebreak ChooseSameBucket reads to pin a
+		// served gang to its own domain. Match on Group, not just
+		// fingerprint: two same-profile gangs share a fingerprint.
+		// M77h: the same predicate marks the machine an incumbent for
+		// the claim loop's stop-when-covered preference below.
+		own := m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint()
+		if own {
+			buckets[i].CreditableOwnTotal = VecAdd(buckets[i].CreditableOwnTotal, vec)
+		}
+		members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc, own: own})
+	}
 	for _, st := range []machine.State{machine.StateConfigured, machine.StateConfiguring} {
 		// Keep-priority order within the domain, like the non-Same walk:
 		// ADR-0045 makes the unclaimed remainder Phase 3's excess, so the
 		// claim preference doubles as the §8 release order.
 		for _, m := range snap.SortedClusterStateBucket(n.ClusterID, st) {
-			if state.IsClaimed(m.ID) {
-				continue
+			addCreditable(m)
+		}
+	}
+	// ADR-0052 (#66/#74): credit the gang's OWN in-flight Creating machines.
+	// Creating is unbound (no cluster) so it is shard-wide, not in the
+	// cluster bucket above; gate on the gang attribution (group+fingerprint)
+	// so only machines this gang provisioned count — an unattributed
+	// Creating machine, or another gang's, matches nobody. This is the
+	// pre-Configuring twin of the Configuring credit above: without it the
+	// gang re-Provisions the same in-flight runway every cycle. Creating is
+	// NOT acquirable (foldAcquirable below folds only Idle+Speculative), so
+	// it is never double-counted.
+	// CountByState is O(1); skip the walk + its slice alloc when no
+	// machine is mid-Creating (the common steady state).
+	if snap.CountByState(machine.StateCreating) > 0 {
+		for _, m := range snap.ListByState(machine.StateCreating) {
+			if m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint() {
+				addCreditable(m)
 			}
-			if !matchProfile(n.Profile, m) {
-				continue
-			}
-			alloc := needs.ResourceQtysFromMap(m.EffectiveAllocatable())
-			vec := acquirable.ParseVec(alloc)
-			if !VecCovers(vec, minUnitVec) {
-				continue
-			}
-			v, ok := lookupAttribute(sameKey, m)
-			if !ok {
-				continue
-			}
-			i, exists := index[v]
-			if !exists {
-				i = len(buckets)
-				index[v] = i
-				buckets = append(buckets, SameBucket{Value: v})
-				members = append(members, nil)
-			}
-			buckets[i].Count++
-			buckets[i].CreditableCount++
-			buckets[i].Total = VecAdd(buckets[i].Total, vec)
-			buckets[i].CreditableTotal = VecAdd(buckets[i].CreditableTotal, vec)
-			// ADR-0051: machines bound to *this gang* (same Profile
-			// fingerprint AND co-location Group) feed CreditableOwnTotal,
-			// the gang-granular tiebreak ChooseSameBucket reads to pin a
-			// served gang to its own domain. Match on Group, not just
-			// fingerprint: two same-profile gangs share a fingerprint.
-			// M77h: the same predicate marks the machine an incumbent for
-			// the claim loop's stop-when-covered preference below.
-			own := m.AssignedGroup == n.Group && m.AssignedNeedFingerprint == n.Profile.Fingerprint()
-			if own {
-				buckets[i].CreditableOwnTotal = VecAdd(buckets[i].CreditableOwnTotal, vec)
-			}
-			members[i] = append(members[i], seedCandidate{id: m.ID, alloc: alloc, own: own})
 		}
 	}
 	// Joint potential: fold in the acquirable half, consumption-aware

@@ -91,6 +91,18 @@ Covers both `Same` (gang-own coverage) and non-`Same` (fingerprint-own),
 because the over-acquire is general (the sim repro's deficit=1 arm is
 non-gang).
 
+Attribution precision: a Creating machine is unbound (no cluster), and
+`Profile.Fingerprint()` / `Group` omit the cluster ID, so the **non-`Same`**
+credit is per-*fingerprint*, not per-*cluster* — a Creating machine one
+cluster provisioned can be credited to a higher-priority same-fingerprint
+Need in another cluster. This is bounded and self-correcting (the shared
+claim ledger credits each machine exactly once, so total credit equals the
+actual own-Creating count; coverage stays met; the matured Idle is shared
+anyway) and does not reintroduce the over-acquire. The `Same` arm is
+gang-exact (Group is gang-unique). Cross-cluster per-cluster precision
+would require a cluster hint on the Provision attribution — out of scope;
+recorded so the precision limit is designed-for, not rediscovered.
+
 ## Consequences
 
 - The over-acquire collapses to 1 acquisition per genuine loss. The sim

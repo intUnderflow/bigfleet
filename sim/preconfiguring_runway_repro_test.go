@@ -133,15 +133,28 @@ func TestPreConfiguringRunway_OverAcquireRepro(t *testing.T) {
 			// more distinct machines than its deficit.
 			t.Logf("  over-acquire ratio (post-fault acq actions ÷ deficit=1) = %d", acq)
 
-			// GATE (was Logf-only): pin the over-acquire law. A single
-			// 1-machine loss legitimately costs 1 acquisition; each cycle
-			// the replacement spends in the INVISIBLE Creating runway adds
-			// one spurious re-Provision, so acq = dwell+1. This pins the
-			// DEFECT — when the Creating runway is counted (the fix), acq
-			// must drop to 1 for every dwell and this assertion flips to
-			// the fix's acceptance criterion.
-			if acq != dwell+1 {
-				t.Errorf("over-acquire law broken: acq=%d, want dwell+1=%d (dwell=%d)", acq, dwell+1, dwell)
+			// GATE — ADR-0052 (#66/#74), the FIX's acceptance criterion.
+			// Pre-fix this pinned the DEFECT (acq == dwell+1): each cycle the
+			// replacement spent in the INVISIBLE Creating runway added one
+			// spurious re-Provision. With the shard's own Creating machine now
+			// credited toward its Need's coverage, the over-acquire collapses
+			// and acq is INDEPENDENT of dwell:
+			//   - exactly ONE Provision (prov == 1): the single 1-machine loss
+			//     is provisioned once; the credited in-flight Creating stops
+			//     the gang re-Provisioning it on every subsequent cycle.
+			//   - acq is 1 at dwell0 (instant Create → Idle → Configure folds
+			//     into a single Provision Step) and 2 for dwell>0 (1 Provision
+			//     of the Speculative + 1 Bootstrap of the matured Idle — the
+			//     irreducible cost of one replacement through the full runway).
+			if provs != 1 {
+				t.Errorf("over-acquire not collapsed: provisions=%d, want exactly 1 (dwell=%d)", provs, dwell)
+			}
+			wantAcq := 2
+			if dwell == 0 {
+				wantAcq = 1
+			}
+			if acq != wantAcq {
+				t.Errorf("acq=%d, want %d — over-acquire must be flat across dwell (dwell=%d)", acq, wantAcq, dwell)
 			}
 			if end.Shortfalls != 0 {
 				t.Errorf("coverage must always be met: shortfalls=%d (dwell=%d)", end.Shortfalls, dwell)
@@ -215,13 +228,15 @@ func TestPreConfiguringRunway_RepeatedChurn(t *testing.T) {
 		})
 	}
 
-	// GATE: the pre-Configuring (Creating) runway lifts reclaims/loss
-	// above the instant-Create (dwell0) floor — the sustained
-	// Bootstrap≈Reclaim signature (#66/#74). The dwell0 control is the
-	// async-actuation/timing floor and must stay small; every dwell>0 arm
-	// must exceed it. POST-FIX (Creating counted) the dwell>0 arms drop
-	// BACK to the floor — i.e. this assertion flips, and that flip is the
-	// fix's acceptance criterion.
+	// GATE — ADR-0052 (#66/#74), the FIX's acceptance criterion. Pre-fix
+	// the pre-Configuring (Creating) runway lifted reclaims/loss ABOVE the
+	// instant-Create (dwell0) floor — the sustained Bootstrap≈Reclaim
+	// signature: the invisible runway drove a per-cycle re-Provision whose
+	// surplus reached Configured and was reclaimed. POST-FIX the shard's own
+	// Creating machine is credited, so the runway adds no churn and every
+	// dwell>0 arm drops BACK to (at or below) the dwell0 floor. The dwell0
+	// control is the irreducible async-actuation/timing floor and stays
+	// small.
 	var floor float64
 	for _, r := range results {
 		if r.dwell == 0 {
@@ -235,8 +250,11 @@ func TestPreConfiguringRunway_RepeatedChurn(t *testing.T) {
 		if r.dwell == 0 {
 			continue
 		}
-		if r.reclPerLoss <= floor {
-			t.Errorf("dwell=%d period=%d reclaims/loss=%.2f did not exceed the dwell0 floor %.2f — the runway over-acquire signature is absent (mechanism drift, or fixed: flip this gate)", r.dwell, r.period, r.reclPerLoss, floor)
+		// At or below the floor: the runway over-acquire signature is gone.
+		// A small tolerance over the floor absorbs deficit-overlap timing
+		// jitter that is not the (removed) per-cycle re-Provision churn.
+		if r.reclPerLoss > floor+0.05 {
+			t.Errorf("dwell=%d period=%d reclaims/loss=%.2f exceeds the dwell0 floor %.2f — the runway over-acquire signature is NOT collapsed (ADR-0052 regression)", r.dwell, r.period, r.reclPerLoss, floor)
 		}
 	}
 }
