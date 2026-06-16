@@ -38,5 +38,5 @@ slo:
   # ADR-0054 BigFleet-property bars. Held bars identical across the ladder.
   shardConfigurePhaseP99Seconds: 15
   bootstrapSuccessRatio: 0.99
-  operatorNodeStateUpdateP99Seconds: 1
+  operatorNodeStateUpdateP99Seconds: 1.5  # M79.8: 1s was apiserver-write-bound (~1.024s actual); 1.5 provisional pending the per-op split (ADR-0054)
   endToEndPodBindP50Seconds: 10

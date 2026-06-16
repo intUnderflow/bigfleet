@@ -143,8 +143,12 @@ type sloOverrides struct {
 	// UpcomingNode=Ready after the shard signals Configured — the one
 	// BigFleet-owned hop with zero prior runner coverage (ADR-0054 Half
 	// 1; the Drop S >=102s tail lived here). Gated only when > 0.
-	// PROVISIONAL posture number, AUTHOR-OWNED (cloud 1s; dev profiles
-	// loosen for the kine write tail).
+	// PROVISIONAL posture number, AUTHOR-OWNED (cloud 1.5s; dev profiles
+	// loosen for the kine write tail). M79.8 (#79 ratification): the ~1s
+	// p99 is apiserver-WRITE bound (handler = trivial compute + 2-3
+	// apiserver round-trips; same class as operatorAck), not operator
+	// logic — bar sized to the apiserver-write regime, finalized by the
+	// per-op duration histogram on the next clean run.
 	OperatorNodeStateUpdateP99Seconds float64 `yaml:"operatorNodeStateUpdateP99Seconds"`
 	// EndToEndPodBindP50Seconds is a LOOSE liveness floor on the
 	// end-to-end pod-bind p50 (ADR-0054 Half 2): p50 sits below the

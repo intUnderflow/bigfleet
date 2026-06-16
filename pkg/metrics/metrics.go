@@ -495,6 +495,24 @@ var (
 		Help: "UpcomingNode CRD apiserver write attempts, by op (create, spec_update, status_update) and outcome (success, conflict, error). Sum / NodeStateUpdate-rate ≈ apiserver round-trips per binding.",
 	}, []string{"op", "outcome"})
 
+	// OperatorUpcomingNodeOpDuration times each individual apiserver call
+	// inside handleNodeStateUpdate (get / create / get_refetch / spec_patch
+	// / status_patch / delete), separately from the whole-handler
+	// OperatorNodeStateUpdateDuration above. M79.8 (bigfleet-uber #79
+	// ratification): the handler is trivial in-memory compute wrapped
+	// around 2-3 apiserver round-trips, so the node-state-update p99 (~1s
+	// at uber-5k) is hypothesized to be apiserver-WRITE bound (a dependency
+	// BigFleet doesn't control), not operator logic. This split makes that
+	// provable: sum of per-op durations ≈ handler total ⇒ write-bound;
+	// a large total − sum(per-op) residual ⇒ operator compute / retry
+	// backoff. Lets the SLO bar be sized to the real apiserver-write cost
+	// rather than guessed (ADR-0054 node-state-update threshold).
+	OperatorUpcomingNodeOpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bigfleet_operator_upcoming_node_op_duration_seconds",
+		Help:    "Wall-clock of each individual apiserver call inside handleNodeStateUpdate, by op. Splits the apiserver-write cost from the whole-handler node_state_update_duration so the node-state-update p99 can be attributed (write-bound vs operator-compute/retry).",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 17),
+	}, []string{"op"})
+
 	// recvLoop spawns one goroutine per inbound frame with no semaphore.
 	// At high inbound rates this can balloon into thousands of in-flight
 	// handlers all queuing on the apiserver-write rate-limiter. Gauge so

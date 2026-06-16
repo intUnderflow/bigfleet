@@ -72,9 +72,24 @@ func (o *Operator) handleNodeStateUpdate(ctx context.Context, u *pb.NodeStateUpd
 	})
 }
 
+// timedOp times one apiserver call inside the NodeStateUpdate handler and
+// records it under op (M79.8 / ADR-0054), so the per-op apiserver-write cost
+// is split from the whole-handler OperatorNodeStateUpdateDuration. The
+// handler's own compute is in-memory and negligible; this confirms whether
+// the node-state-update p99 is apiserver-write-bound (a dependency BigFleet
+// doesn't control) so its SLO bar can be sized to the real cost.
+func (o *Operator) timedOp(op string, fn func() error) error {
+	start := time.Now()
+	err := fn()
+	metrics.OperatorUpcomingNodeOpDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+	return err
+}
+
 func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, phase bfv1alpha1.UpcomingNodePhase, u *pb.NodeStateUpdate) error {
 	var existing bfv1alpha1.UpcomingNode
-	getErr := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
+	getErr := o.timedOp("get", func() error {
+		return o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
+	})
 	switch {
 	case apierrors.IsNotFound(getErr):
 		// Fresh — create.
@@ -82,7 +97,7 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec:       upcomingNodeSpecFromUpdate(u),
 		}
-		createErr := o.cfg.KubeClient.Create(ctx, un)
+		createErr := o.timedOp("create", func() error { return o.cfg.KubeClient.Create(ctx, un) })
 		metrics.OperatorUpcomingNodeWrites.WithLabelValues("create", classifyWriteErr(createErr)).Inc()
 		switch {
 		case createErr == nil:
@@ -96,7 +111,9 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 			// Lost the race to a concurrent handler. Fetch the existing
 			// object so the status update below operates on the right
 			// ResourceVersion.
-			if err := o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing); err != nil {
+			if err := o.timedOp("get_refetch", func() error {
+				return o.cfg.KubeClient.Get(ctx, types.NamespacedName{Name: name}, &existing)
+			}); err != nil {
 				return fmt.Errorf("re-fetch UpcomingNode after AlreadyExists: %w", err)
 			}
 		default:
@@ -126,7 +143,9 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		if !upcomingSpecEqual(existing.Spec, freshSpec) {
 			specPatched := existing.DeepCopy()
 			specPatched.Spec = freshSpec
-			updErr := o.cfg.KubeClient.Patch(ctx, specPatched, client.MergeFrom(&existing))
+			updErr := o.timedOp("spec_patch", func() error {
+				return o.cfg.KubeClient.Patch(ctx, specPatched, client.MergeFrom(&existing))
+			})
 			metrics.OperatorUpcomingNodeWrites.WithLabelValues("spec_update", classifyWriteErr(updErr)).Inc()
 			if updErr != nil {
 				return fmt.Errorf("update UpcomingNode spec: %w", updErr)
@@ -155,7 +174,7 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 	// closes the loop with pod-shim's new fake-Node cleanup path —
 	// the informer DELETE event triggers the fake-Node delete.
 	if phase == bfv1alpha1.UpcomingNodeDrained {
-		delErr := o.cfg.KubeClient.Delete(ctx, &existing)
+		delErr := o.timedOp("delete", func() error { return o.cfg.KubeClient.Delete(ctx, &existing) })
 		metrics.OperatorUpcomingNodeWrites.WithLabelValues("delete", classifyWriteErr(delErr)).Inc()
 		if delErr != nil && !apierrors.IsNotFound(delErr) {
 			return fmt.Errorf("delete UpcomingNode at Drained: %w", delErr)
@@ -205,7 +224,9 @@ func (o *Operator) handleNodeStateUpdateOnce(ctx context.Context, name string, p
 		now := metav1.Now()
 		existing.Status.ProvisioningStartTime = &now
 	}
-	statusErr := o.cfg.KubeClient.Status().Patch(ctx, &existing, client.MergeFrom(statusOriginal))
+	statusErr := o.timedOp("status_patch", func() error {
+		return o.cfg.KubeClient.Status().Patch(ctx, &existing, client.MergeFrom(statusOriginal))
+	})
 	metrics.OperatorUpcomingNodeWrites.WithLabelValues("status_update", classifyWriteErr(statusErr)).Inc()
 	if statusErr != nil {
 		return fmt.Errorf("update UpcomingNode status: %w", statusErr)
