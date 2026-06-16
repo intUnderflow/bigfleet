@@ -180,14 +180,60 @@ Per ADR-0035, the runner gates on **steady-state SLO histograms over the soak wi
 
 Ramp time and ramp throughput are still captured in `summary.json` for capacity exploration, but they don't gate pass/fail. The runner does still time out if steady state isn't reached at all (`waitForSteadyState` budget) — that's a sanity check that the harness installed correctly, not an SLO.
 
-| Metric | Threshold | Best observed | Notes |
-|---|---|---|---|
-| `bigfleet_shard_cycle_duration_seconds` | **100 ms** | 1.8 ms (50k tier) | Decision engine; large headroom intentional. |
-| `bigfleet_operator_rollup_duration_seconds` | **1 s** | 122 ms (50k tier) | One rollup pipeline turn must finish well within the 10 s rollup interval. |
-| `bigfleet_operator_acknowledge_duration_seconds` | **12 s** | 9.97 s (50k tier) | Bounded by operator status-write QPS against the apiserver. Tightens when the operator gains batched status writes. |
-| `bigfleet_scaletest_pod_bind_latency_steady_seconds` | per-profile (default 15 s) | tier-dependent | Per-CR binding latency under churn replacement. ADR-0014 / ADR-0017. The headline customer-facing signal. |
+### What the release gate is — and why (ADR-0054)
 
-Edit `pass()` in `test/scaletest/cmd/scaletest-runner/main.go` to add more.
+The release gate is **BigFleet's capacity-delivery deliverable, not the
+end-to-end pod-bind latency.** The *why* is the whole point of ADR-0054 and
+belongs here, not just in the ADR:
+
+Under the default harness every steady/churn Pod is placed by the **real,
+uncapped kube-scheduler** (`harness.scheduler: kube-scheduler`). So the
+end-to-end "pod-bind latency" (`creationTimestamp → spec.nodeName`) spans two
+costs BigFleet does **not** control: the kube-scheduler's own retry/backoff
+WAIT for an unschedulable Pod, and the *reprovision back-edge* (a
+churn-reclaimed Pod cannot bind until a replacement machine is provisioned —
+Create + bootstrap physics). bigfleet-uber #78 measured that end-to-end p99 in
+the hundreds-to-1300 s range **while BigFleet's own engine stayed clean**
+(configure-phase 0.56 s, shardCycle 0.255 s, 0 shortfalls). Gating BigFleet on
+that number gates it on the cluster's scheduler — so we don't. We keep the
+scheduler production-faithful (the author decision: never reconfigure the
+scheduler to pass our own SLO) and gate BigFleet on what it actually delivers.
+
+**Release gates — each covers one hop BigFleet owns, so a real engine
+regression in that hop trips a gate** (this hop-by-hop coverage is the
+anti-"reframe-to-pass" argument — see ADR-0054):
+
+| Metric (gate) | Threshold | Why this gate is here |
+|---|---|---|
+| `shardConfigurePhaseP99Seconds` | 15 s (held) | Per-machine Idle→Configuring→Configured: BootstrapRequest RTT + `Provider.Configure` + the transition — the capacity-*materialization latency* BigFleet owns. Per-machine + observed on every Bootstrap, so non-saturating under churn (unlike the per-fingerprint `provisioning_latency`, a diagnostic only — ADR-0017). #78: 0.56 s, ~27× headroom. |
+| `bootstrapSuccessRatio` | ≥ 0.99 (held, **MIN**) | Materialization *throughput*, the counterpart to configure-phase's latency. Closes a real hole: configure-phase times only *successes*, and `shardShortfalls==0` is blinded by ADR-0052 in-flight crediting (a Creating machine counts toward coverage before it materializes) — so a Configure throughput collapse would slip *both*. This gate trips on exactly that. |
+| `operatorNodeStateUpdateP99Seconds` | 1 s (dev: 5 s) (held) | The operator publishing `UpcomingNode=Ready` after the shard signals Configured — the last BigFleet-owned hop. Previously instrumented but **never gated**; it was a real tail source (the Drop-S Conflict stuck UpcomingNode for tens of seconds). Now explicit. |
+| `shardShortfalls` | **== 0** | BigFleet's ADR-0045 contract: demand covered by bound capacity. Was a steady-state precondition; now also the release verdict. The cheapest anti-reframe-to-pass guard. |
+| `shardCycleDurationP99Seconds` | 5 s | Decision-engine throughput envelope (retained; large headroom intentional). |
+| `operatorRollupP99Seconds` | 1 s | One rollup pipeline turn, well within the 10 s rollup interval (retained). |
+| `operatorAckP99Seconds` | 12 s | Bounded by operator status-write QPS against the apiserver (retained). |
+| `maxReclaimActionsDuringSoak` | per-profile | Bounded-reclaim gate (ADR-0035 amendment): Phase 3 is shrinkage-only and must be inert at steady demand. |
+| `endToEndPodBindP50Seconds` | 10 s (dev: 30 s) (**LOOSE**) | A coarse common-path liveness floor *only* — p50 sits below the scheduler-retry tail, so a p50 blowup means the *typical* bind path broke. Explicitly **not** the release gate. |
+
+**Informational — scraped, written to `summary.json`, never gated:**
+
+| Metric | Why it is informational, not a gate |
+|---|---|
+| `internalBindingLatencyP99Seconds` + `internalBindingLatencyMaxSeconds` | The end-to-end pod-bind p99 + its non-saturating raw-max cross-check. Regime-context: dominated by the uncapped scheduler retry WAIT + reprovision back-edge, neither BigFleet's deliverable (ADR-0054 Half 2). Retired from gating, kept for visibility. The raw-max exists because the histogram's old top bucket (102.4 s) silently clipped the true tail (M79.4, after #77 read a pegged "76–102 s"). |
+| `bigfleet_shard_provisioning_latency_seconds` | Per-(cluster, fingerprint) fan-out diagnostic with observe-once-and-delete semantics → saturates in steady state; a diagnostic, never a gate (ADR-0017). |
+
+**Why the threshold *values* are where they are:** the BigFleet-property bars
+(configure-phase, success-ratio, node-state-update) are *held* — per-machine /
+per-frame quantities independent of fleet size, so identical across the uber
+ladder (5k…5m), per ADR-0028's held-vs-scaled split. The numbers are
+**provisional, author-owned posture values** (the `maxReclaimActionsDuringSoak`
+class): set in code, ratified against the de-tailed actuals from the dev-50 +
+uber-5k re-measure. Dev profiles loosen node-state-update + p50 for the kine
+write-tail. The `slo:` block in each `test/scaletest/profiles/*.yaml` carries
+the same rationale inline; ADR-0054 is the rationale of record.
+
+Edit `pass()` / `sloOverrides` in `test/scaletest/cmd/scaletest-runner/main.go`
+(and the profile `slo:` blocks) to change gates.
 
 A run that doesn't reach steady state fails with `steady state: ramp budget elapsed without reaching target`. That's a harness-side or system-bring-up issue, not an SLO violation — typically meaning the substrate is under-resourced or some chart-side install step hung.
 

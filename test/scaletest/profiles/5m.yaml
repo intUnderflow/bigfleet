@@ -31,5 +31,13 @@ loadProfile:
 rampBudget: 240m
 
 slo:
-  internalBindingLatencyP99Seconds: 90
+  # internalBindingLatencyP99Seconds retired to informational (ADR-0054):
+  # the end-to-end pod-bind p99 is uncapped-scheduler / reprovision-bound,
+  # not BigFleet's deliverable. The release gate moved onto the
+  # capacity-delivery hops below.
   shardCycleDurationP99Seconds: 100
+  # ADR-0054 BigFleet-property bars. Held bars identical across the ladder.
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1
+  endToEndPodBindP50Seconds: 10

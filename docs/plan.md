@@ -966,13 +966,24 @@ continues elsewhere; see the production-readiness audit for context):
    Configured; = the genuine reprovision physics). Instrumentation fixed:
    M79.4 widened the bind histograms + added a raw-max gauge; M79.5
    widened the saturating shard provisioning-latency histogram so the
-   back-edge is now measurable. **Recommendation (author to confirm):**
-   (1) cap the scheduler backoff for SLO runs (removes the non-BigFleet
-   amplifier); (2) reframe the steady bind-SLO p99 to a regime-aware /
-   p50–p90 target — p50 6.4s / p90 51.2s pass; the p99 is reprovision-
-   bound by physics, and the engine is proven clean, so this is the honest
-   call now (it was NOT earlier, before the engine was exonerated);
-   (3) OPTIONAL, non-blocking: characterize + optimize the reprovision
-   back-edge throughput (now measurable) as a separate engine project — it
-   is not a publish blocker. On confirm, uber-5k (#258) publishes on the
-   reframed SLO + capped backoff.
+   back-edge is now measurable. **Author decision (2026-06-16) + outcome:**
+   (1) cap the scheduler backoff for SLO runs — **OVERRIDDEN.** The
+   kube-scheduler stays UNCAPPED (production-faithful: BigFleet must not
+   reconfigure the cluster's scheduler to pass its own SLO). The
+   end-to-end pod-bind p99 therefore stays scheduler-retry + reprovision-
+   bound by physics and is now INFORMATIONAL only.
+   (2) reframe the steady release gate — **SHIPPED via ADR-0054.** The
+   gate moves off the end-to-end pod-bind p99 (which BigFleet does not
+   control under an uncapped scheduler) onto BigFleet's capacity-delivery
+   hops: `shardConfigurePhaseP99` (held 15s, the materialization latency),
+   `bootstrapSuccessRatio` (≥0.99, materialization throughput — closes the
+   ADR-0052-crediting throughput-collapse hole), `operatorNodeStateUpdate
+   P99` (the previously-uncovered UpcomingNode-publish hop), and
+   `shortfalls==0` (the ADR-0045 coverage contract, promoted to verdict);
+   a LOOSE end-to-end p50 liveness floor is kept. Posture thresholds are
+   PROVISIONAL author-owned numbers, ratified after the dev-50 + uber-5k
+   re-measure. Harness-only — `pkg/decision`/`pkg/shard`/`pkg/operator`
+   and wire formats unchanged.
+   (3) reprovision back-edge optimization (now measurable) — the
+   NON-BLOCKING held-engine-bar follow-on; not a publish blocker. uber-5k
+   (#258) publishes on the reframed gate.

@@ -117,16 +117,25 @@ operator:
   # podAffinity term, not an operator-wide key.
 
 slo:
-  # Loosened from cloud's 15 s: kine on laptop adds ~5-15 s of write
-  # tail compared to Scaleway etcd. 30 s leaves room for kine without
-  # silencing real chain regressions. operatorAckP99 is the same
-  # write-path class — markAcknowledged is a status Patch per CR, so
-  # kine's serial WAL fsync gives it the same tail; loosened to match
-  # (the runner default of 12 s is an etcd-shaped number).
-  internalBindingLatencyP99Seconds: 30
+  # internalBindingLatencyP99Seconds retired to informational (ADR-0054):
+  # the end-to-end pod-bind p99 is uncapped-scheduler / reprovision-bound,
+  # not BigFleet's deliverable. The release gate moved onto the
+  # capacity-delivery hops below.
+  # operatorAckP99 is loosened from the runner default of 12 s: kine on
+  # laptop adds ~5-15 s of write tail vs Scaleway etcd. markAcknowledged
+  # is a status Patch per CR, so kine's serial WAL fsync gives it the same
+  # write-path tail; 30 s leaves room for kine without silencing real
+  # chain regressions.
   operatorAckP99Seconds: 30
   shardCycleDurationP99Seconds: 5
   operatorRollupP99Seconds: 2
+  # ADR-0054 BigFleet-property bars. configure-phase + ratio are held bars
+  # (identical across the ladder); node-state-update + p50 are loosened
+  # for the laptop kine write tail (cloud uses 1 / 10).
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 5
+  endToEndPodBindP50Seconds: 30
 
 costEstimate:
   vCPU: 8

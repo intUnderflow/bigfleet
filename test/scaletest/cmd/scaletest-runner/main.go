@@ -102,6 +102,13 @@ type profileFile struct {
 }
 
 type sloOverrides struct {
+	// InternalBindingLatencyP99Seconds is RETIRED to informational by
+	// ADR-0054: under the default uncapped real kube-scheduler it is an
+	// end-to-end pod-bind p99 dominated by scheduler retry/backoff WAIT +
+	// the reprovision back-edge — neither BigFleet's deliverable — so it
+	// no longer gates pass() or soakFailFastCheck. Still parsed for
+	// backward-compat (profiles that set it don't error) and still scraped
+	// into summary.json as regime-context.
 	InternalBindingLatencyP99Seconds float64 `yaml:"internalBindingLatencyP99Seconds"`
 	ShardCycleDurationP99Seconds     float64 `yaml:"shardCycleDurationP99Seconds"`
 	OperatorRollupP99Seconds         float64 `yaml:"operatorRollupP99Seconds"`
@@ -114,6 +121,39 @@ type sloOverrides struct {
 	// a regression (sustained high churn, far above the bound) still
 	// trips. Author-owned posture number, like ReclaimGrace.
 	MaxReclaimActionsDuringSoak int `yaml:"maxReclaimActionsDuringSoak"`
+	// ShardConfigurePhaseP99Seconds gates the per-machine wall-clock
+	// Idle→Configuring→Configured inside executeBootstrap — the
+	// capacity-materialization LATENCY BigFleet owns end to end (ADR-0054
+	// Half 1, the held bar that inherits ADR-0020's 15s method). Gated
+	// only when > 0. PROVISIONAL posture number, AUTHOR-OWNED (like
+	// MaxReclaimActionsDuringSoak): ratified after the dev-50 + uber-5k
+	// re-measure reports the de-tailed actuals (#78 measured 0.56s).
+	ShardConfigurePhaseP99Seconds float64 `yaml:"shardConfigurePhaseP99Seconds"`
+	// BootstrapSuccessRatio is the MIN acceptable
+	// success/(success+failure) ratio for Bootstrap actions over the soak
+	// — materialization THROUGHPUT, the counterpart to configure-phase's
+	// latency (ADR-0054 Half 1). It closes the throughput-collapse hole
+	// the latency + shortfall gates miss under ADR-0052 in-flight
+	// crediting. Gated only when > 0; 0 = unset/skip. NOTE: this is a
+	// minimum — pass() fails when the measured ratio is BELOW it, the
+	// opposite direction from the latency gates. PROVISIONAL posture
+	// number, AUTHOR-OWNED (e.g. 0.99).
+	BootstrapSuccessRatio float64 `yaml:"bootstrapSuccessRatio"`
+	// OperatorNodeStateUpdateP99Seconds gates the operator publishing
+	// UpcomingNode=Ready after the shard signals Configured — the one
+	// BigFleet-owned hop with zero prior runner coverage (ADR-0054 Half
+	// 1; the Drop S >=102s tail lived here). Gated only when > 0.
+	// PROVISIONAL posture number, AUTHOR-OWNED (cloud 1s; dev profiles
+	// loosen for the kine write tail).
+	OperatorNodeStateUpdateP99Seconds float64 `yaml:"operatorNodeStateUpdateP99Seconds"`
+	// EndToEndPodBindP50Seconds is a LOOSE liveness floor on the
+	// end-to-end pod-bind p50 (ADR-0054 Half 2): p50 sits below the
+	// scheduler-retry tail, so a p50 blowup means the COMMON bind path
+	// broke. Explicitly coarse liveness, NOT the release gate (which
+	// moved onto the BigFleet-property bars above). Gated only when > 0.
+	// PROVISIONAL posture number, AUTHOR-OWNED (cloud 10s; dev profiles
+	// loosen for the kine write tail).
+	EndToEndPodBindP50Seconds float64 `yaml:"endToEndPodBindP50Seconds"`
 }
 
 type runnerAction struct {
@@ -1153,7 +1193,7 @@ loop:
 			v, prof.SLO.MaxReclaimActionsDuringSoak))
 	}
 	res.Passed, res.Failure = pass(metrics, res.Scale.TotalCRs, res.Scale.ShardReplicas, prof.SLO)
-	res.UnmeasuredSLOs = unmeasuredGated(metrics)
+	res.UnmeasuredSLOs = unmeasuredGated(metrics, prof.SLO)
 	if len(res.UnmeasuredSLOs) > 0 {
 		fmt.Fprintf(os.Stderr, "\nWARNING: %d gated SLO(s) UNMEASURED this run (sentinel -1) — the pass verdict does not cover them: %s\n\n",
 			len(res.UnmeasuredSLOs), strings.Join(res.UnmeasuredSLOs, ", "))
@@ -1795,6 +1835,11 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// healthy, what's the user-facing latency of an arriving
 		// Pod?"
 		"internalBindingLatencyP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`,
+		// ADR-0054 Half 2: the loose end-to-end pod-bind p50 liveness
+		// floor. p50 sits below the uncapped-scheduler retry tail, so a
+		// p50 blowup means the COMMON bind path broke — a real liveness
+		// signal — while the p99 above is informational regime-context.
+		"endToEndPodBindP50Seconds": `histogram_quantile(0.50, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[5m])))`,
 		// M79.4: non-saturating cross-check for the p99 above. The p99 is a
 		// histogram_quantile, which CANNOT exceed the top finite bucket — so
 		// a p99 sitting on the top le reads as a clean number even when the
@@ -1828,8 +1873,13 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		"shardDrainPhaseP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))`,
 		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
 		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
-		"coordinatorApplyOpsPerSec": `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
-		"shardShortfalls":           `sum(bigfleet_shard_shortfalls)`,
+		// ADR-0054 Half 1: the operator publishing UpcomingNode=Ready
+		// after the shard signals Configured — the last BigFleet-owned hop
+		// (pkg/operator/upcoming.go:54). Previously instrumented but never
+		// queried; gated by sloOverrides.OperatorNodeStateUpdateP99Seconds.
+		"operatorNodeStateUpdateP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_node_state_update_duration_seconds_bucket[5m])))`,
+		"coordinatorApplyOpsPerSec":         `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
+		"shardShortfalls":                   `sum(bigfleet_shard_shortfalls)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last
@@ -1860,6 +1910,17 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// grpc_server.go handler swallows those — non-zero error here
 		// is a real bug.
 		"coordinatorApplyErrorRate": `sum(rate(bigfleet_coordinator_apply_total{outcome=~"error|fsm_error"}[5m])) / clamp_min(sum(rate(bigfleet_coordinator_apply_total[5m])), 1)`,
+		// ADR-0054 Half 1: Bootstrap materialization throughput =
+		// success / (success + all-failures) over the soak window. The
+		// metric is bigfleet_shard_action_execute_outcomes_total with
+		// labels {kind, outcome}; success is outcome="success" and every
+		// other outcome (no_session, transition_error, blob_error,
+		// configure_error, ctx_canceled, fenced) is a non-success for the
+		// Bootstrap kind (pkg/metrics/metrics.go:164, pkg/shard/execute.go:55).
+		// Mirrors the coordinatorApplyErrorRate ratio idiom; clamp_min(.,1)
+		// avoids 0/0 when no Bootstraps fired in the window. Gated as a MIN
+		// by sloOverrides.BootstrapSuccessRatio.
+		"bootstrapSuccessRatio": `sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap",outcome="success"}[5m])) / clamp_min(sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap"}[5m])), 1)`,
 		// Operator outbox drops (gated). The session-outbox bounded queue
 		// drops messages on overflow; under heavy bootstrap load this
 		// can lose BootstrapBlobResponse / ReclaimAck. Should be 0/sec
@@ -1955,26 +2016,32 @@ func promQuery(ctx context.Context, kubeconfig, ns, query string) (float64, erro
 func soakFailFastCheck(ctx context.Context, kubeconfig, ns string, slo sloOverrides) (bool, string) {
 	qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	// ADR-0054: in-soak and post-soak gates stay in lockstep — the
+	// release gate is now the per-machine configure-phase p99 (the
+	// capacity-materialization latency BigFleet owns), NOT the end-to-end
+	// pod-bind p99 (which is uncapped-scheduler / reprovision-bound and
+	// only informational). 15s is the held configure-phase bar; profiles
+	// override via slo.shardConfigurePhaseP99Seconds.
 	target := 15.0
-	if slo.InternalBindingLatencyP99Seconds > 0 {
-		target = slo.InternalBindingLatencyP99Seconds
+	if slo.ShardConfigurePhaseP99Seconds > 0 {
+		target = slo.ShardConfigurePhaseP99Seconds
 	}
 	cycleTarget := 5.0
 	if slo.ShardCycleDurationP99Seconds > 0 {
 		cycleTarget = slo.ShardCycleDurationP99Seconds
 	}
-	bind, errB := promQuery(qctx, kubeconfig, ns, `histogram_quantile(0.99, sum by (le) (rate(bigfleet_scaletest_pod_bind_latency_steady_seconds_bucket[2m])))`)
+	configure, errB := promQuery(qctx, kubeconfig, ns, `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_configure_phase_seconds_bucket[2m]))))`)
 	cycle, errC := promQuery(qctx, kubeconfig, ns, `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_cycle_duration_seconds_bucket[2m]))))`)
 	if errB != nil && errC != nil {
-		return true, fmt.Sprintf("queries unavailable (bind=%v cycle=%v) — continuing", errB, errC)
+		return true, fmt.Sprintf("queries unavailable (configure=%v cycle=%v) — continuing", errB, errC)
 	}
-	if errB == nil && bind > target {
-		return false, fmt.Sprintf("internalBindingLatencyP99Seconds %.3fs > %.1fs SLO", bind, target)
+	if errB == nil && configure > target {
+		return false, fmt.Sprintf("shardConfigurePhaseP99Seconds %.3fs > %.1fs SLO", configure, target)
 	}
 	if errC == nil && cycle > cycleTarget {
 		return false, fmt.Sprintf("shardCycleDurationP99Seconds %.3fs > %.1fs envelope", cycle, cycleTarget)
 	}
-	return true, fmt.Sprintf("bind=%.3fs cycle=%.3fs", bind, cycle)
+	return true, fmt.Sprintf("configure=%.3fs cycle=%.3fs", configure, cycle)
 }
 
 // urlEncode percent-encodes a PromQL query for use as the value of
@@ -1995,23 +2062,33 @@ func kArgs(kubeconfig string, rest ...string) []string {
 	return rest
 }
 
-// pass enforces the runner's SLO budget per ADR-0014 + ADR-0018:
-// internal binding latency (BigFleet's contribution, harness fake
-// provider returns instantly) is a regression detector; cycle
-// wall-clock is a tracked throughput envelope. User-facing
-// binding latency = this + provider_capacity_create_latency, and
-// the second term lives outside this harness (provider conformance
-// suite + production canaries — see ADR-0018).
+// pass enforces the runner's SLO budget. ADR-0054 reframed the steady
+// release gate off the end-to-end pod-bind p99 (which BigFleet does not
+// control under an uncapped real kube-scheduler) and onto BigFleet's
+// capacity-delivery deliverable plus its ADR-0045 coverage contract:
 //
-//   - internalBindingLatencyP99 ≤ 15 s.  Regression detector. ADR-0018, ADR-0020.
-//     Measured via the per-Pod histogram (ADR-0017) emitted by the
-//     bigfleet-scaletest-pod-shim. The 15 s budget = ~10 s rollupInterval
-//     ceiling (a Pod arriving just after a rollup tick waits one full
-//     interval before the shard sees its CR) + ~5 s chain-execution
-//     headroom (shard cycle + binder burst-drain). Profiles that
-//     lower rollupInterval may lower this SLO accordingly:
-//     `internalBindingLatencyP99 ≤ rollupInterval + 5 s` is the
-//     recommended ceiling. ADR-0020.
+//   - shardConfigurePhaseP99 ≤ 15 s (held bar; ADR-0054, inherits
+//     ADR-0020's method). Per-machine Idle→Configured wall-clock — the
+//     capacity-materialization latency BigFleet owns end to end. Gated
+//     only when the profile sets slo.shardConfigurePhaseP99Seconds.
+//   - bootstrapSuccessRatio ≥ 0.99 (MIN gate; ADR-0054). Materialization
+//     throughput — success/(success+failure) Bootstraps. Closes the
+//     throughput-collapse hole latency + shortfall gates miss under
+//     ADR-0052 in-flight crediting. Gated only when set.
+//   - operatorNodeStateUpdateP99 ≤ 1 s (ADR-0054). The operator
+//     UpcomingNode=Ready publish hop — previously uncovered. Gated only
+//     when set.
+//   - shardShortfalls == 0 (ADR-0045/0054). Demand covered by bound
+//     capacity; promoted from precondition to verdict.
+//   - endToEndPodBindP50 ≤ 10 s (LOOSE liveness; ADR-0054 Half 2). NOT
+//     the release gate; the end-to-end p99 + raw-max stay informational
+//     (uncapped-scheduler / reprovision-bound). Gated only when set.
+//
+// internalBindingLatencyP99 (the end-to-end pod-bind p99) is RETIRED to
+// informational by ADR-0054 — still scraped into summary.json, no longer
+// gates. ADR-0014/0018's original 15s rollup-sized arithmetic assumed
+// the fake-provider in-process floor; under the real scheduler it is
+// structurally unreachable. Its 15s held bar moved to configure-phase.
 //
 //   - shardCycleDurationP99 ≤ rollupInterval / 2 (default 10 s → 5 s).
 //     Throughput envelope — if the shard can't finish a snapshot
@@ -2036,10 +2113,13 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // monitoring stack but no longer block a release.
 // pass evaluates the run's steady-state SLO histograms against the
 // profile's thresholds. Per ADR-0035: SLOs are measured over the soak
-// window with continuous churn, not from ramp behaviour. The headline
-// signals are internal binding latency p99, shard cycle p99, operator
-// rollup p99, and operator ack p99 — all per-CR / per-cycle measures of
-// what a customer feels in steady state.
+// window with continuous churn, not from ramp behaviour. Per ADR-0054
+// the headline signals are the BigFleet capacity-delivery hops
+// (configure-phase p99, Bootstrap success ratio, node-state-update p99,
+// shortfalls==0) plus the throughput envelope (shard cycle p99) and the
+// operator pipeline (rollup p99, ack p99) — what BigFleet actually
+// delivers in steady state, not the uncapped-scheduler-bound end-to-end
+// pod-bind p99.
 //
 // Reaching steady state is a prerequisite for pass() to be called at
 // all (the runner gates on it before soak starts). Ramp throughput is
@@ -2050,9 +2130,9 @@ func kArgs(kubeconfig string, rest ...string) []string {
 // (M66.3 / complexity audit §2: the headline binding-latency SLO read
 // -1 on every kube-scheduler-mode profile because its histogram is
 // pod-shim-emitted, and nothing said so).
-func unmeasuredGated(m map[string]float64) []string {
+func unmeasuredGated(m map[string]float64, slo sloOverrides) []string {
+	// Always-gated keys (no per-profile opt-out): these gate on every run.
 	gated := []string{
-		"internalBindingLatencyP99Seconds",
 		"shardCycleDurationP99Seconds",
 		"operatorRollupP99Seconds",
 		"operatorAckP99Seconds",
@@ -2060,6 +2140,29 @@ func unmeasuredGated(m map[string]float64) []string {
 		// zero-reclaim-churn condition. -1 = one of the two counter
 		// reads failed, so the condition was asserted on nothing.
 		"reclaimActionsDuringSoak",
+		// ADR-0054: shortfalls==0 is promoted from precondition to a hard
+		// verdict, so an unmeasured shortfalls read now hides a vacuous
+		// pass — track it. The series exists from shard start (no
+		// vector(0) fold in readShardShortfalls), so -1 means a failed
+		// scrape, not "zero".
+		"shardShortfalls",
+	}
+	// ADR-0054: the new BigFleet-property bars gate only when their
+	// posture number is set (> 0). Adding them unconditionally would flag
+	// a non-gating key as vacuous forever (the exact reason
+	// internalBindingLatencyP99Seconds is no longer here — it gates on
+	// nothing now). Mirror pass()'s set-then-gate condition.
+	if slo.ShardConfigurePhaseP99Seconds > 0 {
+		gated = append(gated, "shardConfigurePhaseP99Seconds")
+	}
+	if slo.BootstrapSuccessRatio > 0 {
+		gated = append(gated, "bootstrapSuccessRatio")
+	}
+	if slo.OperatorNodeStateUpdateP99Seconds > 0 {
+		gated = append(gated, "operatorNodeStateUpdateP99Seconds")
+	}
+	if slo.EndToEndPodBindP50Seconds > 0 {
+		gated = append(gated, "endToEndPodBindP50Seconds")
 	}
 	var out []string
 	for _, k := range gated {
@@ -2071,10 +2174,6 @@ func unmeasuredGated(m map[string]float64) []string {
 }
 
 func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (bool, string) {
-	internalBindingLatencyTarget := 15.0 // ADR-0020: ~10 s rollupInterval ceiling + ~5 s chain headroom
-	if slo.InternalBindingLatencyP99Seconds > 0 {
-		internalBindingLatencyTarget = slo.InternalBindingLatencyP99Seconds
-	}
 	cycleEnvelopeTarget := 5.0
 	if slo.ShardCycleDurationP99Seconds > 0 {
 		cycleEnvelopeTarget = slo.ShardCycleDurationP99Seconds
@@ -2110,11 +2209,52 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 			return false, fmt.Sprintf("shardsReportingCycle %d < shard.replicas %d — at least one shard isn't reporting metrics", int(v), shardReplicas)
 		}
 	}
-	// ADR-0014 release gate: binding latency. -1 means the metric was
-	// unavailable (Prometheus query failed); skip rather than gate on
-	// a sentinel.
-	if v, ok := m["internalBindingLatencyP99Seconds"]; ok && v >= 0 && v > internalBindingLatencyTarget {
-		return false, fmt.Sprintf("internalBindingLatencyP99Seconds %.3fs > %.1fs SLO (ADR-0018 — internal-only; real-provider time is not measured here, see also ADR-0014)", v, internalBindingLatencyTarget)
+	// ADR-0054 Half 1 — BigFleet capacity-delivery release gates. The
+	// end-to-end pod-bind p99 (internalBindingLatencyP99Seconds) is
+	// RETIRED to informational: under the default uncapped real
+	// kube-scheduler it is dominated by scheduler retry WAIT + the
+	// reprovision back-edge, neither BigFleet's deliverable. The verdict
+	// now reads the hops BigFleet owns. Each new gate is set-then-gate:
+	// the threshold gates only when the profile's posture number is > 0;
+	// the -1 sentinel (failed scrape) is skipped so a scrape miss never
+	// flips a verdict (it surfaces via unmeasuredGated instead).
+	//
+	// Capacity-materialization LATENCY: per-machine Idle→Configured.
+	if slo.ShardConfigurePhaseP99Seconds > 0 {
+		if v, ok := m["shardConfigurePhaseP99Seconds"]; ok && v >= 0 && v > slo.ShardConfigurePhaseP99Seconds {
+			return false, fmt.Sprintf("shardConfigurePhaseP99Seconds %.3fs > %.1fs SLO (ADR-0054 — per-machine capacity-materialization latency BigFleet owns)", v, slo.ShardConfigurePhaseP99Seconds)
+		}
+	}
+	// Capacity-materialization THROUGHPUT: Bootstrap success ratio. MIN
+	// gate — fails when the measured ratio is BELOW the target (opposite
+	// direction from the latency gates). Closes the throughput-collapse
+	// hole that latency + shortfall gates miss under ADR-0052 crediting.
+	if slo.BootstrapSuccessRatio > 0 {
+		if v, ok := m["bootstrapSuccessRatio"]; ok && v >= 0 && v < slo.BootstrapSuccessRatio {
+			return false, fmt.Sprintf("bootstrapSuccessRatio %.4f < %.4f min SLO (ADR-0054 — Bootstrap materialization throughput collapse: machines failing/retrying Configure)", v, slo.BootstrapSuccessRatio)
+		}
+	}
+	// Last BigFleet-owned hop: operator publishing UpcomingNode=Ready.
+	if slo.OperatorNodeStateUpdateP99Seconds > 0 {
+		if v, ok := m["operatorNodeStateUpdateP99Seconds"]; ok && v >= 0 && v > slo.OperatorNodeStateUpdateP99Seconds {
+			return false, fmt.Sprintf("operatorNodeStateUpdateP99Seconds %.3fs > %.1fs SLO (ADR-0054 — operator UpcomingNode-publish hop)", v, slo.OperatorNodeStateUpdateP99Seconds)
+		}
+	}
+	// ADR-0045 coverage contract, promoted from steady-state precondition
+	// to post-soak verdict (ADR-0054): demand covered by bound capacity.
+	// The cheapest anti-reframe-to-pass guard. -1 = failed scrape (the
+	// series exists from shard start), skipped.
+	if v, ok := m["shardShortfalls"]; ok && v >= 0 && v != 0 {
+		return false, fmt.Sprintf("shardShortfalls %.0f != 0 (ADR-0045/0054 — demand not covered by bound capacity)", v)
+	}
+	// ADR-0054 Half 2 — LOOSE end-to-end pod-bind p50 liveness floor. NOT
+	// the release gate (which moved onto the BigFleet-property bars
+	// above); p50 sits below the uncapped-scheduler retry tail, so a p50
+	// blowup means the COMMON bind path broke. Gated only when set.
+	if slo.EndToEndPodBindP50Seconds > 0 {
+		if v, ok := m["endToEndPodBindP50Seconds"]; ok && v >= 0 && v > slo.EndToEndPodBindP50Seconds {
+			return false, fmt.Sprintf("endToEndPodBindP50Seconds %.3fs > %.1fs loose liveness floor (ADR-0054 Half 2 — common bind path broke; p99 is informational)", v, slo.EndToEndPodBindP50Seconds)
+		}
 	}
 	// ADR-0014 throughput envelope: cycle p99 ≤ rollupInterval / 2 so
 	// the shard always finishes one snapshot before the next rollup
