@@ -282,6 +282,18 @@ const realisticRuns = [
   },
 ];
 
+// uber-5k configuration runs: earlier host/cluster-config variants whose
+// SANITISED summary.json is committed under test/scaletest/results/ (numbers
+// only, via scripts/publish-run.sh in bigfleet-uber). They predate the
+// ADR-0054 reframe (older metric set; the bind-latency p99 they recorded was
+// the pre-reframe saturated 102.4 s metric, since retired) so they're shown on
+// the metrics they captured. Linked because these dirs ARE committed.
+const realisticConfigRuns = [
+  { label: "uber-5k (single-host)", dir: "2026-05-13-uber-5k", cycleP99: 0.127, rollupP99: 0.329, ackP99: 0.583, configureP99: 0.019, shortfalls: 0, load: "5,831 / 500,000", passed: false },
+  { label: "uber-5k-wide", dir: "2026-05-13-uber-5k-wide", cycleP99: 1.016, rollupP99: 1.205, ackP99: 0.64, configureP99: 0.156, shortfalls: 0, load: "499,993 / 500,000", passed: false },
+  { label: "uber-5k-2host", dir: "2026-05-16-uber-5k-2host-20x25k", cycleP99: 1.019, rollupP99: 0.497, ackP99: 0.296, configureP99: 0.482, shortfalls: 1, load: "249,995 / 250,000", passed: true },
+];
+
 function realisticSection() {
   let s = `\n## Realistic-regime ladder (uber-*)
 
@@ -302,6 +314,17 @@ Gates: configure-phase ≤ 15 s · bootstrap success ≥ 0.99 · node-state ≤ 
   s += `
 End-to-end pod-bind p99 is informational only — dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge; it varies widely run-to-run (tens to hundreds of seconds) and is not a BigFleet SLO.
 
+### uber-5k configuration runs
+
+Earlier uber-5k runs across host/cluster configurations, kept for transparency (sanitised \`summary.json\` committed per run). These predate the [ADR-0054] reframe — older metric set, and the bind-latency p99 they recorded was the pre-reframe saturated metric (since retired) — so they're shown on the metrics they captured, not the current gate set.
+
+| run | cycle p99 | rollup p99 | ack p99 | configure p99 | shortfalls | load | pass |
+|---|---:|---:|---:|---:|---:|---|:---:|
+`;
+  for (const r of realisticConfigRuns) {
+    s += `| [\`${r.label}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.rollupP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.configureP99)} | ${r.shortfalls} | ${r.load} | ${r.passed ? "✓" : "✗"} |\n`;
+  }
+  s += `
 [ADR-0054]: ./adr/0054-steady-bind-slo-reframe-for-uncapped-scheduler.md
 `;
   return s;

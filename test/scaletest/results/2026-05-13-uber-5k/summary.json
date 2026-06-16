@@ -1,0 +1,50 @@
+{
+  "cost": {
+    "estimatedUsd": 0,
+    "hours": 0.5
+  },
+  "metrics": {
+    "coordinatorApplyErrorRate": -1,
+    "coordinatorApplyOpsPerSec": 0,
+    "coordinatorPendingMax": 0,
+    "coordinatorTermChanges15m": 0,
+    "internalBindingLatencyP99Seconds": 102.4,
+    "loadgenCRsActive": 5831,
+    "loadgenCRsCreatedPerSec": 127.59222463312915,
+    "nodeToBoundP50Seconds": 102.4,
+    "nodeToBoundP99Seconds": 102.4,
+    "operatorAckP99Seconds": 0.5830792331536068,
+    "operatorOutboxDropsPerSec": 0,
+    "operatorRollupP99Seconds": 0.3287593220339003,
+    "shardConfigurePhaseP50Seconds": 0.005555555555555556,
+    "shardConfigurePhaseP99Seconds": 0.018999999999999996,
+    "shardCycleDurationP99Seconds": 0.12697333333333333,
+    "shardDrainPhaseP50Seconds": 0.005,
+    "shardDrainPhaseP99Seconds": 0.0099,
+    "shardInventoryMinMaxRatio": 1,
+    "shardPhase1P99Seconds": 0.06242970464135019,
+    "shardPhase2P99Seconds": 0.00099,
+    "shardPhase3P99Seconds": 0.05199589743589733,
+    "shardPhaseExecuteP99Seconds": 0.00099,
+    "shardPhaseReconcileP99Seconds": 0.0009913561643835615,
+    "shardProvisioningLatencyP50Seconds": 38.912,
+    "shardProvisioningLatencyP99Seconds": 327.68,
+    "shardRequestBootstrapP50Seconds": 0.005555555555555556,
+    "shardRequestBootstrapP99Seconds": 0.018999999999999996,
+    "shardShortfalls": 0,
+    "shardsReportingCycle": 1,
+    "upcomingToNodeP50Seconds": 2.249967231556137,
+    "upcomingToNodeP99Seconds": 10.813848446572953
+  },
+  "passed": false,
+  "profile": "uber-5k",
+  "runId": "20260513-194216-uber-5k",
+  "scale": {
+    "aggregateInventory": 6000,
+    "kwokClusters": 5,
+    "machinesPerCr": 100000,
+    "seedMachinesPerShard": 6000,
+    "shardReplicas": 1,
+    "totalCrs": 500000
+  }
+}

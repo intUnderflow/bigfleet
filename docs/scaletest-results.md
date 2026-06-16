@@ -122,6 +122,16 @@ Gates: configure-phase ≤ 15 s · bootstrap success ≥ 0.99 · node-state ≤ 
 
 End-to-end pod-bind p99 is informational only — dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge; it varies widely run-to-run (tens to hundreds of seconds) and is not a BigFleet SLO.
 
+### uber-5k configuration runs
+
+Earlier uber-5k runs across host/cluster configurations, kept for transparency (sanitised `summary.json` committed per run). These predate the [ADR-0054] reframe — older metric set, and the bind-latency p99 they recorded was the pre-reframe saturated metric (since retired) — so they're shown on the metrics they captured, not the current gate set.
+
+| run | cycle p99 | rollup p99 | ack p99 | configure p99 | shortfalls | load | pass |
+|---|---:|---:|---:|---:|---:|---|:---:|
+| [`uber-5k (single-host)`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k) | 127 ms | 329 ms | 583 ms | 19 ms | 0 | 5,831 / 500,000 | ✗ |
+| [`uber-5k-wide`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide) | 1.02 s | 1.21 s | 640 ms | 156 ms | 0 | 499,993 / 500,000 | ✗ |
+| [`uber-5k-2host`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-16-uber-5k-2host-20x25k) | 1.02 s | 497 ms | 296 ms | 482 ms | 1 | 249,995 / 250,000 | ✓ |
+
 [ADR-0054]: ./adr/0054-steady-bind-slo-reframe-for-uncapped-scheduler.md
 
 *Generated from `test/scaletest/results/*/summary.json` by `site/scripts/sync-scaletest.mjs`. Outcomes recomputed under the current SLO bar.*
