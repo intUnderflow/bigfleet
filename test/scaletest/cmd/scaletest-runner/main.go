@@ -1917,10 +1917,21 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// other outcome (no_session, transition_error, blob_error,
 		// configure_error, ctx_canceled, fenced) is a non-success for the
 		// Bootstrap kind (pkg/metrics/metrics.go:164, pkg/shard/execute.go:55).
-		// Mirrors the coordinatorApplyErrorRate ratio idiom; clamp_min(.,1)
-		// avoids 0/0 when no Bootstraps fired in the window. Gated as a MIN
-		// by sloOverrides.BootstrapSuccessRatio.
-		"bootstrapSuccessRatio": `sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap",outcome="success"}[5m])) / clamp_min(sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap"}[5m])), 1)`,
+		// Gated as a MIN by sloOverrides.BootstrapSuccessRatio.
+		// M79.7 (bigfleet-uber #79 dev-50 step-0 catch): the original form
+		// `success_rate / clamp_min(total_rate, 1)` was WRONG. clamp_min(.,1)
+		// was meant to avoid 0/0, but it floors the DENOMINATOR at 1.0, so
+		// whenever the steady bootstrap rate is < 1/s (the normal case for a
+		// full-preBind fleet whose only bootstraps are sparse churn
+		// replacements, ~0.2/s) the ratio collapses to success_rate/1.0 ≈ the
+		// raw rate (~0.2) DESPITE 100% success — a false MIN-gate failure
+		// (step-0 measured 569/569 = 100% success yet the gate read ~0.2).
+		// Correct form: a true ratio (rate/rate divides out the per-second
+		// scale, so 0.2/0.2 = 1.0 at any throughput), zero-guarded so an
+		// empty window (no bootstraps at all → nothing to assess) reads 1.0
+		// and passes rather than 0/0. `(denom > 0)` drops the zero-total case
+		// so the division is empty, and `or vector(1)` substitutes 1.0.
+		"bootstrapSuccessRatio": `(sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap",outcome="success"}[5m])) / (sum(rate(bigfleet_shard_action_execute_outcomes_total{kind="Bootstrap"}[5m])) > 0)) or vector(1)`,
 		// Operator outbox drops (gated). The session-outbox bounded queue
 		// drops messages on overflow; under heavy bootstrap load this
 		// can lose BootstrapBlobResponse / ReclaimAck. Should be 0/sec
