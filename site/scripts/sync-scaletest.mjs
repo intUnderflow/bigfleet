@@ -199,9 +199,9 @@ function renderMarkdown(runs, progression) {
 
   let header = `# Scale-test results
 
-Each run is one full pass through the scaletest harness: chart install, ramp to steady state, soak, prometheus snapshot, summary. Runs live in [\`test/scaletest/results/\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results) on GitHub; this page is generated from each run's \`summary.json\` and refreshes whenever the site builds.
+Each run is one full pass through the scaletest harness: chart install, ramp to steady state, soak, prometheus snapshot, summary. This page is the canonical record — per-run raw artefacts (logs, prometheus snapshots) are kept locally and not committed; the page is generated from each run's sanitised \`summary.json\` when the site builds.
 
-Two regimes, two grading rules. The **aggregated-catalog ladder** below is graded against the canonical bar — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs recorded as \`passed: true\` by an earlier runner without a sustained-load gate appear as ✗ when they didn't hold target load. The **realistic-catalog ladder** (uber-*) sits in a separate section below and is graded against the regime-aware envelopes defined in [ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md): per-Need cost ≤ 200 µs (constant), with cycle and ramp envelopes scaling with NeedsTable cardinality.
+Two regimes, two grading rules. The **aggregated-catalog ladder** below is graded against the canonical bar — sustained active CRs ≥ 99.9 % of target, cycle p99 ≤ 100 ms, rollup p99 ≤ 1 s, ack p99 ≤ 12 s. Older runs recorded as \`passed: true\` by an earlier runner without a sustained-load gate appear as ✗ when they didn't hold target load. The **realistic-catalog ladder** (uber-*) sits in a separate section below and is graded against the reframed steady-state SLOs in [ADR-0054](./adr/0054-steady-bind-slo-reframe-for-uncapped-scheduler.md) / [SLOs](./slos.md) — BigFleet's own capacity-delivery hops under a default, uncapped kube-scheduler.
 
 `;
   if (first) {
@@ -212,7 +212,7 @@ The paper sets 500K machines as the per-shard cycle ceiling (Phase 3 walks the i
 `;
     if (headline) {
       const reduction = (((first.cycleP99 - headline.cycleP99) / first.cycleP99) * 100).toFixed(1);
-      header += `**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(headline.cycleP99)}** (${reduction} % reduction). The most recent single-shard run that meets the SLO at full sustained load is [\`${shortLabel(headline.dir)}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${headline.dir}).
+      header += `**${fmtSeconds(first.cycleP99)} → ${fmtSeconds(headline.cycleP99)}** (${reduction} % reduction). The most recent single-shard run that meets the SLO at full sustained load is \`${shortLabel(headline.dir)}\`.
 
 `;
     } else {
@@ -243,7 +243,7 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
           ? `${r.active}`
           : "—";
     const pass = r.passed ? "✓" : "✗";
-    table += `| [\`${tag}\`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/${r.dir}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
+    table += `| \`${tag}\` | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${pass} |\n`;
   }
 
   return header + table + realisticSection() + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
