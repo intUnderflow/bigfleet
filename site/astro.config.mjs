@@ -40,6 +40,7 @@ export default defineConfig({
           items: [
             { label: "Operator guide", link: "/operator-guide/" },
             { label: "Scaling guide", link: "/scaling-guide/" },
+            { label: "SLOs", link: "/slos/" },
             { label: "Scale-test runbook", link: "/scaletest/" },
             { label: "Scale-test results", link: "/scaletest-results/" },
           ],
