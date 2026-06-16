@@ -398,6 +398,18 @@ var (
 	}, []string{"shard"})
 )
 
+// rollupDurationBuckets gives fine resolution in the 0.25–2s band where the
+// operator-rollup p99 lives at scale, so the gated p99 distinguishes "≤1s"
+// from ">1s" instead of snapping to a 2× exponential bucket edge. uber-5k's
+// "1.024s" reading (bigfleet-uber #80) was exactly the (0.512,1.024] boundary,
+// not a measurement — a base-2 histogram has no resolution there. Shared by
+// the aggregate and per-phase histograms so the phases stay directly
+// comparable to the total. 32s top keeps headroom for large-CR-count tails.
+var rollupDurationBuckets = []float64{
+	0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.35,
+	0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 2.0, 3.0, 5.0, 8.0, 16, 32,
+}
+
 // Operator metrics.
 var (
 	// OperatorRollupDuration measures only the customer-facing path:
@@ -410,9 +422,10 @@ var (
 	OperatorRollupDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name: "bigfleet_operator_rollup_duration_seconds",
 		Help: "Wall-clock duration of one operator rollup: list CRs, aggregate by Profile, enqueue the stream message. Excludes the post-rollup status-write batch.",
-		// 1ms → ~32s. Top buckets give headroom to measure tail
-		// latency at large CR counts before the histogram saturates.
-		Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
+		// Fine resolution in the 0.25–2s decision band (see
+		// rollupDurationBuckets) so the gated p99 reads sharply at the ~1s
+		// scale tail rather than snapping to a 2× exponential bucket edge.
+		Buckets: rollupDurationBuckets,
 	})
 
 	// OperatorRollupPhaseDuration breaks the rollup's wall-clock into
@@ -434,7 +447,7 @@ var (
 	OperatorRollupPhaseDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "bigfleet_operator_rollup_phase_duration_seconds",
 		Help:    "Per-phase wall-clock duration within one operator rollup. phase ∈ {list, build, enqueue}. Sums to OperatorRollupDuration.",
-		Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
+		Buckets: rollupDurationBuckets,
 	}, []string{"phase"})
 
 	// OperatorAcknowledgeDuration is the time spent transitioning a

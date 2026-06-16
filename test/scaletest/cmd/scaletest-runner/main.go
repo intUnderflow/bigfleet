@@ -1876,7 +1876,19 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		"shardDrainPhaseP99Seconds": `max(histogram_quantile(0.99, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))`,
 		"shardDrainPhaseP50Seconds": `max(histogram_quantile(0.50, sum by (le, pod) (rate(bigfleet_shard_drain_phase_seconds_bucket[5m]))))`,
 		"operatorRollupP99Seconds":  `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))`,
-		"operatorAckP99Seconds":     `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
+		// Per-phase rollup decomposition (informational; bigfleet-uber #80
+		// prove-first). operatorRollupP99 is gated; these localise where the
+		// ~1s tail at uber-5k actually goes. list = apiserver LIST round-trip
+		// (cache deep-copy + per-object proto decode) — an apiserver READ, the
+		// read analog of the node-state write hop; build = buildRollup()
+		// aggregate+marshal, the only engine-compute phase; enqueue = stream
+		// slot replacement, near-zero unless the send is stuck. If list ≈ the
+		// aggregate and build+enqueue ≈ 0, rollup is apiserver-read-bound (bar
+		// ratifies like node-state); if build dominates, it's real engine cost.
+		"operatorRollupListP99Seconds":    `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_phase_duration_seconds_bucket{phase="list"}[5m])))`,
+		"operatorRollupBuildP99Seconds":   `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_phase_duration_seconds_bucket{phase="build"}[5m])))`,
+		"operatorRollupEnqueueP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_rollup_phase_duration_seconds_bucket{phase="enqueue"}[5m])))`,
+		"operatorAckP99Seconds":           `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))`,
 		// ADR-0054 Half 1: the operator publishing UpcomingNode=Ready
 		// after the shard signals Configured — the last BigFleet-owned hop
 		// (pkg/operator/upcoming.go:54). Previously instrumented but never
