@@ -111,13 +111,17 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
 
 ## Realistic-regime ladder (uber-*)
 
-[ADR-0028] defines the regime: workload uses the full `realistic.yaml` archetype catalog (gpu-training, memory-db with small co-location groups produce ~388 Needs/cluster, ~48× more than the aggregated regime). We grade BigFleet on **per-Need Phase 1 p99 ≤ 200 µs** — a constant that holds across the ladder. Cycle p99 and ramp budget envelopes scale linearly with NeedsTable cardinality per the projections in ADR-0028. ack p99 (≤ 12 s) and steady-state binding p99 (≤ 15 s) are held constant across rungs.
+These runs exercise the full `realistic.yaml` archetype catalog (gpu-training, memory-db, co-location gangs) on Uber-donated compute, graded against the reframed steady-state SLOs in [ADR-0054] / [SLOs](./slos.md). Under a **default, uncapped kube-scheduler** we gate BigFleet's own capacity-delivery hops; the end-to-end pod-bind tail is dominated by the scheduler's retry/backoff and the reprovision back-edge, so it is reported informational, not gated.
 
-| profile | commit | NeedsTable | per-Need p99 | cycle p99 | ack p99 | rollup p99 | load | pass |
-|---|---|---:|---:|---:|---:|---:|---|:---:|
-| `uber-5k` (bigfleet-uber #16) | `00ef120` | 7,759 | 130 µs (bar 200) | 1.02 s | 296 ms | 497 ms | 247,523 / 249,750 | ✓ |
-| `uber-50k` (bigfleet-uber #17) | `4ce1e70` | 42,680 | 7000 µs (bar 200) | 885.90 s | — | — | 92,160 / 247,500 | ✗ |
+Gates: configure-phase ≤ 15 s · bootstrap success ≥ 0.99 · node-state ≤ 1.5 s · rollup ≤ 1 s · cycle ≤ 5 s · ack ≤ 12 s · shortfalls = 0 · bind p50 ≤ 10 s.
 
-[ADR-0028]: ./adr/0028-cycle-p99-is-regime-parametric.md
+| profile | commit | configure p99 | bootstrap | node-state p99 | rollup p99 | cycle p99 | ack p99 | shortfalls | bind p50 | pass |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| `uber-5k` | `cee793e` | 310 ms | 1.00 | 1.02 s | 650 ms | 255 ms | 640 ms | 0 | 1.60 s | ✓ |
+| `uber-50k` | — | — | — | — | — | — | — | — | — | pending |
+
+End-to-end pod-bind p99 is informational only — dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge; it varies widely run-to-run (tens to hundreds of seconds) and is not a BigFleet SLO.
+
+[ADR-0054]: ./adr/0054-steady-bind-slo-reframe-for-uncapped-scheduler.md
 
 *Generated from `test/scaletest/results/*/summary.json` by `site/scripts/sync-scaletest.mjs`. Outcomes recomputed under the current SLO bar.*

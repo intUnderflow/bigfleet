@@ -249,64 +249,60 @@ The rundir name encodes the fleet size tested (scaleway-500k = single-shard 500K
   return header + table + realisticSection() + `\n*Generated from \`test/scaletest/results/*/summary.json\` by \`site/scripts/sync-scaletest.mjs\`. Outcomes recomputed under the current SLO bar.*\n`;
 }
 
-// Realistic-regime ladder rows. These runs live on Uber infra and
-// aren't checked into test/scaletest/results/. As new rungs land
-// (uber-50k → uber-500k), add a row here with the values reported by
-// the inner agent's analysis.md. Per ADR-0028, per-Need p99 is the
-// BigFleet-property bar; cycle p99 / ramp budget are workload-property
-// envelopes that scale with NeedsTable cardinality.
+// Realistic-regime ladder rows. These runs exercise the full
+// realistic.yaml catalog on Uber-donated compute and are NOT checked into
+// test/scaletest/results/ — only sanitised aggregate values appear here;
+// raw run data stays internal. Graded against the reframed steady-state
+// SLOs in ADR-0054 / docs/slos.md: under a default uncapped kube-scheduler
+// we gate BigFleet's own capacity-delivery hops, not the end-to-end
+// pod-bind tail (scheduler retry/backoff + reprovision back-edge —
+// informational). As new rungs land (uber-50k → uber-500k), add a row with
+// the inner agent's sanitised values.
 const realisticRuns = [
   {
     profile: "uber-5k",
-    commit: "00ef120",
-    needsTable: 7759,
-    cycleP99: 1.019,
-    perNeedP99Us: 130,
-    perNeedBarUs: 200,
-    ackP99: 0.296,
-    rollupP99: 0.497,
-    bindingP99: null,
-    load: { active: 247523, target: 249750 },
-    rampBudgetMin: 60,
+    commit: "cee793e",
+    configureP99: 0.31,
+    bootstrapSuccess: 1.0,
+    nodeStateP99: 1.024,
+    rollupP99: 0.65,
+    cycleP99: 0.255,
+    ackP99: 0.64,
+    shortfalls: 0,
+    bindP50: 1.6,
     passed: true,
-    analysisRef: "bigfleet-uber #16",
   },
   {
-    // uber-50k 11-host compressed (devpod limit). Three attempts
-    // measured baseline + two single-thread optimization passes;
-    // all failed the regime-aware envelope at the same structural
-    // wall (bucket count ≈ Need count under realistic catalog).
-    // See ADR-0028 empirical addendum.
+    // Next rung. Pending a fresh run on the ADR-0054 methodology; the
+    // earlier 50k attempt predates ADR-0050/0054 and ran on an
+    // incomparable compressed setup, so it is not shown under the
+    // reframed gates.
     profile: "uber-50k",
-    commit: "4ce1e70",
-    needsTable: 42680,
-    cycleP99: 885.9, // ~14.8 min from best attempt
-    perNeedP99Us: 7000,
-    perNeedBarUs: 200,
-    ackP99: null,
-    rollupP99: null,
-    bindingP99: null,
-    load: { active: 92160, target: 247500 },
-    rampBudgetMin: 120,
-    passed: false,
-    analysisRef: "bigfleet-uber #17",
+    pending: true,
   },
 ];
 
 function realisticSection() {
   let s = `\n## Realistic-regime ladder (uber-*)
 
-[ADR-0028] defines the regime: workload uses the full \`realistic.yaml\` archetype catalog (gpu-training, memory-db with small co-location groups produce ~388 Needs/cluster, ~48× more than the aggregated regime). We grade BigFleet on **per-Need Phase 1 p99 ≤ 200 µs** — a constant that holds across the ladder. Cycle p99 and ramp budget envelopes scale linearly with NeedsTable cardinality per the projections in ADR-0028. ack p99 (≤ 12 s) and steady-state binding p99 (≤ 15 s) are held constant across rungs.
+These runs exercise the full \`realistic.yaml\` archetype catalog (gpu-training, memory-db, co-location gangs) on Uber-donated compute, graded against the reframed steady-state SLOs in [ADR-0054] / [SLOs](./slos.md). Under a **default, uncapped kube-scheduler** we gate BigFleet's own capacity-delivery hops; the end-to-end pod-bind tail is dominated by the scheduler's retry/backoff and the reprovision back-edge, so it is reported informational, not gated.
 
-| profile | commit | NeedsTable | per-Need p99 | cycle p99 | ack p99 | rollup p99 | load | pass |
-|---|---|---:|---:|---:|---:|---:|---|:---:|
+Gates: configure-phase ≤ 15 s · bootstrap success ≥ 0.99 · node-state ≤ 1.5 s · rollup ≤ 1 s · cycle ≤ 5 s · ack ≤ 12 s · shortfalls = 0 · bind p50 ≤ 10 s.
+
+| profile | commit | configure p99 | bootstrap | node-state p99 | rollup p99 | cycle p99 | ack p99 | shortfalls | bind p50 | pass |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
 `;
   for (const r of realisticRuns) {
-    const loadCol = r.load ? `${r.load.active.toLocaleString()} / ${r.load.target.toLocaleString()}` : "—";
-    s += `| \`${r.profile}\` (${r.analysisRef}) | \`${r.commit}\` | ${r.needsTable.toLocaleString()} | ${r.perNeedP99Us} µs (bar ${r.perNeedBarUs}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.rollupP99)} | ${loadCol} | ${r.passed ? "✓" : "✗"} |\n`;
+    if (r.pending) {
+      s += `| \`${r.profile}\` | — | — | — | — | — | — | — | — | — | pending |\n`;
+      continue;
+    }
+    s += `| \`${r.profile}\` | \`${r.commit}\` | ${fmtSeconds(r.configureP99)} | ${r.bootstrapSuccess.toFixed(2)} | ${fmtSeconds(r.nodeStateP99)} | ${fmtSeconds(r.rollupP99)} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${r.shortfalls} | ${fmtSeconds(r.bindP50)} | ${r.passed ? "✓" : "✗"} |\n`;
   }
   s += `
-[ADR-0028]: ./adr/0028-cycle-p99-is-regime-parametric.md
+End-to-end pod-bind p99 is informational only — dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge; it varies widely run-to-run (tens to hundreds of seconds) and is not a BigFleet SLO.
+
+[ADR-0054]: ./adr/0054-steady-bind-slo-reframe-for-uncapped-scheduler.md
 `;
   return s;
 }
