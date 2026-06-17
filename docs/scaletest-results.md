@@ -42,15 +42,15 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 
 ## The validated-scale ladder (uber-*)
 
-The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine.
+The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine. Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
 
-| rung | commit | shortfalls | bootstrap | configure p99 | node-state p99 | rollup p99 | cycle p99 | ack p99 | bind p50 | status |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:--|
-| `uber-5k` | `cee793e` | 0 | 1.00 | 310 ms | 1.02 s | 650 ms | 255 ms | 640 ms | 1.60 s | ✅ passed |
-| `uber-50k` | — | — | — | — | — | — | — | — | — | ⏳ next |
-| `uber-500k` | — | — | — | — | — | — | — | — | — | ▫️ planned |
-| `uber-1m` | — | — | — | — | — | — | — | — | — | ▫️ planned |
-| `uber-5m` | — | — | — | — | — | — | — | — | — | ▫️ planned |
+| rung | scale | status | data |
+|---|---|:--|:--|
+| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | publishing |
+| `uber-50k` | next rung | ⏳ next | — |
+| `uber-500k` | planned | ▫️ planned | — |
+| `uber-1m` | planned | ▫️ planned | — |
+| `uber-5m` | planned | ▫️ planned | — |
 
 **`uber-50k`** — the next rung — held until a test fleet large enough to run it without host oversubscription is available, so it is measured on the same methodology rather than a compressed one. (Single-threaded Phase 1 cost grows with demand cardinality — see ADR-0028 — so a larger rung is also where parallel Phase 1 earns its place.)
 
@@ -69,7 +69,7 @@ make scaletest PROFILE=test/scaletest/profiles/5k.yaml SUBSTRATE=test/scaletest/
 
 **Recreate the dashboard.** The Grafana dashboard ships in the repo ([`dashboards/scaletest.json`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/chart/dashboards/scaletest.json)); point it at any Prometheus carrying BigFleet's metrics. Published canonical runs also include a Prometheus snapshot you can load to replay the run's status over time (added per run as it is published).
 
-**Per-run artefacts.** Raw run data (logs, full Prometheus) is dev-box-local and not committed; this page is the canonical record. The sanitised numeric results that *are* committed — `summary.json` plus a `chain-numbers.csv` time-series — are linked from the configuration-variant table below.
+**Per-run artefacts.** Raw run data (logs, full Prometheus) is dev-box-local and not committed; this page is the canonical record. The sanitised numeric results that *are* committed — each run's `summary.json` plus a `chain-numbers.csv` time-series — live in that run's folder, linked from the ladder and the configuration-variant table.
 
 ## How a result is graded
 
@@ -78,13 +78,13 @@ Every gate is measured at **steady state under sustained churn**, never during t
 <details>
 <summary><strong>uber-5k configuration runs</strong> (transparency — pre-reframe metric set)</summary>
 
-Earlier `uber-5k` runs across host/cluster configurations, with sanitised numbers committed per run. These predate the ADR-0054 reframe — older metric set, and the bind-latency p99 they recorded was the since-retired saturated metric — so they are shown on the metrics they captured, not the current gate set, and are configuration variants, **not** ladder rungs.
+Earlier `uber-5k` runs across host/cluster configurations, each with its sanitised numbers committed in the linked run folder. These predate the ADR-0054 reframe — older metric set, and the bind-latency p99 they recorded was the since-retired saturated metric — so the folder's numbers are on the metrics they captured, not the current gate set, and these are configuration variants, **not** ladder rungs.
 
-| run | cycle p99 | rollup p99 | ack p99 | configure p99 | shortfalls | load | time-series | pass |
-|---|---:|---:|---:|---:|---:|---|:--:|:--:|
-| [`uber-5k (single-host)`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k) | 127 ms | 329 ms | 583 ms | 19 ms | 0 | 5,831 / 500,000 | [csv](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k/chain-numbers.csv) | ✗ |
-| [`uber-5k-wide`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide) | 1.02 s | 1.21 s | 640 ms | 156 ms | 0 | 499,993 / 500,000 | [csv](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide/chain-numbers.csv) | ✗ |
-| [`uber-5k-2host`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-16-uber-5k-2host-20x25k) | 1.02 s | 497 ms | 296 ms | 482 ms | 1 | 249,995 / 250,000 | — | ✓ |
+| run | load | pass | data |
+|---|---|:--:|:--|
+| `uber-5k (single-host)` | 5,831 / 500,000 | ✗ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k) · [csv ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k/chain-numbers.csv) |
+| `uber-5k-wide` | 499,993 / 500,000 | ✗ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide) · [csv ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide/chain-numbers.csv) |
+| `uber-5k-2host` | 249,995 / 250,000 | ✓ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-16-uber-5k-2host-20x25k) |
 
 </details>
 

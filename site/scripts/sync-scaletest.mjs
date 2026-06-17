@@ -46,17 +46,23 @@ const GATES = [
 const ladder = [
   {
     profile: "uber-5k", status: "passed", commit: "cee793e",
+    scale: "~5,000-pod realistic-catalog fleet · 1 shard",
+    // dataDir: published run folder for the canonical cee793e artifact. null
+    // until the sanitised summary.json + chain-numbers.csv + prom snapshot land
+    // under test/scaletest/results/ — until then the row shows "publishing" and
+    // the headline scorecard above carries the gate values.
+    dataDir: null,
     shortfalls: 0, bootstrapSuccess: 1.0, configureP99: 0.31, nodeStateP99: 1.024,
     rollupP99: 0.65, cycleP99: 0.255, ackP99: 0.64, bindP50: 1.6,
     shape: "one shard sustaining the full realistic-catalog demand of a simulated fleet (~5,000 pods of demand) through a real, default, uncapped kube-scheduler",
   },
   {
-    profile: "uber-50k", status: "next",
+    profile: "uber-50k", status: "next", scale: "next rung",
     note: "the next rung — held until a test fleet large enough to run it without host oversubscription is available, so it is measured on the same methodology rather than a compressed one. (Single-threaded Phase 1 cost grows with demand cardinality — see ADR-0028 — so a larger rung is also where parallel Phase 1 earns its place.)",
   },
-  { profile: "uber-500k", status: "planned" },
-  { profile: "uber-1m",   status: "planned" },
-  { profile: "uber-5m",   status: "planned" },
+  { profile: "uber-500k", status: "planned", scale: "planned" },
+  { profile: "uber-1m",   status: "planned", scale: "planned" },
+  { profile: "uber-5m",   status: "planned", scale: "planned" },
 ];
 
 // Configuration-variant runs whose sanitised numbers ARE committed under
@@ -145,17 +151,19 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 function ladderSection() {
   let s = `## The validated-scale ladder (uber-*)
 
-The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine.
+The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine. Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
 
-| rung | commit | shortfalls | bootstrap | configure p99 | node-state p99 | rollup p99 | cycle p99 | ack p99 | bind p50 | status |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:--|
+| rung | scale | status | data |
+|---|---|:--|:--|
 `;
   for (const r of ladder) {
-    if (r.status === "passed") {
-      s += `| \`${r.profile}\` | \`${r.commit}\` | ${r.shortfalls} | ${r.bootstrapSuccess.toFixed(2)} | ${fmtSeconds(r.configureP99)} | ${fmtSeconds(r.nodeStateP99)} | ${fmtSeconds(r.rollupP99)} | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.bindP50)} | ${STATUS[r.status]} |\n`;
-    } else {
-      s += `| \`${r.profile}\` | — | — | — | — | — | — | — | — | — | ${STATUS[r.status]} |\n`;
+    let data = "—";
+    if (r.dataDir) {
+      data = `[run folder ↗](${GH}/test/scaletest/results/${r.dataDir})`;
+    } else if (r.status === "passed") {
+      data = "publishing"; // canonical artifact in flight
     }
+    s += `| \`${r.profile}\` | ${r.scale} | ${STATUS[r.status]} | ${data} |\n`;
   }
   const next = ladder.find((r) => r.status === "next");
   if (next?.note) {
@@ -178,7 +186,7 @@ make scaletest PROFILE=test/scaletest/profiles/5k.yaml SUBSTRATE=test/scaletest/
 
 **Recreate the dashboard.** The Grafana dashboard ships in the repo ([\`dashboards/scaletest.json\`](${GH}/test/scaletest/chart/dashboards/scaletest.json)); point it at any Prometheus carrying BigFleet's metrics. Published canonical runs also include a Prometheus snapshot you can load to replay the run's status over time (added per run as it is published).
 
-**Per-run artefacts.** Raw run data (logs, full Prometheus) is dev-box-local and not committed; this page is the canonical record. The sanitised numeric results that *are* committed — \`summary.json\` plus a \`chain-numbers.csv\` time-series — are linked from the configuration-variant table below.`;
+**Per-run artefacts.** Raw run data (logs, full Prometheus) is dev-box-local and not committed; this page is the canonical record. The sanitised numeric results that *are* committed — each run's \`summary.json\` plus a \`chain-numbers.csv\` time-series — live in that run's folder, linked from the ladder and the configuration-variant table.`;
 }
 
 function footnoteAndAppendix() {
@@ -189,14 +197,15 @@ Every gate is measured at **steady state under sustained churn**, never during t
 <details>
 <summary><strong>uber-5k configuration runs</strong> (transparency — pre-reframe metric set)</summary>
 
-Earlier \`uber-5k\` runs across host/cluster configurations, with sanitised numbers committed per run. These predate the ADR-0054 reframe — older metric set, and the bind-latency p99 they recorded was the since-retired saturated metric — so they are shown on the metrics they captured, not the current gate set, and are configuration variants, **not** ladder rungs.
+Earlier \`uber-5k\` runs across host/cluster configurations, each with its sanitised numbers committed in the linked run folder. These predate the ADR-0054 reframe — older metric set, and the bind-latency p99 they recorded was the since-retired saturated metric — so the folder's numbers are on the metrics they captured, not the current gate set, and these are configuration variants, **not** ladder rungs.
 
-| run | cycle p99 | rollup p99 | ack p99 | configure p99 | shortfalls | load | time-series | pass |
-|---|---:|---:|---:|---:|---:|---|:--:|:--:|
+| run | load | pass | data |
+|---|---|:--:|:--|
 `;
   for (const r of configRuns) {
-    const ts = r.csv ? `[csv](${GH}/test/scaletest/results/${r.dir}/chain-numbers.csv)` : "—";
-    s += `| [\`${r.label}\`](${GH}/test/scaletest/results/${r.dir}) | ${fmtSeconds(r.cycleP99)} | ${fmtSeconds(r.rollupP99)} | ${fmtSeconds(r.ackP99)} | ${fmtSeconds(r.configureP99)} | ${r.shortfalls} | ${r.load} | ${ts} | ${r.passed ? "✓" : "✗"} |\n`;
+    let data = `[run folder ↗](${GH}/test/scaletest/results/${r.dir})`;
+    if (r.csv) data += ` · [csv ↗](${GH}/test/scaletest/results/${r.dir}/chain-numbers.csv)`;
+    s += `| \`${r.label}\` | ${r.load} | ${r.passed ? "✓" : "✗"} | ${data} |\n`;
   }
   s += `
 </details>`;
