@@ -1,0 +1,41 @@
+{
+  "cost": {
+    "estimatedUsd": 0,
+    "hours": 0.5
+  },
+  "metrics": {
+    "bootstrapSuccessRatio": 1.0,
+    "endToEndPodBindP50Seconds": 1.6,
+    "internalBindingLatencyMaxSeconds": 1475.26,
+    "internalBindingLatencyP99Seconds": 102.4,
+    "loadgenCRsActive": 500194,
+    "loadgenCRsCreatedPerSec": 0,
+    "operatorAckP99Seconds": 1.28,
+    "operatorNodeStateUpdateP99Seconds": 1.024,
+    "operatorRollupBuildP99Seconds": 0.5,
+    "operatorRollupEnqueueP99Seconds": 0.001,
+    "operatorRollupListP99Seconds": 0.35,
+    "operatorRollupP99Seconds": 0.65,
+    "shardConfigurePhaseP50Seconds": 0.126,
+    "shardConfigurePhaseP99Seconds": 1.098,
+    "shardCycleDurationP99Seconds": 0.255,
+    "shardProvisioningLatencyP50Seconds": 36.69,
+    "shardProvisioningLatencyP99Seconds": 4816.9,
+    "shardShortfalls": 0,
+    "shardShortfallsAged": 0,
+    "shardsReportingCycle": 1,
+    "upcomingToNodeP50Seconds": 1.585,
+    "upcomingToNodeP99Seconds": 2.8
+  },
+  "passed": true,
+  "profile": "uber-5k",
+  "runId": "20260617-003200-uber-5k",
+  "scale": {
+    "aggregateInventory": 22529,
+    "kwokClusters": 20,
+    "machinesPerCr": 25000,
+    "seedMachinesPerShard": 6167,
+    "shardReplicas": 1,
+    "totalCrs": 500000
+  }
+}

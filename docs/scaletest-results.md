@@ -12,11 +12,11 @@ One shard sustaining the full realistic-catalog demand of a simulated fleet (~5,
 |---|---:|---:|
 | shortfalls | **0** ✓ | = 0 |
 | bootstrap success | **1.00** ✓ | ≥ 0.99 |
-| configure-phase p99 | **310 ms** ✓ | ≤ 15 s |
+| configure-phase p99 | **1.10 s** ✓ | ≤ 15 s |
 | node-state-publish p99 | **1.02 s** ✓ | ≤ 1.5 s |
 | roll-up p99 | **650 ms** ✓ | ≤ 1 s |
 | shard cycle p99 | **255 ms** ✓ | ≤ 5 s |
-| ack p99 | **640 ms** ✓ | ≤ 12 s |
+| ack p99 | **1.28 s** ✓ | ≤ 12 s |
 | pod-bind p50 | **1.60 s** ✓ | ≤ 10 s |
 
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
@@ -46,7 +46,7 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 
 | rung | scale | status | data |
 |---|---|:--|:--|
-| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-16-uber-5k-cee793e) |
+| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) |
 | `uber-50k` | next rung | ⏳ next | — |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |

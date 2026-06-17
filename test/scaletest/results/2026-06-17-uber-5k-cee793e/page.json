@@ -4,6 +4,5 @@
   "scale": "~5,000-pod realistic-catalog fleet · 1 shard",
   "commit": "cee793e",
   "shape": "one shard sustaining the full realistic-catalog demand of a simulated fleet (~5,000 pods of demand) through a real, default, uncapped kube-scheduler",
-  "order": 1,
-  "note": "PROVISIONAL: the gate metrics are the verified, already-published cee793e result; the full sanitised artifact (reconstructed summary.json + chain-numbers.csv + Prometheus snapshot) is being published and will replace this folder."
+  "order": 1
 }
