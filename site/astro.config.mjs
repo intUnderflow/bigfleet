@@ -43,6 +43,7 @@ export default defineConfig({
             { label: "SLOs", link: "/slos/" },
             { label: "Scale-test runbook", link: "/scaletest/" },
             { label: "Scale-test results", link: "/scaletest-results/" },
+            { label: "Scale-test resource requirements", link: "/scaletest-resource-requirements/" },
           ],
         },
         {

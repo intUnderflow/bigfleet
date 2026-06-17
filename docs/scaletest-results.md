@@ -6,7 +6,7 @@ BigFleet turns each cluster's capacity demand into provisioned, configured nodes
 
 ## Headline result — `uber-5k` (commit `cee793e`)
 
-One shard sustaining the full realistic-catalog demand of a simulated fleet (~5,000 pods of demand) through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**.
+One shard sustaining the full realistic-catalog demand of a ~5,000-machine fleet (~500,000 pods) through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**.
 
 | gate | result | bar |
 |---|---:|---:|
@@ -42,11 +42,11 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 
 ## The validated-scale ladder (uber-*)
 
-The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine. Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
+The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
 
 | rung | scale | status | data |
 |---|---|:--|:--|
-| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) |
+| `uber-5k` | ~5,000-machine fleet · ~500K pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) |
 | `uber-50k` | next rung | ⏳ next | — |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |

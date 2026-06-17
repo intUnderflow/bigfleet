@@ -212,7 +212,7 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 function ladderSection(ladderRuns) {
   let s = `## The validated-scale ladder (uber-*)
 
-The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on test-fleet capacity, not on the engine. Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
+The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
 
 | rung | scale | status | data |
 |---|---|:--|:--|
