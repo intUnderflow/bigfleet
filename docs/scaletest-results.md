@@ -46,7 +46,7 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 
 | rung | scale | status | data |
 |---|---|:--|:--|
-| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | publishing |
+| `uber-5k` | ~5,000-pod realistic-catalog fleet · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-16-uber-5k-cee793e) |
 | `uber-50k` | next rung | ⏳ next | — |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |
@@ -73,7 +73,7 @@ make scaletest PROFILE=test/scaletest/profiles/5k.yaml SUBSTRATE=test/scaletest/
 
 ## How a result is graded
 
-Every gate is measured at **steady state under sustained churn**, never during the cold-start ramp ([ADR-0035](./adr/0035-scaletest-slos-at-steady-state.md)): ramp is capacity exploration, not a pass/fail signal. Per-machine and per-frame bars are held identical across the whole ladder; only genuinely size-scaling quantities get size-dependent thresholds ([ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md)). The page states each run's verdict under the *current* SLO set, so a committed `summary.json` may record an older verdict than shown here (e.g. against a since-retired saturated bind-latency metric). Separately, the shard's per-cycle decision cost was driven from seconds to tens of milliseconds over the engine-optimisation milestones — the headroom the cycle gate now runs against.
+Every gate is measured at **steady state under sustained churn**, never during the cold-start ramp ([ADR-0035](./adr/0035-scaletest-slos-at-steady-state.md)): ramp is capacity exploration, not a pass/fail signal. Per-machine and per-frame bars are held identical across the whole ladder; only genuinely size-scaling quantities get size-dependent thresholds ([ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md)). Pass/fail on this page is computed from each run's committed `summary.json` against the current gate set, so a run's own recorded verdict may differ (e.g. against a since-retired saturated bind-latency metric). Separately, the shard's per-cycle decision cost was driven from seconds to tens of milliseconds over the engine-optimisation milestones — the headroom the cycle gate now runs against.
 
 <details>
 <summary><strong>uber-5k configuration runs</strong> (transparency — pre-reframe metric set)</summary>
@@ -89,4 +89,4 @@ Earlier `uber-5k` runs across host/cluster configurations, each with its sanitis
 </details>
 
 
-*Generated from `site/scripts/sync-scaletest.mjs`.*
+*Generated from `test/scaletest/results/*/{summary,page}.json` by `site/scripts/sync-scaletest.mjs`.*

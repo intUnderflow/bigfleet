@@ -1,0 +1,17 @@
+{
+  "cost": { "estimatedUsd": 0, "hours": 0.5 },
+  "metrics": {
+    "shardShortfalls": 0,
+    "bootstrapSuccessRatio": 1.0,
+    "shardConfigurePhaseP99Seconds": 0.31,
+    "operatorNodeStateUpdateP99Seconds": 1.024,
+    "operatorRollupP99Seconds": 0.65,
+    "shardCycleDurationP99Seconds": 0.255,
+    "operatorAckP99Seconds": 0.64,
+    "endToEndPodBindP50Seconds": 1.6
+  },
+  "passed": true,
+  "profile": "uber-5k",
+  "runId": "20260616-000000-uber-5k",
+  "scale": { "shardReplicas": 1, "kwokClusters": 20 }
+}
