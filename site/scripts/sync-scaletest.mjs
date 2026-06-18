@@ -174,7 +174,7 @@ BigFleet turns each cluster's capacity demand into provisioned, configured nodes
 **Ladder:** ${strip}`;
 }
 
-function scorecard(canonical) {
+function scorecard(canonical, reproRuns) {
   const { summary, page } = canonical;
   let s = `## Headline result — \`${page.displayName}\` (commit \`${page.commit}\`)
 
@@ -186,6 +186,16 @@ ${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet d
   for (const g of GATES) {
     const mark = gatePasses(summary, g) ? "✓" : "✗";
     s += `| ${g.name} | **${fmtGate(summary, g)}** ${mark} | ${g.gate} |\n`;
+  }
+  // Reproducibility: derived from committed reproducibility-section runs of this
+  // rung — count + all-green status are read from their summaries, not asserted.
+  const repro = (reproRuns || []).filter((r) => r.page.of === page.displayName).sort(byOrder);
+  if (repro.length > 0) {
+    const allGreen = repro.every((r) => allGatesPass(r.summary));
+    const links = repro.map((r) => `[${r.page.displayName} ↗](${GH}/test/scaletest/results/${r.dir})`).join(" · ");
+    s += `
+**Reproduced ${repro.length}× back-to-back** — ${allGreen ? "every gate green on all of them" : `${repro.filter((r) => allGatesPass(r.summary)).length}/${repro.length} all-green`}, engine numbers invariant run-to-run, each on a freshly re-surveyed fleet (${links}).
+`;
   }
   s += `
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
@@ -273,10 +283,10 @@ Earlier \`uber-5k\` runs across host/cluster configurations, each with its sanit
   return s;
 }
 
-function renderPage({ ladderRuns, variantRuns, canonical }) {
+function renderPage({ ladderRuns, variantRuns, canonical, reproRuns }) {
   return [
     lead(ladderRuns),
-    scorecard(canonical),
+    scorecard(canonical, reproRuns),
     whatWeGate(),
     ladderSection(ladderRuns),
     reproduce(),
@@ -309,13 +319,16 @@ async function main() {
     ? passing[passing.length - 1]
     : ladderRuns[ladderRuns.length - 1];
 
+  // Reproducibility runs of a rung — back the "reproduced N×" note (not ladder rungs).
+  const reproRuns = runs.filter((r) => r.page.section === "reproducibility").sort(byOrder);
+
   await fs.mkdir(docsDir, { recursive: true });
   await fs.writeFile(
     path.join(docsDir, "scaletest-results.md"),
-    renderPage({ ladderRuns, variantRuns, canonical }),
+    renderPage({ ladderRuns, variantRuns, canonical, reproRuns }),
   );
   console.error(
-    `scaletest-sync: wrote docs/scaletest-results.md (${ladderRuns.length} ladder, ${variantRuns.length} variant runs)`,
+    `scaletest-sync: wrote docs/scaletest-results.md (${ladderRuns.length} ladder, ${variantRuns.length} variant, ${reproRuns.length} reproducibility runs)`,
   );
 }
 

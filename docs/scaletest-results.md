@@ -19,6 +19,8 @@ One shard sustaining the full realistic-catalog demand of a ~50,000-machine flee
 | ack p99 | **1.28 s** ✓ | ≤ 12 s |
 | pod-bind p50 | **1.60 s** ✓ | ≤ 10 s |
 
+**Reproduced 3× back-to-back** — every gate green on all of them, engine numbers invariant run-to-run, each on a freshly re-surveyed fleet ([run 1 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e) · [run 2 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e) · [run 3 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e)).
+
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
 
 
