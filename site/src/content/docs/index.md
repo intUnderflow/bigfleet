@@ -51,7 +51,7 @@ It's the reference implementation of two papers — the [operating model](/paper
 
 Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — `uber-50k`: a **~50,000-machine fleet** carrying **~5,000,000 pods** across 200 clusters on 40 hosts in 5 regions, served by a single shard — held **every capacity-delivery hop BigFleet owns inside SLO with zero unmet demand** under a real, default, *uncapped* kube-scheduler (shard cycle p99 **4.08 s** under a 5 s bar, roll-up p99 0.76 s, configure-phase p99 1.21 s).
 
-Every number on the [scale-test results page](/scaletest-results/) is reproducible from a committed run summary.
+Every gate figure on the [scale-test results page](/scaletest-results/) is read straight from each run's committed run summary — the page is generated from the data, not hand-entered.
 
 ## Why this exists
 
