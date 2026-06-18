@@ -49,7 +49,7 @@ It's the reference implementation of two papers — the [operating model](/paper
 
 ## Tested at scale
 
-Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — 50 simulated clusters, 50 000 demand requests, 500 000 inventory machines on a 5-node cloud cluster — held shard cycle p99 at **55 ms** under the runner's 100 ms SLO.
+Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — `uber-50k`: a **~50,000-machine fleet** carrying **~5,000,000 pods** across 200 clusters on 40 hosts in 5 regions, served by a single shard — held **every capacity-delivery hop BigFleet owns inside SLO with zero unmet demand** under a real, default, *uncapped* kube-scheduler (shard cycle p99 **4.08 s** under a 5 s bar, roll-up p99 0.76 s, configure-phase p99 1.21 s).
 
 Every number on the [scale-test results page](/scaletest-results/) is reproducible from a committed run summary.
 
@@ -57,7 +57,7 @@ Every number on the [scale-test results page](/scaletest-results/) is reproducib
 
 The hyperscalers built fleet-level capacity control planes in-house — Google has [Borg](https://research.google/pubs/pub43438/), Meta has [Twine](https://www.usenix.org/conference/osdi20/presentation/tang). They did because per-cluster capacity management collapses at fleet scale.
 
-Most organisations now run tens to thousands of Kubernetes clusters and manage capacity per-cluster. The result is well documented: industry surveys put average enterprise CPU utilisation around 18 %, with overprovisioning factors of 2× to 5× and waste estimates between $50 000 and $500 000 per cluster per year. A team's GPUs sitting idle in cluster A can't help that team's training job in cluster B. Multi-node training, gang scheduling, and priority-based preemption — all the things AI/ML workloads actually need — require fleet-wide capacity decisions. Per-cluster autoscalers can't make them.
+Most organisations now run tens to thousands of Kubernetes clusters and manage capacity per-cluster. The result is well documented: Datadog's *State of Cloud Costs* report puts average enterprise CPU utilisation around 18 %, with overprovisioning factors of 2× to 5× and waste estimates between $50 000 and $500 000 per cluster per year. A team's GPUs sitting idle in cluster A can't help that team's training job in cluster B. Multi-node training, gang scheduling, and priority-based preemption — all the things AI/ML workloads actually need — require fleet-wide capacity decisions. Per-cluster autoscalers can't make them.
 
 ## What changes for you
 
@@ -86,7 +86,7 @@ If your fleet is one cluster, you don't need BigFleet. If it's a hundred, you st
 
 ## Status
 
-v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh). Coverage: race-detector unit tests, deterministic simulator with golden traces, long-running soak, multi-cluster end-to-end on kind, [provider conformance suite](/provider-author-guide/), and the [scale-test results](/scaletest-results/) on a real cloud cluster. Real provider implementations live in separate repositories by design — see the [provider author guide](/provider-author-guide/).
+v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh). Coverage: race-detector unit tests, deterministic simulator with golden traces, steady-state soak under churn, multi-cluster end-to-end on kind, [provider conformance suite](/provider-author-guide/), and the [scale-test results](/scaletest-results/) on a real multi-host cloud fleet. Real provider implementations live in separate repositories by design — see the [provider author guide](/provider-author-guide/).
 
 <hr style="margin-top: 3rem; opacity: 0.3;" />
 
