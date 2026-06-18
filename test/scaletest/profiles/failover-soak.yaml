@@ -1,67 +1,59 @@
-# failover-soak — combined static-stability regression. Drives a
-# longer 60-min soak with two coordinator-leader-kills (t=600s and
-# t=1200s) and one shard-pod-kill (t=1800s). Each runnerAction has
-# an asserted outcome in scaletest-runner; the run fails if any
-# assertion misses. Use when you want one belt-and-braces failover
-# regression run before a release; for targeted regressions during
-# development, the dedicated profiles are faster and cheaper:
+# failover-soak — combined belt-and-braces static-stability regression.
 #
-#   failover-leader-kill.yaml  — single coordinator kill, 30-min soak
-#   failover-shard-kill.yaml   — single shard pod kill, 30-min soak
+# Ported to the BYO profileV2 contract (ADR-0034): the realistic.yaml catalog
+# + ADR-0054 gates, on a TWO-shard deploy (topology.shardReplicas: 2). A
+# longer 60-min soak with three disturbances — two coordinator-leader-kills
+# (t=600s, t=1200s) and one shard-pod-kill (t=1800s). Each runnerAction has an
+# asserted outcome in scaletest-runner; the run fails if any assertion misses
+# or if the SLO gates breach across the disturbances. Use for one belt-and-
+# braces failover regression before a release; for targeted dev regressions
+# the dedicated single-disturbance profiles are faster and cheaper:
 #
-# Validates the "static stability is non-negotiable" hard rule
-# end-to-end across multiple disturbance types.
+#   failover-leader-kill.yaml  — single coordinator kill, single shard
+#   failover-shard-kill.yaml   — single shard pod kill, 2 shards
+#   failover-partition.yaml    — coordinator↔shard partition, 2 shards
 
-image:
-  repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
-  pullPolicy: Always
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
 
-bigfleet:
-  image:
-    repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
-    pullPolicy: Always
+metadata:
+  name: "failover-soak"
+  description: "Belt-and-braces static-stability regression: 2 leader-kills + 1 shard-kill over a 60-min realistic soak."
 
-kwok:
-  clusterCount: 50
+scale:
+  machines: 5000
+  density: 100
 
-shard:
-  replicas: 2
-  seedMachines: 0
-  resources:
-    requests: { cpu: 1, memory: 2Gi }
+catalog:
+  archetypes: realistic
 
-coordinator:
-  enabled: true
-  replicas: 1
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 3600
+  rampSeconds: 1800
+  soakSeconds: 3600
+  churnPerMinute: 0.02
 
-operator:
-  qps: 200
-  burst: 400
-  ackConcurrency: 64
-  rollupInterval: 0s
+rampBudget: 60m
 
-prometheus:
-  resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 4, memory: 12Gi }
+topology:
+  shardReplicas: 2
 
-# Runner-only: scaletest-runner reads this, so it isn't applied at
-# chart render time. Each action has an asserted outcome (see
-# runner_actions.go); the run fails if any assertion misses.
 runnerActions:
-  - { atSeconds: 600,  action: kill-coordinator-leader }
-  - { atSeconds: 1200, action: kill-coordinator-leader }
-  - { atSeconds: 1800, action: kill-shard-bigfleet-shard-1 }
+  - atSeconds: 600
+    action: kill-coordinator-leader
+  - atSeconds: 1200
+    action: kill-coordinator-leader
+  - atSeconds: 1800
+    action: kill-shard-bigfleet-shard-1
 
-costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each, M44 Pod-mode floor). 60-min soak with two coordinator-leader-kills + one shard-pod-kill. ~$0.90 end-to-end. M17 belt-and-braces failover regression."
+slo:
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

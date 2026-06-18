@@ -23,10 +23,15 @@ func TestFailoverProfiles_ValidV2(t *testing.T) {
 	}
 
 	cases := []struct {
-		profile string
-		action  string
+		profile     string
+		minActions  int
+		firstAction string
+		wantShards  int // expected topology.shardReplicas (0 = size-derived single shard)
 	}{
-		{"failover-leader-kill", "kill-coordinator-leader"},
+		{"failover-leader-kill", 1, "kill-coordinator-leader", 0},
+		{"failover-shard-kill", 1, "kill-shard-bigfleet-shard-1", 2},
+		{"failover-partition", 1, "partition-coordinator-from-shard-bigfleet-shard-1", 2},
+		{"failover-soak", 3, "kill-coordinator-leader", 2},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -46,11 +51,19 @@ func TestFailoverProfiles_ValidV2(t *testing.T) {
 			if cfg.ClusterCount <= 0 {
 				t.Errorf("%s merged ClusterCount = %d (want > 0)", tc.profile, cfg.ClusterCount)
 			}
-			if len(p.RunnerActions) != 1 || p.RunnerActions[0].Action != tc.action {
-				t.Errorf("%s runnerActions = %+v (want one %q)", tc.profile, p.RunnerActions, tc.action)
+			if len(p.RunnerActions) < tc.minActions {
+				t.Fatalf("%s runnerActions = %+v (want ≥ %d)", tc.profile, p.RunnerActions, tc.minActions)
 			}
-			if p.RunnerActions[0].AtSeconds <= 0 {
-				t.Errorf("%s runnerAction AtSeconds = %d (want > 0)", tc.profile, p.RunnerActions[0].AtSeconds)
+			if p.RunnerActions[0].Action != tc.firstAction {
+				t.Errorf("%s first runnerAction = %q (want %q)", tc.profile, p.RunnerActions[0].Action, tc.firstAction)
+			}
+			for i, a := range p.RunnerActions {
+				if a.AtSeconds <= 0 {
+					t.Errorf("%s runnerAction[%d] AtSeconds = %d (want > 0)", tc.profile, i, a.AtSeconds)
+				}
+			}
+			if p.Topology.ShardReplicas != tc.wantShards {
+				t.Errorf("%s topology.shardReplicas = %d (want %d)", tc.profile, p.Topology.ShardReplicas, tc.wantShards)
 			}
 		})
 	}

@@ -1,60 +1,54 @@
-# failover-shard-kill — M17 static-stability regression check for a
-# shard pod restart. Two shards each carry ~25 KWOK clusters via the
-# N % 2 mapping. At t=600s the runner deletes bigfleet-shard-1; the
-# runnerAction asserts the StatefulSet reschedules the pod and it
-# resumes publishing cycle metrics within the 1 min query window.
+# failover-shard-kill — static-stability regression for a shard pod restart.
 #
-# Validates that operator-to-shard binding survives a shard pod
-# restart — the cluster operators bound to bigfleet-shard-1 should
-# reconnect to the same ordinal as it returns.
+# Ported to the BYO profileV2 contract (ADR-0034): the realistic.yaml catalog
+# + ADR-0054 gates, on a TWO-shard deploy (topology.shardReplicas: 2). The
+# size-derived shard count is 1 for any realistic profile (perShardMachineCeiling
+# = 500k), so the explicit override is what stands up the second shard. Clusters
+# fan across the two shards (N % 2). At t=600s the runner deletes bigfleet-shard-1;
+# the runnerAction asserts the StatefulSet reschedules it and it resumes
+# publishing cycle metrics within the query window, AND the surviving shard
+# (bigfleet-shard-0) holds its SLOs throughout — operator-to-shard binding
+# survives the restart and reconnects to the same ordinal.
 
-image:
-  repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
-  pullPolicy: Always
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
 
-bigfleet:
-  image:
-    repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
-    pullPolicy: Always
+metadata:
+  name: "failover-shard-kill"
+  description: "Static-stability regression: shard pod kill on a 2-shard realistic deploy."
 
-kwok:
-  clusterCount: 50
+scale:
+  machines: 5000
+  density: 100
 
-shard:
-  replicas: 2
-  seedMachines: 0
-  resources:
-    requests: { cpu: 1, memory: 2Gi }
+catalog:
+  archetypes: realistic
 
-coordinator:
-  enabled: true
-  replicas: 1
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 1800
+  rampSeconds: 1800
+  soakSeconds: 1200
+  churnPerMinute: 0.02
 
-operator:
-  qps: 200
-  burst: 400
-  ackConcurrency: 64
-  rollupInterval: 0s
+rampBudget: 60m
 
-prometheus:
-  resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 4, memory: 12Gi }
+# Two shards so killing ordinal 1 leaves ordinal 0 serving (the actual
+# static-stability check: the survivor keeps its SLOs while shard-1 restarts).
+topology:
+  shardReplicas: 2
 
-# M17 runnerAction: kill bigfleet-shard-1 mid-soak. Asserts the pod
-# is rescheduled and resumes publishing cycle metrics within 60 s.
 runnerActions:
-  - { atSeconds: 600, action: kill-shard-bigfleet-shard-1 }
+  - atSeconds: 600
+    action: kill-shard-bigfleet-shard-1
 
-costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each, M44 Pod-mode floor). 2-shard failover-soak with one mid-soak shard-pod-kill. ~$0.74 for a 50-min run. M17 regression check for shard StatefulSet recovery + operator-to-shard binding stability."
+slo:
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

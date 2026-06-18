@@ -319,6 +319,19 @@ type profileV2 struct {
 	RampBudget    string         `yaml:"rampBudget"`
 	RunnerActions []runnerAction `yaml:"runnerActions"`
 	SLO           sloOverrides   `yaml:"slo"`
+
+	// Topology overrides the size-derived shard count and the default
+	// single-replica coordinator. Both default (when zero) to the derived
+	// shard count and a 1-replica coordinator — the size-ladder profiles
+	// leave it unset and render exactly as before. The failover profiles
+	// set it to stand up a multi-shard / multi-replica-coordinator deploy
+	// for the kill/partition scenarios that a size-derived single shard
+	// cannot express (perShardMachineCeiling=500k ⇒ realistic profiles are
+	// single-shard by scale).
+	Topology struct {
+		ShardReplicas       int `yaml:"shardReplicas"`
+		CoordinatorReplicas int `yaml:"coordinatorReplicas"`
+	} `yaml:"topology"`
 }
 
 // validate returns nil if the profile is well-formed.
@@ -515,6 +528,15 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	}
 
 	replicas := shardReplicas(p.Scale.Machines)
+	if p.Topology.ShardReplicas > 0 {
+		// Failover profiles override the size-derived (single) shard count
+		// to stand up a multi-shard deploy for kill/partition scenarios.
+		replicas = p.Topology.ShardReplicas
+	}
+	coordinatorReplicas := 1
+	if p.Topology.CoordinatorReplicas > 0 {
+		coordinatorReplicas = p.Topology.CoordinatorReplicas
+	}
 	// ADR-0035 seed math. Three tiers cooperate to put the cluster in
 	// steady state at install:
 	//   - Configured: machines bound to clusters, sized to cover the
@@ -587,7 +609,7 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 		},
 		"coordinator": map[string]any{
 			"enabled":  true,
-			"replicas": 1,
+			"replicas": coordinatorReplicas,
 		},
 		"harness": map[string]any{
 			"scheduler": "kube-scheduler",
