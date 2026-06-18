@@ -2,20 +2,20 @@
 
 BigFleet turns each cluster's capacity demand into provisioned, configured nodes through pluggable providers — it does **not** place pods ([what BigFleet is](./papers/bigfleet.md)). This page is the canonical record of how far that is proven, against the full `realistic.yaml` workload catalog (gpu-training, memory-db, co-location gangs) and a **real, default, _uncapped_ kube-scheduler**. BigFleet is graded only on the capacity-delivery hops it *owns* — never the cluster's scheduler — and is forbidden from reconfiguring that scheduler to make its own SLO pass ([what we gate](#what-we-gate-and-why-the-bar-is-honest)).
 
-**Ladder:** `uber-5k` ✅ · `uber-50k` ⏳ · `uber-500k` ▫️ · `uber-1m` ▫️ · `uber-5m` ▫️
+**Ladder:** `uber-5k` ✅ · `uber-50k` ✅ · `uber-500k` ▫️ · `uber-1m` ▫️ · `uber-5m` ▫️
 
-## Headline result — `uber-5k` (commit `cee793e`)
+## Headline result — `uber-50k` (commit `cee793e`)
 
-One shard sustaining the full realistic-catalog demand of a ~5,000-machine fleet (~500,000 pods) through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**.
+One shard sustaining the full realistic-catalog demand of a ~50,000-machine fleet (~5,000,000 pods) across 40 hosts in 5 regions through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**.
 
 | gate | result | bar |
 |---|---:|---:|
 | shortfalls | **0** ✓ | = 0 |
 | bootstrap success | **1.00** ✓ | ≥ 0.99 |
-| configure-phase p99 | **1.10 s** ✓ | ≤ 15 s |
-| node-state-publish p99 | **1.02 s** ✓ | ≤ 1.5 s |
-| roll-up p99 | **650 ms** ✓ | ≤ 1 s |
-| shard cycle p99 | **255 ms** ✓ | ≤ 5 s |
+| configure-phase p99 | **1.21 s** ✓ | ≤ 15 s |
+| node-state-publish p99 | **873 ms** ✓ | ≤ 1.5 s |
+| roll-up p99 | **757 ms** ✓ | ≤ 1 s |
+| shard cycle p99 | **4.08 s** ✓ | ≤ 5 s |
 | ack p99 | **1.28 s** ✓ | ≤ 12 s |
 | pod-bind p50 | **1.60 s** ✓ | ≤ 10 s |
 
@@ -47,12 +47,10 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 | rung | scale | status | data |
 |---|---|:--|:--|
 | `uber-5k` | ~5,000-machine fleet · ~500K pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) |
-| `uber-50k` | next rung | ⏳ next | — |
+| `uber-50k` | ~50,000-machine fleet · ~5M pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |
 | `uber-5m` | planned | ▫️ planned | — |
-
-**`uber-50k`** — the next rung — held until a test fleet large enough to run it without host oversubscription is available, so it is measured on the same methodology rather than a compressed one. (Single-threaded Phase 1 cost grows with demand cardinality — see ADR-0028 — so a larger rung is also where parallel Phase 1 earns its place.)
 
 _⏳ next and ▫️ planned are sequencing states, not failures — the ladder is in progress._
 

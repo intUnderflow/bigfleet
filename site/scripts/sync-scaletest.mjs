@@ -59,8 +59,6 @@ const GATES = [
 // Once a rung is run, drop its summary.json + page.json{section:"ladder"} in a
 // folder and it supersedes the roadmap entry of the same profile.
 const ROADMAP = [
-  { profile: "uber-50k", scale: "next rung", status: "next",
-    note: "the next rung — held until a test fleet large enough to run it without host oversubscription is available, so it is measured on the same methodology rather than a compressed one. (Single-threaded Phase 1 cost grows with demand cardinality — see ADR-0028 — so a larger rung is also where parallel Phase 1 earns its place.)" },
   { profile: "uber-500k", scale: "planned", status: "planned" },
   { profile: "uber-1m",   scale: "planned", status: "planned" },
   { profile: "uber-5m",   scale: "planned", status: "planned" },
@@ -304,8 +302,12 @@ async function main() {
     return;
   }
 
-  // Headline = the first passing ladder rung, else the first rung.
-  const canonical = ladderRuns.find((r) => allGatesPass(r.summary)) ?? ladderRuns[0];
+  // Headline = the HIGHEST-order passing ladder rung (the biggest proven scale),
+  // else the highest-order rung. ladderRuns is sorted by order ascending.
+  const passing = ladderRuns.filter((r) => allGatesPass(r.summary));
+  const canonical = passing.length
+    ? passing[passing.length - 1]
+    : ladderRuns[ladderRuns.length - 1];
 
   await fs.mkdir(docsDir, { recursive: true });
   await fs.writeFile(

@@ -18,6 +18,7 @@ src/content/docs/quickstart.md
 src/content/docs/plan.md
 src/content/docs/scaletest.md
 src/content/docs/scaletest-results.md
+src/content/docs/scaletest-resource-requirements.md
 src/content/docs/scaletest-progress.svg
 src/content/docs/architecture-shape.svg
 src/content/docs/user-stories.md
