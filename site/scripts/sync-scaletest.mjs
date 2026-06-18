@@ -187,7 +187,7 @@ function scorecard(canonical, reproRuns) {
 
 ${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet demand**${runs.length > 1 ? `, **reproduced across ${runs.length} independent runs** (each a freshly re-surveyed fleet; engine numbers invariant run-to-run)` : ""}.
 
-| gate | ${runs.map((_, i) => `result ${i + 1}`).join(" | ")} | SLA |
+| gate | ${runs.map((r, i) => `[result ${i + 1} ↗](${GH}/test/scaletest/results/${r.dir})`).join(" | ")} | SLA |
 |---|${runs.map(() => "---:").join("|")}|---:|
 `;
   for (const g of GATES) {
@@ -198,8 +198,7 @@ ${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet d
     s += `| ${g.name} | ${cells.join(" | ")} | ${g.gate} |\n`;
   }
   if (runs.length > 1) {
-    const links = runs.map((r, i) => `[result ${i + 1} ↗](${GH}/test/scaletest/results/${r.dir})`).join(" · ");
-    s += `\nEach result is a committed run summary: ${links}.${allGreen ? " Every result clears every SLA." : ""}\n`;
+    s += `\nEach \`result\` column header links to that run's committed run summary.${allGreen ? " Every result clears every SLA." : ""}\n`;
   }
   s += `
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).

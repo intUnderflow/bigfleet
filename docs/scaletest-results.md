@@ -8,7 +8,7 @@ BigFleet turns each cluster's capacity demand into provisioned, configured nodes
 
 One shard sustaining the full realistic-catalog demand of a ~50,000-machine fleet (~5,000,000 pods) across 40 hosts in 5 regions through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**, **reproduced across 4 independent runs** (each a freshly re-surveyed fleet; engine numbers invariant run-to-run).
 
-| gate | result 1 | result 2 | result 3 | result 4 | SLA |
+| gate | [result 1 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) | [result 2 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e) | [result 3 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e) | [result 4 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e) | SLA |
 |---|---:|---:|---:|---:|---:|
 | shortfalls | 0 | 0 | 0 | 0 | = 0 |
 | bootstrap success | 1.00 | 1.00 | 1.00 | 1.00 | ≥ 0.99 |
@@ -19,7 +19,7 @@ One shard sustaining the full realistic-catalog demand of a ~50,000-machine flee
 | ack p99 | 1.28 s | 1.28 s | 1.28 s | 1.28 s | ≤ 12 s |
 | pod-bind p50 | 1.60 s | 1.60 s | 1.60 s | 1.60 s | ≤ 10 s |
 
-Each result is a committed run summary: [result 1 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) · [result 2 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e) · [result 3 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e) · [result 4 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e). Every result clears every SLA.
+Each `result` column header links to that run's committed run summary. Every result clears every SLA.
 
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
 
