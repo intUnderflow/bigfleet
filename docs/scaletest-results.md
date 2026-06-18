@@ -6,20 +6,20 @@ BigFleet turns each cluster's capacity demand into provisioned, configured nodes
 
 ## Headline result — `uber-50k` (commit `cee793e`)
 
-One shard sustaining the full realistic-catalog demand of a ~50,000-machine fleet (~5,000,000 pods) across 40 hosts in 5 regions through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**.
+One shard sustaining the full realistic-catalog demand of a ~50,000-machine fleet (~5,000,000 pods) across 40 hosts in 5 regions through a real, default, uncapped kube-scheduler — every hop BigFleet owns inside SLO, **zero unmet demand**, **reproduced across 4 independent runs** (each a freshly re-surveyed fleet; engine numbers invariant run-to-run).
 
-| gate | result | bar |
-|---|---:|---:|
-| shortfalls | **0** ✓ | = 0 |
-| bootstrap success | **1.00** ✓ | ≥ 0.99 |
-| configure-phase p99 | **1.21 s** ✓ | ≤ 15 s |
-| node-state-publish p99 | **873 ms** ✓ | ≤ 1.5 s |
-| roll-up p99 | **757 ms** ✓ | ≤ 1 s |
-| shard cycle p99 | **4.08 s** ✓ | ≤ 5 s |
-| ack p99 | **1.28 s** ✓ | ≤ 12 s |
-| pod-bind p50 | **1.60 s** ✓ | ≤ 10 s |
+| gate | result 1 | result 2 | result 3 | result 4 | SLA |
+|---|---:|---:|---:|---:|---:|
+| shortfalls | 0 | 0 | 0 | 0 | = 0 |
+| bootstrap success | 1.00 | 1.00 | 1.00 | 1.00 | ≥ 0.99 |
+| configure-phase p99 | 1.21 s | 1.15 s | 1.21 s | 1.23 s | ≤ 15 s |
+| node-state-publish p99 | 873 ms | 1.02 s | 1.02 s | 1.02 s | ≤ 1.5 s |
+| roll-up p99 | 757 ms | 800 ms | 800 ms | 1.00 s | ≤ 1 s |
+| shard cycle p99 | 4.08 s | 4.08 s | 4.08 s | 4.08 s | ≤ 5 s |
+| ack p99 | 1.28 s | 1.28 s | 1.28 s | 1.28 s | ≤ 12 s |
+| pod-bind p50 | 1.60 s | 1.60 s | 1.60 s | 1.60 s | ≤ 10 s |
 
-**Reproduced 3× back-to-back** — every gate green on all of them, engine numbers invariant run-to-run, each on a freshly re-surveyed fleet ([run 1 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e) · [run 2 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e) · [run 3 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e)).
+Each result is a committed run summary: [result 1 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) · [result 2 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e) · [result 3 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e) · [result 4 ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e). Every result clears every SLA.
 
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
 
@@ -44,7 +44,7 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 
 ## The validated-scale ladder (uber-*)
 
-The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
+The workload is the full `realistic.yaml` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. The larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries the top rung's.
 
 | rung | scale | status | data |
 |---|---|:--|:--|

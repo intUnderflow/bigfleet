@@ -175,27 +175,31 @@ BigFleet turns each cluster's capacity demand into provisioned, configured nodes
 }
 
 function scorecard(canonical, reproRuns) {
-  const { summary, page } = canonical;
+  const { page } = canonical;
+  // The scorecard shows the canonical run plus its reproducibility runs as
+  // result 1..N columns — a consistency table. Values + pass/fail are read from
+  // each run's committed summary.json (a cell that breaches its SLA gets ✗).
+  const repro = (reproRuns || []).filter((r) => r.page.of === page.displayName).sort(byOrder);
+  const runs = [canonical, ...repro]; // result 1 = canonical; results 2..N = reproducibility runs
+  const allGreen = runs.every((r) => allGatesPass(r.summary));
+
   let s = `## Headline result — \`${page.displayName}\` (commit \`${page.commit}\`)
 
-${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet demand**.
+${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet demand**${runs.length > 1 ? `, **reproduced across ${runs.length} independent runs** (each a freshly re-surveyed fleet; engine numbers invariant run-to-run)` : ""}.
 
-| gate | result | bar |
-|---|---:|---:|
+| gate | ${runs.map((_, i) => `result ${i + 1}`).join(" | ")} | SLA |
+|---|${runs.map(() => "---:").join("|")}|---:|
 `;
   for (const g of GATES) {
-    const mark = gatePasses(summary, g) ? "✓" : "✗";
-    s += `| ${g.name} | **${fmtGate(summary, g)}** ${mark} | ${g.gate} |\n`;
+    const cells = runs.map((r) => {
+      const v = fmtGate(r.summary, g);
+      return gatePasses(r.summary, g) ? v : `${v} ✗`;
+    });
+    s += `| ${g.name} | ${cells.join(" | ")} | ${g.gate} |\n`;
   }
-  // Reproducibility: derived from committed reproducibility-section runs of this
-  // rung — count + all-green status are read from their summaries, not asserted.
-  const repro = (reproRuns || []).filter((r) => r.page.of === page.displayName).sort(byOrder);
-  if (repro.length > 0) {
-    const allGreen = repro.every((r) => allGatesPass(r.summary));
-    const links = repro.map((r) => `[${r.page.displayName} ↗](${GH}/test/scaletest/results/${r.dir})`).join(" · ");
-    s += `
-**Reproduced ${repro.length}× back-to-back** — ${allGreen ? "every gate green on all of them" : `${repro.filter((r) => allGatesPass(r.summary)).length}/${repro.length} all-green`}, engine numbers invariant run-to-run, each on a freshly re-surveyed fleet (${links}).
-`;
+  if (runs.length > 1) {
+    const links = runs.map((r, i) => `[result ${i + 1} ↗](${GH}/test/scaletest/results/${r.dir})`).join(" · ");
+    s += `\nEach result is a committed run summary: ${links}.${allGreen ? " Every result clears every SLA." : ""}\n`;
   }
   s += `
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
@@ -220,7 +224,7 @@ Two of the gates are anti-gaming guards: **shortfalls = 0** has no percentile he
 function ladderSection(ladderRuns) {
   let s = `## The validated-scale ladder (uber-*)
 
-The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. One rung is published; the larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries uber-5k's gate values.
+The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, memory-db, co-location gangs — calibrated to a realistic machine fleet (ADR-0050): the hard demand shape, not a toy. The larger rungs are sequential and gated on **test-fleet capacity, not on the engine** — what each rung costs to run, and why 500k/5m need dedicated infrastructure, is in [scale-test resource requirements](./scaletest-resource-requirements.md). Each rung's full numbers live in its run folder; the headline scorecard above carries the top rung's.
 
 | rung | scale | status | data |
 |---|---|:--|:--|
