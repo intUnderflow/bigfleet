@@ -1,61 +1,61 @@
-# failover-leader-kill — M17 static-stability regression check.
+# failover-leader-kill — static-stability regression at the realistic shape.
 #
-# 50 KWOK clusters drive steady-state load against a single shard. At
-# t=600s into the soak the runner deletes the coordinator's leader pod;
-# the runnerAction asserts that bigfleet_coordinator_raft_term advances
-# by ≥1 within the 5 min query window (a re-election landed) and that
-# the data plane (shards + operators) holds its SLOs throughout.
+# Ported to the BYO profileV2 contract (ADR-0034) so failover is exercised
+# against the realistic.yaml catalog + the ADR-0054 gate set, not the legacy
+# single-shape demand model. Pair with any substrate:
 #
-# Validates the "static stability is non-negotiable" hard rule end-to-end:
-# clusters keep running while BigFleet's coordinator restarts.
+#   scaletest-runner --profile=test/scaletest/profiles/failover-leader-kill.yaml \
+#                    --substrate=<substrate>.yaml --output=...
+#
+# The V2 render enables a single-replica coordinator (coordinator.enabled,
+# replicas:1). At t=600s into the soak the runner deletes the coordinator's
+# leader pod; the runnerAction asserts bigfleet_coordinator_raft_term advances
+# by >=1 within the query window (a restart-recovery + re-election landed) AND
+# that the data plane (shard + operators) holds its capacity-delivery SLOs
+# throughout — i.e. clusters keep running while BigFleet's coordinator restarts.
+# This is the "static stability is non-negotiable" hard rule, end to end.
 
-image:
-  repository: ghcr.io/intunderflow/bigfleet-scaletest
-  tag: dev
-  pullPolicy: Always
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
 
-bigfleet:
-  image:
-    repository: ghcr.io/intunderflow/bigfleet
-    tag: dev
-    pullPolicy: Always
+metadata:
+  name: "failover-leader-kill"
+  description: "Static-stability regression: coordinator leader-kill mid-soak at the realistic uber-5k shape."
 
-kwok:
-  clusterCount: 50
+scale:
+  machines: 5000
+  density: 100
 
-shard:
-  replicas: 1
-  seedMachines: 0
-  resources:
-    requests: { cpu: 1, memory: 2Gi }
+catalog:
+  archetypes: realistic
 
-coordinator:
-  enabled: true
-  replicas: 1
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
 
 loadProfile:
-  target: 1000
-  churnPerMinute: 0.05
-  durationSeconds: 1800
+  rampSeconds: 1800
+  # 20-min soak: the kill fires 10 min in, leaving 10 min to observe
+  # re-election + confirm the data plane held its SLOs after recovery.
+  soakSeconds: 1200
+  churnPerMinute: 0.02
 
-operator:
-  qps: 200
-  burst: 400
-  ackConcurrency: 64
-  rollupInterval: 0s
+rampBudget: 60m
 
-prometheus:
-  resources:
-    requests: { cpu: 1, memory: 4Gi }
-    limits:   { cpu: 4, memory: 12Gi }
-
-# M17 runnerAction: fire one leader-kill mid-soak. The runner asserts
-# the new term is observed in coordinator metrics within 60 s.
+# Static-stability action: delete the coordinator's leader pod 10 min into
+# the soak. The runner asserts term-advance within the window; the SLO gates
+# below assert the data plane held throughout (the actual regression check).
 runnerActions:
-  - { atSeconds: 600, action: kill-coordinator-leader }
+  - atSeconds: 600
+    action: kill-coordinator-leader
 
-costEstimate:
-  vCPU: 64
-  memoryGB: 256
-  awsSpotUsdPerHour: 0.84
-  notes: "2× Scaleway PRO2-L (32 vCPU / 128 GB each, M44 Pod-mode floor). Failover-soak with one mid-soak coordinator-leader-kill. ~$0.74 for a 50-min run. M17 regression check for static stability."
+slo:
+  # ADR-0054 capacity-delivery gates — must hold across the disruption.
+  # End-to-end pod-bind p99 is informational (uncapped-scheduler-bound).
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10
