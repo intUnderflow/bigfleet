@@ -900,6 +900,24 @@ ADR's "demand covered by bound + zero reclaim churn") is the
 remaining follow-up and lands with the M77 gate swap. M77/M78
 now unblocked on the engine side; M76 awaits the substrate choice.
 Every remaining ladder item passes through the author queue below.
+
+**M78 ladder status (2026-06-18):** the two auto-runnable rungs are
+DONE and PUBLISHED on the public scale-test results page, both graded
+on the ADR-0054 reframed steady-state gate set under a default,
+UNCAPPED kube-scheduler. **uber-5k** ✅ (`cee793e`, all 8 gates green).
+**uber-50k** ✅ (`cee793e`, 5,000,000 pods, all 8 gates green;
+reproduced 4× independently — the headline scorecard renders the four
+runs as a `result 1..4` consistency table, engine numbers invariant
+run-to-run). The two hard-won enablers were a GLOBAL 40-host fleet (5
+regions, 1:1 distinct hosts — clearing the per-region distinct-host
+wall) and a 16Gi kwok apiserver for 25K-object clusters. **uber-500k /
+1m / 5m** remain approval-gated (author queue item 4) AND need a much
+larger test fleet (~224 hosts + hub sharding + an in-cloud relay; the
+40-host fleet does not carry forward) per
+`docs/scaletest-resource-requirements.md` — not a dev-fleet task. Soak,
+failover matrix, and scale-down drills stay deferred until the ladder
+completes.
+
 Residual non-blocking follow-ups recorded in their ADRs: Raft
 transport TLS (ADR-0048 §scope), per-ordinal shard Certificates for
 multi-shard mTLS, runtime kill-switch toggle via coordinator
