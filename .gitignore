@@ -29,3 +29,7 @@ coverage.html
 /package.json
 /package-lock.json
 /node_modules/
+
+# Local-only dispatch prompts for building out-of-tree providers in the
+# separate bigfleet-providers mono-repo. Not part of this repo's artifacts.
+/provider-prompts/
