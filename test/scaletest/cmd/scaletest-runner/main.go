@@ -191,6 +191,15 @@ type profileBurst struct {
 	Selectivity     float64 `yaml:"selectivity"`
 }
 
+// profileScaleDown is a scheduled sustained demand drop (reclaim-cycle
+// drill): at AtSeconds the load-driver sheds steady workloads until the
+// active Pod count falls to Target×TargetMultiplier, driving Phase 3
+// reclaim. Threaded into the load-driver's loadProfile.scaleDowns.
+type profileScaleDown struct {
+	AtSeconds        int     `yaml:"atSeconds"`
+	TargetMultiplier float64 `yaml:"targetMultiplier"`
+}
+
 // substrateFile is the runtime-side half of ADR-0034: it describes the
 // hosts the scale test will run on, the per-cluster apiserver operating
 // point, and the kwok-pod resource budget. Orthogonal to profileFile,
@@ -312,6 +321,10 @@ type profileV2 struct {
 		// a bursts: block in a V2 profile would be silently dropped — the
 		// V2 struct, not the chart, is the gate.
 		Bursts []profileBurst `yaml:"bursts"`
+		// ScaleDowns (reclaim-cycle drill): scheduled sustained demand
+		// drops threaded into the load-driver. Like bursts, the V2 struct
+		// is the gate — a scaleDowns block is dropped unless declared here.
+		ScaleDowns []profileScaleDown `yaml:"scaleDowns"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the rampSeconds-derived deadline. Same
 	// semantics as profileFile.RampBudget (M22). Empty → use
@@ -655,6 +668,12 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	// without bursts render exactly as before.
 	if len(p.LoadProfile.Bursts) > 0 {
 		values["loadProfile"].(map[string]any)["bursts"] = p.LoadProfile.Bursts
+	}
+	// scaleDowns ride the same loadProfile toYaml path as bursts; the
+	// load-driver parses loadProfile.scaleDowns (scaleDownSpec). Only set
+	// when present so profiles without it render exactly as before.
+	if len(p.LoadProfile.ScaleDowns) > 0 {
+		values["loadProfile"].(map[string]any)["scaleDowns"] = p.LoadProfile.ScaleDowns
 	}
 	if len(p.RunnerActions) > 0 {
 		values["runnerActions"] = p.RunnerActions

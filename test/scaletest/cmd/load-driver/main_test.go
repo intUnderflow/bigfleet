@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/preflight"
@@ -759,5 +764,44 @@ func TestPreBindPlateau(t *testing.T) {
 	}
 	if q.observe(520) { // stall=2 >= passes, but min 500 >= 100
 		t.Fatal("stuck above want/10 must not plateau regardless of stall")
+	}
+}
+
+// TestScaleDownTo verifies the reclaim-cycle demand-drop: scaleDownTo
+// deletes steady (non-burst) workload OBJECTS until the active replica
+// count falls to <= want, and never touches burst objects (drainBurst
+// owns those). deleteWorkload tolerates NotFound, so an empty fake client
+// is enough — the assertion is on the in-memory workloads bookkeeping.
+func TestScaleDownTo(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	d := &driver{
+		k:   fake.NewClientBuilder().WithScheme(scheme).Build(),
+		log: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		workloads: map[string]workloadMeta{
+			"nb1": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"nb2": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"nb3": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"b1":  {kind: kindDeployment, archetype: "gpu-training-large", replicas: 10, burst: true},
+		},
+	}
+	if got := d.activeCount(); got != 40 {
+		t.Fatalf("precondition activeCount = %d, want 40", got)
+	}
+	d.scaleDownTo(context.Background(), 20)
+	if got := d.activeCount(); got > 20 {
+		t.Errorf("after scaleDownTo(20): activeCount = %d, want <= 20", got)
+	}
+	if _, ok := d.workloads["b1"]; !ok {
+		t.Errorf("burst workload b1 was deleted by scaleDownTo; bursts must be left to drainBurst")
+	}
+	// A multiplier that wouldn't reduce below current is a no-op floor: asking
+	// for more than present deletes nothing.
+	before := d.activeCount()
+	d.scaleDownTo(context.Background(), before+100)
+	if got := d.activeCount(); got != before {
+		t.Errorf("scaleDownTo(want>active) changed activeCount %d -> %d", before, got)
 	}
 }

@@ -68,3 +68,46 @@ func TestFailoverProfiles_ValidV2(t *testing.T) {
 		})
 	}
 }
+
+// TestReclaimCycleProfile_ValidV2 validates the scale-down/reclaim drill
+// profile loads through readProfileV2 → validate → merge and carries the
+// scaleDowns demand-drop the load-driver consumes (the ladder-only BYO
+// matrix test does not cover it). Also pins the generous reclaim bound
+// (the inverted SLO posture: reclaim is expected here).
+func TestReclaimCycleProfile_ValidV2(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+	p, err := readProfileV2(filepath.Join(root, "test", "scaletest", "profiles", "reclaim-cycle.yaml"))
+	if err != nil {
+		t.Fatalf("readProfileV2: %v", err)
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if cfg.ClusterCount <= 0 {
+		t.Errorf("merged ClusterCount = %d (want > 0)", cfg.ClusterCount)
+	}
+	if len(p.LoadProfile.ScaleDowns) != 1 {
+		t.Fatalf("scaleDowns = %+v (want exactly one)", p.LoadProfile.ScaleDowns)
+	}
+	sd := p.LoadProfile.ScaleDowns[0]
+	if sd.TargetMultiplier != 0.5 {
+		t.Errorf("scaleDown TargetMultiplier = %v (want 0.5)", sd.TargetMultiplier)
+	}
+	if sd.AtSeconds <= 0 {
+		t.Errorf("scaleDown AtSeconds = %d (want > 0)", sd.AtSeconds)
+	}
+	// The inverted SLO posture: reclaim is expected, so the bound must be
+	// generous (non-zero), unlike the steady-state ~0 guard.
+	if p.SLO.MaxReclaimActionsDuringSoak <= 0 {
+		t.Errorf("maxReclaimActionsDuringSoak = %d (want > 0 — reclaim is expected in this drill)", p.SLO.MaxReclaimActionsDuringSoak)
+	}
+}

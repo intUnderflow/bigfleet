@@ -111,6 +111,15 @@ type profile struct {
 	// Target by ExtraTarget for DurationSeconds, then drains back.
 	Bursts []burstSpec `yaml:"bursts"`
 
+	// ScaleDowns: scheduled SUSTAINED demand drops (a fleet shedding
+	// workloads), the inverse of a burst. At AtSeconds the driver deletes
+	// steady workload objects until the active Pod count falls to
+	// Target×TargetMultiplier and leaves it there. Models paper §13
+	// scale-down: the Pods are GC'd, the shard's roll-up sees fewer needs,
+	// and Phase 3 reclaims the now-excess Configured machines. Used by the
+	// reclaim-cycle drill. Empty = no scale-down.
+	ScaleDowns []scaleDownSpec `yaml:"scaleDowns"`
+
 	// ClusterSizeDistribution (ADR-0015 §5): override the per-pod
 	// effective Target via a heavy-tailed distribution. Each pod
 	// computes its multiplier deterministically from POD_NAME's
@@ -157,6 +166,16 @@ type burstSpec struct {
 	ExtraTarget     int     `yaml:"extraTarget"`
 	DurationSeconds int     `yaml:"durationSeconds"`
 	Selectivity     float64 `yaml:"selectivity"`
+}
+
+// scaleDownSpec is one scheduled sustained demand drop. At AtSeconds from
+// the driver's start the steady population is reduced to Target×Multiplier
+// and held there (no drain-back). Every cluster fires it — no per-cluster
+// selectivity — so the fleet-wide demand drop produces a clean Phase 3
+// reclaim signal.
+type scaleDownSpec struct {
+	AtSeconds        int     `yaml:"atSeconds"`
+	TargetMultiplier float64 `yaml:"targetMultiplier"`
 }
 
 type sizeBucket struct {
@@ -602,6 +621,9 @@ func (d *driver) run(ctx context.Context) error {
 	// fires (bigfleet-uber #73). Bursts are independent demand; they do
 	// not depend on the fill completing.
 	go d.runBursts(ctx, startedAt)
+	// Scheduled sustained demand drops (reclaim-cycle drill). Own goroutine,
+	// same wall-clock anchor as bursts; fires fleet-wide (no selectivity).
+	go d.runScaleDowns(ctx, startedAt)
 
 	// M52.B (ADR-0035): pre-bind the initial Pods to fake-Nodes,
 	// bypassing the slow kube-scheduler ramp. Patient retry — fake-
@@ -767,6 +789,93 @@ func (d *driver) runBursts(ctx context.Context, startedAt time.Time) {
 					pb.extraOn = false
 					d.log.Info("burst drained", "archetype", pb.spec.Archetype)
 					d.drainBurst(ctx)
+				}
+			}
+		}
+	}
+}
+
+// scaleDownTo deletes steady (non-burst) workload OBJECTS until the active
+// Pod count falls to <= want, then leaves it there. Deleting the objects
+// (not just their Pods, which controllers recreate) is what permanently
+// sheds demand: the Pods are GC'd, the shard's roll-up sees fewer needs,
+// and Phase 3 reclaims the now-excess Configured machines (paper §13).
+// Burst objects are left to drainBurst. d.workloads is mutex-guarded, so
+// concurrency with the steady churn loop is safe.
+func (d *driver) scaleDownTo(ctx context.Context, want int) {
+	if want < 0 {
+		want = 0
+	}
+	type cand struct {
+		name     string
+		replicas int
+	}
+	d.mu.Lock()
+	cands := make([]cand, 0, len(d.workloads))
+	for name, m := range d.workloads {
+		if m.burst {
+			continue
+		}
+		cands = append(cands, cand{name: name, replicas: m.replicas})
+	}
+	d.mu.Unlock()
+	// Largest-first so the fewest deletions reach the target.
+	sort.Slice(cands, func(i, j int) bool { return cands[i].replicas > cands[j].replicas })
+	for _, c := range cands {
+		if d.activeCount() <= want {
+			break
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err := d.deleteWorkload(ctx, c.name); err != nil {
+			errs.WithLabelValues("delete").Inc()
+		}
+	}
+	target.Set(float64(d.activeCount()))
+	d.log.Info("scale-down applied", "want", want, "active", d.activeCount())
+}
+
+// runScaleDowns fires the profile's sustained demand drops on a wall-clock
+// timeline anchored at startedAt (mirroring runBursts). Unlike bursts there
+// is NO per-cluster selectivity — every cluster fires every scale-down, so
+// the fleet-wide demand drop produces a clean Phase 3 reclaim signal. Each
+// scale-down is one-shot (no drain-back): the population stays at the lower
+// level and the steady churn loop maintains it on the survivors.
+func (d *driver) runScaleDowns(ctx context.Context, startedAt time.Time) {
+	type pending struct {
+		fireAt time.Time
+		mult   float64
+		fired  bool
+	}
+	events := make([]*pending, 0, len(d.prof.ScaleDowns))
+	for _, s := range d.prof.ScaleDowns {
+		if s.TargetMultiplier <= 0 || s.TargetMultiplier >= 1 {
+			d.log.Warn("ignoring scale-down with out-of-range multiplier", "multiplier", s.TargetMultiplier, "at_s", s.AtSeconds)
+			continue
+		}
+		events = append(events, &pending{
+			fireAt: startedAt.Add(time.Duration(s.AtSeconds) * time.Second),
+			mult:   s.TargetMultiplier,
+		})
+		d.log.Info("scale-down scheduled", "at_s", s.AtSeconds, "multiplier", s.TargetMultiplier)
+	}
+	if len(events) == 0 {
+		return
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			for _, e := range events {
+				if !e.fired && !now.Before(e.fireAt) {
+					e.fired = true
+					want := int(float64(d.prof.Target) * e.mult)
+					d.log.Info("scale-down firing", "multiplier", e.mult, "want", want)
+					d.scaleDownTo(ctx, want)
 				}
 			}
 		}
