@@ -4,13 +4,15 @@ How to size BigFleet for your fleet, and the knobs to reach for at each scale.
 
 ## Demand-to-inventory regimes (ADR-0013)
 
-BigFleet's `shardCycleDurationP99 ≤ 100 ms` SLO is regime-aware. "Demand" is unsatisfied CapacityRequests not yet bound to a configured machine; the demand-to-inventory ratio is the fraction of inventory that has demand pending against it at any moment.
+BigFleet's `shardCycleDurationP99` SLO is **regime-aware and size-dependent** (ADR-0028): the bar is set per regime and scales with per-shard inventory — it is *not* a single fixed figure. "Demand" is unsatisfied CapacityRequests not yet bound to a configured machine; the demand-to-inventory ratio is the fraction of inventory that has demand pending against it at any moment.
 
-| Regime | Pending demand vs inventory | When it happens | SLO |
+| Regime | Pending demand vs inventory | When it happens | Cycle SLO |
 |---|---|---|---|
-| **Steady state** | ≤ 2 % (1:50) | normal day-to-day | `cycle p99 ≤ 50 ms` |
-| **Burst** | ≤ 10 % (1:10) | deploy ramps, AZ rebalance, batch-job submission | `cycle p99 ≤ 100 ms` |
+| **Steady state** | ≤ 2 % (1:50) | normal day-to-day | tightest bar for the size |
+| **Burst** | ≤ 10 % (1:10) | deploy ramps, AZ rebalance, batch-job submission | the *graded* bar — what the release gate measures |
 | **Reprovisioning** | up to 100 % (1:1) | cluster migration, full DR, mass spot eviction | **no per-cycle SLO** — convergence-rate guarantee: `≥5 000 bindings/cycle until drain` |
+
+The concrete bar lives in each profile's `slo:` block and is justified in [SLOs](slos.md) — at fleet scale it is seconds, not the millisecond figures an early single-shard revision of this guide quoted (the shard walks the whole inventory snapshot each cycle, so the floor rises with size). For example the published `uber-50k` clears its burst bar at shard-cycle p99 4.08 s on a 50,000-machine single shard.
 
 **Worked example.** A real production fleet of 500 000 nodes running ~5 000 deployments has roughly 5 000 binding events per minute (Borg / Twine churn rate). With a ~30 s bind-to-running latency, ~2 500 of those bindings are pending at any moment — 0.5 % of inventory. **The fleet sits in the steady-state row 99 % of the time.** A platform-wide deployment ramp (every team pushing on a Friday afternoon) might briefly push pending demand to 5-8 % — still inside the burst regime. A 1:1 reprovisioning event is rare enough to be worth its own runbook.
 
@@ -18,25 +20,33 @@ The scaletest profiles model this realistically (M29). For burst-regime profiles
 
 Per ADR-0013, the cycle-p99 SLO is *measured* under burst conditions (the worst case real fleets actually hit during normal operation). Reprovisioning is its own regime gated on throughput rather than per-cycle latency. The scaletest profiles follow the regime split:
 
-| profile | regime | demand:inventory | SLO |
-|---|---|---|---|
-| `scaleway-500k` | burst (single shard) | 1:10 | cycle p99 ≤ 5 s, binding-latency p99 ≤ 5 s |
-| `scaleway-1m` | burst (2 shards) | 1:10 | same |
-| `scaleway-5m` | burst (10 shards) | 1:10 | same |
+| profile (file) | machines | regime | status |
+|---|---|:--|:--|
+| `uber-5k` (`5k.yaml`) | 5,000 | burst, single shard | ✅ published |
+| `uber-50k` (`50k.yaml`) | 50,000 | burst, single shard | ✅ published |
+| `uber-500k` (`500k.yaml`) | 500,000 | burst, single shard | planned (test-fleet-capacity gated) |
+| `uber-1m` (`1m.yaml`) | 1,000,000 | burst, 2 shards | planned |
+| `uber-5m` (`5m.yaml`) | 5,000,000 | burst, 10 shards | planned |
 
-The 1:1 reprovisioning regime (gated on convergence rate, not cycle p99) used to live in dedicated `scaleway-{1m,5m}-reprovision.yaml` profiles — those were dropped in M44 to keep the profile set focused on size tiers. Scale-up demand × 10 in any profile to drive reprovisioning; convergence-rate gating in the runner is manual (interpret `bigfleet_shard_actions_total{kind="Bootstrap"}` from the snapshot).
+Profiles are graded on the **ADR-0054 capacity-delivery gate set** — configure-phase, bootstrap-success, node-state-publish, roll-up, shard-cycle, ack, `shortfalls == 0`, and a loose bind-p50 — measured at steady state under churn through a real, *uncapped* kube-scheduler. End-to-end pod-bind p99 is **not** gated (it is scheduler-retry + reprovision-bound, not BigFleet's deliverable). The exact bars live in each profile's `slo:` block and are justified per-metric in [SLOs](slos.md); achieved numbers are on the [scale-test results](./scaletest-results.md) page. (`uber-*` is the published *label* for the substrate-agnostic `Nk.yaml` profiles; there is no `uber-5k.yaml`.)
 
-## Per-shard machine ceiling (revised by scale tests)
+The 1:1 reprovisioning regime (gated on convergence rate, not cycle p99) is exercised by scaling a profile's demand × 10; convergence-rate gating in the runner is manual (interpret `bigfleet_shard_actions_total{kind="Bootstrap"}` from the snapshot).
 
-The plan §5.1 aspirational ceiling of 500K machines per shard does not hold at the runner's `shardCycleDurationP99 ≤ 100 ms` SLO. Empirical numbers from `pkg/shard/cycle_bench_test.go` and the Scaleway 500K real-cluster run:
+## Per-shard machine ceiling
 
-| Inventory size | Cycle p99 (M5 Max bench) | Cycle p99 (PRO2 cloud) |
-|---|---|---|
-| 50K | 245 ms | ~480 ms |
-| 100K | 412 ms | ~820 ms |
-| 500K | 2.15 s | 4.07 s |
+The shard's hot path runs over the inventory snapshot every cycle, so per-cycle cost scales with per-shard inventory. The cycle-p99 SLO is **regime-parametric** (ADR-0028) — graded in the burst regime under the ADR-0054 release gate — **not** a single 100 ms bar (an earlier revision of this guide quoted one; that framing was retired by ADR-0028/0054).
 
-**Effective per-shard ceiling at the 100 ms SLO is ~25K–50K machines** depending on hardware single-thread speed. To reach plan §5.1's 100M-machine fleet target, the deployment needs 2–4K shards, not the 200 the original sizing implied. See M11.18 (parallel/batched execute) and any future M11.19+ work on incremental snapshots for the path to a higher per-shard number.
+**Proven single-shard operating point:** `uber-50k` runs **50,000 machines on one shard** at shard-cycle p99 **4.08 s**, inside the burst bar, with every capacity-delivery gate green — published and reproduced 4× (see the [scale-test results](./scaletest-results.md)). The next single-shard target is `uber-500k` (500,000 machines — the M11 per-shard ceiling); it is gated on **test-fleet capacity, not the engine**.
+
+Local microbenchmarks (`pkg/shard/cycle_bench_test.go`) bound the per-cycle **compute** cost on the dev box (substrate-independent — useful as a relative scaling curve, not an SLO):
+
+| Inventory size | Cycle p99 (M5 Max bench) |
+|---|---|
+| 50K | 245 ms |
+| 100K | 412 ms |
+| 500K | 2.15 s |
+
+The path to higher per-shard numbers is M11.18 (parallel/batched execute) plus incremental snapshots. In practice per-shard count is rarely the binding limit — operational blast radius is (see the sizing table below).
 
 ## Sizing table
 
@@ -52,15 +62,11 @@ The table below maps fleet size to BigFleet's recommended deployment shape. Numb
 
 The general rule: shard count grows roughly linearly with fleet size. Per-shard limits aren't the bottleneck — operational blast radius is. Start small (1 shard) and split when:
 
-- Per-shard machine count is approaching ~500K, *or*
-- A shard's hot-path cycle duration p99 exceeds 100 ms, *or*
+- Per-shard machine count is approaching ~500K (the M11 single-shard ceiling), *or*
+- A shard's hot-path cycle-p99 is approaching its regime SLO (ADR-0028/0054), *or*
 - A single shard's failure would impact too many clusters at once for your incident-response budget.
 
-## Per-shard machine ceiling
-
-The shard's hot path runs over the inventory snapshot every cycle. Plan §10 estimates ~500K machines per shard fits comfortably in a few hundred MB and stays under the 50 ms cycle budget. We've measured the M6 ceiling — 100K machines across 3 shards — at 400 ms rebalance latency, 12.5× under the 5s plan target. Headroom is generous.
-
-Don't push past 500K per shard without first exercising the soak test (`make soak`) at that size.
+Don't push a shard toward the 500K ceiling without first exercising a soak at that size (the soak / failover / scale-down depth campaign is the dimension that proves it, separate from the throughput ladder).
 
 ## Per-cluster CR ceiling
 
@@ -105,32 +111,19 @@ The conformance suite (`make conformance TARGET=...`) reports whether your provi
 
 ## Scaletest ramp budget
 
-The scaletest-runner gates each profile with a "ramp-to-steady-state" deadline. If the load-driver fleet hasn't reached ≥ 99.9 % of `totalCRs` (= `kwok.clusterCount × loadProfile.target`) by the deadline, the runner aborts pre-soak and the run reports failure.
+The scaletest-runner gates each profile with a "ramp-to-steady-state" deadline. If the fleet hasn't reached ≈ 99.9 % of the profile's target Pod count by the deadline, the runner aborts pre-soak and reports failure.
 
-Default formula (M22):
+A profile may set an explicit `rampBudget`; otherwise the runner falls back to the M22 formula `max(15 min, totalCRs / 750 CR/sec, durationSeconds × 0.5)`. The uber-* ladder profiles set explicit overrides, because a realistic fleet ramps for longer than the formula floor as it scales:
 
-```
-rampBudget = max(15 min, totalCRs / 750 CR/sec, durationSeconds × 0.5)
-```
+| profile (file) | `rampBudget` |
+|---|---|
+| `uber-5k` (`5k.yaml`) | 60m |
+| `uber-50k` (`50k.yaml`) | 120m |
+| `uber-500k` (`500k.yaml`) | 240m |
+| `uber-1m` (`1m.yaml`) | 240m |
+| `uber-5m` (`5m.yaml`) | 240m |
 
-Resolved budgets for the in-tree profiles:
-
-| profile | totalCRs | resolved budget | which clause |
-|---|---|---|---|
-| `dev-5k` | 5K | 15 min | floor |
-| `scaleway-50k` | 50K | 15 min | floor |
-| `scaleway-500k` | 50K (against 500K seeded inventory) | 15 min | floor |
-| `scaleway-1m` | 100K (against 1M aggregate) | 15 min | floor |
-| `scaleway-5m` | 500K (against 5M aggregate) | ~12 min | 750 CR/sec |
-| `failover-soak` | 50K (60 min soak) | 30 min | durationSeconds × 0.5 |
-
-The 750 CR/sec floor is empirical: the 1M de-risk run sustained ~1110 CR/sec aggregate; sizing budget at 750 gives ~1.5× headroom over the observed throughput. If a real run is missing the gate by a small margin (the 1M de-risk landed at 998 975 / 999 000), the resolved budget value gets logged at runner startup so the failure mode is obvious from `runner.log`.
-
-Profile authors can override the formula directly:
-
-```yaml
-rampBudget: 45m
-```
+Override per profile with the `rampBudget:` field; the 750 CR/sec floor in the fallback formula is empirical (the 1M de-risk sustained ~1110 CR/sec, so 750 leaves ~1.5× headroom).
 
 ## CI vs local hardware
 
