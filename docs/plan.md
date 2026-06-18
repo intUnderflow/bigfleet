@@ -940,9 +940,20 @@ quota subsystem + coordinator instruction pipeline deletion scope.
 **Author decisions queue** (the loop parks work on these and
 continues elsewhere; see the production-readiness audit for context):
 
-1. Catalog weight semantics — `weight` is documented as pod-count
-   share but implemented as workload-object share; the choice changes
-   every profile's demand mix and the M78 baselines.
+1. ~~Catalog weight semantics~~ — **RESOLVED 2026-06-13** by ADR-0044
+   + ADR-0050 (both Accepted, after this item was written): `weight`
+   is workload-OBJECT frequency; pod-count and machine-share are
+   *derived* (`podShare ∝ weight × E[replicas]`; `machineShare ∝
+   podShare / podsPerMachine`), and weights are back-solved from a
+   target machine mix. There is no code path that reads `weight` as a
+   pod-share (`sizing.go:219-228 podShare()` is the single function
+   feeding both the load-driver demand draw and the seed share), so
+   the "choice" this item worried about cannot be made at read time.
+   `TestRealisticCatalog_MachineMix` pins the realized mix; the catalog
+   + pin are byte-identical between the published baseline (`cee793e`)
+   and HEAD, so no baseline impact. (The "documented as pod-count
+   share" framing traced to ADR-0032's now-superseded header, since
+   annotated.)
 2. ~~M67/M68 ADR sign-off~~ — **RESOLVED 2026-06-12**: ADR-0045
    rewritten and Accepted per author decision (capacity counts iff
    bound; Phase 3 on demand shrinkage only; no packing model, no

@@ -68,7 +68,12 @@ func (c Catalog) ForDemand() []Archetype {
 // Archetype describes one workload pattern. Both producer (CR)
 // and consumer (Configured machine) sides read this same struct.
 type Archetype struct {
-	Name                string            `yaml:"name"`
+	Name string `yaml:"name"`
+	// Weight is the relative draw frequency of a WORKLOAD OBJECT
+	// (ADR-0044/0050) — not a pod- or machine-share. Pod-count and
+	// machine-share are derived (podShare ∝ weight × E[replicas]); see
+	// sizing.go podShare(). Weights are back-solved from a target
+	// machine mix, not authored as a pod-count distribution.
 	Weight              int               `yaml:"weight"`
 	InstanceTypes       []string          `yaml:"instanceTypes"`
 	Zones               []string          `yaml:"zones"`

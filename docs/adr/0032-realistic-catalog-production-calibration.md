@@ -80,6 +80,12 @@ as standalone Pods).
 
 Ten archetypes (was six), weighted by Pod-count distribution:
 
+> **Superseded by [ADR-0050] (2026-06-13):** `weight` is no longer a
+> pod-count distribution. It is a back-solved *workload-object*
+> frequency calibrated to a target **machine** mix; pod-count and
+> machine-share are derived properties (`podShare ∝ weight ×
+> E[replicas]`). The table below is retained for historical context.
+
 | Tier | Weight | Resource shape (w/ typical sidecar overhead) | Priority | Co-location | Gang | Spread prob |
 |------|-------:|---|---|---|---|------:|
 | `tiny-stateless` | **70%** | 300–400m CPU / 384–500 Mi | default (100) | no | no | 0.45 (zone, max-skew 2, ScheduleAnyway) |
@@ -285,4 +291,5 @@ Four catalog-side improvements deferred to follow-on work:
 [ADR-0027]: 0027-rollup-demand-is-a-constrained-resource-request.md
 [ADR-0028]: 0028-cycle-p99-is-regime-parametric.md
 [ADR-0029]: 0029-phase1-omega-style-occ.md
+[ADR-0050]: 0050-realism-catalog-is-machine-calibrated.md
 [fleet-scale-kubernetes.md]: ../papers/fleet-scale-kubernetes.md
