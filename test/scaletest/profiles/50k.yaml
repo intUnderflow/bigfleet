@@ -26,6 +26,11 @@ loadProfile:
   rampSeconds: 3600
   soakSeconds: 3600
   churnPerMinute: 0.02
+  # De-tail the post-fill transient before the reclaim-count window opens:
+  # the ramp settles from ~2.0/s into the ~2.93/s endogenous floor, so the
+  # first 10 min would inflate the soak-integral count. Pairs with the
+  # maxReclaimActionsDuringSoak bound below (ADR-0035/0045).
+  settleSeconds: 600
 
 rampBudget: 120m
 
@@ -40,3 +45,12 @@ slo:
   bootstrapSuccessRatio: 0.99
   operatorNodeStateUpdateP99Seconds: 1.5  # M79.8: 1s was apiserver-write-bound (~1.024s actual); 1.5 provisional pending the per-op split (ADR-0054)
   endToEndPodBindP50Seconds: 10
+  # Bounded-reclaim gate (ADR-0035/0045): the 50k concurrent engine has a
+  # ~2.93/s endogenous in-flight-churn floor (the #64-70 finding, ~10× dev-50),
+  # so the default 0 (zero-reclaim) assertion is unachievable here. 15000 ≈
+  # the de-tailed 3000s soak window × 2.93/s (~8790) with ~1.7× margin. The
+  # floor is a stable attractor that scales sub-linearly (0.51/s @20 clusters
+  # → 2.93/s @200), so this rests on the measured 50k floor, not extrapolation.
+  # Tighten on the next runner-driven 50k soak. settleSeconds above de-tails
+  # the ramp transient out of the window.
+  maxReclaimActionsDuringSoak: 15000
