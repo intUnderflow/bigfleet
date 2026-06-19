@@ -125,17 +125,34 @@ spec:
             - name: CLUSTER_ID_PREFIX
               value: "{{ .Values.kwok.clusterIdPrefix }}"
             {{- end }}
-            # Shard endpoint resolution. Two paths:
-            #   1. shard.overrideAddr set (cross-host satellite): operator
-            #      dials the override address directly — typically the
-            #      local Docker bridge gateway fronting an SSH/TCP tunnel
-            #      to a remote shard. Bypasses in-cluster DNS entirely.
-            #   2. Default (M12, single-host): operator picks an ordinal as
+            # Shard endpoint resolution. Three paths, in precedence order:
+            #   1. shard.overrideHost set (cross-host MULTI-shard satellite):
+            #      operator picks ordinal `N % BIGFLEET_SHARD_REPLICAS` from
+            #      POD_NAME and dials `<host>:(portBase + ordinal)` — the
+            #      local end of that ordinal's SSH/TCP tunnel. The per-ordinal
+            #      math mirrors path 3 so a given cluster always reaches the
+            #      same shard, even across a tunnel. Pairs with the per-ordinal
+            #      NodePorts on the primary host (crossHost.shardNodePort base).
+            #   2. shard.overrideAddr set (cross-host SINGLE-shard satellite):
+            #      operator dials the one override address directly — the
+            #      local Docker bridge gateway fronting one tunnel to one
+            #      remote shard. The legacy single-endpoint dial.
+            #   3. Default (M12, single-host): operator picks an ordinal as
             #      `N % BIGFLEET_SHARD_REPLICAS` from POD_NAME and dials
             #      the per-pod headless DNS. Stable across pod restarts —
             #      required for cluster-to-shard binding to survive a
             #      StatefulSet rollout-restart.
-            {{- if .Values.shard.overrideAddr }}
+            {{- if .Values.shard.overrideHost }}
+            {{- if lt (int (.Values.shard.replicas | default 1)) 2 }}
+            {{- fail "shard.overrideHost is the cross-host MULTI-shard satellite knob: set shard.replicas to the hub's shard count (>= 2) even though this satellite runs shard.skip — otherwise every operator computes ordinal N%1=0 and the whole fleet silently binds shard-0. For a cross-host SINGLE-shard satellite use shard.overrideAddr (one endpoint) instead." }}
+            {{- end }}
+            - name: BIGFLEET_SHARD_OVERRIDE_HOST
+              value: "{{ .Values.shard.overrideHost }}"
+            - name: BIGFLEET_SHARD_OVERRIDE_PORT_BASE
+              value: "{{ .Values.shard.overridePortBase | default 30780 }}"
+            - name: BIGFLEET_SHARD_REPLICAS
+              value: "{{ .Values.shard.replicas | default 1 }}"
+            {{- else if .Values.shard.overrideAddr }}
             - name: BIGFLEET_SHARD_ADDR
               value: "{{ .Values.shard.overrideAddr }}"
             {{- else }}

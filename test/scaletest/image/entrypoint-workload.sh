@@ -22,27 +22,38 @@ CLUSTER_ID="${CLUSTER_ID_PREFIX:-}${POD_NAME}"
 
 # ---- multi-shard endpoint resolution ----
 #
-# When BIGFLEET_SHARD_HEADLESS_DNS is set, the harness is running
-# against a multi-shard StatefulSet. We pick a deterministic shard
-# ordinal from the kwok-cluster's StatefulSet ordinal so a pod restart
-# lands on the same shard, preserving cluster-to-shard binding (per
-# the "clusters are permanently bound to shards on first contact"
-# hard rule).
+# Three resolution paths, in precedence order. All three pick a
+# deterministic shard ordinal from the kwok-cluster's StatefulSet
+# ordinal (POD_NAME = kwok-cluster-N) so a pod restart lands on the
+# same shard, preserving cluster-to-shard binding (the "clusters are
+# permanently bound to shards on first contact" hard rule). If the pod
+# name doesn't end in -N (legacy Deployment install / ad-hoc), the
+# ordinal falls back to 0.
 #
-# POD_NAME convention: kwok-cluster-N (StatefulSet pod). If the pod
-# name doesn't end in -N (legacy Deployment install / ad-hoc), fall
-# back to ordinal 0.
-#
-# When BIGFLEET_SHARD_HEADLESS_DNS is unset, BIGFLEET_SHARD_ADDR must
-# already be set by the chart — the legacy single-shard path.
-if [[ -n "${BIGFLEET_SHARD_HEADLESS_DNS:-}" ]]; then
+#   1. BIGFLEET_SHARD_OVERRIDE_HOST set (cross-host MULTI-shard
+#      satellite): dial <host>:(portBase + ordinal) — the local end of
+#      that ordinal's SSH/TCP tunnel to a remote per-ordinal NodePort.
+#   2. BIGFLEET_SHARD_HEADLESS_DNS set (in-cluster multi-shard): dial
+#      the per-pod headless DNS for the ordinal.
+#   3. Neither set: BIGFLEET_SHARD_ADDR must already be exported by the
+#      chart — the legacy single-endpoint path (single-host, or the
+#      cross-host SINGLE-shard satellite via shard.overrideAddr).
+shard_ordinal_from_pod() {
+  local ord="${POD_NAME##*-}"
+  if ! [[ "$ord" =~ ^[0-9]+$ ]]; then
+    ord=0
+  fi
+  echo $((ord % $1))
+}
+if [[ -n "${BIGFLEET_SHARD_OVERRIDE_HOST:-}" ]]; then
+  : "${BIGFLEET_SHARD_OVERRIDE_PORT_BASE:?BIGFLEET_SHARD_OVERRIDE_PORT_BASE required when BIGFLEET_SHARD_OVERRIDE_HOST is set}"
+  : "${BIGFLEET_SHARD_REPLICAS:?BIGFLEET_SHARD_REPLICAS required when BIGFLEET_SHARD_OVERRIDE_HOST is set}"
+  SHARD_ORDINAL="$(shard_ordinal_from_pod "$BIGFLEET_SHARD_REPLICAS")"
+  BIGFLEET_SHARD_ADDR="${BIGFLEET_SHARD_OVERRIDE_HOST}:$((BIGFLEET_SHARD_OVERRIDE_PORT_BASE + SHARD_ORDINAL))"
+elif [[ -n "${BIGFLEET_SHARD_HEADLESS_DNS:-}" ]]; then
   : "${BIGFLEET_SHARD_REPLICAS:?BIGFLEET_SHARD_REPLICAS required when BIGFLEET_SHARD_HEADLESS_DNS is set}"
   : "${BIGFLEET_SHARD_PORT:?BIGFLEET_SHARD_PORT required when BIGFLEET_SHARD_HEADLESS_DNS is set}"
-  POD_ORDINAL="${POD_NAME##*-}"
-  if ! [[ "$POD_ORDINAL" =~ ^[0-9]+$ ]]; then
-    POD_ORDINAL=0
-  fi
-  SHARD_ORDINAL=$((POD_ORDINAL % BIGFLEET_SHARD_REPLICAS))
+  SHARD_ORDINAL="$(shard_ordinal_from_pod "$BIGFLEET_SHARD_REPLICAS")"
   BIGFLEET_SHARD_ADDR="bigfleet-shard-${SHARD_ORDINAL}.${BIGFLEET_SHARD_HEADLESS_DNS}:${BIGFLEET_SHARD_PORT}"
 fi
 : "${BIGFLEET_SHARD_ADDR:?BIGFLEET_SHARD_ADDR required (or BIGFLEET_SHARD_HEADLESS_DNS + BIGFLEET_SHARD_REPLICAS + BIGFLEET_SHARD_PORT)}"

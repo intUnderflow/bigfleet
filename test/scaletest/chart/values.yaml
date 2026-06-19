@@ -61,11 +61,30 @@ shard:
   # connect operators to a remote shard via shard.overrideAddr.
   # Single-host profiles leave this unset.
   skip: false
-  # If set, operators in this chart's kwok pods dial this gRPC address
-  # for the shard, bypassing the in-cluster headless DNS path. Used in
-  # cross-host topologies — typically the local Docker bridge gateway
-  # IP + the NodePort that tunnels to a remote shard.
+  # If set, operators in this chart's kwok pods dial this single gRPC
+  # address for the shard, bypassing the in-cluster headless DNS path.
+  # The cross-host SINGLE-shard path — typically the local Docker bridge
+  # gateway IP + the one NodePort that tunnels to a remote shard. For
+  # cross-host MULTI-shard, use overrideHost/overridePortBase instead so
+  # each cluster reaches its own ordinal.
   overrideAddr: ""
+  # Cross-host MULTI-shard satellite routing. When set, each operator
+  # derives its shard ordinal `N % shard.replicas` from POD_NAME and
+  # dials `overrideHost:(overridePortBase + ordinal)` — the local end of
+  # that ordinal's SSH/TCP tunnel. Mirrors the in-cluster headless-DNS
+  # ordinal math so a cluster always reaches the same shard, even across
+  # a tunnel, satisfying "clusters are permanently bound to shards on
+  # first contact" at replicas > 1. Pairs with the primary host's
+  # per-ordinal NodePorts (crossHost.expose + crossHost.shardNodePort
+  # base). Takes precedence over overrideAddr. Empty = not a multi-shard
+  # satellite. overridePortBase defaults to the crossHost.shardNodePort
+  # base (30780). REQUIRED: set shard.replicas to the hub's shard count
+  # (>= 2) on this satellite too — even with shard.skip — or every
+  # operator computes ordinal N%1=0 and the whole fleet silently binds
+  # shard-0. The chart fails the render if overrideHost is set with
+  # replicas < 2 (use overrideAddr for a genuine single-shard satellite).
+  overrideHost: ""
+  overridePortBase: 30780
   # If set, the shard binary uses this as --id instead of POD_NAME.
   # Lets multi-shard topologies spanning hosts assign stable shard IDs
   # that don't collide across host boundaries (e.g. "shard-0" and
@@ -328,17 +347,27 @@ costEstimate:
 # host dial a shard on a "primary" host via an SSH/TCP tunnel, this
 # block configures the primary's NodePort exposure for tunnel ingress.
 # All fields default off; single-host profiles are unaffected. See
-# also: shard.overrideAddr, coordinator.overrideAddr, shard.skip,
-# coordinator.skip, kwok.clusterIdPrefix — the satellite-side knobs
-# that pair with this block.
+# also the satellite-side knobs that pair with this block:
+# shard.overrideAddr (single-shard) OR shard.overrideHost +
+# shard.overridePortBase (multi-shard; set overridePortBase to this
+# block's shardNodePort), coordinator.overrideAddr, shard.skip,
+# coordinator.skip, kwok.clusterIdPrefix.
 crossHost:
-  # When true, render NodePort Services for the shard (and the
-  # coordinator, if coordinator.enabled) so they're reachable on the
-  # host network. Required on the primary host that satellites tunnel
-  # into; harmless on the satellite (which has shard.skip /
-  # coordinator.skip set anyway).
+  # When true, render one NodePort Service PER shard ordinal (and the
+  # coordinator, if coordinator.enabled) so each is independently
+  # reachable on the host network. Required on the primary host that
+  # satellites tunnel into; harmless on the satellite (which has
+  # shard.skip / coordinator.skip set anyway).
   expose: false
-  # NodePort the primary host exposes for shard gRPC.
+  # BASE NodePort for shard gRPC: ordinal i is exposed on
+  # shardNodePort + i (so shard.replicas=2 → 30780 for bigfleet-shard-0,
+  # 30781 for bigfleet-shard-1). The satellite opens one tunnel per
+  # ordinal to these ports and routes with shard.overridePortBase set to
+  # the same base. The chart fails the render if the per-ordinal range
+  # (base .. base+replicas-1) leaves the 30000-32767 NodePort window OR
+  # collides with coordinatorNodePort below — at the defaults that caps
+  # shard.replicas at 10 when the coordinator is also exposed; raise
+  # coordinatorNodePort (or lower the base) for wider shard fans.
   shardNodePort: 30780
   # NodePort the primary host exposes for coordinator gRPC. Only
   # rendered when coordinator.enabled is also true.

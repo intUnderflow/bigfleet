@@ -1,17 +1,34 @@
 {{- /*
-NodePort exposure for cross-host scaletest topologies. When
-`crossHost.expose: true`, exports the shard's gRPC port (and the
-coordinator's, if enabled) on the host network so an operator running
-on a remote host can dial through an SSH/TCP tunnel terminating on
-this host's Docker bridge gateway.
+Per-ordinal NodePort exposure for cross-host scaletest topologies. When
+`crossHost.expose: true`, exports EACH shard ordinal's gRPC port (and
+the coordinator's, if enabled) on the host network so an operator
+running on a remote host can dial a specific shard through an SSH/TCP
+tunnel terminating on this host's Docker bridge gateway.
+
+Why per-ordinal (not one Service fronting all shards): a single
+NodePort whose selector matches every shard pod load-balances across
+ordinals, so an operator that must bind to `bigfleet-shard-1` would
+land on a random shard — breaking the "clusters are permanently bound
+to shards on first contact" hard rule the moment shard.replicas > 1.
+Each ordinal therefore gets its own Service selecting exactly one pod
+via the StatefulSet's `statefulset.kubernetes.io/pod-name` label, on a
+deterministic nodePort = `crossHost.shardNodePort + ordinal`. The
+satellite host opens one tunnel per ordinal to those ports and routes
+cluster-N → ordinal-(N % shard.replicas) (see shard.overrideHost).
 
 Disabled by default — only renders when explicitly opted in, so
-single-host profiles (dev-*, scaleway-*) are unaffected.
+single-host profiles (dev-*, uber-*) are unaffected. At
+shard.replicas=1 this renders exactly one Service on the base nodePort
+selecting `bigfleet-shard-0`, identical in reach to the legacy
+single-shard exposure.
 
 The pieces that make this useful together:
-  - `shard.overrideAddr` on the remote host's kwok pods, set to the
-    tunnel's local-side endpoint (typically `<docker-bridge>:30780`),
-    so operators dial the tunnel instead of in-cluster DNS.
+  - `shard.overrideHost` + `shard.overridePortBase` on the remote
+    host's kwok pods: each operator computes its shard ordinal from
+    POD_NAME (N % shard.replicas) and dials
+    `<docker-bridge>:(portBase + ordinal)`, the local end of that
+    ordinal's tunnel. (Legacy `shard.overrideAddr` still works for the
+    single-shard case — a literal one-endpoint dial.)
   - `shard.skip` / `coordinator.skip` on the remote host, so it
     doesn't deploy its own shard/coordinator — the satellite is purely
     operator-bearing.
@@ -20,24 +37,37 @@ The pieces that make this useful together:
 */ -}}
 {{- if .Values.crossHost }}
 {{- if .Values.crossHost.expose }}
+{{- $replicas := int (.Values.shard.replicas | default 1) }}
+{{- $base := int (.Values.crossHost.shardNodePort | default 30780) }}
+{{- $maxPort := add $base (sub $replicas 1) }}
+{{- if gt $maxPort 32767 }}
+{{- fail (printf "crossHost: shard NodePort range %d..%d exceeds the 32767 NodePort ceiling (shard.replicas=%d); lower shard.replicas or crossHost.shardNodePort" $base $maxPort $replicas) }}
+{{- end }}
+{{- if and .Values.coordinator .Values.coordinator.enabled }}
+{{- $coordPort := int (.Values.crossHost.coordinatorNodePort | default 30790) }}
+{{- if and (ge $coordPort $base) (le $coordPort $maxPort) }}
+{{- fail (printf "crossHost: shard NodePort range %d..%d collides with coordinatorNodePort %d; raise crossHost.coordinatorNodePort above the range or lower shard.replicas" $base $maxPort $coordPort) }}
+{{- end }}
+{{- end }}
+{{- range $i := until $replicas }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: bigfleet-shard-nodeport
-  namespace: {{ .Values.namespace }}
+  name: bigfleet-shard-{{ $i }}-nodeport
+  namespace: {{ $.Values.namespace }}
   labels:
-    {{- include "scaletest.labels" . | nindent 4 }}
+    {{- include "scaletest.labels" $ | nindent 4 }}
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/component: shard
-    app.kubernetes.io/part-of: bigfleet-scaletest
+    statefulset.kubernetes.io/pod-name: bigfleet-shard-{{ $i }}
   ports:
     - name: grpc
       port: 7780
       targetPort: grpc
-      nodePort: {{ .Values.crossHost.shardNodePort | default 30780 }}
+      nodePort: {{ add $base $i }}
 ---
+{{- end }}
 {{- if and .Values.coordinator .Values.coordinator.enabled }}
 apiVersion: v1
 kind: Service
