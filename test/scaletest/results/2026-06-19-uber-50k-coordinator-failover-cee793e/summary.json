@@ -1,0 +1,32 @@
+{
+  "cost": {
+    "estimatedUsd": 0,
+    "hours": 0.3
+  },
+  "metrics": {
+    "raftTermBaseline": 2,
+    "raftTermAfterRecovery": 2,
+    "raftTermWindowSwing": 2,
+    "coordinatorRecoverySeconds": 60,
+    "dataPlaneSessionsMin": 200,
+    "dataPlaneShortfallsMax": 0,
+    "shardCycleDurationP99Seconds": 4.08,
+    "bootstrapSuccessRatio": 1.0,
+    "operatorNodeStateUpdateP99Seconds": 1.024,
+    "operatorRollupP99Seconds": 1.0,
+    "operatorAckP99Seconds": 1.28,
+    "endToEndPodBindP50Seconds": 1.6
+  },
+  "passed": true,
+  "profile": "failover-leader-kill-50k",
+  "runId": "20260619-065839-uber-50k-leaderkill",
+  "scale": {
+    "aggregateInventory": 225203,
+    "kwokClusters": 200,
+    "machinesPerCr": 25000,
+    "satellites": 40,
+    "shardReplicas": 1,
+    "coordinatorReplicas": 1,
+    "totalCrs": 5000000
+  }
+}

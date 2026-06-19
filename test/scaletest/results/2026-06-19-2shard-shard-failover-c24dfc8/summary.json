@@ -1,0 +1,33 @@
+{
+  "cost": {
+    "estimatedUsd": 0,
+    "hours": 0.5
+  },
+  "metrics": {
+    "shardReplicas": 2,
+    "satellites": 2,
+    "routingSplitShard0": 5,
+    "routingSplitShard1": 5,
+    "survivorShard0HeldSessions": 5,
+    "survivorShard0DriftStdDev": 0.0,
+    "killedShard1RecreatedSeconds": 31,
+    "killedShard1RecoveredSessions": 5,
+    "sessionTotalStdDevPostkill": 0.0,
+    "bootstrapSuccessRatioMin": 1.0,
+    "configurePhaseP99SecondsMax": 0.131,
+    "shardCycleDurationP99SecondsMax": 0.099,
+    "shardShortfallsMax": 0,
+    "crossRegionTunnelFlap": false
+  },
+  "passed": true,
+  "profile": "failover-shard-kill-2shard-intraregion",
+  "runId": "20260619-181327-2shard-shardkill-intraregion",
+  "scale": {
+    "kwokClusters": 10,
+    "satellites": 2,
+    "shardReplicas": 2,
+    "coordinatorReplicas": 0,
+    "machinesPerCr": 25000,
+    "totalCrs": 250000
+  }
+}

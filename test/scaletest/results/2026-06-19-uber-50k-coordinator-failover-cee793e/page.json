@@ -1,0 +1,17 @@
+{
+  "section": "resilience",
+  "displayName": "uber-50k — coordinator failover",
+  "scale": "5M pods · coordinator killed · 1 shard",
+  "commit": "cee793e",
+  "order": 2,
+  "scenario": "Static stability: kill the coordinator at 5M pods — does the data plane keep delivering capacity while the control plane is down?",
+  "criterion": "The data plane keeps cycling through the coordinator restart — sessions held, zero shortfalls. (The 'clusters keep running with BigFleet's coordinator down' hard rule.)",
+  "highlights": [
+    { "label": "data-plane sessions (min during kill)", "metric": "dataPlaneSessionsMin", "kind": "count" },
+    { "label": "shortfalls (max)", "metric": "dataPlaneShortfallsMax", "kind": "count" },
+    { "label": "coordinator recovery", "metric": "coordinatorRecoverySeconds", "kind": "duration" },
+    { "label": "shard cycle p99", "metric": "shardCycleDurationP99Seconds", "kind": "secs" },
+    { "label": "bootstrap success", "metric": "bootstrapSuccessRatio", "kind": "ratio" }
+  ],
+  "caveat": "Single coordinator replica — this validates data-plane static stability while the coordinator is absent/restarting (the hard rule), not a multi-node Raft leader election."
+}

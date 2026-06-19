@@ -155,6 +155,42 @@ function capitalise(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Render seconds as a coarse human duration (soak / recovery windows):
+// 18000 -> "5 h", 60 -> "1 min", 31 -> "31 s".
+function fmtDuration(s) {
+  if (typeof s !== "number" || !Number.isFinite(s)) return "—";
+  if (s >= 3600) { const h = s / 3600; return `${Number.isInteger(h) ? h : h.toFixed(1)} h`; }
+  if (s >= 60)   { const m = s / 60;   return `${Number.isInteger(m) ? m : m.toFixed(1)} min`; }
+  return `${s} s`;
+}
+
+// Format a single metric value in a resilience highlight's units. Distinct
+// from the ladder's fmtGate (which is keyed to the 8-gate spec); resilience
+// metrics are heterogeneous, so the page.json highlight names the kind.
+function fmtMetricVal(v, kind) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+  switch (kind) {
+    case "secs":     return fmtSeconds(v);
+    case "ratio":    return v.toFixed(2);
+    case "duration": return fmtDuration(v);
+    case "rawMb":    return `${commas(v)} MB`;
+    case "perSec":   return `${v}/s`;
+    case "count":
+    default:         return commas(v);
+  }
+}
+
+// A resilience highlight reads its number(s) from summary.json by key — never
+// hand-typed — so the page can't drift from the data. Single `metric`, or a
+// `metricStart`/`metricEnd` pair rendered "A → B" (sep overridable).
+function fmtHighlight(summary, h) {
+  const m = summary.metrics || {};
+  if (h.metricStart && h.metricEnd) {
+    return `${fmtMetricVal(m[h.metricStart], h.kind)}${h.sep || " → "}${fmtMetricVal(m[h.metricEnd], h.kind)}`;
+  }
+  return fmtMetricVal(m[h.metric], h.kind);
+}
+
 // ---------------------------------------------------------------------------
 // Sections
 // ---------------------------------------------------------------------------
@@ -243,6 +279,38 @@ The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, 
   return s;
 }
 
+// Resilience & robustness: depth-campaign runs (soak / failover / scale-down)
+// that are NOT scored against the 8 capacity-delivery gates — each carries its
+// own pass criterion (in page.json) and verdict (summary.passed). Numbers come
+// from each run's summary.json via the highlight metric keys.
+function resilienceSection(resilienceRuns) {
+  if (resilienceRuns.length === 0) return "";
+  let s = `## Resilience & robustness
+
+Beyond the throughput ladder, these runs stress what happens when things go wrong or change — a multi-hour soak, control-plane failover, a shard kill, a demand collapse — on the same \`realistic.yaml\` workload catalog. They are **not** scored against the eight capacity-delivery gates above; each has its own pass criterion (shown per result), and the verdict is read from the run's committed \`summary.json\`.
+`;
+  for (const r of resilienceRuns) {
+    const { page, summary } = r;
+    const verdict = summary.passed ? "✅ passed" : "❌ failed";
+    s += `
+### \`${page.displayName}\` — ${verdict}${page.commit ? ` · commit \`${page.commit}\`` : ""}
+${page.scale ? `\n*${page.scale}*\n` : ""}
+${page.scenario || ""}
+
+**Pass criterion:** ${page.criterion || "—"}
+
+| metric | value |
+|---|---:|
+`;
+    for (const h of page.highlights || []) {
+      s += `| ${h.label} | ${fmtHighlight(summary, h)} |\n`;
+    }
+    if (page.caveat) s += `\n_${page.caveat}_\n`;
+    s += `\n${folderLink(r.dir)}\n`;
+  }
+  return s;
+}
+
 function reproduce() {
   return `## Reproduce & trust
 
@@ -286,22 +354,24 @@ Earlier \`uber-5k\` runs across host/cluster configurations, each with its sanit
   return s;
 }
 
-function renderPage({ ladderRuns, variantRuns, canonical, reproRuns }) {
+function renderPage({ ladderRuns, variantRuns, resilienceRuns, canonical, reproRuns }) {
   return [
     lead(ladderRuns),
     scorecard(canonical, reproRuns),
     whatWeGate(),
     ladderSection(ladderRuns),
+    resilienceSection(resilienceRuns),
     reproduce(),
     footnoteAndAppendix(variantRuns),
     `\n*Generated from \`test/scaletest/results/*/{summary,page}.json\` by \`site/scripts/sync-scaletest.mjs\`.*\n`,
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 async function main() {
   const runs = await readRuns();
   const ladderRuns = runs.filter((r) => r.page.section === "ladder").sort(byOrder);
   const variantRuns = runs.filter((r) => r.page.section === "variant").sort(byOrder);
+  const resilienceRuns = runs.filter((r) => r.page.section === "resilience").sort(byOrder);
 
   if (ladderRuns.length === 0) {
     // No published ladder run found (e.g. results/ absent on a stripped build
@@ -328,10 +398,10 @@ async function main() {
   await fs.mkdir(docsDir, { recursive: true });
   await fs.writeFile(
     path.join(docsDir, "scaletest-results.md"),
-    renderPage({ ladderRuns, variantRuns, canonical, reproRuns }),
+    renderPage({ ladderRuns, variantRuns, resilienceRuns, canonical, reproRuns }),
   );
   console.error(
-    `scaletest-sync: wrote docs/scaletest-results.md (${ladderRuns.length} ladder, ${variantRuns.length} variant, ${reproRuns.length} reproducibility runs)`,
+    `scaletest-sync: wrote docs/scaletest-results.md (${ladderRuns.length} ladder, ${variantRuns.length} variant, ${resilienceRuns.length} resilience, ${reproRuns.length} reproducibility runs)`,
   );
 }
 

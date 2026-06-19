@@ -1,0 +1,38 @@
+{
+  "cost": {
+    "estimatedUsd": 0,
+    "hours": 0.75
+  },
+  "metrics": {
+    "preShedPeakConfigured": 5513,
+    "convergedConfigured": 3818,
+    "convergedConfiguredStdDev": 4.3,
+    "configuredReclaimedToIdle": 1695,
+    "configuredReclaimedPctOfPeak": 31,
+    "reclaimActionsTotal": 5127,
+    "reclaimPerSecSteadyPreShed": 2.03,
+    "reclaimPerSecPostShedPeak": 3.77,
+    "reclaimPerSecConvergedFloor": 0.51,
+    "reclaimCycleBound": 6000,
+    "shardCycleDurationP99Seconds": 0.2536,
+    "shardConfigurePhaseP99Seconds": 0.6322,
+    "bootstrapSuccessRatio": 1.0,
+    "shardShortfalls": 0,
+    "drainingMax": 0,
+    "sessionsConnected": 20,
+    "shedTargetMultiplier": 0.5,
+    "shedAtSeconds": 600
+  },
+  "passed": true,
+  "profile": "uber-5k-reclaim-cycle",
+  "runId": "20260619-135821-uber-5k-reclaim",
+  "scale": {
+    "aggregateInventory": 22529,
+    "kwokClusters": 20,
+    "machinesPerCr": 25000,
+    "satellites": 4,
+    "shardReplicas": 1,
+    "coordinatorReplicas": 0,
+    "totalCrs": 500000
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "section": "resilience",
+  "displayName": "uber-5k — scale-down / reclaim",
+  "scale": "500K pods · 50% demand shed",
+  "commit": "205fb99",
+  "order": 4,
+  "scenario": "Scale-down: shed 50% of demand mid-soak — does BigFleet reclaim the surplus in a bounded, converging way (no thrash)?",
+  "criterion": "Reclaim stays under the bound, converges to a steady floor, no over-reclaim (zero shortfalls). Inverted posture: reclaim is the expected, healthy outcome here.",
+  "highlights": [
+    { "label": "configured (peak → converged)", "metricStart": "preShedPeakConfigured", "metricEnd": "convergedConfigured", "kind": "count" },
+    { "label": "reclaimed to idle", "metric": "configuredReclaimedToIdle", "kind": "count" },
+    { "label": "reclaim actions / bound", "metricStart": "reclaimActionsTotal", "metricEnd": "reclaimCycleBound", "kind": "count", "sep": " / " },
+    { "label": "converged reclaim floor", "metric": "reclaimPerSecConvergedFloor", "kind": "perSec" },
+    { "label": "shortfalls", "metric": "shardShortfalls", "kind": "count" }
+  ],
+  "caveat": "The bounded-reclaim gate this exercised is now committed on the 50k profile (settleSeconds + maxReclaimActionsDuringSoak)."
+}

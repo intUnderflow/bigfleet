@@ -57,6 +57,94 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 _⏳ next and ▫️ planned are sequencing states, not failures — the ladder is in progress._
 
 
+## Resilience & robustness
+
+Beyond the throughput ladder, these runs stress what happens when things go wrong or change — a multi-hour soak, control-plane failover, a shard kill, a demand collapse — on the same `realistic.yaml` workload catalog. They are **not** scored against the eight capacity-delivery gates above; each has its own pass criterion (shown per result), and the verdict is read from the run's committed `summary.json`.
+
+### `uber-50k — 5-hour soak` — ✅ passed · commit `cee793e`
+
+*5M pods · 1 shard · 5 h*
+
+Endurance at headline scale: 5,000,000 pods sustained for five hours under churn — does anything leak or drift?
+
+**Pass criterion:** All eight capacity-delivery gates hold throughout, no resource leak (flat goroutines / open fds, bounded RSS), and zero leaked machines.
+
+| metric | value |
+|---|---:|
+| duration | 5 h |
+| goroutines (start → end) | 1,274 → 1,274 |
+| open fds (start → end) | 210 → 210 |
+| shard RSS (start → end) | 1,475 MB → 1,576 MB |
+| leaked machines (max, transitional) | 8 |
+| shortfalls | 0 |
+| shard cycle p99 | 4.08 s |
+
+_Steady reclaim held at the documented bounded floor (≈2.93/s) — the endogenous in-flight-churn rate, now codified as the bounded-reclaim gate, not drift._
+
+[run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-soak-cee793e)
+
+### `uber-50k — coordinator failover` — ✅ passed · commit `cee793e`
+
+*5M pods · coordinator killed · 1 shard*
+
+Static stability: kill the coordinator at 5M pods — does the data plane keep delivering capacity while the control plane is down?
+
+**Pass criterion:** The data plane keeps cycling through the coordinator restart — sessions held, zero shortfalls. (The 'clusters keep running with BigFleet's coordinator down' hard rule.)
+
+| metric | value |
+|---|---:|
+| data-plane sessions (min during kill) | 200 |
+| shortfalls (max) | 0 |
+| coordinator recovery | 1 min |
+| shard cycle p99 | 4.08 s |
+| bootstrap success | 1.00 |
+
+_Single coordinator replica — this validates data-plane static stability while the coordinator is absent/restarting (the hard rule), not a multi-node Raft leader election._
+
+[run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-coordinator-failover-cee793e)
+
+### `2-shard shard failover` — ✅ passed · commit `c24dfc8`
+
+*250K pods · 2 shards · intra-region*
+
+Data-plane shard failover: on a genuine two-shard deploy, kill one shard — is the blast radius contained to its own clusters?
+
+**Pass criterion:** The surviving shard holds all its sessions; the killed shard reschedules and recovers; zero shortfalls throughout.
+
+| metric | value |
+|---|---:|
+| cluster split (shard-0 / shard-1) | 5 / 5 |
+| survivor sessions held | 5 |
+| killed shard recovered sessions | 5 |
+| killed shard recreate time | 31 s |
+| shortfalls (max) | 0 |
+| configure-phase p99 (max) | 131 ms |
+
+_Validates the per-ordinal shard routing (commit c24dfc8) end-to-end. The ~31 s kill+recreate landed between metric samples, so this captures the clean outcome (no lingering degradation) but not the drop→reconnect transition; ≤5 s sampling would capture it._
+
+[run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-2shard-shard-failover-c24dfc8)
+
+### `uber-5k — scale-down / reclaim` — ✅ passed · commit `205fb99`
+
+*500K pods · 50% demand shed*
+
+Scale-down: shed 50% of demand mid-soak — does BigFleet reclaim the surplus in a bounded, converging way (no thrash)?
+
+**Pass criterion:** Reclaim stays under the bound, converges to a steady floor, no over-reclaim (zero shortfalls). Inverted posture: reclaim is the expected, healthy outcome here.
+
+| metric | value |
+|---|---:|
+| configured (peak → converged) | 5,513 → 3,818 |
+| reclaimed to idle | 1,695 |
+| reclaim actions / bound | 5,127 / 6,000 |
+| converged reclaim floor | 0.51/s |
+| shortfalls | 0 |
+
+_The bounded-reclaim gate this exercised is now committed on the 50k profile (settleSeconds + maxReclaimActionsDuringSoak)._
+
+[run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-5k-reclaim-205fb99)
+
+
 ## Reproduce & trust
 
 The profiles and substrates are committed and substrate-agnostic ([ADR-0034](./adr/0034-scaletest-byo-substrate.md)) — bring your own substrate and run the same gate:
