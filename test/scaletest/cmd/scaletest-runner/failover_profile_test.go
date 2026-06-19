@@ -69,6 +69,68 @@ func TestFailoverProfiles_ValidV2(t *testing.T) {
 	}
 }
 
+// TestRunNowBatchProfiles_ValidV2 guards the two depth-slate profiles that
+// run on the standing fleet next: reclaim-cycle-50k (the 50k twin of the
+// reclaim drill, to land the bounded-reclaim gate on measured data) and
+// 50k-2shard (the first 2-shard throughput run). Neither is in the
+// ladder-only BYO matrix, so this pins their parse → validate → merge and
+// the load-bearing fields (50k scaleDowns + generous bound; 2-shard
+// topology).
+func TestRunNowBatchProfiles_ValidV2(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+
+	t.Run("reclaim-cycle-50k", func(t *testing.T) {
+		t.Parallel()
+		p, err := readProfileV2(filepath.Join(root, "test", "scaletest", "profiles", "reclaim-cycle-50k.yaml"))
+		if err != nil {
+			t.Fatalf("readProfileV2: %v", err)
+		}
+		if err := p.validate(); err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		if _, err := merge(p, s); err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if p.Scale.Machines != 50000 {
+			t.Errorf("scale.machines = %d (want 50000 — the 50k twin)", p.Scale.Machines)
+		}
+		if len(p.LoadProfile.ScaleDowns) != 1 || p.LoadProfile.ScaleDowns[0].TargetMultiplier != 0.5 {
+			t.Errorf("scaleDowns = %+v (want one 0.5 shed)", p.LoadProfile.ScaleDowns)
+		}
+		// Inverted posture: reclaim is expected, bound is generous (10x the
+		// uber-5k drill's 6000) so the drill doesn't fail for doing its job.
+		if p.SLO.MaxReclaimActionsDuringSoak < 6000 {
+			t.Errorf("maxReclaimActionsDuringSoak = %d (want a generous 50k bound)", p.SLO.MaxReclaimActionsDuringSoak)
+		}
+	})
+
+	t.Run("50k-2shard", func(t *testing.T) {
+		t.Parallel()
+		p, err := readProfileV2(filepath.Join(root, "test", "scaletest", "profiles", "50k-2shard.yaml"))
+		if err != nil {
+			t.Fatalf("readProfileV2: %v", err)
+		}
+		if err := p.validate(); err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		if _, err := merge(p, s); err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if p.Topology.ShardReplicas != 2 {
+			t.Errorf("topology.shardReplicas = %d (want 2)", p.Topology.ShardReplicas)
+		}
+		// Steady-state throughput run: no disturbance.
+		if len(p.RunnerActions) != 0 {
+			t.Errorf("runnerActions = %+v (want none — steady-state throughput)", p.RunnerActions)
+		}
+	})
+}
+
 // TestReclaimCycleProfile_ValidV2 validates the scale-down/reclaim drill
 // profile loads through readProfileV2 → validate → merge and carries the
 // scaleDowns demand-drop the load-driver consumes (the ladder-only BYO

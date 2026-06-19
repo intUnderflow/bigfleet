@@ -1,0 +1,61 @@
+# 50k-2shard — 50K machines / 5M pods at density-100, sharded across TWO shards.
+#
+# The throughput twin of 50k.yaml on a 2-shard deploy. We have 2-shard
+# FAILOVER only (at uber-5k); this is the first 2-shard THROUGHPUT run at
+# headline scale. ~200 kwok clusters fan across the two shards (cluster
+# N % 2), exercising the per-ordinal routing (c24dfc8) + operator→shard
+# binding under 5M-pod load with two concurrent hot paths. It proves
+# aggregate throughput tracks ~2 shards rather than collapsing on the
+# coordinator ReportShard fan-in or the hub NodePort — and the undisturbed
+# steady state is the control the published shard-kill blast-radius result
+# lacked.
+#
+# Demand stays satisfiable throughout, so cross-shard rebalancing (ADR-0055,
+# unbuilt) is never triggered — this is a pure routing / binding-invariant
+# test (topology never crosses shard boundaries is a hard rule). Same
+# realistic.yaml catalog + ADR-0054 gates as 50k.yaml; the shardsReporting
+# gate enforces that BOTH shards report cycles.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "50k-2shard"
+  description: "50K machines / 5M pods across two shards — 2-shard throughput + per-ordinal routing under headline load."
+
+scale:
+  machines: 50000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 3600
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+  settleSeconds: 600
+
+rampBudget: 120m
+
+# Two shards: clusters bind to shard-(N % 2) via the per-ordinal NodePorts +
+# per-ordinal keeper tunnels (c24dfc8). No runnerActions — this is the
+# steady-state throughput / routing run, not a failover drill.
+topology:
+  shardReplicas: 2
+
+slo:
+  shardCycleDurationP99Seconds: 25
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10
+  # Steady-state bounded-reclaim gate (per 50k.yaml): the endogenous
+  # in-flight-churn floor, not a shed. settleSeconds de-tails the ramp.
+  maxReclaimActionsDuringSoak: 15000

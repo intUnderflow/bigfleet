@@ -1,0 +1,69 @@
+# reclaim-cycle-50k — scale-down / Phase-3-reclaim drill at HEADLINE scale.
+#
+# The 50K-machine twin of reclaim-cycle.yaml (which runs at uber-5k). Its
+# job is to land the bounded-reclaim gate on MEASURED 50k-shed data: the
+# gate now on 50k.yaml (maxReclaimActionsDuringSoak 15000) currently rests
+# on the soak floor + a uber-5k convergence proof, i.e. extrapolation. A
+# 50k half-fleet shed measures the real Phase-3 magnitude so the 50k bound
+# can be tightened to a directly-observed value.
+#
+# At t=600s into the soak the load-driver sheds half its demand (a SUSTAINED
+# drop to Target×0.5 — steady workload objects deleted, not refilled). The
+# roll-up then sees ~half the needs and Phase 3 reclaims the excess
+# Configured machines (paper §13 / ADR-0049).
+#
+# SLO POSTURE — THE INVERSION (same as reclaim-cycle.yaml): reclaim is the
+# EXPECTED healthy outcome, so maxReclaimActionsDuringSoak is GENEROUS —
+# the uber-5k drill measured 5,127 actions against a 6,000 bound, so the
+# 10x-scale bound is set to 60,000 (still catches pathological runaway,
+# which would blow well past fleet size). TIGHTEN to the de-tailed measured
+# value after this run; that value then justifies the 50k.yaml steady-state
+# gate. The ADR-0054 capacity-delivery gates use the 50k regime values
+# (cycle p99 relaxed to 25s per ADR-0028) and MUST hold across the shed.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "reclaim-cycle-50k"
+  description: "Scale-down/reclaim drill at uber-50k: shed half the demand mid-soak; measure the Phase-3 reclaim magnitude to land the bounded-reclaim gate on real 50k data."
+
+scale:
+  machines: 50000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 3600
+  # 40-min soak: shed fires 10 min in, leaving ~30 min to watch Phase 3
+  # reclaim the excess down and settle (no oscillation).
+  soakSeconds: 2400
+  churnPerMinute: 0.02
+  # Sustained demand drop to 50% of target, 10 min into the soak.
+  scaleDowns:
+    - atSeconds: 600
+      targetMultiplier: 0.5
+
+rampBudget: 120m
+
+topology:
+  shardReplicas: 1
+
+slo:
+  # Reclaim is EXPECTED — generous bound (10x the uber-5k drill's 6,000),
+  # to be tightened to the measured de-tailed value after this run.
+  maxReclaimActionsDuringSoak: 60000
+  # ADR-0054 capacity-delivery gates, 50k regime (cycle relaxed to 25s).
+  shardCycleDurationP99Seconds: 25
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10
