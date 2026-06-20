@@ -72,6 +72,12 @@ func TestInvertedGateProfiles_ValidV2(t *testing.T) {
 		if p.Seed.ConfiguredFraction <= 0 || p.Seed.ConfiguredFraction >= 1 {
 			t.Errorf("seed.configuredFraction = %v (want in (0,1) — under-provisioned at install)", p.Seed.ConfiguredFraction)
 		}
+		// The load-bearing #89 knob: open-loop over-subscription holds demand
+		// strictly above supply. Without it the closed-loop demand path tracks
+		// the supply-sizing input and no shortfall forms (the test is vacuous).
+		if p.LoadProfile.OpenLoopDemandMultiplier <= 1 {
+			t.Errorf("loadProfile.openLoopDemandMultiplier = %v (want > 1 — the open-loop over-subscription that makes demand exceed supply, bigfleet-uber #89)", p.LoadProfile.OpenLoopDemandMultiplier)
+		}
 		// The preempt gate must NOT be on for the scarcity run.
 		if p.SLO.ExpectPreemptions {
 			t.Errorf("expectPreemptions = true (want false — scarcity is not a preemption run)")
@@ -107,13 +113,21 @@ func TestInvertedGateProfiles_ValidV2(t *testing.T) {
 		if !p.SLO.ExpectPreemptions {
 			t.Errorf("expectPreemptions = false (want true — preemption is the pass condition)")
 		}
-		// Zero headroom: 100% Configured, no idle, no speculative — the only
-		// way to bind the burst is to preempt.
-		if p.Seed.ConfiguredFraction != 1.0 {
-			t.Errorf("seed.configuredFraction = %v (want 1.0 — fully Configured fleet)", p.Seed.ConfiguredFraction)
+		// Near-zero headroom, the #89-validated construction (commit 551a163):
+		// the elastic pool is sized to ≈ natural bound demand via the absolute
+		// speculativeCount knob (NOT a whole-machine speculativeMultiplier,
+		// which over-seeds and reintroduces headroom), with no pre-bound
+		// Configured seed and no idle buffer. The incumbents consume nearly
+		// all of the demand-sized pool, so a high-priority burst can only bind
+		// by preempting them.
+		if p.Seed.ConfiguredFraction != 0 {
+			t.Errorf("seed.configuredFraction = %v (want 0 — supply is the demand-sized elastic pool, #89)", p.Seed.ConfiguredFraction)
+		}
+		if p.Seed.SpeculativeCount <= 0 {
+			t.Errorf("seed.speculativeCount = %d (want > 0 — the demand-sized elastic pool IS the supply, #89)", p.Seed.SpeculativeCount)
 		}
 		if p.Seed.IdleHeadroomFraction != 0 || p.Seed.SpeculativeMultiplier != 0 {
-			t.Errorf("seed headroom = idle %v / spec %d (want both 0 — zero headroom forces preemption)",
+			t.Errorf("seed headroom = idle %v / specMultiplier %d (want both 0 — the pool is sized by speculativeCount, not a whole-machine multiplier)",
 				p.Seed.IdleHeadroomFraction, p.Seed.SpeculativeMultiplier)
 		}
 		// The high-priority burst that forces the preemption.
@@ -168,6 +182,50 @@ func TestInvertedGateProfiles_RenderSLO(t *testing.T) {
 	}
 	if slo.ShortfallConfinedBelowPriorityClass != "batch" {
 		t.Errorf("rendered slo.ShortfallConfinedBelowPriorityClass = %q (want \"batch\")", slo.ShortfallConfinedBelowPriorityClass)
+	}
+	// The open-loop over-subscription must thread into the load-driver's
+	// loadProfile (the chart toYaml's it through to the load-driver's
+	// profile.yaml). Without this round-trip the V2 struct would parse the
+	// field but the chart would never see it — exactly the silent-drop the
+	// bursts/scaleDowns/demandSteps gates exist to prevent.
+	lp, ok := values["loadProfile"].(map[string]any)
+	if !ok {
+		t.Fatalf("loadProfile block missing or wrong type: %T", values["loadProfile"])
+	}
+	mult, ok := lp["openLoopDemandMultiplier"].(float64)
+	if !ok || mult <= 1 {
+		t.Errorf("rendered loadProfile.openLoopDemandMultiplier = %#v (want a float64 > 1)", lp["openLoopDemandMultiplier"])
+	}
+}
+
+// TestRenderHelmValues_OpenLoopDemandAbsentByDefault is the absence pin: a
+// profile that does NOT set openLoopDemandMultiplier (or sets it ≤ 1) must
+// render NO openLoopDemandMultiplier key, so every non-scarcity profile is
+// byte-identical and the closed-loop demand path is untouched.
+func TestRenderHelmValues_OpenLoopDemandAbsentByDefault(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+	// preemption-5k uses bursts, not open-loop demand — a good stand-in for
+	// "a profile that doesn't over-subscribe".
+	p, err := readProfileV2(filepath.Join(root, "test", "scaletest", "profiles", "preemption-5k.yaml"))
+	if err != nil {
+		t.Fatalf("readProfileV2: %v", err)
+	}
+	if p.LoadProfile.OpenLoopDemandMultiplier > 1 {
+		t.Fatalf("fixture unexpectedly over-subscribes: %v", p.LoadProfile.OpenLoopDemandMultiplier)
+	}
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	lp := values["loadProfile"].(map[string]any)
+	if _, present := lp["openLoopDemandMultiplier"]; present {
+		t.Errorf("openLoopDemandMultiplier present for a non-scarcity profile: %v", lp["openLoopDemandMultiplier"])
 	}
 }
 

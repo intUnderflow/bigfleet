@@ -433,6 +433,17 @@ type profileV2 struct {
 		// declared here. Does NOT trigger the speculative-pool track-down
 		// (that derivation keys on scaleDowns only).
 		DemandSteps []profileDemandStep `yaml:"demandSteps"`
+		// OpenLoopDemandMultiplier (scarcity profiles, bigfleet-uber #89):
+		// over-subscribe the bindable per-cluster Target by this factor — the
+		// load-driver creates Target×(multiplier−1) extra Pods that are never
+		// bound and never drained, holding demand strictly above supply so a
+		// genuine standing shortfall forms. Threaded into the load-driver's
+		// loadProfile.openLoopDemandMultiplier (the chart toYaml's the whole
+		// loadProfile map, so this passthrough is all that's needed). Like
+		// bursts/scaleDowns/demandSteps the V2 struct is the gate — the field
+		// is dropped unless declared here. ≤ 1 (the default) = no
+		// over-subscription, every other profile renders unchanged.
+		OpenLoopDemandMultiplier float64 `yaml:"openLoopDemandMultiplier"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the rampSeconds-derived deadline. Same
 	// semantics as profileFile.RampBudget (M22). Empty → use
@@ -832,6 +843,16 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	// burst-ceiling sizing (the latter is the scaleDowns/#337 concern).
 	if len(p.LoadProfile.DemandSteps) > 0 {
 		values["loadProfile"].(map[string]any)["demandSteps"] = p.LoadProfile.DemandSteps
+	}
+	// openLoopDemandMultiplier (scarcity over-subscription, bigfleet-uber
+	// #89) rides the same loadProfile toYaml path. Only set when it actually
+	// over-subscribes (> 1) so non-scarcity profiles render byte-identically;
+	// the load-driver treats ≤ 1 as disabled anyway, but not emitting it
+	// keeps the rendered values minimal. Pure load-driver demand bookkeeping:
+	// supply seeding is untouched, so the engine sees demand > supply with no
+	// engine-side change.
+	if p.LoadProfile.OpenLoopDemandMultiplier > 1 {
+		values["loadProfile"].(map[string]any)["openLoopDemandMultiplier"] = p.LoadProfile.OpenLoopDemandMultiplier
 	}
 	// shard.failureRatePerSec override: only set when a chaos profile asks
 	// for an elevated rate, so profiles without it inherit the chart's

@@ -960,3 +960,122 @@ func TestRunDemandSteps_ShedsDown(t *testing.T) {
 		t.Errorf("burst workload b1 was deleted by the demand step; bursts must be left to drainBurst")
 	}
 }
+
+// TestOpenLoopExtra pins the over-subscription arithmetic (bigfleet-uber
+// #89): a multiplier ≤ 1 adds nothing (every non-scarcity profile is
+// unchanged), and a multiplier > 1 adds exactly Target×(multiplier−1) extra
+// Pods on top of the bindable Target.
+func TestOpenLoopExtra(t *testing.T) {
+	cases := []struct {
+		target int
+		mult   float64
+		want   int
+	}{
+		{0, 2.0, 0},       // no target → nothing
+		{1000, 0, 0},      // unset multiplier → disabled
+		{1000, 1.0, 0},    // exactly 1 → disabled (no over-subscription)
+		{1000, 0.5, 0},    // < 1 → disabled, never negative
+		{1000, 2.0, 1000}, // double demand: 1000 extra
+		{1000, 1.5, 500},  // 50% over-subscribe
+		{2500, 3.0, 5000}, // triple: 5000 extra on top of 2500
+	}
+	for _, c := range cases {
+		if got := openLoopExtra(c.target, c.mult); got != c.want {
+			t.Errorf("openLoopExtra(%d, %v) = %d, want %d", c.target, c.mult, got, c.want)
+		}
+	}
+}
+
+// TestLoadProfile_OpenLoopDemandParse verifies openLoopDemandMultiplier
+// round-trips from the load-driver profile YAML (the chart toYaml's the
+// loadProfile map through verbatim, so a parse gap would silently drop the
+// scarcity over-subscription, exactly like the V2-struct gate on bursts).
+func TestLoadProfile_OpenLoopDemandParse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	const y = `target: 5000
+churnPerMinute: 0.02
+openLoopDemandMultiplier: 2.0
+`
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadProfile(path)
+	if err != nil {
+		t.Fatalf("loadProfile: %v", err)
+	}
+	if p.OpenLoopDemandMultiplier != 2.0 {
+		t.Errorf("parsed openLoopDemandMultiplier = %v, want 2.0", p.OpenLoopDemandMultiplier)
+	}
+}
+
+// TestOpenLoopOverSubscribe drives the open-loop fill end-to-end against a
+// fake apiserver: the surplus is created UNCONDITIONALLY (no bind-gate, no
+// plateau-stall — the workloads exist regardless of binding) and lands the
+// active Pod count at Target×multiplier. The created objects are non-burst
+// so scaleDown/drain leave them alone; markSteadyState is already set, so
+// the over-subscribe ramp does not re-trip it. A multiplier ≤ 1 is a no-op.
+func TestOpenLoopOverSubscribe(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	newDriver := func(mult float64) *driver {
+		// A single tiny non-gang archetype so createWorkload's picker draws a
+		// deterministic shape and the ramp lands cleanly on target.
+		arches := []archetype.Archetype{{
+			Name:          "cpu-service",
+			Weight:        1,
+			InstanceTypes: []string{"m6i.large"},
+			SizeBuckets:   []archetype.SizeBucket{{Weight: 1, Resources: map[string]string{"cpu": "1"}}},
+		}}
+		return &driver{
+			clusterID:  "test-cluster",
+			k:          fake.NewClientBuilder().WithScheme(scheme).Build(),
+			log:        slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+			rng:        rand.New(rand.NewSource(1)),
+			picker:     archetype.NewPicker(arches),
+			archByName: indexArchetypes(arches),
+			workloads:  map[string]workloadMeta{},
+			prof:       profile{Target: 1000, OpenLoopDemandMultiplier: mult},
+		}
+	}
+
+	t.Run("over-subscribes above the bindable target", func(t *testing.T) {
+		d := newDriver(2.0)
+		// Establish the bindable fill first (mirrors run()'s rampTo(Target)).
+		if err := d.rampTo(context.Background(), d.prof.Target, false); err != nil {
+			t.Fatalf("initial rampTo: %v", err)
+		}
+		if got := d.activeCount(); got != 1000 {
+			t.Fatalf("after initial fill activeCount = %d, want 1000", got)
+		}
+		if !d.steadyState() {
+			t.Fatal("initial fill must mark steady state")
+		}
+		d.openLoopOverSubscribe(context.Background())
+		// 2× multiplier → Target extra Pods → 2000 active. Unconditional:
+		// nothing bound any Pod, so the surplus exists purely as demand.
+		if got := d.activeCount(); got < 2000 {
+			t.Errorf("after open-loop over-subscribe activeCount = %d, want >= 2000 (the surplus is created without binding)", got)
+		}
+		// Every surplus object is non-burst, so scaleDown/drain ignore it.
+		for name, m := range d.workloads {
+			if m.burst {
+				t.Errorf("open-loop surplus object %q tagged burst=true; must be plain demand", name)
+			}
+		}
+	})
+
+	t.Run("multiplier <= 1 is a no-op", func(t *testing.T) {
+		d := newDriver(1.0)
+		if err := d.rampTo(context.Background(), d.prof.Target, false); err != nil {
+			t.Fatalf("initial rampTo: %v", err)
+		}
+		before := d.activeCount()
+		d.openLoopOverSubscribe(context.Background())
+		if got := d.activeCount(); got != before {
+			t.Errorf("openLoopOverSubscribe with multiplier 1.0 changed activeCount %d -> %d", before, got)
+		}
+	})
+}

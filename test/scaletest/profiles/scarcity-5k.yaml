@@ -6,20 +6,46 @@
 # leave the surplus LOW-priority demand as a STANDING shortfall, and NEVER
 # starve high-priority. This profile constructs that regime and grades it.
 #
-# HOW SUPPLY IS HELD BELOW DEMAND (seed math, ADR-0035 / ADR-0044 §4):
-# demand = machines × density = 5000 × 100 = 500K Pods. The three supply
-# tiers are starved so the engine cannot cover it:
-#   - configuredFraction: 0.6 — only ~60% of the machine demand is bound
-#     at install (under-provisioned from the start).
-#   - speculativeMultiplier: 0 — NO elastic procurement quota. This is the
-#     load-bearing knob: with zero Speculative pool the engine has nowhere
-#     to provision NEW machines from, so the ~40% deficit cannot be closed.
-#     The shortfall is therefore GENUINE undersupply, not a slow ramp.
-#   - idleHeadroomFraction: 0 — no churn buffer either.
-#   - preBind: false — the initial fill goes through the real
-#     Unschedulable → UPC → CapacityRequest path against a fleet that
-#     cannot satisfy it (preBind would fast-bind to fake-Nodes that the
-#     scarce seed does not have).
+# WHY THE OLD CONSTRUCTION DIDN'T WORK (bigfleet-uber #89):
+# the harness's default demand path is CLOSED-LOOP. The load-driver's
+# per-cluster Pod target IS the substrate's podsPerCluster, and
+# clusterCount × podsPerCluster ≈ machines × density — so demand is pinned
+# to the very input that sizes supply. The three #89 attempts all failed:
+#   - configuredFraction 0.6 alone: the realistic catalog's per-zone gang
+#     floor inflates the per-cluster Configured seed far past nominal (a
+#     17-machine nominal seed ballooned to ~117/cluster at small per-cluster
+#     targets), over-seeding supply ABOVE demand → idle spare, no shortfall.
+#   - demand oversubscription: there was no knob to raise demand above
+#     podsPerCluster — the ramp asymptotes near supply.
+#   - capping supply: demand tracked the cap ("capping supply caps demand").
+#
+# HOW THIS CONSTRUCTION WORKS (open-loop demand, the #89 fix):
+#   - loadProfile.openLoopDemandMultiplier 2.0 — the load-driver fills the
+#     bindable Target, THEN over-subscribes by creating Target×1.0 MORE Pods
+#     that are never bound and never drained. This excess is OPEN-LOOP: it is
+#     created unconditionally (no bind-gate, no plateau-stall), so against a
+#     supply-short fleet it stays Pending and rolls up as standing demand via
+#     the realistic Unschedulable → UPC → CapacityRequest → operator → shard
+#     NeedsTable path (the UPC emits one CR per Pod regardless of
+#     schedulability, ADR-0039). This is the load-bearing demand knob — it is
+#     the ONLY way to hold demand strictly above supply harness-side.
+#   - speculativeMultiplier 0 + idleHeadroomFraction 0 — NO elastic
+#     procurement quota and no churn buffer. With zero Speculative pool the
+#     engine has nowhere to provision NEW machines from, so the over-
+#     subscribed excess CANNOT be closed. The shortfall is GENUINE, frozen
+#     undersupply, not a slow ramp: supply is the fixed Configured seed.
+#   - configuredFraction 0.6 — a Configured seed that comfortably binds the
+#     high-priority (service / critical) demand first, so the priority-
+#     throttle has supply to satisfy priority-descending and the residual
+#     shortfall confines to the batch floor. (The gang-floor over-seeding that
+#     defeated the OLD construction is now harmless: it only adds spare
+#     service-shaped machines; the over-subscribed batch demand still cannot
+#     be met because there is no elastic pool, and batch Pods can't bind to
+#     the service-shaped spare.)
+#   - preBind false — the fill goes through the real Unschedulable → UPC →
+#     CapacityRequest path against a fleet that cannot satisfy it (preBind
+#     would fast-bind to fake-Nodes the scarce seed does not have, and the
+#     open-loop surplus is created AFTER preBind so it is never fast-bound).
 #
 # SLO POSTURE — THE INVERSION: the default verdict treats a standing
 # shortfall as a hard FAILURE (shardShortfalls != 0 fails pass(); a
@@ -32,13 +58,12 @@
 #   - shortfallStabilityMax: bounds |Δ shortfalls| over the soak — the
 #     CONVERGENCE half. A priority-throttled steady state holds its
 #     shortfall roughly flat; a GROWING shortfall (demand outrunning the
-#     engine) still fails. Sized for ~1% of the ~2000-machine deficit
-#     wobble.
+#     engine) still fails.
 # Every OTHER ADR-0054 capacity-delivery gate (cycle / configure /
 # bootstrap / node-state / pod-bind-p50) STILL holds — the engine must
 # stay healthy WHILE priority-throttled.
 #
-# CONFINEMENT (now asserted): the sole-throttle rule's confinement half —
+# CONFINEMENT (asserted): the sole-throttle rule's confinement half —
 # "shortfall confined to the lowest priority tier, zero high-priority
 # shortfall" — IS graded here via shortfallConfinedBelowPriorityClass:
 # batch. It is backed by the per-priority bigfleet_shard_shortfalls_by_priority
@@ -46,15 +71,17 @@
 # map to batch / service / critical); the gate asserts
 # sum(bigfleet_shard_shortfalls_by_priority{priority_class!="batch"}) == 0.
 # Together with expectStandingShortfall (existence + convergence) this run
-# now grades BOTH halves of the sole-throttle rule. (Was a documented
-# KNOWN GAP until the per-priority-class engine metric closed it.)
+# grades BOTH halves of the sole-throttle rule. A fleet run confirms the
+# confinement holds at the substrate's actual geometry (the per-class seed-
+# vs-demand shape-match is geometry-sensitive; the existence + convergence
+# half is guaranteed by the zero-elastic-pool invariant above).
 
 apiVersion: bigfleet.io/scaletest/v1
 kind: Profile
 
 metadata:
   name: "scarcity-5k"
-  description: "Genuine-scarcity priority-throttle: supply < demand by design; assert a non-zero, converged standing shortfall (uber-5k shape)."
+  description: "Genuine-scarcity priority-throttle: open-loop demand > supply by design; assert a non-zero, converged, batch-confined standing shortfall (uber-5k shape)."
 
 scale:
   machines: 5000
@@ -64,8 +91,11 @@ catalog:
   archetypes: realistic
 
 seed:
-  # ~60% of machine demand bound at install; no elastic pool, no idle
-  # buffer → ~40% of demand is a genuine, unclosable standing shortfall.
+  # A Configured seed that binds the bound fill's high-priority demand and
+  # leaves the open-loop surplus unsatisfiable. NO elastic pool, NO idle
+  # buffer → the over-subscribed excess is a genuine, unclosable standing
+  # shortfall. The seed is sized off the BOUND demand (machines × density);
+  # the open-loop multiplier below pushes total demand past it.
   configuredFraction: 0.6
   speculativeMultiplier: 0
   idleHeadroomFraction: 0
@@ -78,16 +108,24 @@ loadProfile:
   # converged (flat) shortfall rather than a still-ramping one.
   soakSeconds: 1800
   churnPerMinute: 0.02
+  # THE LOAD-BEARING KNOB (#89 fix): over-subscribe the bindable per-cluster
+  # target 2× — the load-driver creates the full bindable fill, then an equal
+  # number of EXTRA Pods that are never bound and never drained. With zero
+  # elastic pool the excess is permanently unsatisfiable → a large, frozen
+  # standing shortfall. 2.0 doubles demand (≈ 1M Pods total vs ~500K of
+  # supply-sized bound demand), comfortably above any gang-floor-inflated
+  # Configured seed at any substrate geometry.
+  openLoopDemandMultiplier: 2.0
 
 rampBudget: 60m
 
 slo:
   # THE INVERSION: a standing, converged shortfall is the pass condition.
   expectStandingShortfall: true
-  # |Δ shortfalls| tolerance over the soak. ~40% of ~5000 effective
-  # machines ≈ a 2000-machine deficit; allow ~1% wobble (churn noise)
-  # while still failing a growing/diverging shortfall.
-  shortfallStabilityMax: 20
+  # |Δ shortfalls| tolerance over the soak. The over-subscribed deficit is
+  # large (~5000+ machines short); allow a small wobble (churn noise) while
+  # still failing a growing/diverging shortfall.
+  shortfallStabilityMax: 50
   # CONFINEMENT: the standing shortfall must sit ENTIRELY in the lowest
   # priority tier ("batch", the realistic catalog's floor at priority 100).
   # Any shortfall in service/critical means BigFleet starved high-priority

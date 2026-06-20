@@ -173,6 +173,35 @@ type profile struct {
 	// methodology sets this true so the install reaches steady state
 	// without paying the kube-scheduler bulk-bind ramp.
 	PreBind bool `yaml:"preBind"`
+
+	// OpenLoopDemandMultiplier (scarcity profiles) adds a SUSTAINED
+	// over-subscription on top of the bindable Target fill: after the
+	// initial rampTo(Target) the driver creates extra workload objects
+	// summing to Target×(multiplier−1) more Pods and LEAVES THEM PENDING
+	// for the rest of the run — never pre-bound, never drained.
+	//
+	// This is the harness's open-loop demand mode (bigfleet-uber #89). The
+	// existing demand path is closed-loop: the load-driver's Target is the
+	// substrate's podsPerCluster, and clusterCount×podsPerCluster ≈
+	// machines×density, so demand is pinned to the same input that sizes
+	// supply — a genuine supply<demand standing shortfall cannot be
+	// constructed by capping supply (demand tracks the cap) or by
+	// over-subscribing the closed-loop ramp (it asymptotes near supply).
+	// The excess objects here are created UNCONDITIONALLY (no bind-gate, no
+	// plateau-stall), so the unbindable surplus stays Pending and rolls up
+	// as standing demand via the realistic Unschedulable → UPC →
+	// CapacityRequest → operator → shard NeedsTable path (the UPC creates
+	// one CR per Pod regardless of schedulability, ADR-0039), which is what
+	// the engine's priority-throttle / sole-throttle ordering is then
+	// graded against.
+	//
+	// ≤ 1 (or unset) disables it — every existing profile is unchanged. A
+	// multiplier (not an absolute count) so the over-subscription scales
+	// with whatever per-cluster Target the substrate dictates. Independent
+	// of PreBind: the surplus is excluded from preBindInitialPods by
+	// construction (that step runs over the initial fill only, before the
+	// surplus is created) so it stays Pending even on a pre-bound profile.
+	OpenLoopDemandMultiplier float64 `yaml:"openLoopDemandMultiplier"`
 }
 
 type burstSpec struct {
@@ -671,6 +700,18 @@ func (d *driver) run(ctx context.Context) error {
 		d.preBindInitialPods(ctx)
 	}
 
+	// Open-loop demand (scarcity profiles, bigfleet-uber #89): after the
+	// bindable Target fill, over-subscribe by creating extra workload
+	// objects that are NEVER pre-bound and NEVER drained. Created after
+	// preBindInitialPods so the surplus is excluded from the fast-bind
+	// sweep (which ran over the initial fill above); its Pods therefore
+	// stay Pending against the supply-short fleet and roll up as a standing
+	// shortfall via the realistic Unschedulable → UPC → CapacityRequest
+	// path. This is the harness's only way to hold demand strictly above
+	// supply — the default Target-as-podsPerCluster demand is closed-loop
+	// and tracks the supply-sizing input. ≤ 1 = disabled (no surplus).
+	d.openLoopOverSubscribe(ctx)
+
 	// M66.3: in kube-scheduler mode the scheduler binds Pods, so no
 	// harness component sits on the bind path to record latency the
 	// way pod-shim does. Watch for binds instead, from here on — after
@@ -1075,6 +1116,53 @@ func (d *driver) rampTo(ctx context.Context, want int, burst bool) error {
 	}
 	d.markSteadyState()
 	return nil
+}
+
+// openLoopExtra returns how many EXTRA Pods worth of demand the open-loop
+// over-subscription should add on top of the bindable target, given the
+// configured Target and OpenLoopDemandMultiplier. A multiplier ≤ 1 (the
+// default) adds nothing — every non-scarcity profile is unchanged. Pure so
+// the over-subscription arithmetic is unit-testable without an apiserver.
+func openLoopExtra(target int, multiplier float64) int {
+	if multiplier <= 1 || target <= 0 {
+		return 0
+	}
+	extra := int(float64(target)*multiplier) - target
+	if extra < 0 {
+		return 0
+	}
+	return extra
+}
+
+// openLoopOverSubscribe creates the sustained over-subscription surplus for
+// scarcity profiles (bigfleet-uber #89): Target×(multiplier−1) extra Pods
+// worth of workload objects, created unconditionally on top of the bindable
+// fill and held for the rest of the run. The surplus is the harness's
+// open-loop demand — it is NOT pre-bound (this runs after
+// preBindInitialPods, so the fast-bind sweep never sees it) and is never
+// drained, so against a supply-short fleet its Pods stay Pending and roll up
+// as a standing shortfall. Tracked as ordinary (non-burst) workloads: the
+// scarcity profile sets no bursts/scaleDowns/demandSteps, so nothing deletes
+// them; steady-state churn maintains the population on its survivors like
+// any other steady demand. A multiplier ≤ 1 is a no-op.
+func (d *driver) openLoopOverSubscribe(ctx context.Context) {
+	extra := openLoopExtra(d.prof.Target, d.prof.OpenLoopDemandMultiplier)
+	if extra <= 0 {
+		return
+	}
+	want := d.activeCount() + extra
+	d.log.Info("open-loop demand: over-subscribing above bindable target",
+		"target", d.prof.Target, "multiplier", d.prof.OpenLoopDemandMultiplier,
+		"extra_pods", extra, "want", want)
+	// rampTo creates objects until Σreplicas ≥ want, never bind-gating; the
+	// surplus is non-burst so scaleDown/drain leave it alone. steadyMarked
+	// is already set by the initial rampTo, so this re-mark is a no-op.
+	if err := d.rampTo(ctx, want, false); err != nil {
+		d.log.Warn("open-loop over-subscribe ramp failed", "err", err)
+		return
+	}
+	target.Set(float64(d.activeCount()))
+	d.log.Info("open-loop demand: surplus created (held Pending for the run)", "active", d.activeCount())
 }
 
 // rampExtra creates burst workload objects whose replica counts sum to
