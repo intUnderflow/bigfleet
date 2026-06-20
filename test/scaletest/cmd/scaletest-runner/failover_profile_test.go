@@ -131,6 +131,39 @@ func TestRunNowBatchProfiles_ValidV2(t *testing.T) {
 	})
 }
 
+// TestSpotChurnProfile_ValidV2 validates the spot/hardware-fault chaos
+// profile parses → validates → merges and carries the elevated failure
+// rate the new profileV2.Shard.FailureRatePerSec passthrough renders into
+// the chart (the chaos test's whole point), plus the un-relaxed steady
+// reclaim bound (the load-bearing assertion: Failed re-provision must not
+// inflate Phase 3).
+func TestSpotChurnProfile_ValidV2(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+	p, err := readProfileV2(filepath.Join(root, "test", "scaletest", "profiles", "spot-churn-50k.yaml"))
+	if err != nil {
+		t.Fatalf("readProfileV2: %v", err)
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if _, err := merge(p, s); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	if p.Shard.FailureRatePerSec <= 0.0000001160 {
+		t.Errorf("shard.failureRatePerSec = %v (want elevated above the ~1.16e-7 chart default)", p.Shard.FailureRatePerSec)
+	}
+	// The steady 50k reclaim bound must NOT be relaxed for this run — the
+	// assertion is that Failed-recovery doesn't leak into Phase 3.
+	if p.SLO.MaxReclaimActionsDuringSoak != 15000 {
+		t.Errorf("maxReclaimActionsDuringSoak = %d (want the un-relaxed 50k steady 15000)", p.SLO.MaxReclaimActionsDuringSoak)
+	}
+}
+
 // TestReclaimCycleProfile_ValidV2 validates the scale-down/reclaim drill
 // profile loads through readProfileV2 → validate → merge and carries the
 // scaleDowns demand-drop the load-driver consumes (the ladder-only BYO

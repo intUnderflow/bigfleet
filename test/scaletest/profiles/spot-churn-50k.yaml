@@ -1,0 +1,66 @@
+# spot-churn-50k — sustained spot/hardware-fault churn at headline scale.
+#
+# 50k.yaml's twin with the M38 failure injector cranked up: a sustained,
+# unsolicited Configured→Failed churn at ~50× the chart's production-
+# realistic default (1.16e-7/s ≈ 1%/day per machine), modelling a fleet
+# under heavy spot-reclaim / hardware-fault pressure — the one failure mode
+# that happens CONTINUOUSLY in a real fleet but the throughput ladder omits.
+#
+# What it proves: the transitional-state-recovery + drain-grace + re-provision
+# path holds under continuous induced failure at 5M scale — bootstrap success
+# stays ≥0.99 (materialisation keeps up), shortfalls stay 0, the ADR-0054
+# gates hold. AND — the load-bearing assertion — Failed-driven re-provision
+# (a reconcile/re-Create loop) does NOT inflate the Phase-3 reclaim gate:
+# maxReclaimActionsDuringSoak stays at the 50k steady bound (15000) despite
+# the churn, confirming Failed-recovery and Phase-3 reclaim are separate
+# accounting. If the bound breaches, re-provision is leaking into reclaim.
+#
+# ADR-0043: this is reality-faithful supply-side churn (the rate is anchored
+# to the shard flag's own 0.1–1%/day real-fleet citation), not a fabricated
+# shape — it's the realistic churn the steady soak leaves out.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "spot-churn-50k"
+  description: "Sustained spot/hardware-fault churn at uber-50k: ADR-0054 gates + bounded-reclaim hold under continuous Configured→Failed injection."
+
+scale:
+  machines: 50000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 3600
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+  settleSeconds: 600
+
+rampBudget: 120m
+
+# 50× the chart's production-realistic 1.16e-7/s default → ~5.8e-6/s per
+# Configured machine. At ~64K Configured that's ~0.37 induced failures/s →
+# ~1,300 over the 60-min soak: enough to exercise the recovery path
+# continuously, well short of dominating a 5M-pod fleet. Tune down if it
+# breaches bootstrap-success.
+shard:
+  failureRatePerSec: 0.0000058
+
+slo:
+  shardCycleDurationP99Seconds: 25
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10
+  # The load-bearing assertion: Failed-driven re-provision must NOT inflate
+  # the Phase-3 reclaim count — the steady 50k bound holds despite the churn.
+  maxReclaimActionsDuringSoak: 15000

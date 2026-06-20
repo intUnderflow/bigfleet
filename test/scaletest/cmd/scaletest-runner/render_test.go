@@ -191,6 +191,31 @@ func TestRenderHelmValues_MachineDemandSeedSizing(t *testing.T) {
 	}
 }
 
+// TestRenderHelmValues_FailureRateOverride pins the chaos passthrough: a
+// profile that sets shard.failureRatePerSec lands it in the rendered shard
+// values (so the chart drives the M38 injector at that rate), and a profile
+// that leaves it unset renders no key (the chart's production-realistic
+// default applies — every existing profile unchanged).
+func TestRenderHelmValues_FailureRateOverride(t *testing.T) {
+	t.Parallel()
+	p, s, cfg := fixtureMerged(t)
+
+	// Absence: default fixture has no failure-rate override → no shard key.
+	noOverride := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	shard, _ := noOverride["shard"].(map[string]any)
+	if _, ok := shard["failureRatePerSec"]; ok {
+		t.Errorf("shard.failureRatePerSec present with no override: %v", shard["failureRatePerSec"])
+	}
+
+	// Presence: an elevated rate rides through to the rendered shard map.
+	p.Shard.FailureRatePerSec = 0.0000058
+	withOverride := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	shard2, _ := withOverride["shard"].(map[string]any)
+	if got, ok := shard2["failureRatePerSec"].(float64); !ok || got != 0.0000058 {
+		t.Errorf("shard.failureRatePerSec = %v (ok=%v), want 5.8e-6", shard2["failureRatePerSec"], ok)
+	}
+}
+
 func TestRenderHelmValues_TinyScalePrometheusFootprint(t *testing.T) {
 	t.Parallel()
 	p, s, _ := fixtureMerged(t)

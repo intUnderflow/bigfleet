@@ -345,6 +345,17 @@ type profileV2 struct {
 		ShardReplicas       int `yaml:"shardReplicas"`
 		CoordinatorReplicas int `yaml:"coordinatorReplicas"`
 	} `yaml:"topology"`
+
+	// Shard carries optional shard-engine overrides a profile can set
+	// directly (vs the seed tiers derived from Seed/Scale). Today: the M38
+	// failure-injector rate, so a chaos profile can drive sustained
+	// spot/hardware-fault churn above the chart's production-realistic
+	// default (shard.failureRatePerSec, ~1.16e-7/s per Configured machine).
+	// 0 = unset → the chart default applies, so every existing profile
+	// renders unchanged.
+	Shard struct {
+		FailureRatePerSec float64 `yaml:"failureRatePerSec"`
+	} `yaml:"shard"`
 }
 
 // validate returns nil if the profile is well-formed.
@@ -674,6 +685,12 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	// when present so profiles without it render exactly as before.
 	if len(p.LoadProfile.ScaleDowns) > 0 {
 		values["loadProfile"].(map[string]any)["scaleDowns"] = p.LoadProfile.ScaleDowns
+	}
+	// shard.failureRatePerSec override: only set when a chaos profile asks
+	// for an elevated rate, so profiles without it inherit the chart's
+	// production-realistic default unchanged.
+	if p.Shard.FailureRatePerSec > 0 {
+		values["shard"].(map[string]any)["failureRatePerSec"] = p.Shard.FailureRatePerSec
 	}
 	if len(p.RunnerActions) > 0 {
 		values["runnerActions"] = p.RunnerActions
