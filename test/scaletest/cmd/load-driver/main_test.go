@@ -806,6 +806,49 @@ func TestScaleDownTo(t *testing.T) {
 	}
 }
 
+// TestBurstPhase pins the burst window decision, including the
+// bigfleet-uber #89 regression: a durationSeconds-0 (noDrain) burst must
+// FIRE at fireAt and NEVER drain — the old code computed drainAt == fireAt,
+// a zero-width window the rising edge never satisfied, so the burst silently
+// no-op'd. A finite burst fires inside [fireAt,drainAt) and drains at drainAt.
+func TestBurstPhase(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	fireAt := base.Add(600 * time.Second)
+	// Finite burst: drains 600s after firing.
+	finiteDrain := fireAt.Add(600 * time.Second)
+	// noDrain (durationSeconds 0): drainAt == fireAt in construction.
+	noDrain := fireAt
+
+	cases := []struct {
+		name      string
+		now       time.Time
+		drainAt   time.Time
+		noDrain   bool
+		extraOn   bool
+		wantFire  bool
+		wantDrain bool
+	}{
+		// noDrain — the #89 fix.
+		{"noDrain before fire", fireAt.Add(-time.Second), noDrain, true, false, false, false},
+		{"noDrain at fire", fireAt, noDrain, true, false, true, false},
+		{"noDrain long after fire, already on", fireAt.Add(9999 * time.Second), noDrain, true, true, false, false},
+		// finite burst.
+		{"finite before fire", fireAt.Add(-time.Second), finiteDrain, false, false, false, false},
+		{"finite at fire (rising edge)", fireAt, finiteDrain, false, false, true, false},
+		{"finite mid-window, already on", fireAt.Add(300 * time.Second), finiteDrain, false, true, false, false},
+		{"finite at drain (falling edge)", finiteDrain, finiteDrain, false, true, false, true},
+		{"finite after drain, already off", finiteDrain.Add(time.Second), finiteDrain, false, false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fire, drain := burstPhase(c.now, fireAt, c.drainAt, c.noDrain, c.extraOn)
+			if fire != c.wantFire || drain != c.wantDrain {
+				t.Errorf("burstPhase = (fire %v, drain %v), want (%v, %v)", fire, drain, c.wantFire, c.wantDrain)
+			}
+		})
+	}
+}
+
 // TestPlanDemandStep pins the oscillation drill's dispatch decision: a
 // multiplier below the current level sheds, above it re-grows, and exactly
 // at it is a no-op. Pure function — the apiserver-heavy rampTo path is

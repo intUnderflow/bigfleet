@@ -756,6 +756,25 @@ type pendingBurst struct {
 	// picker (legacy ADR-0015 §3 behaviour).
 	arch    *archetype.Archetype
 	extraOn bool
+	// noDrain implements the runner's documented burst contract
+	// "durationSeconds 0 = never drain — the gang lives for the rest of the
+	// run" (profileBurst doc). Without it, durationSeconds 0 yields
+	// drainAt == fireAt — a zero-width [fireAt,drainAt) window the rising
+	// edge never satisfies, so the burst NEVER FIRES (bigfleet-uber #89:
+	// preemption-5k's burst silently no-op'd). When noDrain is set the
+	// burst fires at fireAt and is never drained.
+	noDrain bool
+}
+
+// burstPhase decides, for one burst observed at `now`, whether this tick is
+// its rising edge (fire) and/or falling edge (drain), given its current
+// extraOn state. A noDrain burst (durationSeconds 0) fires once and is
+// never drained — honouring the runner's "0 = never drain" contract.
+// Pure (no apiserver) so the window logic is unit-testable.
+func burstPhase(now, fireAt, drainAt time.Time, noDrain, extraOn bool) (fire, drain bool) {
+	fire = !extraOn && !now.Before(fireAt) && (noDrain || now.Before(drainAt))
+	drain = extraOn && !noDrain && !now.Before(drainAt)
+	return fire, drain
 }
 
 // runBursts schedules and fires the profile's burst events on a wall-clock
@@ -793,6 +812,7 @@ func (d *driver) runBursts(ctx context.Context, startedAt time.Time) {
 			drainAt: startedAt.Add(time.Duration(b.AtSeconds+b.DurationSeconds) * time.Second),
 			spec:    b,
 			arch:    arch,
+			noDrain: b.DurationSeconds == 0,
 		})
 		d.log.Info("burst scheduled", "archetype", b.Archetype, "at_s", b.AtSeconds, "extra", b.ExtraTarget, "duration_s", b.DurationSeconds)
 	}
@@ -811,14 +831,15 @@ func (d *driver) runBursts(ctx context.Context, startedAt time.Time) {
 			// objects are created on the rising edge and deleted on the
 			// falling edge.
 			for _, pb := range bursts {
-				if !pb.extraOn && !now.Before(pb.fireAt) && now.Before(pb.drainAt) {
+				fire, drain := burstPhase(now, pb.fireAt, pb.drainAt, pb.noDrain, pb.extraOn)
+				if fire {
 					pb.extraOn = true
-					d.log.Info("burst firing", "archetype", pb.spec.Archetype, "extra", pb.spec.ExtraTarget)
+					d.log.Info("burst firing", "archetype", pb.spec.Archetype, "extra", pb.spec.ExtraTarget, "no_drain", pb.noDrain)
 					if err := d.rampExtra(ctx, pb.spec.ExtraTarget, pb.arch); err != nil {
 						d.log.Warn("burst ramp failed", "err", err)
 					}
 				}
-				if pb.extraOn && !now.Before(pb.drainAt) {
+				if drain {
 					pb.extraOn = false
 					d.log.Info("burst drained", "archetype", pb.spec.Archetype)
 					d.drainBurst(ctx)
