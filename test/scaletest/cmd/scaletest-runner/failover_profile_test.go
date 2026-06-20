@@ -327,3 +327,105 @@ func TestOscillationProfile_ValidV2(t *testing.T) {
 		t.Errorf("shard.speculativeShedMultiplier set for a demandSteps profile: %v (burst ceiling must stay at peak)", shardMap["speculativeShedMultiplier"])
 	}
 }
+
+// TestPreemptionProfile_ValidV2 pins the bigfleet-uber #89 reconstruction of
+// the Phase-2 preemption drill: the near-zero-headroom regime is built from a
+// demand-sized absolute Speculative seed (seed.speculativeCount, the new
+// knob) with NO configured/idle seed and preBind off, plus a transient
+// high-priority burst. Asserts the profile loads + renders the seed as the
+// shard's absolute per-shard seedSpeculative (NOT a machines-multiple), and
+// carries the expectPreemptions inversion.
+func TestPreemptionProfile_ValidV2(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+	profPath := filepath.Join(root, "test", "scaletest", "profiles", "preemption-5k.yaml")
+	p, err := readProfileV2(profPath)
+	if err != nil {
+		t.Fatalf("readProfileV2: %v", err)
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	// Demand-sized elastic seed, no owned/idle seed.
+	if p.Seed.SpeculativeCount != 4300 {
+		t.Errorf("seed.speculativeCount = %d (want 4300 — demand-sized elastic pool)", p.Seed.SpeculativeCount)
+	}
+	if p.Seed.SpeculativeMultiplier != 0 {
+		t.Errorf("seed.speculativeMultiplier = %d (want 0 — count and multiplier are mutually exclusive)", p.Seed.SpeculativeMultiplier)
+	}
+	if p.Seed.ConfiguredFraction != 0 || p.Seed.IdleHeadroomFraction != 0 || p.Seed.PreBind {
+		t.Errorf("seed = %+v (want configuredFraction 0, idleHeadroomFraction 0, preBind false)", p.Seed)
+	}
+	// The inversion + the transient high-priority burst.
+	if !p.SLO.ExpectPreemptions {
+		t.Error("expectPreemptions = false (want true — the engine must actually preempt)")
+	}
+	if len(p.LoadProfile.Bursts) != 1 {
+		t.Fatalf("bursts = %+v (want exactly one high-priority burst)", p.LoadProfile.Bursts)
+	}
+	b := p.LoadProfile.Bursts[0]
+	if b.Archetype != "critical-realtime" {
+		t.Errorf("burst archetype = %q (want critical-realtime)", b.Archetype)
+	}
+	if b.DurationSeconds <= 0 {
+		t.Errorf("burst durationSeconds = %d (want > 0 — transient, drains before the satisfied-check)", b.DurationSeconds)
+	}
+
+	// The absolute seed renders to the shard's per-shard seedSpeculative
+	// verbatim (single shard → 4300), with no configured seed.
+	arch, typed, err := loadCatalogArchetypes(profPath, p.Catalog.Archetypes)
+	if err != nil {
+		t.Fatalf("loadCatalogArchetypes: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg, arch, typed)
+	shardMap, ok := values["shard"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered values missing shard map: %#v", values["shard"])
+	}
+	if got := shardMap["seedSpeculative"]; got != 4300 {
+		t.Errorf("rendered shard.seedSpeculative = %v (want 4300 — absolute per-shard, not machinesEffective×multiplier)", got)
+	}
+	if got := shardMap["seedConfiguredPerCluster"]; got != 0 {
+		t.Errorf("rendered shard.seedConfiguredPerCluster = %v (want 0)", got)
+	}
+}
+
+// TestSeedSpeculative_CountMultiplierMutuallyExclusive pins the validation:
+// a profile may set seed.speculativeCount OR seed.speculativeMultiplier, not
+// both (they would otherwise silently race in renderHelmValues, which prefers
+// the multiplier).
+func TestSeedSpeculative_CountMultiplierMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	base := func() profileV2 {
+		var p profileV2
+		p.Metadata.Name = "x"
+		p.Scale.Machines = 5000
+		p.Scale.Density = 100
+		p.LoadProfile.RampSeconds = 1
+		return p
+	}
+	both := base()
+	both.Seed.SpeculativeCount = 4300
+	both.Seed.SpeculativeMultiplier = 1
+	if err := both.validate(); err == nil {
+		t.Error("validate() accepted both speculativeCount and speculativeMultiplier (want mutual-exclusion error)")
+	}
+	neg := base()
+	neg.Seed.SpeculativeCount = -1
+	if err := neg.validate(); err == nil {
+		t.Error("validate() accepted negative speculativeCount")
+	}
+	countOnly := base()
+	countOnly.Seed.SpeculativeCount = 4300
+	if err := countOnly.validate(); err != nil {
+		t.Errorf("validate() rejected speculativeCount-only profile: %v", err)
+	}
+}

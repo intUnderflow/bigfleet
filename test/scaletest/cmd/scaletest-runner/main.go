@@ -371,7 +371,19 @@ type profileV2 struct {
 	Seed struct {
 		ConfiguredFraction    float64 `yaml:"configuredFraction"`
 		SpeculativeMultiplier int     `yaml:"speculativeMultiplier"`
-		IdleHeadroomFraction  float64 `yaml:"idleHeadroomFraction"`
+		// SpeculativeCount is an ABSOLUTE per-shard Speculative
+		// (elastic-procurement) seed, an alternative to the
+		// machines-multiple SpeculativeMultiplier for regimes that must
+		// size the elastic pool to demand rather than to a whole multiple
+		// of machinesEffective. SpeculativeMultiplier is integer-only
+		// (1×machinesEffective already overshoots natural bound demand),
+		// so it cannot express a near-zero-headroom pool; SpeculativeCount
+		// can (bigfleet-uber #89 preemption-5k: seed ≈ natural demand so a
+		// high-priority burst must Preempt, not bind spare). Per-shard, NOT
+		// divided by replicas (mirrors the shard's --seed-speculative).
+		// Mutually exclusive with SpeculativeMultiplier.
+		SpeculativeCount     int     `yaml:"speculativeCount"`
+		IdleHeadroomFraction float64 `yaml:"idleHeadroomFraction"`
 		// PreBind (M52.B, ADR-0035): when true, the load-driver
 		// fast-binds the initial Pod fill to fake-Nodes via the Bind
 		// API (after the Pods have gone through the realistic
@@ -480,6 +492,12 @@ func (p profileV2) validate() error {
 	}
 	if p.Seed.IdleHeadroomFraction < 0 {
 		return fmt.Errorf("profile %q: seed.idleHeadroomFraction must be ≥ 0 (got %g)", name, p.Seed.IdleHeadroomFraction)
+	}
+	if p.Seed.SpeculativeCount < 0 {
+		return fmt.Errorf("profile %q: seed.speculativeCount must be ≥ 0 (got %d)", name, p.Seed.SpeculativeCount)
+	}
+	if p.Seed.SpeculativeCount > 0 && p.Seed.SpeculativeMultiplier > 0 {
+		return fmt.Errorf("profile %q: seed.speculativeCount and seed.speculativeMultiplier are mutually exclusive (got %d and %d)", name, p.Seed.SpeculativeCount, p.Seed.SpeculativeMultiplier)
 	}
 	return nil
 }
@@ -690,6 +708,11 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	speculativePerShard := 0
 	if p.Seed.SpeculativeMultiplier > 0 {
 		speculativePerShard = machinesEffective * p.Seed.SpeculativeMultiplier / replicas
+	} else if p.Seed.SpeculativeCount > 0 {
+		// Absolute per-shard seed (already per-shard — NOT divided by
+		// replicas), for near-zero-headroom regimes where a whole multiple
+		// of machinesEffective overshoots demand (#89 preemption-5k).
+		speculativePerShard = p.Seed.SpeculativeCount
 	}
 
 	values := map[string]any{
