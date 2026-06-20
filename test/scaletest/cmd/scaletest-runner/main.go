@@ -277,6 +277,19 @@ type profileScaleDown struct {
 	TargetMultiplier float64 `yaml:"targetMultiplier"`
 }
 
+// profileDemandStep is one step of a bidirectional demand timeline (the
+// oscillation drill): at AtSeconds the load-driver moves the active Pod
+// count to Target×TargetMultiplier — shedding (Phase 3 reclaim) below the
+// current level or re-growing (Phase 1 re-procure) above it. Unlike
+// profileScaleDown the multiplier may exceed 1, and a demandSteps timeline
+// does NOT trigger the speculative-pool track-down (the burst ceiling stays
+// at peak so the re-grow is never ceiling-limited). Threaded into the
+// load-driver's loadProfile.demandSteps.
+type profileDemandStep struct {
+	AtSeconds        int     `yaml:"atSeconds"`
+	TargetMultiplier float64 `yaml:"targetMultiplier"`
+}
+
 // substrateFile is the runtime-side half of ADR-0034: it describes the
 // hosts the scale test will run on, the per-cluster apiserver operating
 // point, and the kwok-pod resource budget. Orthogonal to profileFile,
@@ -402,6 +415,12 @@ type profileV2 struct {
 		// drops threaded into the load-driver. Like bursts, the V2 struct
 		// is the gate — a scaleDowns block is dropped unless declared here.
 		ScaleDowns []profileScaleDown `yaml:"scaleDowns"`
+		// DemandSteps (oscillation drill): a bidirectional demand timeline
+		// threaded into the load-driver. Like bursts/scaleDowns the V2
+		// struct is the gate — a demandSteps block is dropped unless
+		// declared here. Does NOT trigger the speculative-pool track-down
+		// (that derivation keys on scaleDowns only).
+		DemandSteps []profileDemandStep `yaml:"demandSteps"`
 	} `yaml:"loadProfile"`
 	// RampBudget overrides the rampSeconds-derived deadline. Same
 	// semantics as profileFile.RampBudget (M22). Empty → use
@@ -782,6 +801,14 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			shardMap["speculativeShedAtSeconds"] = first.AtSeconds
 			shardMap["speculativeShedMultiplier"] = first.TargetMultiplier
 		}
+	}
+	// demandSteps (oscillation drill) ride the same loadProfile toYaml path.
+	// Deliberately NO speculative-pool track-down: the burst ceiling stays at
+	// peak across the oscillation so the re-grow steps are never
+	// ceiling-limited — isolating the engine's settle/thrash behaviour from
+	// burst-ceiling sizing (the latter is the scaleDowns/#337 concern).
+	if len(p.LoadProfile.DemandSteps) > 0 {
+		values["loadProfile"].(map[string]any)["demandSteps"] = p.LoadProfile.DemandSteps
 	}
 	// shard.failureRatePerSec override: only set when a chaos profile asks
 	// for an elevated rate, so profiles without it inherit the chart's

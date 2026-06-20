@@ -247,3 +247,83 @@ func TestRenderHelmValues_SpeculativeShedAbsentWithoutScaleDown(t *testing.T) {
 		t.Errorf("shard.speculativeShedMultiplier present with no scaleDowns: %v", shardMap["speculativeShedMultiplier"])
 	}
 }
+
+// TestOscillationProfile_ValidV2 validates the shed↔regrow oscillation drill
+// (depth-slate #6): the profile loads through readProfileV2 → validate →
+// merge and carries the bidirectional demandSteps timeline the load-driver
+// consumes. Pins the two-cycle down→up shape, that demandSteps threads into
+// the rendered loadProfile, and — crucially — that a demandSteps profile
+// does NOT trigger the speculative-pool track-down (the burst ceiling stays
+// at peak so the re-grow legs are never ceiling-limited; #337 keys on
+// scaleDowns only).
+func TestOscillationProfile_ValidV2(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	s, err := readSubstrate(filepath.Join(root, "test", "scaletest", "substrates", "example-mid-host.yaml"))
+	if err != nil {
+		t.Fatalf("readSubstrate: %v", err)
+	}
+	profPath := filepath.Join(root, "test", "scaletest", "profiles", "oscillation-5k.yaml")
+	p, err := readProfileV2(profPath)
+	if err != nil {
+		t.Fatalf("readProfileV2: %v", err)
+	}
+	if err := p.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	cfg, err := merge(p, s)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	// No scaleDowns — the oscillation drill is demandSteps-only.
+	if len(p.LoadProfile.ScaleDowns) != 0 {
+		t.Errorf("scaleDowns = %+v (want none — oscillation uses demandSteps)", p.LoadProfile.ScaleDowns)
+	}
+	// Two full down→up cycles: 0.5, 1.0, 0.5, 1.0.
+	if len(p.LoadProfile.DemandSteps) != 4 {
+		t.Fatalf("demandSteps = %+v (want exactly four — two down→up cycles)", p.LoadProfile.DemandSteps)
+	}
+	wantMults := []float64{0.5, 1.0, 0.5, 1.0}
+	last := 0
+	for i, ds := range p.LoadProfile.DemandSteps {
+		if ds.TargetMultiplier != wantMults[i] {
+			t.Errorf("demandStep[%d] TargetMultiplier = %v (want %v)", i, ds.TargetMultiplier, wantMults[i])
+		}
+		if ds.AtSeconds <= last {
+			t.Errorf("demandStep[%d] AtSeconds = %d (want strictly increasing, > %d)", i, ds.AtSeconds, last)
+		}
+		last = ds.AtSeconds
+	}
+	// Inverted SLO posture: reclaim is expected on each shed, so the bound
+	// must be generous (non-zero).
+	if p.SLO.MaxReclaimActionsDuringSoak <= 0 {
+		t.Errorf("maxReclaimActionsDuringSoak = %d (want > 0 — reclaim is expected on each shed)", p.SLO.MaxReclaimActionsDuringSoak)
+	}
+
+	arch, typed, err := loadCatalogArchetypes(profPath, p.Catalog.Archetypes)
+	if err != nil {
+		t.Fatalf("loadCatalogArchetypes: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg, arch, typed)
+
+	// demandSteps must thread into the load-driver's loadProfile.
+	lp, ok := values["loadProfile"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered values missing loadProfile map: %#v", values["loadProfile"])
+	}
+	steps, ok := lp["demandSteps"].([]profileDemandStep)
+	if !ok || len(steps) != 4 {
+		t.Fatalf("rendered loadProfile.demandSteps = %#v (want 4 profileDemandStep)", lp["demandSteps"])
+	}
+
+	// Absence pin: a demandSteps profile must NOT set the speculative-shed
+	// keys — the burst ceiling stays at peak across the oscillation.
+	shardMap, _ := values["shard"].(map[string]any)
+	if _, ok := shardMap["speculativeShedAtSeconds"]; ok {
+		t.Errorf("shard.speculativeShedAtSeconds set for a demandSteps profile: %v (burst ceiling must stay at peak)", shardMap["speculativeShedAtSeconds"])
+	}
+	if _, ok := shardMap["speculativeShedMultiplier"]; ok {
+		t.Errorf("shard.speculativeShedMultiplier set for a demandSteps profile: %v (burst ceiling must stay at peak)", shardMap["speculativeShedMultiplier"])
+	}
+}

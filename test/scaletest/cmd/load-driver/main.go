@@ -120,6 +120,21 @@ type profile struct {
 	// reclaim-cycle drill. Empty = no scale-down.
 	ScaleDowns []scaleDownSpec `yaml:"scaleDowns"`
 
+	// DemandSteps: a scheduled BIDIRECTIONAL demand timeline (the
+	// oscillation drill). Unlike ScaleDowns — which only sheds, and which
+	// the runner couples to the speculative-pool track-down (#337) — each
+	// step here moves the active population to Target×TargetMultiplier in
+	// EITHER direction: a multiplier below the current level sheds objects
+	// (Phase 3 reclaims), a multiplier above it re-grows them (rampTo;
+	// Phase 1 re-procures). A down→up→down sequence exercises whether the
+	// engine SETTLES at each level or oscillates (over-reclaim then
+	// over-provision then over-reclaim — the M67 thrash). The Speculative
+	// burst ceiling is deliberately left at peak across the oscillation (no
+	// track-down) so the re-grow is never burst-ceiling-limited — isolating
+	// "does the engine thrash?" from "is the burst ceiling too low after a
+	// shed?". Empty = no demand steps.
+	DemandSteps []demandStep `yaml:"demandSteps"`
+
 	// ClusterSizeDistribution (ADR-0015 §5): override the per-pod
 	// effective Target via a heavy-tailed distribution. Each pod
 	// computes its multiplier deterministically from POD_NAME's
@@ -174,6 +189,19 @@ type burstSpec struct {
 // selectivity — so the fleet-wide demand drop produces a clean Phase 3
 // reclaim signal.
 type scaleDownSpec struct {
+	AtSeconds        int     `yaml:"atSeconds"`
+	TargetMultiplier float64 `yaml:"targetMultiplier"`
+}
+
+// demandStep is one scheduled BIDIRECTIONAL demand level (the oscillation
+// drill). At AtSeconds from the driver's start the active population moves
+// to Target×TargetMultiplier — sheds (scaleDownTo) if that is below the
+// current level, re-grows (rampTo) if above. Like scaleDownSpec every
+// cluster fires every step (no selectivity), so the fleet-wide level
+// change produces a clean Phase 1 / Phase 3 signal. TargetMultiplier may
+// be any value > 0 (above OR below 1 — the inverse-only restriction of
+// scaleDownSpec does not apply here).
+type demandStep struct {
 	AtSeconds        int     `yaml:"atSeconds"`
 	TargetMultiplier float64 `yaml:"targetMultiplier"`
 }
@@ -625,6 +653,11 @@ func (d *driver) run(ctx context.Context) error {
 	// same wall-clock anchor as bursts; fires fleet-wide (no selectivity).
 	go d.runScaleDowns(ctx, startedAt)
 
+	// Demand steps (oscillation drill): the bidirectional twin of
+	// scaleDowns, same wall-clock anchor, fires fleet-wide. Sheds or
+	// re-grows the steady population to each step's level in time order.
+	go d.runDemandSteps(ctx, startedAt)
+
 	// M52.B (ADR-0035): pre-bind the initial Pods to fake-Nodes,
 	// bypassing the slow kube-scheduler ramp. Patient retry — fake-
 	// Nodes only materialise after the operator starts (which the
@@ -876,6 +909,93 @@ func (d *driver) runScaleDowns(ctx context.Context, startedAt time.Time) {
 					want := int(float64(d.prof.Target) * e.mult)
 					d.log.Info("scale-down firing", "multiplier", e.mult, "want", want)
 					d.scaleDownTo(ctx, want)
+				}
+			}
+		}
+	}
+}
+
+// demandStepAction is what a demand step does relative to the current
+// active population: shed objects, re-grow objects, or nothing.
+type demandStepAction int
+
+const (
+	demandStepNoop demandStepAction = iota
+	demandStepDown
+	demandStepUp
+)
+
+// planDemandStep decides the action and target level for one demand step,
+// given the configured Target, the step multiplier and the current active
+// count. Pure (no apiserver, no locks) so the dispatch logic is unit-
+// testable; runDemandSteps applies the result via scaleDownTo / rampTo.
+func planDemandStep(target int, mult float64, active int) (demandStepAction, int) {
+	want := int(float64(target) * mult)
+	switch {
+	case want < active:
+		return demandStepDown, want
+	case want > active:
+		return demandStepUp, want
+	default:
+		return demandStepNoop, want
+	}
+}
+
+// runDemandSteps fires the profile's bidirectional demand steps on a
+// wall-clock timeline anchored at startedAt (mirroring runScaleDowns).
+// There is NO per-cluster selectivity — every cluster fires every step,
+// so the fleet-wide level change produces a clean Phase 1 / Phase 3
+// signal. Each step is one-shot: the population stays at the new level and
+// the steady churn loop maintains it on the survivors (down) or the
+// freshly-created objects (up). Steps are evaluated against the LIVE active
+// count at fire time, so a sequence reaches each step's absolute level
+// regardless of where the previous step left it.
+func (d *driver) runDemandSteps(ctx context.Context, startedAt time.Time) {
+	type pending struct {
+		fireAt time.Time
+		mult   float64
+		fired  bool
+	}
+	events := make([]*pending, 0, len(d.prof.DemandSteps))
+	for _, s := range d.prof.DemandSteps {
+		if s.TargetMultiplier <= 0 {
+			d.log.Warn("ignoring demand step with non-positive multiplier", "multiplier", s.TargetMultiplier, "at_s", s.AtSeconds)
+			continue
+		}
+		events = append(events, &pending{
+			fireAt: startedAt.Add(time.Duration(s.AtSeconds) * time.Second),
+			mult:   s.TargetMultiplier,
+		})
+		d.log.Info("demand step scheduled", "at_s", s.AtSeconds, "multiplier", s.TargetMultiplier)
+	}
+	if len(events) == 0 {
+		return
+	}
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			for _, e := range events {
+				if e.fired || now.Before(e.fireAt) {
+					continue
+				}
+				e.fired = true
+				action, want := planDemandStep(d.prof.Target, e.mult, d.activeCount())
+				switch action {
+				case demandStepDown:
+					d.log.Info("demand step firing (shed)", "multiplier", e.mult, "want", want)
+					d.scaleDownTo(ctx, want)
+				case demandStepUp:
+					d.log.Info("demand step firing (re-grow)", "multiplier", e.mult, "want", want)
+					if err := d.rampTo(ctx, want, false); err != nil {
+						d.log.Warn("demand step re-grow failed", "err", err)
+					}
+					target.Set(float64(d.activeCount()))
+				default:
+					d.log.Info("demand step is a no-op at current level", "multiplier", e.mult, "want", want, "active", d.activeCount())
 				}
 			}
 		}

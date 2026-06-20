@@ -1,0 +1,99 @@
+# oscillation-5k — shed↔regrow oscillation drill (depth-slate #6) at uber-5k.
+#
+# The reclaim-cycle drill sheds ONCE and measures the Phase-3 reclaim
+# magnitude. This drill sheds and re-grows REPEATEDLY and asks the harder
+# question: does the engine SETTLE at each demand level, or does it
+# OSCILLATE — over-reclaim on the shed, then over-provision on the regrow,
+# then over-reclaim again (the M67 thrash)? Two full down→up cycles, each
+# leg given 12 min to settle before the next step, so a step always starts
+# from a settled state and intra-window thrash is distinguishable from
+# steps-too-close-together.
+#
+# THE PRIMITIVE — loadProfile.demandSteps (bidirectional, NOT scaleDowns):
+# each step moves the active demand to Target×targetMultiplier in EITHER
+# direction. A multiplier below the current level sheds steady workload
+# objects (Phase 3 reclaims the now-excess Configured machines); a
+# multiplier above it re-grows them via rampTo (Phase 1 re-procures). The
+# steady churn loop maintains whichever level the last step left. This is
+# the re-grow primitive the one-directional scaleDowns lacked.
+#
+# SPECULATIVE BURST CEILING STAYS AT PEAK (the key difference from
+# reclaim-cycle): a demandSteps timeline deliberately does NOT trigger the
+# speculative-pool track-down (#337). The burst ceiling is held at its
+# seeded peak (speculativeMultiplier × machines) across the whole
+# oscillation, so the re-grow legs are NEVER burst-ceiling-limited — demand
+# never exceeds the original Target, the ceiling is 3× Target. This ISOLATES
+# the question under test ("does the engine thrash across shed↔regrow?")
+# from burst-ceiling sizing (which is the scaleDowns/#337 concern, measured
+# by the reclaim-cycle drill instead). Pure harness fixture choice — the
+# engine never sizes the Speculative pool either way.
+#
+# SLO POSTURE — THE INVERSION (same as reclaim-cycle): reclaim is the
+# EXPECTED healthy outcome on each shed, so maxReclaimActionsDuringSoak is
+# GENEROUS — it spans TWO half-fleet sheds (~2× the reclaim-cycle drill's
+# single-shed 5,127), set to 15,000 with churn margin; it still catches
+# pathological runaway oscillation (which would blow past many× fleet size).
+# The OSCILLATION verdict itself is read by the operator from the Phase-3
+# action-count + demand/inventory TIME-SERIES, not a single threshold:
+#   - cycle-2 reclaim ≈ cycle-1 reclaim (no drift — each shed reclaims the
+#     same magnitude; a growing count = the engine isn't fully settling),
+#   - Phase 3 INERT in every settle window (no intra-window thrash),
+#   - each regrow re-procures to full with only a TRANSIENT shortfall that
+#     resolves before the next step (the post-soak sample lands at a
+#     re-grown, settled 1.0 level → shortfalls 0, reclaim inert).
+# The ADR-0054 capacity-delivery gates (uber-5k regime) MUST hold across
+# every step.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "oscillation-5k"
+  description: "Shed↔regrow oscillation drill at uber-5k: two full down→up demand cycles; assert the engine settles at each level (bounded reclaim per shed, clean re-procure per regrow) and does not thrash."
+
+scale:
+  machines: 5000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 1800
+  # 60-min soak: 4 demand steps at 720s spacing (two down→up cycles), then
+  # a final 12-min settle so the post-soak sample lands on a re-grown,
+  # settled level.
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+  # Two full oscillation cycles: shed to 50% → regrow to 100% → shed to
+  # 50% → regrow to 100%. 12 min between steps to settle each leg.
+  demandSteps:
+    - atSeconds: 720
+      targetMultiplier: 0.5
+    - atSeconds: 1440
+      targetMultiplier: 1.0
+    - atSeconds: 2160
+      targetMultiplier: 0.5
+    - atSeconds: 2880
+      targetMultiplier: 1.0
+
+rampBudget: 60m
+
+slo:
+  # Reclaim is EXPECTED on each shed — generous bound spanning TWO half-fleet
+  # sheds (≈2× the reclaim-cycle single-shed 5,127 + churn margin); still
+  # catches runaway oscillation. The no-drift / no-thrash verdict is read
+  # from the time-series, not this threshold.
+  maxReclaimActionsDuringSoak: 15000
+  # ADR-0054 capacity-delivery gates — must hold across every step.
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

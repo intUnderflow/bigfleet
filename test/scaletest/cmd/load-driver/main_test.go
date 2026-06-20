@@ -805,3 +805,115 @@ func TestScaleDownTo(t *testing.T) {
 		t.Errorf("scaleDownTo(want>active) changed activeCount %d -> %d", before, got)
 	}
 }
+
+// TestPlanDemandStep pins the oscillation drill's dispatch decision: a
+// multiplier below the current level sheds, above it re-grows, and exactly
+// at it is a no-op. Pure function — the apiserver-heavy rampTo path is
+// covered separately (TestRampToTermination); this fixes the direction.
+func TestPlanDemandStep(t *testing.T) {
+	const target = 1000
+	cases := []struct {
+		name       string
+		mult       float64
+		active     int
+		wantAction demandStepAction
+		wantLevel  int
+	}{
+		{"shed below current", 0.5, 1000, demandStepDown, 500},
+		{"regrow above current", 1.0, 500, demandStepUp, 1000},
+		{"regrow past original target", 1.5, 1000, demandStepUp, 1500},
+		{"no-op at current level", 0.5, 500, demandStepNoop, 500},
+		{"shed to zero", 0.0001, 1000, demandStepDown, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			action, level := planDemandStep(target, c.mult, c.active)
+			if action != c.wantAction {
+				t.Errorf("planDemandStep(%d,%v,%d) action = %d, want %d", target, c.mult, c.active, action, c.wantAction)
+			}
+			if level != c.wantLevel {
+				t.Errorf("planDemandStep(%d,%v,%d) level = %d, want %d", target, c.mult, c.active, level, c.wantLevel)
+			}
+		})
+	}
+}
+
+// TestLoadProfile_DemandStepsParse verifies the bidirectional demandSteps
+// timeline parses from the load-driver profile YAML (the chart toYaml's the
+// loadProfile map through verbatim, so a parse gap silently drops the drill).
+func TestLoadProfile_DemandStepsParse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	const y = `target: 5000
+churnPerMinute: 0.02
+demandSteps:
+  - atSeconds: 720
+    targetMultiplier: 0.5
+  - atSeconds: 1440
+    targetMultiplier: 1.0
+`
+	if err := os.WriteFile(path, []byte(y), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadProfile(path)
+	if err != nil {
+		t.Fatalf("loadProfile: %v", err)
+	}
+	if len(p.DemandSteps) != 2 {
+		t.Fatalf("parsed %d demandSteps, want 2: %#v", len(p.DemandSteps), p.DemandSteps)
+	}
+	if p.DemandSteps[0] != (demandStep{AtSeconds: 720, TargetMultiplier: 0.5}) {
+		t.Errorf("demandSteps[0] = %+v, want {720 0.5}", p.DemandSteps[0])
+	}
+	if p.DemandSteps[1] != (demandStep{AtSeconds: 1440, TargetMultiplier: 1.0}) {
+		t.Errorf("demandSteps[1] = %+v, want {1440 1.0}", p.DemandSteps[1])
+	}
+}
+
+// TestRunDemandSteps_ShedsDown drives runDemandSteps end-to-end on the shed
+// (down) path: a single step at atSeconds 0 fires on the first tick and
+// sheds steady objects to the target level via scaleDownTo, leaving burst
+// objects untouched. (The re-grow path uses rampTo, which needs an
+// apiserver; its dispatch is pinned by TestPlanDemandStep.)
+func TestRunDemandSteps_ShedsDown(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("AddToScheme: %v", err)
+	}
+	d := &driver{
+		k:   fake.NewClientBuilder().WithScheme(scheme).Build(),
+		log: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+		prof: profile{
+			Target:      40,
+			DemandSteps: []demandStep{{AtSeconds: 0, TargetMultiplier: 0.5}},
+		},
+		workloads: map[string]workloadMeta{
+			"nb1": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"nb2": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"nb3": {kind: kindDeployment, archetype: "cpu-service", replicas: 10},
+			"b1":  {kind: kindDeployment, archetype: "gpu-training-large", replicas: 10, burst: true},
+		},
+	}
+	if got := d.activeCount(); got != 40 {
+		t.Fatalf("precondition activeCount = %d, want 40", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.runDemandSteps(ctx, time.Now())
+
+	// The step fires on the first 1s tick; poll for the shed to land.
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if d.activeCount() <= 20 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := d.activeCount(); got > 20 {
+		t.Errorf("after demand step (mult 0.5): activeCount = %d, want <= 20", got)
+	}
+	if _, ok := d.workloads["b1"]; !ok {
+		t.Errorf("burst workload b1 was deleted by the demand step; bursts must be left to drainBurst")
+	}
+}
