@@ -1,0 +1,96 @@
+# scarcity-5k — genuine-scarcity priority-throttle (engine-correctness).
+#
+# Supply is < demand BY DESIGN. The sole-throttle hard rule (CLAUDE.md:
+# "Priority is the sole throttling mechanism") says that when BigFleet
+# cannot satisfy all demand it must satisfy strictly PRIORITY-DESCENDING,
+# leave the surplus LOW-priority demand as a STANDING shortfall, and NEVER
+# starve high-priority. This profile constructs that regime and grades it.
+#
+# HOW SUPPLY IS HELD BELOW DEMAND (seed math, ADR-0035 / ADR-0044 §4):
+# demand = machines × density = 5000 × 100 = 500K Pods. The three supply
+# tiers are starved so the engine cannot cover it:
+#   - configuredFraction: 0.6 — only ~60% of the machine demand is bound
+#     at install (under-provisioned from the start).
+#   - speculativeMultiplier: 0 — NO elastic procurement quota. This is the
+#     load-bearing knob: with zero Speculative pool the engine has nowhere
+#     to provision NEW machines from, so the ~40% deficit cannot be closed.
+#     The shortfall is therefore GENUINE undersupply, not a slow ramp.
+#   - idleHeadroomFraction: 0 — no churn buffer either.
+#   - preBind: false — the initial fill goes through the real
+#     Unschedulable → UPC → CapacityRequest path against a fleet that
+#     cannot satisfy it (preBind would fast-bind to fake-Nodes that the
+#     scarce seed does not have).
+#
+# SLO POSTURE — THE INVERSION: the default verdict treats a standing
+# shortfall as a hard FAILURE (shardShortfalls != 0 fails pass(); a
+# standing shortfall + frozen acquisitions trips the steady-state plateau
+# fail-fast). Here a standing shortfall is the EXPECTED, CORRECT outcome,
+# so the run sets:
+#   - expectStandingShortfall: true — inverts both the pass() shortfall
+#     gate (now: shortfall MUST be > 0) and the steady-state wait (a stable
+#     standing shortfall + flat acquisitions IS steady, not stuck).
+#   - shortfallStabilityMax: bounds |Δ shortfalls| over the soak — the
+#     CONVERGENCE half. A priority-throttled steady state holds its
+#     shortfall roughly flat; a GROWING shortfall (demand outrunning the
+#     engine) still fails. Sized for ~1% of the ~2000-machine deficit
+#     wobble.
+# Every OTHER ADR-0054 capacity-delivery gate (cycle / configure /
+# bootstrap / node-state / pod-bind-p50) STILL holds — the engine must
+# stay healthy WHILE priority-throttled.
+#
+# KNOWN GAP (reported, NOT worked around): the sole-throttle rule's
+# CONFINEMENT half — "shortfall confined to the lowest priority tier, zero
+# high-priority shortfall" — is NOT asserted here. The only shortfall
+# metric is the aggregate bigfleet_shard_shortfalls gauge (+ an
+# age-bucketed twin); neither carries a priority / priority-class label.
+# Asserting confinement would require a per-priority shortfall engine
+# metric, which is an author-gated engine change. This profile asserts the
+# runner-feasible half (shortfall > 0 and converged); confinement is read
+# from the shard's phase-attribution log + Phase-1 unsatisfied-by-priority
+# trace by the operator until that metric exists.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "scarcity-5k"
+  description: "Genuine-scarcity priority-throttle: supply < demand by design; assert a non-zero, converged standing shortfall (uber-5k shape)."
+
+scale:
+  machines: 5000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  # ~60% of machine demand bound at install; no elastic pool, no idle
+  # buffer → ~40% of demand is a genuine, unclosable standing shortfall.
+  configuredFraction: 0.6
+  speculativeMultiplier: 0
+  idleHeadroomFraction: 0
+  preBind: false
+
+loadProfile:
+  rampSeconds: 1800
+  # 30-min soak: long enough for the engine to settle into the
+  # priority-throttled steady state and for shortfallStabilityMax to read a
+  # converged (flat) shortfall rather than a still-ramping one.
+  soakSeconds: 1800
+  churnPerMinute: 0.02
+
+rampBudget: 60m
+
+slo:
+  # THE INVERSION: a standing, converged shortfall is the pass condition.
+  expectStandingShortfall: true
+  # |Δ shortfalls| tolerance over the soak. ~40% of ~5000 effective
+  # machines ≈ a 2000-machine deficit; allow ~1% wobble (churn noise)
+  # while still failing a growing/diverging shortfall.
+  shortfallStabilityMax: 20
+  # ADR-0054 capacity-delivery gates — must hold WHILE priority-throttled.
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

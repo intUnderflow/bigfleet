@@ -1,0 +1,103 @@
+# preemption-5k — Phase-2 preemption (engine-correctness).
+#
+# The fleet is seeded 100% Configured with ZERO headroom, then a
+# HIGH-priority burst arrives that can ONLY bind by preempting the
+# low-priority incumbents. This is the Phase-2 path: a higher-priority
+# Need that no Idle/Speculative machine can satisfy drives the decision
+# engine to drain (Preempt) a Configured machine held by a lower-priority
+# workload and hand it to the preemptor (pkg/decision/phase2_inversions.go;
+# Preempt is one of the six action kinds, ActionKindPreempt).
+#
+# HOW THE PREEMPTION REGIME IS CONSTRUCTED:
+#   - configuredFraction: 1.0 — the whole machine demand is bound at
+#     install. The realistic catalog's steady mix is dominated by
+#     priority-100 incumbents (tiny-stateless ~66%, cpu-batch ~6%, both
+#     priorityClasses: [100]) — i.e. mostly LOW-priority workloads.
+#   - idleHeadroomFraction: 0 AND speculativeMultiplier: 0 — ZERO
+#     headroom. No Idle buffer, no Speculative pool. There is no spare
+#     machine anywhere, so a new high-priority Need cannot be satisfied by
+#     acquiring fresh capacity; the ONLY way to place it is Phase-2
+#     preemption of an incumbent.
+#   - preBind: true — the install fill binds straight to fake-Nodes so the
+#     fleet is genuinely at 100% Configured before the burst (no ramp gap
+#     that would let the burst bind into not-yet-filled capacity).
+#
+# THE BURST: critical-realtime is the catalog's top-priority archetype
+# (priorityClasses: [1000000], the highest in the catalog vs the
+# incumbents' 100). A burst names it (resolved against the full catalog —
+# it need not be burstOnly), injecting a large slug of high-priority demand
+# ~10 min into the soak against the zero-headroom fleet. The engine must
+# preempt priority-100 incumbents to bind it. extraTarget is sized well
+# above zero headroom so preemption is forced, not incidental.
+#
+# SLO POSTURE — THE INVERSION: the default verdict has no notion of
+# "preemption expected". Here the test PASSES only if the engine actually
+# preempted, so the run sets:
+#   - expectPreemptions: true — asserts the cumulative Preempt-action count
+#     (bigfleet_shard_actions_total{kind="Preempt"}) is > 0. This counter
+#     EXISTS as an engine metric (ShardActionsTotal), so the gate is fully
+#     runner-feasible.
+# "High-priority demand ends satisfied" is read from demand coverage: the
+# burst's high-priority Needs are covered (the engine preempted to place
+# them), so the steady shortfall gate (shardShortfalls == 0, the default,
+# UN-inverted here) must still hold at end of soak — a leftover shortfall
+# would mean the burst was NOT satisfied. Confinement of the residual to
+# the displaced low-priority tier is the same per-priority-metric gap noted
+# in scarcity-5k.yaml (no priority-labelled shortfall metric exists).
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "preemption-5k"
+  description: "Phase-2 preemption: 100%-Configured low-priority fleet, zero headroom, high-priority burst forces Preempt (uber-5k shape)."
+
+scale:
+  machines: 5000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  # 100% Configured, ZERO headroom: the only way to place the high-priority
+  # burst is to preempt a low-priority incumbent.
+  configuredFraction: 1.0
+  speculativeMultiplier: 0
+  idleHeadroomFraction: 0
+  preBind: true
+
+loadProfile:
+  rampSeconds: 1800
+  # 30-min soak: burst fires 10 min in, leaving ~20 min to observe the
+  # Preempt actions and confirm the high-priority demand ends satisfied
+  # (shortfall back to 0) after the incumbents are drained and rebound.
+  soakSeconds: 1800
+  churnPerMinute: 0.02
+  # HIGH-priority burst (critical-realtime, priority 1000000) against the
+  # zero-headroom fleet. extraTarget is a large slug so binding it requires
+  # preempting the priority-100 incumbents; durationSeconds keeps it live
+  # for the rest of the soak so the post-burst steady state is the
+  # preempted-and-rebound fleet. selectivity 1.0 = every cluster, so the
+  # event is deterministic/reproducible.
+  bursts:
+    - atSeconds: 600
+      archetype: critical-realtime
+      extraTarget: 200
+      durationSeconds: 0
+      selectivity: 1.0
+
+rampBudget: 60m
+
+slo:
+  # THE INVERSION: the engine must actually preempt.
+  expectPreemptions: true
+  # Shortfall gate is NOT inverted here: after preemption the high-priority
+  # burst must end SATISFIED, so the default shardShortfalls == 0 gate
+  # (demand covered) is the "ends satisfied" assertion.
+  # ADR-0054 capacity-delivery gates — must hold across the preemption.
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

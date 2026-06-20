@@ -158,6 +158,65 @@ type sloOverrides struct {
 	// PROVISIONAL posture number, AUTHOR-OWNED (cloud 10s; dev profiles
 	// loosen for the kine write tail).
 	EndToEndPodBindP50Seconds float64 `yaml:"endToEndPodBindP50Seconds"`
+
+	// --- Inverted SLO gates (engine-correctness profiles) ---
+	//
+	// The default verdict treats a standing shortfall as a hard FAILURE
+	// (shardShortfalls != 0 fails pass(); a standing shortfall + frozen
+	// acquisitions trips the steady-state plateau detector). That is
+	// correct for a capacity-met run, but it CANNOT express two
+	// engine-correctness tests where a standing shortfall (or a Preempt)
+	// is the EXPECTED pass condition:
+	//
+	//   1. Genuine-scarcity priority-throttle: supply < demand by design.
+	//      The sole-throttle hard rule (CLAUDE.md) says BigFleet satisfies
+	//      demand strictly priority-descending and leaves the surplus
+	//      LOW-priority demand as a standing shortfall — NEVER starving
+	//      high-priority. Here a non-zero, CONVERGED shortfall is a PASS.
+	//   2. Phase-2 preemption: a zero-headroom LOW-priority fill plus a
+	//      HIGH-priority burst that can only bind by preempting incumbents.
+	//      Here a non-zero Preempt-action count is a PASS.
+	//
+	// All fields default zero-valued-off, so every existing profile's
+	// pass() (and steady-state wait) behaviour is byte-identical.
+
+	// ExpectStandingShortfall inverts the shortfall verdict for this run.
+	// When true: the default `shardShortfalls != 0 → fail` gate is
+	// REPLACED by "shortfall must be > 0 AND converged" (the standing
+	// shortfall is the expected steady state, not a failure), and the
+	// steady-state wait treats a stable shortfall with flat acquisitions
+	// as steady rather than tripping the demand-side plateau fail-fast.
+	// Every OTHER gate (cycle / configure / bootstrap / node-state / …)
+	// still applies. Default false = the unconditional ADR-0045/0054
+	// shortfall-zero gate, unchanged.
+	//
+	// LIMITATION (engine-metric gap, reported, NOT worked around): the
+	// sole-throttle hard rule's "confined to the lowest priority tier,
+	// zero high-priority shortfall" half is NOT assertable here. The
+	// only shortfall metric is the aggregate `bigfleet_shard_shortfalls`
+	// gauge (and an age-bucketed twin); neither carries a priority /
+	// priority-class label. Asserting confinement would require an engine
+	// metric/label change, which is author-gated. This gate therefore
+	// asserts only the runner-feasible half: shortfall > 0 and converged.
+	ExpectStandingShortfall bool `yaml:"expectStandingShortfall"`
+	// ShortfallStabilityMax bounds |Δ shortfalls| over the soak window —
+	// the convergence half of the inverted shortfall gate. Only consulted
+	// when ExpectStandingShortfall is true. A converged scarcity run holds
+	// its shortfall roughly flat (the engine has settled into the
+	// priority-throttled steady state); a GROWING shortfall means demand
+	// is outrunning the engine, which is a real failure even under
+	// scarcity. Default 0 → strict (no growth tolerated). The delta is
+	// measured by the shardShortfallsDelta query (signed; an absolute
+	// value is compared so a shrinking shortfall also passes).
+	ShortfallStabilityMax float64 `yaml:"shortfallStabilityMax"`
+	// ExpectPreemptions asserts the engine actually preempted: the
+	// cumulative Preempt-action count (bigfleet_shard_actions_total
+	// {kind="Preempt"}) must be > 0. The Preempt counter EXISTS as an
+	// engine metric (pkg/metrics/metrics.go ShardActionsTotal, kind
+	// label includes "Preempt"; emitted by Phase 2,
+	// pkg/decision/phase2_inversions.go), so this gate is fully
+	// runner-feasible. Default false = no preemption assertion.
+	ExpectPreemptions bool `yaml:"expectPreemptions"`
 }
 
 type runnerAction struct {
@@ -1025,7 +1084,7 @@ func run(args []string) error {
 		// M77a / ADR-0045: V2 profiles gate on BigFleet's actual
 		// contract — demand covered by bound capacity — not pod-bind
 		// percentage. See waitForSteadyStateV2.
-		if err := waitForSteadyStateV2(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget); err != nil {
+		if err := waitForSteadyStateV2(ctx, *kubeconfig, namespace, prof.KWOK.ClusterCount, prof.LoadProfile.Target, rampBudget, prof.SLO.ExpectStandingShortfall); err != nil {
 			return fmt.Errorf("steady state: %w", err)
 		}
 	} else {
@@ -1567,7 +1626,14 @@ func waitForSteadyState(ctx context.Context, kubeconfig, ns string, clusterCount
 // catalog shape mismatch, or an engine defect), so fail in 2 minutes
 // instead of burning the ramp budget. This re-keys the legacy frozen-
 // binds plateau detector onto demand-side liveness.
-func waitForSteadyStateV2(ctx context.Context, kubeconfig, ns string, clusterCount int, perClusterTarget int, budget time.Duration) error {
+// expectShortfall inverts the demand-coverage half of the gate for
+// genuine-scarcity engine-correctness runs (sloOverrides.ExpectStandingShortfall):
+// supply is < demand by design, so steady state is "demand ramped, a
+// standing shortfall present, acquisitions flat" rather than
+// "shortfalls == 0". The plateau fail-fast — which normally reads a
+// standing shortfall + frozen acquisitions as a structurally-stuck
+// engine — is the EXPECTED converged state here, so it is suppressed.
+func waitForSteadyStateV2(ctx context.Context, kubeconfig, ns string, clusterCount int, perClusterTarget int, budget time.Duration, expectShortfall bool) error {
 	deadline := time.Now().Add(budget)
 	tick := time.NewTicker(10 * time.Second)
 	defer tick.Stop()
@@ -1602,17 +1668,31 @@ func waitForSteadyStateV2(ctx context.Context, kubeconfig, ns string, clusterCou
 			binds = readPodBindsSucceeded(ctx, kubeconfig, ns) // reported, never gated
 			demandReady := active >= target && demandRows > 0
 			acqFlat := acq >= 0 && acq == lastAcq
-			if demandReady && shortfalls == 0 && acqFlat {
+			// Coverage condition: normally "no shortfall"; inverted for a
+			// scarcity run to "standing shortfall present" (supply < demand
+			// by design — the engine has priority-throttled, so the residual
+			// LOW-priority shortfall is the steady state, not a defect).
+			coverageSteady := shortfalls == 0
+			if expectShortfall {
+				coverageSteady = shortfalls > 0
+			}
+			if demandReady && coverageSteady && acqFlat {
 				stable++
 				if stable >= quiesceTicks {
-					fmt.Fprintf(os.Stderr, "  steady (ADR-0045): pods %d/%d ready, active %d/%d, shortfalls 0, acquisitions flat at %d for %s, binds %d (reported, not gated)\n",
-						ready, clusterCount, active, target, acq, time.Duration(quiesceTicks)*10*time.Second, binds)
+					fmt.Fprintf(os.Stderr, "  steady (ADR-0045): pods %d/%d ready, active %d/%d, shortfalls %d%s, acquisitions flat at %d for %s, binds %d (reported, not gated)\n",
+						ready, clusterCount, active, target, shortfalls,
+						map[bool]string{true: " (standing — expected under scarcity)", false: " (== 0, covered)"}[expectShortfall],
+						acq, time.Duration(quiesceTicks)*10*time.Second, binds)
 					return nil
 				}
 			} else {
 				stable = 0
 			}
-			if demandReady && shortfalls > 0 && acqFlat {
+			// Plateau fail-fast: a standing shortfall + frozen acquisitions
+			// is "stuck" for a capacity-met run, but it is the EXPECTED
+			// converged steady state for a scarcity run (handled by
+			// coverageSteady above), so suppress it when expectShortfall.
+			if !expectShortfall && demandReady && shortfalls > 0 && acqFlat {
 				frozen++
 				if frozen >= plateauTicks {
 					return fmt.Errorf(
@@ -1954,6 +2034,23 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		"operatorNodeStateUpdateP99Seconds": `histogram_quantile(0.99, sum by (le) (rate(bigfleet_operator_node_state_update_duration_seconds_bucket[5m])))`,
 		"coordinatorApplyOpsPerSec":         `sum(rate(bigfleet_coordinator_apply_total[5m]))`,
 		"shardShortfalls":                   `sum(bigfleet_shard_shortfalls)`,
+		// shardShortfallsDelta is the convergence half of the inverted
+		// shortfall gate (sloOverrides.ExpectStandingShortfall). It is the
+		// |change| in the aggregate shortfall gauge over the soak window —
+		// a converged scarcity steady state holds it ≈ 0; a growing
+		// shortfall (demand outrunning the engine) shows here. abs() keeps
+		// it ≥ 0 so the -1 failed-scrape sentinel stays unambiguous. The
+		// [5m] window is rewritten to the soak window below, same as the
+		// rate gates. Only consulted when ExpectStandingShortfall is set;
+		// inert otherwise.
+		"shardShortfallsDelta": `abs(delta(sum(bigfleet_shard_shortfalls)[5m:15s]))`,
+		// preemptActions is the cumulative Phase-2 Preempt-action count
+		// (engine-correctness preemption gate, sloOverrides.ExpectPreemptions).
+		// The Preempt counter exists (ShardActionsTotal{kind="Preempt"});
+		// `or on() vector(0)` folds the absent series (a run that never
+		// preempted has no child) to 0, so 0 genuinely means "never
+		// preempted". Only consulted when ExpectPreemptions is set.
+		"preemptActions": `sum(bigfleet_shard_actions_total{kind="Preempt"}) or on() vector(0)`,
 		// loadgenCRsActive uses min_over_time across the last 5 min of
 		// soak so the post-soak gate catches "ramped to target then
 		// drifted below" runs without false-positiving on the very last
@@ -2249,6 +2346,16 @@ func unmeasuredGated(m map[string]float64, slo sloOverrides) []string {
 	if slo.EndToEndPodBindP50Seconds > 0 {
 		gated = append(gated, "endToEndPodBindP50Seconds")
 	}
+	// Inverted-gate keys gate only when the inverted posture is declared.
+	// ExpectStandingShortfall makes the shortfall-convergence delta
+	// load-bearing; ExpectPreemptions makes the Preempt counter
+	// load-bearing. (shardShortfalls itself is always-gated above.)
+	if slo.ExpectStandingShortfall {
+		gated = append(gated, "shardShortfallsDelta")
+	}
+	if slo.ExpectPreemptions {
+		gated = append(gated, "preemptActions")
+	}
 	var out []string
 	for _, k := range gated {
 		if v, ok := m[k]; ok && v < 0 {
@@ -2329,8 +2436,40 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	// to post-soak verdict (ADR-0054): demand covered by bound capacity.
 	// The cheapest anti-reframe-to-pass guard. -1 = failed scrape (the
 	// series exists from shard start), skipped.
-	if v, ok := m["shardShortfalls"]; ok && v >= 0 && v != 0 {
+	//
+	// INVERTED for engine-correctness scarcity runs: when the profile
+	// declares ExpectStandingShortfall, supply is < demand by design and a
+	// standing shortfall is the EXPECTED steady state (sole-throttle hard
+	// rule: satisfy priority-descending, leave the LOW-priority surplus as
+	// a shortfall). The gate then asserts the opposite — shortfall MUST be
+	// > 0 and converged (|Δ| ≤ ShortfallStabilityMax) — rather than == 0.
+	// NOTE the confinement half ("zero high-priority shortfall") is not
+	// assertable: no priority-labelled shortfall metric exists (see the
+	// ExpectStandingShortfall doc). -1 is still skipped (failed scrape).
+	if slo.ExpectStandingShortfall {
+		if v, ok := m["shardShortfalls"]; ok && v >= 0 {
+			if v == 0 {
+				return false, "shardShortfalls == 0 but expectStandingShortfall is set (scarcity run: supply < demand by design — a covered run means the seed wasn't actually scarce, the test is vacuous)"
+			}
+			// shardShortfallsDelta is abs(delta(...)) in PromQL, so a real
+			// value is always ≥ 0; -1 is the failed-scrape sentinel (skip),
+			// matching every other gate's convention.
+			if d, ok := m["shardShortfallsDelta"]; ok && d >= 0 && d > slo.ShortfallStabilityMax {
+				return false, fmt.Sprintf("shardShortfallsDelta %.0f (|Δ| over soak) > %.0f tolerance — standing shortfall is not converged (demand outrunning the engine under scarcity, not a priority-throttled steady state)", d, slo.ShortfallStabilityMax)
+			}
+		}
+	} else if v, ok := m["shardShortfalls"]; ok && v >= 0 && v != 0 {
 		return false, fmt.Sprintf("shardShortfalls %.0f != 0 (ADR-0045/0054 — demand not covered by bound capacity)", v)
+	}
+	// Phase-2 preemption assertion (engine-correctness preemption run):
+	// the engine must have actually preempted an incumbent. The Preempt
+	// counter exists (bigfleet_shard_actions_total{kind="Preempt"}); the
+	// absent-series fold means a never-incremented counter reads 0, so 0
+	// here genuinely means "never preempted", a failure for this run.
+	if slo.ExpectPreemptions {
+		if v, ok := m["preemptActions"]; ok && v >= 0 && v == 0 {
+			return false, "preemptActions == 0 but expectPreemptions is set — the engine never emitted a Phase-2 Preempt action (a HIGH-priority burst against a zero-headroom LOW-priority fill must bind by preempting incumbents)"
+		}
 	}
 	// ADR-0054 Half 2 — LOOSE end-to-end pod-bind p50 liveness floor. NOT
 	// the release gate (which moved onto the BigFleet-property bars
