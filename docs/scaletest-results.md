@@ -192,18 +192,5 @@ make scaletest PROFILE=test/scaletest/profiles/5k.yaml SUBSTRATE=test/scaletest/
 
 Every gate is measured at **steady state under sustained churn**, never during the cold-start ramp ([ADR-0035](./adr/0035-scaletest-slos-at-steady-state.md)): ramp is capacity exploration, not a pass/fail signal. Per-machine and per-frame bars are held identical across the whole ladder; only genuinely size-scaling quantities get size-dependent thresholds ([ADR-0028](./adr/0028-cycle-p99-is-regime-parametric.md)). Pass/fail on this page is computed from each run's committed `summary.json` against the current gate set, so a run's own recorded verdict may differ (e.g. against a since-retired saturated bind-latency metric). Separately, the shard's per-cycle decision cost was driven from seconds to tens of milliseconds over the engine-optimisation milestones — the headroom the cycle gate now runs against.
 
-<details>
-<summary><strong>uber-5k configuration runs</strong> (transparency — pre-reframe metric set)</summary>
-
-Earlier `uber-5k` runs across host/cluster configurations, each with its sanitised numbers committed in the linked run folder. These predate the ADR-0054 reframe — older metric set, and the bind-latency p99 they recorded was the since-retired saturated metric — so the folder's numbers are on the metrics they captured, not the current gate set, and these are configuration variants, **not** ladder rungs.
-
-| run | load | pass | data |
-|---|---|:--:|:--|
-| `uber-5k (single-host)` | 5,831 / 500,000 | ✗ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k) · [csv ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k/chain-numbers.csv) |
-| `uber-5k-wide` | 499,993 / 500,000 | ✗ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide) · [csv ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-13-uber-5k-wide/chain-numbers.csv) |
-| `uber-5k-2host` | 249,995 / 250,000 | ✓ | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-05-16-uber-5k-2host-20x25k) |
-
-</details>
-
 
 *Generated from `test/scaletest/results/*/{summary,page}.json` by `site/scripts/sync-scaletest.mjs`.*
