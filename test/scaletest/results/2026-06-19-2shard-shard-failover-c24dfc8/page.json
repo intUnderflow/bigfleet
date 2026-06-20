@@ -7,12 +7,42 @@
   "scenario": "Data-plane shard failover: on a genuine two-shard deploy, kill one shard — is the blast radius contained to its own clusters?",
   "criterion": "The surviving shard holds all its sessions; the killed shard reschedules and recovers; zero shortfalls throughout.",
   "highlights": [
-    { "label": "cluster split (shard-0 / shard-1)", "metricStart": "routingSplitShard0", "metricEnd": "routingSplitShard1", "kind": "count", "sep": " / " },
-    { "label": "survivor sessions held", "metric": "survivorShard0HeldSessions", "kind": "count" },
-    { "label": "killed shard recovered sessions", "metric": "killedShard1RecoveredSessions", "kind": "count" },
-    { "label": "killed shard recreate time", "metric": "killedShard1RecreatedSeconds", "kind": "duration" },
-    { "label": "shortfalls (max)", "metric": "shardShortfallsMax", "kind": "count" },
-    { "label": "configure-phase p99 (max)", "metric": "configurePhaseP99SecondsMax", "kind": "secs" }
+    {
+      "label": "cluster split (shard-0 / shard-1)",
+      "metricStart": "routingSplitShard0",
+      "metricEnd": "routingSplitShard1",
+      "kind": "count",
+      "sep": " / "
+    },
+    {
+      "label": "survivor sessions held",
+      "metric": "survivorShard0HeldSessions",
+      "kind": "count"
+    },
+    {
+      "label": "killed shard recovered sessions",
+      "metric": "killedShard1RecoveredSessions",
+      "kind": "count"
+    },
+    {
+      "label": "killed shard recreate time",
+      "metric": "killedShard1RecreatedSeconds",
+      "kind": "duration"
+    },
+    {
+      "label": "shortfalls (max)",
+      "metric": "shardShortfallsMax",
+      "kind": "count"
+    },
+    {
+      "label": "configure-phase p99 (max)",
+      "metric": "configurePhaseP99SecondsMax",
+      "kind": "secs"
+    }
   ],
-  "caveat": "Validates the per-ordinal shard routing (commit c24dfc8) end-to-end. The ~31 s kill+recreate landed between metric samples, so this captures the clean outcome (no lingering degradation) but not the drop→reconnect transition; ≤5 s sampling would capture it."
+  "caveat": "Validates the per-ordinal shard routing (commit c24dfc8) end-to-end. The ~31 s kill+recreate landed between metric samples, so this captures the clean outcome (no lingering degradation) but not the drop→reconnect transition; ≤5 s sampling would capture it.",
+  "receipt": {
+    "snapshot": "https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-2shard.tar.gz",
+    "grafana": true
+  }
 }

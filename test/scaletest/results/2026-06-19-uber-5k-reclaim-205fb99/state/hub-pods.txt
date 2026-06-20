@@ -1,0 +1,5 @@
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE           NOMINATED NODE   READINESS GATES
+bigfleet-coordinator-0     1/1     Running   0          57m   10.42.0.116   NODEID   <none>           <none>
+bigfleet-shard-0           1/1     Running   0          57m   10.42.0.115   NODEID   <none>           <none>
+grafana-7c5dbf74b9-vqgh6   1/1     Running   0          57m   10.42.0.113   NODEID   <none>           <none>
+prometheus-0               2/2     Running   0          57m   10.42.0.114   NODEID   <none>           <none>

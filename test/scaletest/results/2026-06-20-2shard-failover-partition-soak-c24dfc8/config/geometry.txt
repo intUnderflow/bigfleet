@@ -1,0 +1,3 @@
+label=failover-partition-soak-2shard
+hub=hub
+satellites=3 (sat-1..sat-N, regions anonymized)

@@ -4,5 +4,9 @@
   "scale": "~5,000-machine fleet · ~500K pods · 1 shard",
   "commit": "cee793e",
   "shape": "one shard sustaining the full realistic-catalog demand of a ~5,000-machine fleet (~500,000 pods) through a real, default, uncapped kube-scheduler",
-  "order": 1
+  "order": 1,
+  "receipt": {
+    "snapshot": "https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-cee.tar.gz",
+    "grafana": true
+  }
 }

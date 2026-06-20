@@ -1,0 +1,3 @@
+label=failover-shard-kill-2shard
+hub=hub
+satellites=2 (sat-1..sat-N, regions anonymized)

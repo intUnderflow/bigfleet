@@ -1,0 +1,16 @@
+2026-06-20T18:46:29.944184401Z 2026-06-20T18:46:29.944Z [INFO]  raft: initial configuration: index=0 servers=[]
+2026-06-20T18:46:29.944369621Z 2026-06-20T18:46:29.944Z [INFO]  raft: entering follower state: follower="Node at 10.42.0.129:7791 [Follower]" leader-address= leader-id=
+2026-06-20T18:46:29.947070381Z time=2026-06-20T18:46:29.946Z level=INFO msg="coordinator listening" grpc_addr=[::]:7790 raft_bind=:7791 node_id=bigfleet-coordinator-0 data_dir=/var/lib/bigfleet
+2026-06-20T18:46:29.947498691Z time=2026-06-20T18:46:29.947Z level=INFO msg="coordinator started" component=coordinator node=bigfleet-coordinator-0 raft_bind=:7791 data_dir=/var/lib/bigfleet
+2026-06-20T18:46:29.947514841Z time=2026-06-20T18:46:29.947Z level=INFO msg="metrics serving" addr=:8790
+2026-06-20T18:46:30.985485646Z 2026-06-20T18:46:30.985Z [WARN]  raft: heartbeat timeout reached, starting election: last-leader-addr= last-leader-id=
+2026-06-20T18:46:30.985507296Z 2026-06-20T18:46:30.985Z [INFO]  raft: entering candidate state: node="Node at 10.42.0.129:7791 [Candidate]" term=2
+2026-06-20T18:46:30.985512716Z 2026-06-20T18:46:30.985Z [DEBUG] raft: pre-voting for self: term=2 id=bigfleet-coordinator-0
+2026-06-20T18:46:30.985517066Z 2026-06-20T18:46:30.985Z [DEBUG] raft: calculated votes needed: needed=1 term=2
+2026-06-20T18:46:30.985521306Z 2026-06-20T18:46:30.985Z [DEBUG] raft: pre-vote received: from=bigfleet-coordinator-0 term=2 tally=0
+2026-06-20T18:46:30.985524926Z 2026-06-20T18:46:30.985Z [DEBUG] raft: pre-vote granted: from=bigfleet-coordinator-0 term=2 tally=1
+2026-06-20T18:46:30.985528416Z 2026-06-20T18:46:30.985Z [INFO]  raft: pre-vote successful, starting election: term=2 tally=1 refused=0 votesNeeded=1
+2026-06-20T18:46:30.986826516Z 2026-06-20T18:46:30.986Z [DEBUG] raft: voting for self: term=2 id=bigfleet-coordinator-0
+2026-06-20T18:46:30.988629686Z 2026-06-20T18:46:30.988Z [DEBUG] raft: vote granted: from=bigfleet-coordinator-0 term=2 tally=1
+2026-06-20T18:46:30.988637386Z 2026-06-20T18:46:30.988Z [INFO]  raft: election won: term=2 tally=1
+2026-06-20T18:46:30.988641086Z 2026-06-20T18:46:30.988Z [INFO]  raft: entering leader state: leader="Node at 10.42.0.129:7791 [Leader]"

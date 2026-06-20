@@ -1,0 +1,3 @@
+label=reclaim-205fb99
+hub=hub
+satellites=4 (sat-1..sat-N, regions anonymized)

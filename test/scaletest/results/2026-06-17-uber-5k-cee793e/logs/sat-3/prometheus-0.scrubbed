@@ -1,0 +1,23 @@
+2026-06-20T15:34:51.880712830Z ts=2026-06-20T15:34:51.880Z caller=main.go:671 level=info msg="Starting Prometheus Server" mode=server version="(version=2.55.0, branch=HEAD, revision=91d80252c3e528728b0f88d254dd720f6be07cb8)"
+2026-06-20T15:34:51.880774866Z ts=2026-06-20T15:34:51.880Z caller=main.go:676 level=info build_context="(go=go1.23.2, platform=linux/amd64, user=root@9fad779131cc, date=20241022-13:47:22, tags=netgo,builtinassets,stringlabels)"
+2026-06-20T15:34:51.880808815Z ts=2026-06-20T15:34:51.880Z caller=main.go:677 level=info host_details="(Linux 6.12.68+ #1 SMP Sun Apr 12 08:53:59 UTC 2026 x86_64 prometheus-0 (none))"
+2026-06-20T15:34:51.880824332Z ts=2026-06-20T15:34:51.880Z caller=main.go:678 level=info fd_limits="(soft=1048576, hard=1048576)"
+2026-06-20T15:34:51.880845511Z ts=2026-06-20T15:34:51.880Z caller=main.go:679 level=info vm_limits="(soft=unlimited, hard=unlimited)"
+2026-06-20T15:34:51.883844872Z ts=2026-06-20T15:34:51.882Z caller=web.go:585 level=info component=web msg="Start listening for connections" address=:9090
+2026-06-20T15:34:51.883859235Z ts=2026-06-20T15:34:51.883Z caller=main.go:1197 level=info msg="Starting TSDB ..."
+2026-06-20T15:34:51.884683528Z ts=2026-06-20T15:34:51.884Z caller=tls_config.go:348 level=info component=web msg="Listening on" address=[::]:9090
+2026-06-20T15:34:51.884697113Z ts=2026-06-20T15:34:51.884Z caller=tls_config.go:351 level=info component=web msg="TLS is disabled." http2=false address=[::]:9090
+2026-06-20T15:34:51.886230523Z ts=2026-06-20T15:34:51.886Z caller=head.go:627 level=info component=tsdb msg="Replaying on-disk memory mappable chunks if any"
+2026-06-20T15:34:51.886242092Z ts=2026-06-20T15:34:51.886Z caller=head.go:714 level=info component=tsdb msg="On-disk memory mappable chunks replay completed" duration=1.214µs
+2026-06-20T15:34:51.886243710Z ts=2026-06-20T15:34:51.886Z caller=head.go:722 level=info component=tsdb msg="Replaying WAL, this may take a while"
+2026-06-20T15:34:51.891436209Z ts=2026-06-20T15:34:51.891Z caller=head.go:794 level=info component=tsdb msg="WAL segment loaded" segment=0 maxSegment=0
+2026-06-20T15:34:51.891462576Z ts=2026-06-20T15:34:51.891Z caller=head.go:831 level=info component=tsdb msg="WAL replay completed" checkpoint_replay_duration=18.454µs wal_replay_duration=5.082518ms wbl_replay_duration=669ns chunk_snapshot_load_duration=0s mmap_chunk_replay_duration=1.214µs total_replay_duration=5.120428ms
+2026-06-20T15:34:51.894746044Z ts=2026-06-20T15:34:51.894Z caller=main.go:1218 level=info fs_type=EXT4_SUPER_MAGIC
+2026-06-20T15:34:51.894757777Z ts=2026-06-20T15:34:51.894Z caller=main.go:1221 level=info msg="TSDB started"
+2026-06-20T15:34:51.894763546Z ts=2026-06-20T15:34:51.894Z caller=main.go:1404 level=info msg="Loading configuration file" filename=/etc/prometheus/prometheus.yml
+2026-06-20T15:34:51.895922070Z ts=2026-06-20T15:34:51.895Z caller=kubernetes.go:331 level=info component="discovery manager scrape" discovery=kubernetes config=bigfleet msg="Using pod service account via in-cluster config"
+2026-06-20T15:34:51.896486051Z ts=2026-06-20T15:34:51.896Z caller=main.go:1441 level=info msg="updated GOGC" old=100 new=75
+2026-06-20T15:34:51.896493541Z ts=2026-06-20T15:34:51.896Z caller=main.go:1452 level=info msg="Completed loading of configuration file" filename=/etc/prometheus/prometheus.yml totalDuration=1.713676ms db_storage=1.888µs remote_storage=1.741µs web_handler=570ns query_engine=1.173µs scrape=431.833µs scrape_sd=748.198µs notify=1.564µs notify_sd=1.498µs rules=1.811µs tracing=7.324µs
+2026-06-20T15:34:51.896510653Z ts=2026-06-20T15:34:51.896Z caller=main.go:1182 level=info msg="Server is ready to receive web requests."
+2026-06-20T15:34:51.896623964Z ts=2026-06-20T15:34:51.896Z caller=manager.go:164 level=info component="rule manager" msg="Starting rule manager..."
+2026-06-20T15:58:28.744217826Z ts=2026-06-20T15:58:28.744Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781969697085 maxt=1781971108484 ulid=01KVJW2GRP51WDR37J9HX57RSQ duration=113.333794ms ooo=false

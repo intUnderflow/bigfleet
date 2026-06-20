@@ -1,0 +1,3 @@
+label=uber-5k-cee793e
+hub=hub
+satellites=4 (sat-1..sat-N, regions anonymized)

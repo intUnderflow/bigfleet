@@ -1,0 +1,286 @@
+namespace: bigfleet-scaletest
+image: { repository: registry:5000/bigfleet-scaletest, tag: "cee793e", pullPolicy: IfNotPresent }
+bigfleet: { image: { repository: registry:5000/bigfleet, tag: "cee793e", pullPolicy: IfNotPresent } }
+kwok:
+  storage: etcd
+  clusterCount: 20
+  apiserverResources: { requests: { cpu: "2", memory: 4Gi }, limits: { cpu: "4", memory: 8Gi } }
+  workloadResources:  { requests: { cpu: "2", memory: 4Gi }, limits: { cpu: "4", memory: 8Gi } }
+  sharedVolumeSizeLimit: "2Gi"
+podShim: { binderConcurrency: 256, upcomingNodeConcurrency: 32 }
+shard:
+  replicas: 1
+  seedConfiguredPerCluster: 250
+  seedMachines: 1000
+  seedSpeculative: 15000
+  seedDensityMultiplier: 100
+  maxActionsPerCycle: 4096
+  executeConcurrency: 256
+  metricsWarmupCycles: 5
+  resources: { requests: { cpu: "6", memory: 12Gi }, limits: { cpu: "16", memory: 32Gi } }
+coordinator: { enabled: true, replicas: 1, resources: { requests: { cpu: "500m", memory: 1Gi }, limits: { cpu: "2", memory: 4Gi } } }
+harness: { scheduler: kube-scheduler }
+crossHost: { expose: true, shardNodePort: 30780, coordinatorNodePort: 30790 }
+loadProfile: { target: 25000, churnPerMinute: 0.02, durationSeconds: 5400, reconcilePerTickCap: 200, preBind: true }
+operator: { qps: 200, burst: 400, ackConcurrency: 64, rollupInterval: "0s" }
+prometheus: { resources: { requests: { cpu: "2", memory: 8Gi }, limits: { cpu: "4", memory: 24Gi } } }
+slo: { internalBindingLatencyP99Seconds: 15, shardCycleDurationP99Seconds: 25 }
+---arch---
+loadProfile:
+  archetypes:
+  - name: tiny-stateless
+    weight: 16073
+    instanceTypes:
+    - m6i.large
+    - m6i.xlarge
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 60
+      resources:
+        cpu: 400m
+        memory: 500Mi
+    - weight: 40
+      resources:
+        cpu: 300m
+        memory: 384Mi
+    priorityClasses:
+    - 100
+    interruptionPenalty: 32
+    reclamationPenalty: 64
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.45
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+  - name: cpu-service
+    weight: 2755
+    instanceTypes:
+    - m6i.xlarge
+    - m6i.2xlarge
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 70
+      resources:
+        cpu: 2200m
+        memory: 8500Mi
+    - weight: 30
+      resources:
+        cpu: 4200m
+        memory: 16500Mi
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 1024
+    reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.75
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule
+  - name: cpu-batch
+    weight: 1378
+    instanceTypes:
+    - c6i.4xlarge
+    - c6i.8xlarge
+    - n2-standard-32
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 60
+      resources:
+        cpu: '4'
+        memory: 8Gi
+    - weight: 40
+      resources:
+        cpu: '8'
+        memory: 16Gi
+    priorityClasses:
+    - 100
+    interruptionPenalty: 64
+    reclamationPenalty: 256
+    meanLifetimeSeconds: 600
+    spreadConstraintProb: 0.15
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+  - name: memory-cache
+    weight: 2000
+    instanceTypes:
+    - r6i.xlarge
+    - r6i.2xlarge
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '2'
+        memory: 16Gi
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 4096
+    reclamationPenalty: 16384
+    meanLifetimeSeconds: 0
+    sameRack: true
+    allowPartial: true
+    groupSizeRange:
+    - 3
+    - 5
+  - name: stateful-db
+    weight: 2000
+    instanceTypes:
+    - r6i.2xlarge
+    - r6i.4xlarge
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '8'
+        memory: 32Gi
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 8192
+    reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    allowPartial: true
+    groupSizeRange:
+    - 3
+    - 5
+  - name: gpu-inference
+    weight: 100
+    podsPerNode: 8
+    instanceTypes:
+    - a3-highgpu-8g
+    - a2-highgpu-8g
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '8'
+        memory: 32Gi
+        nvidia.com/gpu: '1'
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 4096
+    reclamationPenalty: 8192
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 0.5
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 2
+      whenUnsatisfiable: ScheduleAnyway
+  - name: gpu-training-small
+    weight: 32
+    podsPerNode: 1
+    instanceTypes:
+    - a3-highgpu-8g
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '64'
+        memory: 256Gi
+        nvidia.com/gpu: '8'
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 16384
+    reclamationPenalty: 32768
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange:
+    - 2
+    - 8
+  - name: gpu-training-medium
+    weight: 18
+    podsPerNode: 1
+    instanceTypes:
+    - a3-highgpu-8g
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '64'
+        memory: 256Gi
+        nvidia.com/gpu: '8'
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 32768
+    reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    sameRack: true
+    groupSizeRange:
+    - 8
+    - 16
+  - name: gpu-training-large
+    weight: 1
+    burstOnly: true
+    podsPerNode: 1
+    instanceTypes:
+    - a3-highgpu-8g
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '128'
+        memory: 512Gi
+        nvidia.com/gpu: '8'
+    priorityClasses:
+    - 1000
+    interruptionPenalty: 65536
+    reclamationPenalty: 131072
+    meanLifetimeSeconds: 0
+    sameZone: true
+    groupSizeRange:
+    - 64
+    - 256
+  - name: critical-realtime
+    weight: 230
+    instanceTypes:
+    - c6i.4xlarge
+    - m6i.2xlarge
+    zones:
+    - zone-a
+    - zone-b
+    - zone-c
+    sizeBuckets:
+    - weight: 100
+      resources:
+        cpu: '4'
+        memory: 8Gi
+    priorityClasses:
+    - 1000000
+    interruptionPenalty: 65536
+    reclamationPenalty: 65536
+    meanLifetimeSeconds: 0
+    spreadConstraintProb: 1.0
+    spreadConstraint:
+      topologyKey: topology.kubernetes.io/zone
+      maxSkew: 1
+      whenUnsatisfiable: DoNotSchedule

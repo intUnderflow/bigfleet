@@ -48,7 +48,7 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 
 | rung | scale | status | data |
 |---|---|:--|:--|
-| `uber-5k` | ~5,000-machine fleet · ~500K pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) |
+| `uber-5k` | ~5,000-machine fleet · ~500K pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) · [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-cee.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e/LOAD-RECIPE.md) |
 | `uber-50k` | ~50,000-machine fleet · ~5M pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |
@@ -124,6 +124,8 @@ _Validates the per-ordinal shard routing (commit c24dfc8) end-to-end. The ~31 s 
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-2shard-shard-failover-c24dfc8)
 
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-2shard.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-2shard-shard-failover-c24dfc8) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-2shard-shard-failover-c24dfc8/LOAD-RECIPE.md)
+
 ### `uber-5k — scale-down / reclaim` — ✅ passed · commit `205fb99`
 
 *500K pods · 50% demand shed*
@@ -143,6 +145,8 @@ Scale-down: shed 50% of demand mid-soak — does BigFleet reclaim the surplus in
 _The bounded-reclaim gate this exercised is now committed on the 50k profile (settleSeconds + maxReclaimActionsDuringSoak)._
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-5k-reclaim-205fb99)
+
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-reclaim.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-5k-reclaim-205fb99) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-5k-reclaim-205fb99/LOAD-RECIPE.md)
 
 ### `2-shard failover — partition + soak` — ✅ passed · commit `c24dfc8`
 
@@ -166,6 +170,8 @@ Control-plane partition then a multi-disturbance soak, on a genuine two-shard de
 _Single coordinator replica — the leader-kills are static-stability checks (the data plane survives the coordinator restart), not a Raft leader election. uber-5k-scale 2-shard deploy; the per-ordinal routing (c24dfc8) is the same one validated at 5M in the 2-shard-throughput run._
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-20-2shard-failover-partition-soak-c24dfc8)
+
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-partsoak.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-20-2shard-failover-partition-soak-c24dfc8) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-20-2shard-failover-partition-soak-c24dfc8/LOAD-RECIPE.md)
 
 
 ## Reproduce & trust

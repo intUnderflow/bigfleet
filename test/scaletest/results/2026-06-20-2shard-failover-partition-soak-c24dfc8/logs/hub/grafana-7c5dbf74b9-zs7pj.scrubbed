@@ -1,0 +1,4 @@
+2026-06-20T18:24:39.493091168Z logger=migrator t=2026-06-20T18:24:39.492874978Z level=warn msg="Skipping migration: Already executed, but not recorded in migration log" id="drop unique orgID index on alert_configuration if exists"
+2026-06-20T18:24:40.063039281Z logger=migrator t=2026-06-20T18:24:40.062780861Z level=warn msg="Skipping migration: Already executed, but not recorded in migration log" id="drop index UQE_dashboard_public_config_uid - v1"
+2026-06-20T18:24:40.067158191Z logger=migrator t=2026-06-20T18:24:40.067003601Z level=warn msg="Skipping migration: Already executed, but not recorded in migration log" id="drop index IDX_dashboard_public_config_org_id_dashboard_uid - v1"
+2026-06-20T18:24:40.858600356Z logger=local.finder t=2026-06-20T18:24:40.858406396Z level=warn msg="Skipping finding plugins as directory does not exist" path=/usr/share/grafana/plugins-bundled

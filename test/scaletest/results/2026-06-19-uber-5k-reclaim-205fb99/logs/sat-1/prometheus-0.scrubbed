@@ -1,0 +1,23 @@
+2026-06-20T16:31:40.596204975Z ts=2026-06-20T16:31:40.596Z caller=main.go:671 level=info msg="Starting Prometheus Server" mode=server version="(version=2.55.0, branch=HEAD, revision=91d80252c3e528728b0f88d254dd720f6be07cb8)"
+2026-06-20T16:31:40.596237335Z ts=2026-06-20T16:31:40.596Z caller=main.go:676 level=info build_context="(go=go1.23.2, platform=linux/amd64, user=root@9fad779131cc, date=20241022-13:47:22, tags=netgo,builtinassets,stringlabels)"
+2026-06-20T16:31:40.596241635Z ts=2026-06-20T16:31:40.596Z caller=main.go:677 level=info host_details="(Linux 6.12.55+ #1 SMP Sun Feb  1 08:53:53 UTC 2026 x86_64 prometheus-0 (none))"
+2026-06-20T16:31:40.596249964Z ts=2026-06-20T16:31:40.596Z caller=main.go:678 level=info fd_limits="(soft=1048576, hard=1048576)"
+2026-06-20T16:31:40.596252935Z ts=2026-06-20T16:31:40.596Z caller=main.go:679 level=info vm_limits="(soft=unlimited, hard=unlimited)"
+2026-06-20T16:31:40.598597216Z ts=2026-06-20T16:31:40.598Z caller=web.go:585 level=info component=web msg="Start listening for connections" address=:9090
+2026-06-20T16:31:40.599240196Z ts=2026-06-20T16:31:40.599Z caller=main.go:1197 level=info msg="Starting TSDB ..."
+2026-06-20T16:31:40.600503237Z ts=2026-06-20T16:31:40.600Z caller=tls_config.go:348 level=info component=web msg="Listening on" address=[::]:9090
+2026-06-20T16:31:40.600518547Z ts=2026-06-20T16:31:40.600Z caller=tls_config.go:351 level=info component=web msg="TLS is disabled." http2=false address=[::]:9090
+2026-06-20T16:31:40.604991980Z ts=2026-06-20T16:31:40.604Z caller=head.go:627 level=info component=tsdb msg="Replaying on-disk memory mappable chunks if any"
+2026-06-20T16:31:40.605015480Z ts=2026-06-20T16:31:40.604Z caller=head.go:714 level=info component=tsdb msg="On-disk memory mappable chunks replay completed" duration=1.34µs
+2026-06-20T16:31:40.605019269Z ts=2026-06-20T16:31:40.604Z caller=head.go:722 level=info component=tsdb msg="Replaying WAL, this may take a while"
+2026-06-20T16:31:40.607241921Z ts=2026-06-20T16:31:40.607Z caller=head.go:794 level=info component=tsdb msg="WAL segment loaded" segment=0 maxSegment=0
+2026-06-20T16:31:40.607249991Z ts=2026-06-20T16:31:40.607Z caller=head.go:831 level=info component=tsdb msg="WAL replay completed" checkpoint_replay_duration=40.52µs wal_replay_duration=2.226691ms wbl_replay_duration=140ns chunk_snapshot_load_duration=0s mmap_chunk_replay_duration=1.34µs total_replay_duration=2.289482ms
+2026-06-20T16:31:40.609426532Z ts=2026-06-20T16:31:40.609Z caller=main.go:1218 level=info fs_type=EXT4_SUPER_MAGIC
+2026-06-20T16:31:40.609434292Z ts=2026-06-20T16:31:40.609Z caller=main.go:1221 level=info msg="TSDB started"
+2026-06-20T16:31:40.609437262Z ts=2026-06-20T16:31:40.609Z caller=main.go:1404 level=info msg="Loading configuration file" filename=/etc/prometheus/prometheus.yml
+2026-06-20T16:31:40.610230843Z ts=2026-06-20T16:31:40.610Z caller=kubernetes.go:331 level=info component="discovery manager scrape" discovery=kubernetes config=bigfleet msg="Using pod service account via in-cluster config"
+2026-06-20T16:31:40.610656093Z ts=2026-06-20T16:31:40.610Z caller=main.go:1441 level=info msg="updated GOGC" old=100 new=75
+2026-06-20T16:31:40.610663233Z ts=2026-06-20T16:31:40.610Z caller=main.go:1452 level=info msg="Completed loading of configuration file" filename=/etc/prometheus/prometheus.yml totalDuration=1.220131ms db_storage=1.08µs remote_storage=1.77µs web_handler=840ns query_engine=1.02µs scrape=247.43µs scrape_sd=562.121µs notify=1.1µs notify_sd=710ns rules=1.34µs tracing=4.35µs
+2026-06-20T16:31:40.610666583Z ts=2026-06-20T16:31:40.610Z caller=main.go:1182 level=info msg="Server is ready to receive web requests."
+2026-06-20T16:31:40.612695534Z ts=2026-06-20T16:31:40.612Z caller=manager.go:164 level=info component="rule manager" msg="Starting rule manager..."
+2026-06-20T17:21:27.895989536Z ts=2026-06-20T17:21:27.895Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781973106521 maxt=1781976087486 ulid=01KVK0TF7DRW99VMTW6T31MGP7 duration=106.412142ms ooo=false

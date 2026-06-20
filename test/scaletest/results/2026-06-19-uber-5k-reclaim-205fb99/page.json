@@ -7,11 +7,38 @@
   "scenario": "Scale-down: shed 50% of demand mid-soak — does BigFleet reclaim the surplus in a bounded, converging way (no thrash)?",
   "criterion": "Reclaim stays under the bound, converges to a steady floor, no over-reclaim (zero shortfalls). Inverted posture: reclaim is the expected, healthy outcome here.",
   "highlights": [
-    { "label": "configured (peak → converged)", "metricStart": "preShedPeakConfigured", "metricEnd": "convergedConfigured", "kind": "count" },
-    { "label": "reclaimed to idle", "metric": "configuredReclaimedToIdle", "kind": "count" },
-    { "label": "reclaim actions / bound", "metricStart": "reclaimActionsTotal", "metricEnd": "reclaimCycleBound", "kind": "count", "sep": " / " },
-    { "label": "converged reclaim floor", "metric": "reclaimPerSecConvergedFloor", "kind": "perSec" },
-    { "label": "shortfalls", "metric": "shardShortfalls", "kind": "count" }
+    {
+      "label": "configured (peak → converged)",
+      "metricStart": "preShedPeakConfigured",
+      "metricEnd": "convergedConfigured",
+      "kind": "count"
+    },
+    {
+      "label": "reclaimed to idle",
+      "metric": "configuredReclaimedToIdle",
+      "kind": "count"
+    },
+    {
+      "label": "reclaim actions / bound",
+      "metricStart": "reclaimActionsTotal",
+      "metricEnd": "reclaimCycleBound",
+      "kind": "count",
+      "sep": " / "
+    },
+    {
+      "label": "converged reclaim floor",
+      "metric": "reclaimPerSecConvergedFloor",
+      "kind": "perSec"
+    },
+    {
+      "label": "shortfalls",
+      "metric": "shardShortfalls",
+      "kind": "count"
+    }
   ],
-  "caveat": "The bounded-reclaim gate this exercised is now committed on the 50k profile (settleSeconds + maxReclaimActionsDuringSoak)."
+  "caveat": "The bounded-reclaim gate this exercised is now committed on the 50k profile (settleSeconds + maxReclaimActionsDuringSoak).",
+  "receipt": {
+    "snapshot": "https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-reclaim.tar.gz",
+    "grafana": true
+  }
 }

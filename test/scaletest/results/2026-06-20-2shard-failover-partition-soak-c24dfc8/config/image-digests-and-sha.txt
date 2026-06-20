@@ -1,0 +1,7 @@
+git_sha=c24dfc88fd7d221cb958a3645c1384f882536a2a
+bigfleet-coordinator-0  registry:5000/bigfleet@sha256:0674f627690feaf3b7703035b5eeb23297632ceed170393342ade78967347748
+bigfleet-shard-0  registry:5000/bigfleet@sha256:0674f627690feaf3b7703035b5eeb23297632ceed170393342ade78967347748
+bigfleet-shard-1  registry:5000/bigfleet@sha256:0674f627690feaf3b7703035b5eeb23297632ceed170393342ade78967347748
+grafana-7c5dbf74b9-zs7pj  docker.io/grafana/grafana@sha256:578309639f1343b02883d7d4fc2b7f3783747a9f53e7b3ec34224e92eedb55ad
+prometheus-0  docker.io/prom/prometheus@sha256:378f4e03703557d1c6419e6caccf922f96e6d88a530f7431d66a4c4f4b1000fe docker.io/curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
+  
