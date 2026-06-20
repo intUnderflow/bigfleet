@@ -12,6 +12,18 @@
 # roll-up then sees ~half the needs and Phase 3 reclaims the excess
 # Configured machines (paper §13 / ADR-0049).
 #
+# SPECULATIVE QUOTA TRACKS DEMAND DOWN (Run-1 fix, same as reclaim-cycle.yaml):
+# the runner derives a speculative-shed from this scaleDowns block (same
+# atSeconds + targetMultiplier), so the shard sheds half its Speculative
+# (elastic-procurement burst) quota when demand halves. Without it the pool
+# stayed at its PRE-shed peak (speculativeMultiplier × machines), ~2×
+# oversized after the halving, and the over-sized pool fed a sustained
+# post-shed reclaim floor that made the count window-sensitive. A real fleet
+# right-sizes burst quota to its footprint (ADR-0026); the fixed peak pool is
+# the ADR-0043 fabricated-demand trap. Harness supply bookkeeping on the fake
+# provider — NOT an engine change (the engine never sizes the Speculative
+# pool; it treats whatever exists as available supply).
+#
 # SLO POSTURE — THE INVERSION (same as reclaim-cycle.yaml): reclaim is the
 # EXPECTED healthy outcome, so maxReclaimActionsDuringSoak is GENEROUS —
 # the uber-5k drill measured 5,127 actions against a 6,000 bound, so the

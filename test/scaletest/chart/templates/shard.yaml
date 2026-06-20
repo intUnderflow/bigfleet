@@ -112,6 +112,10 @@ spec:
             {{- if .Values.shard.failureRatePerSec }}
             - --failure-rate-per-sec={{ .Values.shard.failureRatePerSec }}
             {{- end }}
+            {{- if .Values.shard.speculativeShedAtSeconds }}
+            - --speculative-shed-at-seconds={{ .Values.shard.speculativeShedAtSeconds }}
+            - --speculative-shed-multiplier={{ .Values.shard.speculativeShedMultiplier }}
+            {{- end }}
             {{- if .Values.shard.phaseAttributionLog }}
             - --phase-attribution-log
             {{- end }}

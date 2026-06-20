@@ -530,3 +530,82 @@ func TestCreateLatency_ZeroIsInstant(t *testing.T) {
 		t.Errorf("CreateLatency=0: state=%s, want Idle immediately (no Creating dwell)", got.State)
 	}
 }
+
+// TestFake_ShedSpeculative_RemovesFractionOfSlots is the reclaim-cycle
+// harness hook: ShedSpeculative right-sizes the Speculative (burst) quota
+// DOWN, removing the requested fraction of UNREALIZED Speculative slots
+// and leaving realized capacity (Idle/Configured) untouched. After the
+// shed the removed slots vanish from List.
+func TestFake_ShedSpeculative_RemovesFractionOfSlots(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	ctx := context.Background()
+	for i := 0; i < 10; i++ {
+		p.AddSpeculative(machine.ID("spec-"+strconv.Itoa(i)),
+			machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 1, 0)
+	}
+	// Realized capacity that must survive the shed.
+	p.AddIdle("idle-keep", machine.Profile{InstanceType: "m6i"}, machine.CapacityTypeBareMetal, 0, 0)
+	p.AddConfigured("conf-keep", machine.Profile{InstanceType: "m6i"}, machine.CapacityTypeBareMetal, 0, 0, "cluster-a", 100, 0, 0)
+
+	if got := p.SpeculativeCount(); got != 10 {
+		t.Fatalf("precondition SpeculativeCount = %d, want 10", got)
+	}
+
+	// Keep 0.5 → shed half (fraction 0.5).
+	removed := p.ShedSpeculative(0.5)
+	if removed != 5 {
+		t.Errorf("ShedSpeculative(0.5) removed %d, want 5", removed)
+	}
+	if got := p.SpeculativeCount(); got != 5 {
+		t.Errorf("post-shed SpeculativeCount = %d, want 5", got)
+	}
+
+	// Realized capacity is untouched, and the survivors + realized are the
+	// only records List returns.
+	resp, err := p.List(ctx, provider.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var spec, idle, conf int
+	for _, m := range resp.Machines {
+		switch m.State {
+		case machine.StateSpeculative:
+			spec++
+		case machine.StateIdle:
+			idle++
+		case machine.StateConfigured:
+			conf++
+		}
+	}
+	if spec != 5 || idle != 1 || conf != 1 {
+		t.Errorf("post-shed List: speculative=%d idle=%d configured=%d, want 5/1/1 (realized capacity never sheds)", spec, idle, conf)
+	}
+}
+
+// TestFake_ShedSpeculative_EdgeFractions: fraction <= 0 removes nothing,
+// fraction >= 1 removes the whole Speculative pool, and both leave
+// realized capacity alone.
+func TestFake_ShedSpeculative_EdgeFractions(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	for i := 0; i < 4; i++ {
+		p.AddSpeculative(machine.ID("spec-"+strconv.Itoa(i)),
+			machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 1, 0)
+	}
+	if got := p.ShedSpeculative(0); got != 0 {
+		t.Errorf("ShedSpeculative(0) removed %d, want 0 (no-op)", got)
+	}
+	if got := p.ShedSpeculative(-0.5); got != 0 {
+		t.Errorf("ShedSpeculative(-0.5) removed %d, want 0 (no-op)", got)
+	}
+	if got := p.SpeculativeCount(); got != 4 {
+		t.Errorf("after no-op sheds SpeculativeCount = %d, want 4", got)
+	}
+	if got := p.ShedSpeculative(2.0); got != 4 {
+		t.Errorf("ShedSpeculative(2.0) removed %d, want 4 (clamped to 1)", got)
+	}
+	if got := p.SpeculativeCount(); got != 0 {
+		t.Errorf("after full shed SpeculativeCount = %d, want 0", got)
+	}
+}

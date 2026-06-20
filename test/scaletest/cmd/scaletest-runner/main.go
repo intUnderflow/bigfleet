@@ -762,6 +762,26 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 	// when present so profiles without it render exactly as before.
 	if len(p.LoadProfile.ScaleDowns) > 0 {
 		values["loadProfile"].(map[string]any)["scaleDowns"] = p.LoadProfile.ScaleDowns
+		// reclaim-cycle: thread the SAME shed into the shard's Speculative
+		// (burst) quota so it tracks demand DOWN with the load-driver's
+		// demand drop. Without this the Speculative pool stays seeded at its
+		// PRE-shed peak size and the over-sized pool feeds a sustained
+		// post-shed Phase-3 reclaim floor (~1/targetMultiplier× too big),
+		// which makes the reclaim count window-sensitive (Run-1 finding;
+		// ADR-0026 burst quota tracks footprint, ADR-0043 fixed-pool trap).
+		// Derived from the FIRST scale-down event (atSeconds + the keep
+		// fraction targetMultiplier) — the reclaim-cycle profiles shed once.
+		// The load-driver anchors scale-downs at its own start and the shard
+		// at its own start; both start at install, so the two fire within a
+		// chart-rollout skew of each other. This is harness supply
+		// bookkeeping on the fake provider, NOT an engine decision: the
+		// engine never sizes the Speculative pool.
+		first := p.LoadProfile.ScaleDowns[0]
+		if first.TargetMultiplier > 0 && first.TargetMultiplier < 1 {
+			shardMap := values["shard"].(map[string]any)
+			shardMap["speculativeShedAtSeconds"] = first.AtSeconds
+			shardMap["speculativeShedMultiplier"] = first.TargetMultiplier
+		}
 	}
 	// shard.failureRatePerSec override: only set when a chaos profile asks
 	// for an elevated rate, so profiles without it inherit the chart's

@@ -80,6 +80,61 @@ func runFailureInjector(ctx context.Context, prov *fake.Provider, ratePerSec flo
 	}
 }
 
+// runSpeculativeShed right-sizes the in-process fake provider's
+// Speculative (elastic-procurement burst) quota DOWN at a wall-clock
+// offset, mirroring the load-driver's demand scale-down.
+//
+// The reclaim-cycle drill sheds half the demand mid-soak; the harness
+// must shed the burst quota with it. Without this hook the Speculative
+// pool stays seeded at its PRE-shed peak size — ~1/(targetMultiplier)×
+// oversized vs the halved demand — and the over-sized pool feeds a
+// sustained post-shed Phase-3 reclaim floor (Phase 1 keeps a pool to
+// re-provision from, those realisations become unclaimed excess, Phase 3
+// reclaims them: the re-buy churn). A real fleet right-sizes burst quota
+// to its current footprint (ADR-0026); holding the fixed peak pool past
+// a shed is exactly the ADR-0043 fabricated-demand trap.
+//
+// `surviveMultiplier` is the fraction of the Speculative pool to KEEP —
+// the same targetMultiplier the load-driver applies to demand — so the
+// shed is proportional (e.g. 0.5 demand → 0.5 burst quota). The shed
+// fires once, `atSeconds` after process start (the load-driver anchors
+// its scale-downs at its own start; both start at install, so the two
+// fire within a chart-rollout skew of each other — close enough that the
+// reclaim window sees one settled regime).
+//
+// This is purely supply bookkeeping on the fake provider — NOT an engine
+// decision. The engine never sizes the Speculative pool; it treats
+// whatever exists as available supply. So shrinking the seeded pool is a
+// harness/fixture change, not a change to pkg/decision policy.
+//
+// Exits when ctx is cancelled or after the one-shot shed fires.
+func runSpeculativeShed(ctx context.Context, prov *fake.Provider, atSeconds int, surviveMultiplier float64, logger *slog.Logger) {
+	if surviveMultiplier < 0 {
+		surviveMultiplier = 0
+	}
+	if surviveMultiplier >= 1 {
+		// A multiplier ≥ 1 keeps everything — nothing to shed.
+		return
+	}
+	wait := time.Duration(atSeconds) * time.Second
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
+	before := prov.SpeculativeCount()
+	removed := prov.ShedSpeculative(1 - surviveMultiplier)
+	logger.Info("speculative quota shed (reclaim-cycle: burst quota tracks demand down)",
+		"at_seconds", atSeconds,
+		"survive_multiplier", surviveMultiplier,
+		"speculative_before", before,
+		"removed", removed,
+		"speculative_after", before-removed,
+	)
+}
+
 // poissonDraw returns a sample from Poisson(λ). Knuth's algorithm
 // is fine for λ ≤ ~30 (each iteration draws one Float64). For the
 // realistic-fleet rates × 30-min soaks × 60K Configured we expect
@@ -608,6 +663,8 @@ func runShard(args []string) error {
 	archetypesPath := fs.String("archetypes", "", "scaletest M31: path to a workload-archetype catalog YAML. When set, the seed distributes machines across archetypes by ADR-0044 machine-demand share — weight × E[replicas] / podsPerMachine, with a per-zone floor of max(groupSizeRange) for gang archetypes (instance-type, zone, resources, priority and penalties from each archetype). Gang floors may push seeded totals above the configured counts. When empty, the seed falls back to the legacy single shape (preflight.LegacyDemandInstanceType, matching the load-driver's legacy Pod template). Both this flag and the load-driver's archetypes reference must point at the same file so demand and Configured match.")
 	failureRatePerSec := fs.Float64("failure-rate-per-sec", 0, "scaletest M38: per-second probability (per Configured machine) of an unsolicited provider failure (spot reclaim / hardware fault). 0 disables. Real fleets see ~0.1-1%/day; that maps to ~1.16e-8 to 1.16e-7 per second per machine. The injector runs in a background goroutine, picks a random Configured machine each tick, and transitions it to Failed via the fake provider. Exercises the shard's transitional-state-recovery + drain-grace paths under load.")
 	seedDensityMultiplier := fs.Int("seed-density-multiplier", 1, "scaletest: seed each fake-inventory machine with Allocatable = N × Profile.Resources, so one machine has the real capacity of N replicas of its Profile (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 keeps the legacy 1 Pod = 1 machine math. Under ADR-0027's resource-vector model this is just per-machine capacity — Phase 1's `creditExistingSupply` and `take` both diff against the machine's true Allocatable; there is no longer a per-Pod density reconstruction step that needs the multiplier to be honoured separately.")
+	speculativeShedAtSeconds := fs.Int("speculative-shed-at-seconds", 0, "scaletest reclaim-cycle: wall-clock offset (from shard start) at which the in-process fake provider's Speculative (elastic-procurement burst) quota is right-sized DOWN, mirroring the load-driver's demand scale-down so burst quota tracks demand. Requires --speculative-shed-multiplier in (0,1). 0 (and the default) disables — every non-reclaim profile is unaffected. The engine never sizes the Speculative pool; this is harness supply bookkeeping, not an engine decision.")
+	speculativeShedMultiplier := fs.Float64("speculative-shed-multiplier", 1, "scaletest reclaim-cycle: fraction of the Speculative quota pool to KEEP at the shed (the same targetMultiplier the load-driver applies to demand). E.g. 0.5 sheds half the burst quota when demand halves. Only consulted when --speculative-shed-at-seconds > 0 and this is in (0,1); 1 (default) keeps everything (no shed).")
 	maxActionsPerCycle := fs.Int("max-actions-per-cycle", 0, "cap total decision actions executed per cycle so a ramp burst doesn't blow past the cycle SLO; 0 = unlimited (production default). Surplus actions roll into the next cycle.")
 	actuationPaused := fs.Bool("actuation-paused", false, "ADR-0046 kill switch: run decision cycles and full reporting (reconcile, metrics, shortfalls, AvailableCapacity) but execute no Bootstrap/Provision/Reclaim/Preempt actions. Suppressed actions are counted in bigfleet_shard_actions_suppressed_total. Flipped by redeploy; durable across restarts because it is deployment state.")
 	reclaimCapFraction := fs.Float64("reclaim-cap-fraction", shard.DefaultReclaimCapFraction, "ADR-0046 blast-radius cap: per cycle, per cluster, execute at most max(1, fraction × the cluster's Configured count) Reclaim actions; the surplus re-derives next cycle. Bounds the worst-case drain rate when the engine's inputs or logic are wrong. Preempts are not capped (priority-driven allocation, paper §16). 0 disables.")
@@ -663,8 +720,8 @@ func runShard(args []string) error {
 		fakeProv *fake.Provider
 	)
 	if *providerAddr != "" {
-		if *seedMachines > 0 || *seedSpeculative > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 {
-			return errors.New("--seed-* and --failure-rate-per-sec drive the in-process fake provider and cannot be combined with --provider-addr")
+		if *seedMachines > 0 || *seedSpeculative > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 || *speculativeShedAtSeconds > 0 {
+			return errors.New("--seed-*, --failure-rate-per-sec and --speculative-shed-* drive the in-process fake provider and cannot be combined with --provider-addr")
 		}
 		pc, err := grpcclient.New(*providerAddr, grpcclient.Identity{ShardID: *shardID, Epoch: epoch}, tlsCfg)
 		if err != nil {
@@ -792,6 +849,16 @@ func runShard(args []string) error {
 	// fine for the 1e-8 to 1e-7 range that matches production.
 	if *failureRatePerSec > 0 {
 		go runFailureInjector(ctx, fakeProv, *failureRatePerSec, logger)
+	}
+
+	// reclaim-cycle drill: shed the Speculative (burst) quota proportional
+	// to the demand scale-down at its scheduled offset, so the post-shed
+	// reclaim floor scales with the reduced demand instead of churning a
+	// fixed peak-sized pool. Only the fake-provider path (scaletest); a
+	// real provider's quota is its own concern. Disabled unless both knobs
+	// are set, so every non-reclaim profile is unaffected.
+	if fakeProv != nil && *speculativeShedAtSeconds > 0 && *speculativeShedMultiplier > 0 && *speculativeShedMultiplier < 1 {
+		go runSpeculativeShed(ctx, fakeProv, *speculativeShedAtSeconds, *speculativeShedMultiplier, logger)
 	}
 
 	// #66/#74 scaletest-only: the wall-clock Create-latency advancer settles

@@ -177,6 +177,17 @@ shard:
   # enough to leave on in the small correctness profiles (dev-50), so
   # a failed `make prevalidate` is self-diagnosing without a re-run.
   phaseAttributionLog: false
+  # reclaim-cycle drill: right-size the in-process fake provider's
+  # Speculative (elastic-procurement burst) quota DOWN at this offset
+  # (seconds from shard start), mirroring the load-driver's demand
+  # scale-down so burst quota tracks demand. The runner derives both
+  # values from the profile's first loadProfile.scaleDowns event; 0
+  # disables (every non-reclaim profile renders unchanged). Pure harness
+  # supply bookkeeping — the engine never sizes the Speculative pool.
+  speculativeShedAtSeconds: 0
+  # Fraction of the Speculative pool to KEEP at the shed (the same
+  # targetMultiplier the load-driver applies to demand). 1 = no shed.
+  speculativeShedMultiplier: 1
 
 provider:
   resources:

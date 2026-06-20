@@ -8,6 +8,20 @@
 # CR GC'd → fewer needs → Phase 3 reclaims → per-CapacityType idle hold /
 # Delete, ADR-0049).
 #
+# SPECULATIVE QUOTA TRACKS DEMAND DOWN (Run-1 fix): the same scale-down
+# also right-sizes the shard's Speculative (elastic-procurement burst)
+# quota — the runner derives a speculative-shed from this scaleDowns block
+# (same atSeconds + targetMultiplier) and the shard sheds that fraction of
+# its Speculative pool when demand drops. Without it the pool stayed seeded
+# at its PRE-shed peak (speculativeMultiplier × machines, sized to PRE-shed
+# demand), ~1/targetMultiplier× oversized after the halving; the over-sized
+# pool fed a sustained post-shed reclaim floor ~3× the pre-shed floor that
+# made the reclaim count window-sensitive. A real fleet right-sizes burst
+# quota to its current footprint (ADR-0026); holding the fixed peak pool is
+# the ADR-0043 fabricated-demand trap. Pure harness supply bookkeeping on
+# the fake provider — NOT an engine change (the engine never sizes the
+# Speculative pool; it treats whatever exists as available supply).
+#
 # SLO POSTURE — THE INVERSION: the steady-state gate asserts Phase 3 is
 # INERT (maxReclaimActionsDuringSoak ~0, the M67 oscillation guard). Here
 # reclaim is the EXPECTED, healthy outcome, so maxReclaimActionsDuringSoak
@@ -19,7 +33,10 @@
 # capacity-delivery gates MUST still hold — reclaim is normal Phase 3 work,
 # not an SLO violation. Conservation / no-over-reclaim / no-oscillation are
 # read from the Phase-3 action counts + the demand/inventory time-series by
-# the operator, not a single threshold.
+# the operator, not a single threshold. With the Speculative-tracks-demand
+# fix the post-shed reclaim floor now scales with the REDUCED demand (no
+# fixed-peak-pool re-buy churn), so the measured count is no longer
+# window-sensitive; the generous bound is unchanged pending a re-measure.
 
 apiVersion: bigfleet.io/scaletest/v1
 kind: Profile

@@ -492,6 +492,73 @@ func (p *Provider) ConfiguredCount() int {
 	return n
 }
 
+// SpeculativeCount returns the number of unrealized Speculative quota
+// slots currently held (machines still in StateSpeculative — i.e. the
+// elastic-procurement burst quota Phase 1 has not yet provisioned).
+// Scaletest-only, used by the speculative-shed harness hook to size its
+// shed against the live pool.
+func (p *Provider) SpeculativeCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, m := range p.machines {
+		if m.State == machine.StateSpeculative {
+			n++
+		}
+	}
+	return n
+}
+
+// ShedSpeculative removes `fraction` (clamped to [0,1]) of the currently
+// unrealized Speculative quota slots, modelling a fleet right-sizing its
+// elastic-procurement burst quota DOWN when its footprint shrinks
+// (ADR-0026 burst quota tracks the current footprint; ADR-0043: the
+// fixed peak-sized pool is fabricated demand the harness must not hold
+// past a shed). Only StateSpeculative records are touched — realized
+// capacity (Idle / Configuring / Configured machines provisioned from a
+// slot) is never deleted, so a shed cannot drain running workloads. The
+// removed slots vanish from the next provider.List (RemoveMachine
+// semantics); Phase 1 simply has fewer slots to provision from, so the
+// post-shed re-buy churn that an over-sized pool feeds is removed at the
+// source. Returns the number of slots removed.
+//
+// Scaletest-only. The shard binary drives this from a wall-clock offset
+// mirroring the load-driver's demand scale-down (cmd/bigfleet/shard.go),
+// so demand and burst quota shed together. It is NOT an engine decision:
+// the engine never sizes the Speculative pool — it treats whatever exists
+// as available supply (the pool size is purely seeded inventory).
+func (p *Provider) ShedSpeculative(fraction float64) int {
+	if fraction <= 0 {
+		return 0
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Collect current Speculative IDs in sorted order so the shed is
+	// deterministic (Go map iteration order is randomised; the harness
+	// wants a repeatable "first N slots removed" for test stability).
+	ids := make([]machine.ID, 0)
+	for id, m := range p.machines {
+		if m.State == machine.StateSpeculative {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	remove := int(float64(len(ids)) * fraction)
+	for i := 0; i < remove; i++ {
+		id := ids[i]
+		delete(p.machines, id)
+		p.rev++
+		// No revLog append for a deletion: the incremental delta path keys
+		// on present records (mirrors RemoveMachine); a fresh List omits
+		// the id, and the closed-loop sim reconciles full.
+		delete(p.lastModRev, id)
+	}
+	return remove
+}
+
 // Create implements provider.Provider. The host comes into being only
 // when provisioning settles at Idle: a machine still Creating (the
 // CreateStaged path) has no host yet, so the post-effect sets the host

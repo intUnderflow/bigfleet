@@ -205,4 +205,45 @@ func TestReclaimCycleProfile_ValidV2(t *testing.T) {
 	if p.SLO.MaxReclaimActionsDuringSoak <= 0 {
 		t.Errorf("maxReclaimActionsDuringSoak = %d (want > 0 — reclaim is expected in this drill)", p.SLO.MaxReclaimActionsDuringSoak)
 	}
+
+	// Run-1 fix: the SAME scaleDown must thread into the shard's Speculative
+	// (burst) quota shed so it tracks demand DOWN. renderHelmValues derives
+	// speculativeShedAtSeconds + speculativeShedMultiplier from the first
+	// scaleDown event; without it the Speculative pool stays at its pre-shed
+	// peak and feeds a sustained post-shed reclaim floor.
+	arch, typed, err := loadCatalogArchetypes(
+		filepath.Join(root, "test", "scaletest", "profiles", "reclaim-cycle.yaml"), p.Catalog.Archetypes)
+	if err != nil {
+		t.Fatalf("loadCatalogArchetypes: %v", err)
+	}
+	values := renderHelmValues(p, s, cfg, arch, typed)
+	shardMap, ok := values["shard"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered values missing shard map: %#v", values["shard"])
+	}
+	if got, want := shardMap["speculativeShedAtSeconds"], sd.AtSeconds; got != want {
+		t.Errorf("shard.speculativeShedAtSeconds = %v, want %d (= scaleDown AtSeconds)", got, want)
+	}
+	if got, want := shardMap["speculativeShedMultiplier"], sd.TargetMultiplier; got != want {
+		t.Errorf("shard.speculativeShedMultiplier = %v, want %v (= scaleDown TargetMultiplier — burst quota tracks demand down)", got, want)
+	}
+}
+
+// TestRenderHelmValues_SpeculativeShedAbsentWithoutScaleDown is the
+// absence pin: a profile with NO scaleDowns must render NO speculative-shed
+// keys, so every non-reclaim profile is byte-identical to before the fix.
+func TestRenderHelmValues_SpeculativeShedAbsentWithoutScaleDown(t *testing.T) {
+	t.Parallel()
+	p, s, cfg := fixtureMerged(t)
+	if len(p.LoadProfile.ScaleDowns) != 0 {
+		t.Fatalf("fixture unexpectedly has scaleDowns: %+v", p.LoadProfile.ScaleDowns)
+	}
+	values := renderHelmValues(p, s, cfg, testArchetypes, testTypedArchetypes)
+	shardMap, _ := values["shard"].(map[string]any)
+	if _, ok := shardMap["speculativeShedAtSeconds"]; ok {
+		t.Errorf("shard.speculativeShedAtSeconds present with no scaleDowns: %v", shardMap["speculativeShedAtSeconds"])
+	}
+	if _, ok := shardMap["speculativeShedMultiplier"]; ok {
+		t.Errorf("shard.speculativeShedMultiplier present with no scaleDowns: %v", shardMap["speculativeShedMultiplier"])
+	}
 }

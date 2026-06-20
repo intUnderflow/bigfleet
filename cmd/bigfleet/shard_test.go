@@ -1,10 +1,103 @@
 package main
 
 import (
+	"context"
+	"io"
+	"log/slog"
+	"strconv"
 	"testing"
+	"time"
 
+	"github.com/intUnderflow/bigfleet/pkg/machine"
+	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
 )
+
+func quietLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func seedSpec(p *fake.Provider, n int) {
+	for i := 0; i < n; i++ {
+		p.AddSpeculative(machine.ID("spec-"+strconv.Itoa(i)),
+			machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 1, 0)
+	}
+}
+
+// TestRunSpeculativeShed_TracksDemandDown is the reclaim-cycle Run-1 fix:
+// at the scheduled offset the shed removes (1 - surviveMultiplier) of the
+// Speculative pool so the burst quota tracks the demand scale-down. A tiny
+// atSeconds keeps the test fast.
+func TestRunSpeculativeShed_TracksDemandDown(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	seedSpec(p, 100)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		runSpeculativeShed(ctx, p, 0 /*fire immediately*/, 0.5, quietLogger())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("runSpeculativeShed did not return")
+	}
+
+	if got := p.SpeculativeCount(); got != 50 {
+		t.Errorf("post-shed SpeculativeCount = %d, want 50 (kept surviveMultiplier=0.5)", got)
+	}
+}
+
+// TestRunSpeculativeShed_NoOpAtMultiplierOne: a survive-multiplier of 1
+// (the default, no scale-down) sheds nothing and returns immediately.
+func TestRunSpeculativeShed_NoOpAtMultiplierOne(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	seedSpec(p, 40)
+
+	done := make(chan struct{})
+	go func() {
+		// atSeconds large, but the multiplier>=1 guard must short-circuit
+		// before any wait, so this returns at once.
+		runSpeculativeShed(context.Background(), p, 100000, 1.0, quietLogger())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSpeculativeShed(multiplier=1) did not short-circuit")
+	}
+	if got := p.SpeculativeCount(); got != 40 {
+		t.Errorf("SpeculativeCount = %d, want 40 (multiplier 1 = no shed)", got)
+	}
+}
+
+// TestRunSpeculativeShed_CancelBeforeFire: cancelling the context before
+// the offset elapses must exit without shedding.
+func TestRunSpeculativeShed_CancelBeforeFire(t *testing.T) {
+	t.Parallel()
+	p := fake.New(fake.Options{InstantTransitions: true})
+	seedSpec(p, 30)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runSpeculativeShed(ctx, p, 3600 /*far future*/, 0.5, quietLogger())
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSpeculativeShed did not exit on context cancel")
+	}
+	if got := p.SpeculativeCount(); got != 30 {
+		t.Errorf("SpeculativeCount = %d, want 30 (cancelled before fire = no shed)", got)
+	}
+}
 
 // TestSeedZoneRack pins the ADR-0040 Addendum §4 blocking math:
 // sameRack archetypes fill one (zone, rack) for a whole max-group-size
