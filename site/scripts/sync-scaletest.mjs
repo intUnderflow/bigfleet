@@ -151,6 +151,25 @@ function folderLink(dir) {
   return `[run folder ↗](${GH}/test/scaletest/results/${dir})`;
 }
 
+// Receipts: the full Grafana-loadable evidence bundle for a published run,
+// rendered only when its page.json carries a `receipt` block — so runs
+// without one are byte-identical. The big Prometheus TSDB lives as an
+// external release asset (`receipt.snapshot` = its URL, repo-lean); the
+// scrubbed component logs + config/state live in the run folder; the
+// Grafana dashboard + one-command load recipe (`receipt.grafana`) live in
+// the run folder as LOAD-RECIPE.md. compact omits the run-folder link (the
+// caller already shows it, e.g. the ladder table's data cell).
+function receiptLinks(page, dir, compact = false) {
+  const r = page.receipt;
+  if (!r) return "";
+  const parts = [];
+  if (r.snapshot) parts.push(`[Prometheus snapshot ↗](${r.snapshot})`);
+  if (!compact) parts.push(`[scrubbed logs + config ↗](${GH}/test/scaletest/results/${dir})`);
+  if (r.grafana) parts.push(`[load in Grafana ↗](${GH}/test/scaletest/results/${dir}/LOAD-RECIPE.md)`);
+  if (parts.length === 0) return "";
+  return compact ? parts.join(" · ") : `📦 **Receipts:** ${parts.join(" · ")}`;
+}
+
 function capitalise(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -239,6 +258,8 @@ ${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet d
   s += `
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
 `;
+  const rcpt = receiptLinks(page, canonical.dir);
+  if (rcpt) s += `\n${rcpt} — open the full run in Grafana and check every number yourself.\n`;
   return s;
 }
 
@@ -266,7 +287,8 @@ The workload is the full \`realistic.yaml\` archetype catalog — gpu-training, 
 `;
   for (const r of ladderRuns) {
     const status = allGatesPass(r.summary) ? "passed" : "failed";
-    s += `| \`${r.page.displayName}\` | ${r.page.scale} | ${STATUS[status]} | ${folderLink(r.dir)} |\n`;
+    const rcpt = receiptLinks(r.page, r.dir, true);
+    s += `| \`${r.page.displayName}\` | ${r.page.scale} | ${STATUS[status]} | ${folderLink(r.dir)}${rcpt ? ` · ${rcpt}` : ""} |\n`;
   }
   for (const r of ROADMAP) {
     s += `| \`${r.profile}\` | ${r.scale} | ${STATUS[r.status]} | — |\n`;
@@ -306,7 +328,8 @@ ${page.scenario || ""}
       s += `| ${h.label} | ${fmtHighlight(summary, h)} |\n`;
     }
     if (page.caveat) s += `\n_${page.caveat}_\n`;
-    s += `\n${folderLink(r.dir)}\n`;
+    const rcpt = receiptLinks(page, r.dir);
+    s += `\n${folderLink(r.dir)}${rcpt ? `\n\n${rcpt}` : ""}\n`;
   }
   return s;
 }
