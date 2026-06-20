@@ -998,10 +998,13 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		}
 		s.log.Warn("shortfalls detected", "count", n, "top_fingerprints", fps)
 		metrics.ShardShortfalls.Set(float64(n))
-		emitAgedShortfallBuckets(s.Shortfalls())
+		all := s.Shortfalls()
+		emitAgedShortfallBuckets(all)
+		emitShortfallsByPriorityClass(all)
 	} else {
 		metrics.ShardShortfalls.Set(0)
 		emitAgedShortfallBuckets(nil)
+		emitShortfallsByPriorityClass(nil)
 	}
 	if s.cfg.OnActions != nil {
 		s.cfg.OnActions(all)
@@ -1387,6 +1390,57 @@ func ageBucket(age int) string {
 		return "10-59"
 	default:
 		return "1-9"
+	}
+}
+
+// shortfallPriorityClasses is the fixed, bounded label set for
+// ShardShortfallsByPriority. Every class is re-published (zeroed if
+// absent) each cycle so a class that clears reads 0 rather than holding a
+// stale value — same discipline as emitAgedShortfallBuckets.
+var shortfallPriorityClasses = []string{
+	priorityClassBatch, priorityClassService, priorityClassCritical, priorityClassOther,
+}
+
+const (
+	priorityClassBatch    = "batch"    // ~100 — best-effort / preemptible
+	priorityClassService  = "service"  // ~1000 — default serving workloads
+	priorityClassCritical = "critical" // ~1000000 — control plane / safety-critical
+	priorityClassOther    = "other"    // anything outside the realistic catalog's tiers
+)
+
+// priorityClass maps a workload priority to one of a small, bounded set of
+// class names, keeping ShardShortfallsByPriority's cardinality fixed. The
+// realistic scale catalog uses 100 / 1000 / 1000000
+// (test/scaletest/profiles/archetypes/realistic.yaml); the thresholds
+// bracket those tiers so real catalogs land on the named classes and any
+// out-of-catalog priority defaults to "other".
+func priorityClass(priority int32) string {
+	switch {
+	case priority >= 1000000:
+		return priorityClassCritical
+	case priority >= 1000:
+		return priorityClassService
+	case priority >= 100:
+		return priorityClassBatch
+	default:
+		return priorityClassOther
+	}
+}
+
+// emitShortfallsByPriorityClass resets every class label to 0 and
+// re-publishes the current per-class shortfall count. Called every cycle
+// (with nil when there are no shortfalls) so a class that clears reads 0,
+// not a stale value. Each Shortfall is counted once — its Profile carries
+// the workload priority — so sum-over-class equals the aggregate
+// ShardShortfalls gauge. Pure local metric set: no coordinator call, no
+// hot-path dependency on pkg/coordinator (CLAUDE.md static-stability rule).
+func emitShortfallsByPriorityClass(sfs []Shortfall) {
+	counts := make(map[string]int, len(shortfallPriorityClasses))
+	for _, sf := range sfs {
+		counts[priorityClass(sf.Profile.Priority())]++
+	}
+	for _, class := range shortfallPriorityClasses {
+		metrics.ShardShortfallsByPriority.WithLabelValues(class).Set(float64(counts[class]))
 	}
 }
 

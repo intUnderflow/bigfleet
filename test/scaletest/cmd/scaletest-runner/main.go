@@ -190,14 +190,14 @@ type sloOverrides struct {
 	// still applies. Default false = the unconditional ADR-0045/0054
 	// shortfall-zero gate, unchanged.
 	//
-	// LIMITATION (engine-metric gap, reported, NOT worked around): the
-	// sole-throttle hard rule's "confined to the lowest priority tier,
-	// zero high-priority shortfall" half is NOT assertable here. The
-	// only shortfall metric is the aggregate `bigfleet_shard_shortfalls`
-	// gauge (and an age-bucketed twin); neither carries a priority /
-	// priority-class label. Asserting confinement would require an engine
-	// metric/label change, which is author-gated. This gate therefore
-	// asserts only the runner-feasible half: shortfall > 0 and converged.
+	// This gate asserts the EXISTENCE + CONVERGENCE half (shortfall > 0,
+	// |Δ| ≤ ShortfallStabilityMax). The sole-throttle rule's CONFINEMENT
+	// half — "confined to the lowest priority tier, zero high-priority
+	// shortfall" — is asserted separately by
+	// ShortfallConfinedBelowPriorityClass, backed by the per-priority
+	// ShardShortfallsByPriority engine metric. (Previously a documented
+	// KNOWN GAP: the only shortfall metric was the unlabelled aggregate;
+	// the per-priority-class GaugeVec closed it.)
 	ExpectStandingShortfall bool `yaml:"expectStandingShortfall"`
 	// ShortfallStabilityMax bounds |Δ shortfalls| over the soak window —
 	// the convergence half of the inverted shortfall gate. Only consulted
@@ -217,6 +217,24 @@ type sloOverrides struct {
 	// pkg/decision/phase2_inversions.go), so this gate is fully
 	// runner-feasible. Default false = no preemption assertion.
 	ExpectPreemptions bool `yaml:"expectPreemptions"`
+
+	// ShortfallConfinedBelowPriorityClass asserts the CONFINEMENT half of
+	// the sole-throttle hard rule: under genuine scarcity the standing
+	// shortfall must be confined to the LOWEST priority tier — zero
+	// shortfall in any higher class (CLAUDE.md: "Priority is the sole
+	// throttling mechanism"; BigFleet never starves high-priority demand).
+	// Set it to the lowest priority-class name (the realistic catalog's
+	// floor is "batch"); the gate then asserts
+	// `sum(bigfleet_shard_shortfalls_by_priority{priority_class!="<class>"}) == 0`.
+	//
+	// This complements ExpectStandingShortfall (the EXISTENCE +
+	// convergence half) and is only meaningful alongside it — a confined
+	// shortfall over a covered run is vacuous. Backed by the
+	// ShardShortfallsByPriority engine GaugeVec (pkg/metrics, emitted by
+	// pkg/shard), so unlike the historical KNOWN-GAP this is now fully
+	// runner-feasible. Empty string = off (default); every existing
+	// profile is byte-identical.
+	ShortfallConfinedBelowPriorityClass string `yaml:"shortfallConfinedBelowPriorityClass"`
 }
 
 type runnerAction struct {
@@ -1232,7 +1250,7 @@ loop:
 
 	// Pull metrics summary. Same deadline rationale.
 	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), 2*time.Minute)
-	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace, *duration)
+	metrics := readKeyMetrics(metricsCtx, *kubeconfig, namespace, *duration, prof.SLO)
 	if mergedActive {
 		// Reclaim count over the steady window (M77a / ADR-0045).
 		// Raw counter delta, not a rate window: rate()/increase()
@@ -1927,7 +1945,7 @@ func sloWindow(soak time.Duration) string {
 // steady-state rate windows (see sloWindow); the [15m] raft-term query
 // is deliberately untouched — it watches leader stability across the
 // whole run, not the steady-state window.
-func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Duration) map[string]float64 {
+func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Duration, slo sloOverrides) map[string]float64 {
 	queries := map[string]string{
 		// Cycle p99 is reported as the worst-shard number — the SLO
 		// applies per shard, not aggregated. With shard.replicas: 1
@@ -2122,6 +2140,21 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 		// number of seeded machines; significant skew suggests a shard
 		// failed seed-time partially.
 		"shardInventoryMinMaxRatio": `min(sum by (pod) (bigfleet_shard_inventory_machines)) / clamp_min(max(sum by (pod) (bigfleet_shard_inventory_machines)), 1)`,
+	}
+	// shortfallAboveLowestClass is the CONFINEMENT half of the
+	// sole-throttle gate (sloOverrides.ShortfallConfinedBelowPriorityClass):
+	// the count of unresolved shortfalls in any priority class ABOVE the
+	// declared floor. The sole-throttle rule requires this to be 0 — a
+	// non-zero value means BigFleet is starving high-priority demand under
+	// scarcity. `or on() vector(0)` folds the absent series (no shortfall
+	// above the floor → the higher-class children may never exist) to a
+	// real 0; -1 is reserved for a failed scrape. Added only when the
+	// posture is declared, so non-confinement runs never scrape the
+	// per-priority metric (opt-in, every other profile byte-identical).
+	if slo.ShortfallConfinedBelowPriorityClass != "" {
+		queries["shortfallAboveLowestClass"] = fmt.Sprintf(
+			`sum(bigfleet_shard_shortfalls_by_priority{priority_class!=%q}) or on() vector(0)`,
+			slo.ShortfallConfinedBelowPriorityClass)
 	}
 	win := sloWindow(soak)
 	out := make(map[string]float64, len(queries))
@@ -2353,6 +2386,9 @@ func unmeasuredGated(m map[string]float64, slo sloOverrides) []string {
 	if slo.ExpectStandingShortfall {
 		gated = append(gated, "shardShortfallsDelta")
 	}
+	if slo.ShortfallConfinedBelowPriorityClass != "" {
+		gated = append(gated, "shortfallAboveLowestClass")
+	}
 	if slo.ExpectPreemptions {
 		gated = append(gated, "preemptActions")
 	}
@@ -2443,9 +2479,10 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	// rule: satisfy priority-descending, leave the LOW-priority surplus as
 	// a shortfall). The gate then asserts the opposite — shortfall MUST be
 	// > 0 and converged (|Δ| ≤ ShortfallStabilityMax) — rather than == 0.
-	// NOTE the confinement half ("zero high-priority shortfall") is not
-	// assertable: no priority-labelled shortfall metric exists (see the
-	// ExpectStandingShortfall doc). -1 is still skipped (failed scrape).
+	// The CONFINEMENT half ("zero high-priority shortfall") is asserted
+	// below via ShortfallConfinedBelowPriorityClass, backed by the
+	// per-priority ShardShortfallsByPriority engine metric. -1 is still
+	// skipped (failed scrape).
 	if slo.ExpectStandingShortfall {
 		if v, ok := m["shardShortfalls"]; ok && v >= 0 {
 			if v == 0 {
@@ -2456,6 +2493,18 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 			// matching every other gate's convention.
 			if d, ok := m["shardShortfallsDelta"]; ok && d >= 0 && d > slo.ShortfallStabilityMax {
 				return false, fmt.Sprintf("shardShortfallsDelta %.0f (|Δ| over soak) > %.0f tolerance — standing shortfall is not converged (demand outrunning the engine under scarcity, not a priority-throttled steady state)", d, slo.ShortfallStabilityMax)
+			}
+		}
+		// CONFINEMENT: the sole-throttle hard rule (CLAUDE.md) requires the
+		// standing shortfall to sit ENTIRELY in the lowest priority tier —
+		// any shortfall in a higher class means BigFleet starved
+		// high-priority demand under scarcity, a hard failure. The query
+		// (shortfallAboveLowestClass) folds the absent series to a real 0,
+		// so a 0 here genuinely means "nothing above the floor"; -1 is the
+		// failed-scrape sentinel (skip).
+		if slo.ShortfallConfinedBelowPriorityClass != "" {
+			if v, ok := m["shortfallAboveLowestClass"]; ok && v >= 0 && v != 0 {
+				return false, fmt.Sprintf("shortfallAboveLowestClass %.0f != 0 — standing shortfall is NOT confined to %q (sole-throttle hard rule violated: BigFleet starved higher-priority demand under scarcity)", v, slo.ShortfallConfinedBelowPriorityClass)
 			}
 		}
 	} else if v, ok := m["shardShortfalls"]; ok && v >= 0 && v != 0 {

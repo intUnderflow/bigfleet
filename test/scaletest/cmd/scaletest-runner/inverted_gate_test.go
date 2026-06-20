@@ -76,6 +76,12 @@ func TestInvertedGateProfiles_ValidV2(t *testing.T) {
 		if p.SLO.ExpectPreemptions {
 			t.Errorf("expectPreemptions = true (want false — scarcity is not a preemption run)")
 		}
+		// The CONFINEMENT half must be ON, pinned to the realistic catalog's
+		// lowest tier ("batch"): the standing shortfall must sit entirely in
+		// the lowest priority class, never starving higher-priority demand.
+		if p.SLO.ShortfallConfinedBelowPriorityClass != "batch" {
+			t.Errorf("shortfallConfinedBelowPriorityClass = %q (want \"batch\" — the sole-throttle confinement assertion)", p.SLO.ShortfallConfinedBelowPriorityClass)
+		}
 	})
 
 	t.Run("preemption-5k", func(t *testing.T) {
@@ -160,15 +166,20 @@ func TestInvertedGateProfiles_RenderSLO(t *testing.T) {
 	if slo.ShortfallStabilityMax <= 0 {
 		t.Errorf("rendered slo.ShortfallStabilityMax = %v (want > 0)", slo.ShortfallStabilityMax)
 	}
+	if slo.ShortfallConfinedBelowPriorityClass != "batch" {
+		t.Errorf("rendered slo.ShortfallConfinedBelowPriorityClass = %q (want \"batch\")", slo.ShortfallConfinedBelowPriorityClass)
+	}
 }
 
 // scarcityMetrics is a metric map representing a healthy, converged
 // scarcity steady state: a standing shortfall (> 0) that is converged
-// (delta within tolerance), every other ADR-0054 gate satisfied.
+// (delta within tolerance) AND confined to the lowest priority tier
+// (zero shortfall above the floor), every other ADR-0054 gate satisfied.
 func scarcityMetrics() map[string]float64 {
 	m := passingMetrics()
-	m["shardShortfalls"] = 1200 // standing — expected under scarcity
-	m["shardShortfallsDelta"] = 5
+	m["shardShortfalls"] = 1200        // standing — expected under scarcity
+	m["shardShortfallsDelta"] = 5      // converged
+	m["shortfallAboveLowestClass"] = 0 // confined to the lowest tier
 	return m
 }
 
@@ -179,6 +190,7 @@ func TestPass_InvertedShortfall(t *testing.T) {
 		slo := passingSLO()
 		slo.ExpectStandingShortfall = true
 		slo.ShortfallStabilityMax = 20
+		slo.ShortfallConfinedBelowPriorityClass = "batch"
 		return slo
 	}
 
@@ -237,6 +249,36 @@ func TestPass_InvertedShortfall(t *testing.T) {
 			},
 			wantPass:   false,
 			wantSubstr: "shardConfigurePhaseP99Seconds",
+		},
+		{
+			name: "confined shortfall (zero above the floor) passes",
+			mutate: func(m map[string]float64, slo *sloOverrides) {
+				m["shortfallAboveLowestClass"] = 0 // sole-throttle honoured
+			},
+			wantPass: true,
+		},
+		{
+			name: "high-priority shortfall (above the floor) fails — sole-throttle violated",
+			mutate: func(m map[string]float64, slo *sloOverrides) {
+				m["shortfallAboveLowestClass"] = 3 // service/critical demand starved
+			},
+			wantPass:   false,
+			wantSubstr: "shortfallAboveLowestClass",
+		},
+		{
+			name: "confinement sentinel (-1) is skipped",
+			mutate: func(m map[string]float64, slo *sloOverrides) {
+				m["shortfallAboveLowestClass"] = -1 // failed scrape, must not fail the run
+			},
+			wantPass: true,
+		},
+		{
+			name: "confinement gate is opt-in: high-priority shortfall ungated when class unset",
+			mutate: func(m map[string]float64, slo *sloOverrides) {
+				slo.ShortfallConfinedBelowPriorityClass = ""
+				m["shortfallAboveLowestClass"] = 9 // present but ungated, must not fail
+			},
+			wantPass: true,
 		},
 	}
 
@@ -345,15 +387,17 @@ func TestUnmeasuredGated_InvertedKeys(t *testing.T) {
 		slo := passingSLO()
 		slo.ExpectStandingShortfall = true
 		slo.ExpectPreemptions = true
+		slo.ShortfallConfinedBelowPriorityClass = "batch"
 		m := map[string]float64{
 			"shardCycleDurationP99Seconds": 0.3,
 			"operatorRollupP99Seconds":     0.2,
 			"operatorAckP99Seconds":        9.0,
 			"shardShortfallsDelta":         -1,
+			"shortfallAboveLowestClass":    -1,
 			"preemptActions":               -1,
 		}
 		got := unmeasuredGated(m, slo)
-		want := map[string]bool{"shardShortfallsDelta": true, "preemptActions": true}
+		want := map[string]bool{"shardShortfallsDelta": true, "shortfallAboveLowestClass": true, "preemptActions": true}
 		for _, k := range got {
 			delete(want, k)
 		}
@@ -365,12 +409,13 @@ func TestUnmeasuredGated_InvertedKeys(t *testing.T) {
 	t.Run("not flagged when inverted posture unset", func(t *testing.T) {
 		slo := passingSLO() // neither inverted field set
 		m := map[string]float64{
-			"shardShortfallsDelta": -1,
-			"preemptActions":       -1,
+			"shardShortfallsDelta":      -1,
+			"shortfallAboveLowestClass": -1,
+			"preemptActions":            -1,
 		}
 		got := unmeasuredGated(m, slo)
 		for _, k := range got {
-			if k == "shardShortfallsDelta" || k == "preemptActions" {
+			if k == "shardShortfallsDelta" || k == "shortfallAboveLowestClass" || k == "preemptActions" {
 				t.Fatalf("ungated inverted key %q flagged as unmeasured: %v", k, got)
 			}
 		}

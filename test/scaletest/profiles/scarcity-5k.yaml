@@ -38,16 +38,16 @@
 # bootstrap / node-state / pod-bind-p50) STILL holds — the engine must
 # stay healthy WHILE priority-throttled.
 #
-# KNOWN GAP (reported, NOT worked around): the sole-throttle rule's
-# CONFINEMENT half — "shortfall confined to the lowest priority tier, zero
-# high-priority shortfall" — is NOT asserted here. The only shortfall
-# metric is the aggregate bigfleet_shard_shortfalls gauge (+ an
-# age-bucketed twin); neither carries a priority / priority-class label.
-# Asserting confinement would require a per-priority shortfall engine
-# metric, which is an author-gated engine change. This profile asserts the
-# runner-feasible half (shortfall > 0 and converged); confinement is read
-# from the shard's phase-attribution log + Phase-1 unsatisfied-by-priority
-# trace by the operator until that metric exists.
+# CONFINEMENT (now asserted): the sole-throttle rule's confinement half —
+# "shortfall confined to the lowest priority tier, zero high-priority
+# shortfall" — IS graded here via shortfallConfinedBelowPriorityClass:
+# batch. It is backed by the per-priority bigfleet_shard_shortfalls_by_priority
+# engine GaugeVec (the realistic catalog's priorities 100 / 1000 / 1000000
+# map to batch / service / critical); the gate asserts
+# sum(bigfleet_shard_shortfalls_by_priority{priority_class!="batch"}) == 0.
+# Together with expectStandingShortfall (existence + convergence) this run
+# now grades BOTH halves of the sole-throttle rule. (Was a documented
+# KNOWN GAP until the per-priority-class engine metric closed it.)
 
 apiVersion: bigfleet.io/scaletest/v1
 kind: Profile
@@ -88,6 +88,12 @@ slo:
   # machines ≈ a 2000-machine deficit; allow ~1% wobble (churn noise)
   # while still failing a growing/diverging shortfall.
   shortfallStabilityMax: 20
+  # CONFINEMENT: the standing shortfall must sit ENTIRELY in the lowest
+  # priority tier ("batch", the realistic catalog's floor at priority 100).
+  # Any shortfall in service/critical means BigFleet starved high-priority
+  # demand — a sole-throttle violation. Backed by the per-priority
+  # bigfleet_shard_shortfalls_by_priority engine GaugeVec.
+  shortfallConfinedBelowPriorityClass: batch
   # ADR-0054 capacity-delivery gates — must hold WHILE priority-throttled.
   shardCycleDurationP99Seconds: 5
   shardConfigurePhaseP99Seconds: 15

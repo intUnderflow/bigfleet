@@ -11,6 +11,7 @@
 //	bigfleet_shard_actions_total{kind}             counter
 //	bigfleet_shard_inventory_machines{state}       gauge
 //	bigfleet_shard_shortfalls                      gauge
+//	bigfleet_shard_shortfalls_by_priority{priority_class} gauge
 //	bigfleet_coordinator_raft_term                 gauge
 //	bigfleet_coordinator_apply_total{outcome}      counter
 //	bigfleet_coordinator_pending_instructions{shard} gauge
@@ -133,6 +134,26 @@ var (
 		Name: "bigfleet_shard_shortfalls",
 		Help: "Number of unresolved shortfalls the shard is reporting up.",
 	})
+
+	// ShardShortfallsByPriority is the per-priority-class breakdown of the
+	// aggregate ShardShortfalls gauge. It exists to make the sole-throttle
+	// hard rule (CLAUDE.md: "Priority is the sole throttling mechanism")
+	// assertable: under genuine scarcity BigFleet must satisfy demand
+	// strictly priority-descending and confine the standing shortfall to
+	// the LOWEST priority tier — never starving high-priority demand. The
+	// scarcity engine-correctness scale test can now gate
+	// `sum(bigfleet_shard_shortfalls_by_priority{priority_class!="batch"}) == 0`.
+	//
+	// Cardinality is bounded to a tiny fixed set of class names by
+	// PriorityClass() (pkg/shard): the realistic catalog's priorities
+	// (~100 / 1000 / 1000000) map to batch / service / critical, with any
+	// other value bucketed to "other". The aggregate ShardShortfalls
+	// gauge is deliberately kept unchanged — existing gates and dashboards
+	// query it directly. sum-over-class equals the aggregate.
+	ShardShortfallsByPriority = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bigfleet_shard_shortfalls_by_priority",
+		Help: "Number of unresolved shortfalls the shard is reporting up, by priority class (batch / service / critical / other). sum() == bigfleet_shard_shortfalls. Lets the scarcity gate assert the sole-throttle rule: zero shortfall above the lowest tier.",
+	}, []string{"priority_class"})
 
 	// ShardShortfallsAged is the per-age-bucket count of currently
 	// unresolved shortfalls. Buckets are decimal cycle-counts:

@@ -3,8 +3,99 @@ package shard
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/intUnderflow/bigfleet/pkg/metrics"
 	"github.com/intUnderflow/bigfleet/pkg/needs"
 )
+
+// TestPriorityClass pins the bounded priority→class mapping the
+// per-priority shortfall metric uses. The realistic scale catalog's
+// tiers (100 / 1000 / 1000000) must land on batch / service / critical;
+// anything outside the catalog buckets to "other" so cardinality stays
+// fixed.
+func TestPriorityClass(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		priority int32
+		want     string
+	}{
+		{100, priorityClassBatch},      // realistic catalog floor
+		{500, priorityClassBatch},      // between batch and service
+		{1000, priorityClassService},   // realistic catalog default
+		{999999, priorityClassService}, // just below critical
+		{1000000, priorityClassCritical},
+		{5000000, priorityClassCritical},
+		{0, priorityClassOther}, // out of catalog
+		{-5, priorityClassOther},
+		{99, priorityClassOther}, // below the batch floor
+	}
+	for _, c := range cases {
+		if got := priorityClass(c.priority); got != c.want {
+			t.Errorf("priorityClass(%d) = %q, want %q", c.priority, got, c.want)
+		}
+	}
+}
+
+// TestEmitShortfallsByPriorityClass_SetAndReset verifies the per-class
+// gauge is populated from each Shortfall's Profile.Priority(), that
+// same-class shortfalls sum, and — the load-bearing reset behaviour —
+// that a class which clears in a later cycle reads 0 rather than holding
+// a stale value (same discipline as the aged-bucket gauge).
+func TestEmitShortfallsByPriorityClass_SetAndReset(t *testing.T) {
+	// Not parallel: mutates a process-global GaugeVec.
+	profile := func(priority int32) needs.Profile {
+		return needs.NewProfile([]needs.Requirement{
+			{Key: "node.kubernetes.io/instance-type", Operator: needs.OperatorIn, Values: []string{"m6i.large"}},
+		}, nil, priority, needs.PenaltyBucket1, needs.PenaltyBucket1)
+	}
+	classGauge := func(class string) float64 {
+		return testutil.ToFloat64(metrics.ShardShortfallsByPriority.WithLabelValues(class))
+	}
+
+	// Cycle 1: two batch, one service, one critical shortfall.
+	emitShortfallsByPriorityClass([]Shortfall{
+		{Profile: profile(100)},
+		{Profile: profile(100)},
+		{Profile: profile(1000)},
+		{Profile: profile(1000000)},
+	})
+	if got := classGauge(priorityClassBatch); got != 2 {
+		t.Errorf("cycle 1 batch = %v, want 2 (summed)", got)
+	}
+	if got := classGauge(priorityClassService); got != 1 {
+		t.Errorf("cycle 1 service = %v, want 1", got)
+	}
+	if got := classGauge(priorityClassCritical); got != 1 {
+		t.Errorf("cycle 1 critical = %v, want 1", got)
+	}
+	if got := classGauge(priorityClassOther); got != 0 {
+		t.Errorf("cycle 1 other = %v, want 0", got)
+	}
+
+	// Cycle 2: the confined steady state — only batch shortfalls remain.
+	// service/critical must reset to 0, NOT keep their stale cycle-1 value.
+	emitShortfallsByPriorityClass([]Shortfall{
+		{Profile: profile(100)},
+	})
+	if got := classGauge(priorityClassBatch); got != 1 {
+		t.Errorf("cycle 2 batch = %v, want 1", got)
+	}
+	if got := classGauge(priorityClassService); got != 0 {
+		t.Errorf("cycle 2 service = %v, want 0 (stale value not cleared)", got)
+	}
+	if got := classGauge(priorityClassCritical); got != 0 {
+		t.Errorf("cycle 2 critical = %v, want 0 (stale value not cleared)", got)
+	}
+
+	// Cycle 3: fully resolved — every class reads 0.
+	emitShortfallsByPriorityClass(nil)
+	for _, class := range shortfallPriorityClasses {
+		if got := classGauge(class); got != 0 {
+			t.Errorf("cycle 3 %s = %v, want 0 (all resolved)", class, got)
+		}
+	}
+}
 
 // TestRecordShortfalls_SameFingerprintSumsAndAgesOnce pins the M68
 // ledger fix (philosophy-conformance audit, satisfaction-arithmetic
