@@ -1,0 +1,20 @@
+{
+  "section": "resilience",
+  "displayName": "2-shard failover — partition + soak",
+  "scale": "375K pods · 2 shards · 15 clusters",
+  "commit": "c24dfc8",
+  "order": 5,
+  "scenario": "Control-plane partition then a multi-disturbance soak, on a genuine two-shard deploy: sever a shard from the coordinator, then kill leaders + a shard — does the data plane keep delivering capacity throughout?",
+  "criterion": "Both shards keep cycling through the coordinator partition (static stability); across the soak's two leader-kills + a shard-kill the data plane is unaffected, blast radius is contained, and shortfalls stay 0.",
+  "highlights": [
+    { "label": "partition: shard-1 cycles run during the sever", "metric": "partitionShard1CyclesAdvanced", "kind": "count" },
+    { "label": "partition: shortfalls", "metric": "partitionShortfallsMax", "kind": "count" },
+    { "label": "soak: leader-kills survived", "metric": "soakLeaderKills", "kind": "count" },
+    { "label": "soak: sessions held through the kills", "metric": "soakLeaderKillSessionsHeld", "kind": "count" },
+    { "label": "soak: survivor sessions held (shard-kill)", "metric": "soakShardKillSurvivorSessionsHeld", "kind": "count" },
+    { "label": "soak: killed shard recovered (of baseline)", "metricStart": "soakShardKillShard1RecoveredSessions", "metricEnd": "soakShardKillShard1Baseline", "kind": "count", "sep": " / " },
+    { "label": "soak: shortfalls", "metric": "soakShortfallsMax", "kind": "count" },
+    { "label": "shard cycle p99 (max, through soak)", "metric": "soakCycleP99SecondsMax", "kind": "secs" }
+  ],
+  "caveat": "Single coordinator replica — the leader-kills are static-stability checks (the data plane survives the coordinator restart), not a Raft leader election. uber-5k-scale 2-shard deploy; the per-ordinal routing (c24dfc8) is the same one validated at 5M in the 2-shard-throughput run."
+}

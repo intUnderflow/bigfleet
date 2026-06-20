@@ -1,0 +1,34 @@
+{
+  "cost": { "estimatedUsd": 0, "hours": 0.7 },
+  "metrics": {
+    "shardReplicas": 2,
+    "coordinatorReplicas": 1,
+    "satellites": 3,
+    "kwokClusters": 15,
+    "partitionShard1CyclesAdvanced": 62,
+    "partitionShard0CyclesAdvanced": 68,
+    "partitionShard1SessionsHeld": 7,
+    "partitionShortfallsMax": 0,
+    "soakLeaderKills": 2,
+    "soakLeaderKillSessionsHeld": 15,
+    "soakRaftTermStable": 2,
+    "soakShardKillSurvivorSessionsHeld": 8,
+    "soakShardKillShard1RecoveredSessions": 5,
+    "soakShardKillShard1Baseline": 7,
+    "soakShortfallsMax": 0,
+    "soakCycleP99SecondsMax": 0.127,
+    "soakBootstrapMin": 1.0
+  },
+  "passed": true,
+  "profile": "failover-partition+soak-2shard",
+  "runId": "20260620-033342-failover-partition-soak",
+  "scale": {
+    "machines": 5000,
+    "density": 100,
+    "kwokClusters": 15,
+    "satellites": 3,
+    "shardReplicas": 2,
+    "coordinatorReplicas": 1,
+    "totalCrs": 375000
+  }
+}

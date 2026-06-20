@@ -144,6 +144,29 @@ _The bounded-reclaim gate this exercised is now committed on the 50k profile (se
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-5k-reclaim-205fb99)
 
+### `2-shard failover — partition + soak` — ✅ passed · commit `c24dfc8`
+
+*375K pods · 2 shards · 15 clusters*
+
+Control-plane partition then a multi-disturbance soak, on a genuine two-shard deploy: sever a shard from the coordinator, then kill leaders + a shard — does the data plane keep delivering capacity throughout?
+
+**Pass criterion:** Both shards keep cycling through the coordinator partition (static stability); across the soak's two leader-kills + a shard-kill the data plane is unaffected, blast radius is contained, and shortfalls stay 0.
+
+| metric | value |
+|---|---:|
+| partition: shard-1 cycles run during the sever | 62 |
+| partition: shortfalls | 0 |
+| soak: leader-kills survived | 2 |
+| soak: sessions held through the kills | 15 |
+| soak: survivor sessions held (shard-kill) | 8 |
+| soak: killed shard recovered (of baseline) | 5 / 7 |
+| soak: shortfalls | 0 |
+| shard cycle p99 (max, through soak) | 127 ms |
+
+_Single coordinator replica — the leader-kills are static-stability checks (the data plane survives the coordinator restart), not a Raft leader election. uber-5k-scale 2-shard deploy; the per-ordinal routing (c24dfc8) is the same one validated at 5M in the 2-shard-throughput run._
+
+[run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-20-2shard-failover-partition-soak-c24dfc8)
+
 
 ## Reproduce & trust
 
