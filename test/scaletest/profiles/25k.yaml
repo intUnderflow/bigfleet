@@ -1,0 +1,52 @@
+# 25k — 25K machines / 2.5M pods at density-100.
+#
+# An intermediate rung, and the constant-demand workload for the density A/B
+# (depth slate #4): run this same 2.5M-pod demand on two substrates that
+# differ ONLY in clustersPerHost (proven 125K/host vs the assumed-but-
+# unvalidated 250K/host) and measure apiserver memory + node CPU + ADR-0054
+# gate invariance. Configure-phase is a per-machine cost, so the gates should
+# be density-invariant; a green 250K/host arm promotes that packing from
+# assumption to baseline and roughly halves the host count the uber-500k
+# grant ask needs (~200 vs ~400 hosts).
+#
+# Substrate-agnostic. See 5k.yaml for the runner invocation.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "25k"
+  description: "25K machines, 2.5M aggregated Pods at density=100 — intermediate rung + density-A/B constant-demand workload."
+
+scale:
+  machines: 25000
+  density: 100
+
+catalog:
+  archetypes: realistic
+
+seed:
+  configuredFraction: 1.0
+  preBind: true
+  speculativeMultiplier: 3
+  idleHeadroomFraction: 0.2
+
+loadProfile:
+  rampSeconds: 2400
+  soakSeconds: 3600
+  churnPerMinute: 0.02
+  settleSeconds: 600
+
+rampBudget: 90m
+
+slo:
+  # 50k-regime gates (cycle relaxed per ADR-0028); held identical across both
+  # density arms so the A/B isolates substrate packing, not the bar.
+  shardCycleDurationP99Seconds: 25
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10
+  # Steady bounded-reclaim floor scaled to ~half the 50k demand (~2.25/s →
+  # ~6.75K/3000s); 10000 holds with margin. settleSeconds de-tails the ramp.
+  maxReclaimActionsDuringSoak: 10000

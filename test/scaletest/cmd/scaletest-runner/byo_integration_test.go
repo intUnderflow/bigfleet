@@ -35,7 +35,7 @@ func TestBYO_ProfileSubstrateMatrix(t *testing.T) {
 	profilesDir := filepath.Join(root, "test", "scaletest", "profiles")
 	substratesDir := filepath.Join(root, "test", "scaletest", "substrates")
 
-	profiles := []string{"5k", "50k", "500k", "1m", "5m"}
+	profiles := []string{"5k", "25k", "50k", "500k", "1m", "5m"}
 	substrates := []string{"example-fat-host", "example-mid-host", "example-kind-laptop"}
 
 	helmAvailable := false
