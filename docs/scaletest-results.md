@@ -23,6 +23,8 @@ Each `result` column header links to that run's committed run summary. Every res
 
 > End-to-end pod-bind p99 is **not** gated and is large by design — it is dominated by the uncapped scheduler's retry/backoff and the reprovision back-edge, neither of which is BigFleet's deliverable. See [what we gate](#what-we-gate-and-why-the-bar-is-honest).
 
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-cee793e.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e/LOAD-RECIPE.md) — open the full run in Grafana and check every number yourself.
+
 
 ## What we gate, and why the bar is honest
 
@@ -49,7 +51,7 @@ The workload is the full `realistic.yaml` archetype catalog — gpu-training, me
 | rung | scale | status | data |
 |---|---|:--|:--|
 | `uber-5k` | ~5,000-machine fleet · ~500K pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e) · [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-20260620/tsdb-snapshot-cee.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-17-uber-5k-cee793e/LOAD-RECIPE.md) |
-| `uber-50k` | ~50,000-machine fleet · ~5M pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) |
+| `uber-50k` | ~50,000-machine fleet · ~5M pods · 1 shard | ✅ passed | [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e) · [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-cee793e.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e/LOAD-RECIPE.md) |
 | `uber-500k` | planned | ▫️ planned | — |
 | `uber-1m` | planned | ▫️ planned | — |
 | `uber-5m` | planned | ▫️ planned | — |

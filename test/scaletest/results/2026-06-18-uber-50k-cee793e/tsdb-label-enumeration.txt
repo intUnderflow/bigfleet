@@ -1,0 +1,262 @@
+# uber-50k receipt — TSDB label enumeration (hub shard/coordinator prometheus, cee793e)
+# Complete distinct label-value set for human eyeball sanitization. søn. 21 jun. 2026 16:10:48 UTC
+
+== __name__ (102 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 102 distinct)
+== bucket (4 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 4 distinct)
+== capacity_type (2 values) ==
+  BareMetal
+  OnDemand
+== cluster (190 values) ==
+  kwok-cluster-0
+  kwok-cluster-1
+  kwok-cluster-10
+  kwok-cluster-100
+  kwok-cluster-101
+  kwok-cluster-102
+  kwok-cluster-103
+  kwok-cluster-104
+  kwok-cluster-11
+  kwok-cluster-110
+  kwok-cluster-111
+  kwok-cluster-112
+  kwok-cluster-113
+  kwok-cluster-114
+  kwok-cluster-115
+  kwok-cluster-116
+  kwok-cluster-117
+  kwok-cluster-118
+  kwok-cluster-119
+  kwok-cluster-12
+  kwok-cluster-120
+  kwok-cluster-121
+  kwok-cluster-122
+  kwok-cluster-123
+  kwok-cluster-124
+  kwok-cluster-125
+  kwok-cluster-126
+  kwok-cluster-127
+  kwok-cluster-128
+  kwok-cluster-129
+  kwok-cluster-13
+  kwok-cluster-130
+  kwok-cluster-131
+  kwok-cluster-132
+  kwok-cluster-133
+  kwok-cluster-134
+  kwok-cluster-135
+  kwok-cluster-136
+  kwok-cluster-137
+  kwok-cluster-138
+  kwok-cluster-139
+  kwok-cluster-14
+  kwok-cluster-140
+  kwok-cluster-141
+  kwok-cluster-142
+  kwok-cluster-143
+  kwok-cluster-144
+  kwok-cluster-145
+  kwok-cluster-146
+  kwok-cluster-147
+  kwok-cluster-148
+  kwok-cluster-149
+  kwok-cluster-15
+  kwok-cluster-150
+  kwok-cluster-151
+  kwok-cluster-152
+  kwok-cluster-153
+  kwok-cluster-154
+  kwok-cluster-155
+  kwok-cluster-156
+  kwok-cluster-157
+  kwok-cluster-158
+  kwok-cluster-159
+  kwok-cluster-16
+  kwok-cluster-160
+  kwok-cluster-161
+  kwok-cluster-162
+  kwok-cluster-163
+  kwok-cluster-164
+  kwok-cluster-165
+  kwok-cluster-166
+  kwok-cluster-167
+  kwok-cluster-168
+  kwok-cluster-169
+  kwok-cluster-17
+  kwok-cluster-170
+  kwok-cluster-171
+  kwok-cluster-172
+  kwok-cluster-173
+  kwok-cluster-174
+  kwok-cluster-175
+  kwok-cluster-176
+  kwok-cluster-177
+  kwok-cluster-178
+  kwok-cluster-179
+  kwok-cluster-18
+  kwok-cluster-180
+  kwok-cluster-181
+  kwok-cluster-182
+  kwok-cluster-183
+  kwok-cluster-184
+  kwok-cluster-185
+  kwok-cluster-186
+  kwok-cluster-187
+  kwok-cluster-188
+  kwok-cluster-189
+  kwok-cluster-19
+  kwok-cluster-190
+  kwok-cluster-191
+  kwok-cluster-192
+  kwok-cluster-193
+  kwok-cluster-194
+  kwok-cluster-195
+  kwok-cluster-196
+  kwok-cluster-197
+  kwok-cluster-198
+  kwok-cluster-199
+  kwok-cluster-2
+  kwok-cluster-20
+  kwok-cluster-21
+  kwok-cluster-22
+  kwok-cluster-23
+  kwok-cluster-24
+  kwok-cluster-25
+  kwok-cluster-26
+  kwok-cluster-27
+  kwok-cluster-28
+  kwok-cluster-29
+  kwok-cluster-3
+  kwok-cluster-30
+  kwok-cluster-31
+  kwok-cluster-32
+  kwok-cluster-33
+  kwok-cluster-34
+  kwok-cluster-35
+  kwok-cluster-36
+  kwok-cluster-37
+  kwok-cluster-38
+  kwok-cluster-39
+  kwok-cluster-4
+  kwok-cluster-40
+  kwok-cluster-41
+  kwok-cluster-42
+  kwok-cluster-43
+  kwok-cluster-44
+  kwok-cluster-45
+  kwok-cluster-46
+  kwok-cluster-47
+  kwok-cluster-48
+  kwok-cluster-49
+  kwok-cluster-5
+  kwok-cluster-50
+  kwok-cluster-51
+  kwok-cluster-52
+  kwok-cluster-53
+  kwok-cluster-54
+  kwok-cluster-55
+  kwok-cluster-56
+  kwok-cluster-57
+  kwok-cluster-58
+  kwok-cluster-59
+  kwok-cluster-6
+  kwok-cluster-60
+  kwok-cluster-61
+  kwok-cluster-62
+  kwok-cluster-63
+  kwok-cluster-64
+  kwok-cluster-65
+  kwok-cluster-66
+  kwok-cluster-67
+  kwok-cluster-68
+  kwok-cluster-69
+  kwok-cluster-7
+  kwok-cluster-70
+  kwok-cluster-71
+  kwok-cluster-72
+  kwok-cluster-73
+  kwok-cluster-74
+  kwok-cluster-75
+  kwok-cluster-76
+  kwok-cluster-77
+  kwok-cluster-78
+  kwok-cluster-79
+  kwok-cluster-8
+  kwok-cluster-80
+  kwok-cluster-81
+  kwok-cluster-82
+  kwok-cluster-83
+  kwok-cluster-84
+  kwok-cluster-85
+  kwok-cluster-86
+  kwok-cluster-87
+  kwok-cluster-88
+  kwok-cluster-89
+  kwok-cluster-9
+  kwok-cluster-90
+  kwok-cluster-91
+  kwok-cluster-92
+  kwok-cluster-93
+  kwok-cluster-94
+== code (3 values) ==
+  200
+  500
+  503
+== component (2 values) ==
+  coordinator
+  shard
+== event (2 values) ==
+  installed
+  removed
+== instance (2 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 2 distinct)
+== interruption_penalty_bucket (28 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 28 distinct)
+== job (1 values) ==
+  bigfleet
+== kind (5 values) ==
+  Bootstrap
+  Delete
+  Preempt
+  Provision
+  Reclaim
+== le (54 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 54 distinct)
+== metrics_port (1 values) ==
+  metrics
+== outcome (7 values) ==
+  blob_error
+  committed
+  conflict
+  ctx_canceled
+  no_session
+  provider_error
+  success
+== phase (7 values) ==
+  emit
+  execute
+  phase1
+  phase2
+  phase3
+  reconcile
+  snapread
+== pod (2 values) ==
+  bigfleet-coordinator-0
+  bigfleet-shard-0
+== quantile (5 values) ==
+  (numeric/metric-name/pod-IP values omitted from human list; 5 distinct)
+== shard (1 values) ==
+  bigfleet-shard-0
+== state (5 values) ==
+  Configured
+  Configuring
+  Failed
+  Idle
+  Speculative
+== version (1 values) ==
+  go1.26.4
+
+# instance label = ephemeral pod IPs (10.42.x / 100.64.x) — sample:
+   10.42.0.147:8790
+   10.42.0.148:8780

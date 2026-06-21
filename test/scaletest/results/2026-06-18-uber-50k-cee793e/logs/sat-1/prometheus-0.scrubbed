@@ -1,0 +1,119 @@
+2026-06-20T03:46:17.673340021Z ts=2026-06-20T03:46:17.673Z caller=main.go:671 level=info msg="Starting Prometheus Server" mode=server version="(version=2.55.0, branch=HEAD, revision=91d80252c3e528728b0f88d254dd720f6be07cb8)"
+2026-06-20T03:46:17.673389651Z ts=2026-06-20T03:46:17.673Z caller=main.go:676 level=info build_context="(go=go1.23.2, platform=linux/amd64, user=root@BUILD_HOST, date=20241022-13:47:22, tags=netgo,builtinassets,stringlabels)"
+2026-06-20T03:46:17.673395561Z ts=2026-06-20T03:46:17.673Z caller=main.go:677 level=info host_details="(Linux 6.12.68+ #1 SMP Sun Apr 12 08:53:59 UTC 2026 x86_64 prometheus-0 (none))"
+2026-06-20T03:46:17.673400911Z ts=2026-06-20T03:46:17.673Z caller=main.go:678 level=info fd_limits="(soft=1048576, hard=1048576)"
+2026-06-20T03:46:17.673421381Z ts=2026-06-20T03:46:17.673Z caller=main.go:679 level=info vm_limits="(soft=unlimited, hard=unlimited)"
+2026-06-20T03:46:17.677270581Z ts=2026-06-20T03:46:17.677Z caller=web.go:585 level=info component=web msg="Start listening for connections" address=:9090
+2026-06-20T03:46:17.678181621Z ts=2026-06-20T03:46:17.677Z caller=main.go:1197 level=info msg="Starting TSDB ..."
+2026-06-20T03:46:17.679954881Z ts=2026-06-20T03:46:17.679Z caller=tls_config.go:348 level=info component=web msg="Listening on" address=[::]:9090
+2026-06-20T03:46:17.679969461Z ts=2026-06-20T03:46:17.679Z caller=tls_config.go:351 level=info component=web msg="TLS is disabled." http2=false address=[::]:9090
+2026-06-20T03:46:17.686356111Z ts=2026-06-20T03:46:17.686Z caller=head.go:627 level=info component=tsdb msg="Replaying on-disk memory mappable chunks if any"
+2026-06-20T03:46:17.686385361Z ts=2026-06-20T03:46:17.686Z caller=head.go:714 level=info component=tsdb msg="On-disk memory mappable chunks replay completed" duration=2.21µs
+2026-06-20T03:46:17.686389441Z ts=2026-06-20T03:46:17.686Z caller=head.go:722 level=info component=tsdb msg="Replaying WAL, this may take a while"
+2026-06-20T03:46:17.691211341Z ts=2026-06-20T03:46:17.691Z caller=head.go:794 level=info component=tsdb msg="WAL segment loaded" segment=0 maxSegment=0
+2026-06-20T03:46:17.691236001Z ts=2026-06-20T03:46:17.691Z caller=head.go:831 level=info component=tsdb msg="WAL replay completed" checkpoint_replay_duration=60.24µs wal_replay_duration=4.81988ms wbl_replay_duration=160ns chunk_snapshot_load_duration=0s mmap_chunk_replay_duration=2.21µs total_replay_duration=4.91483ms
+2026-06-20T03:46:17.694645971Z ts=2026-06-20T03:46:17.694Z caller=main.go:1218 level=info fs_type=EXT4_SUPER_MAGIC
+2026-06-20T03:46:17.694664551Z ts=2026-06-20T03:46:17.694Z caller=main.go:1221 level=info msg="TSDB started"
+2026-06-20T03:46:17.694669091Z ts=2026-06-20T03:46:17.694Z caller=main.go:1404 level=info msg="Loading configuration file" filename=/etc/prometheus/prometheus.yml
+2026-06-20T03:46:17.696283791Z ts=2026-06-20T03:46:17.696Z caller=kubernetes.go:331 level=info component="discovery manager scrape" discovery=kubernetes config=bigfleet msg="Using pod service account via in-cluster config"
+2026-06-20T03:46:17.696748731Z ts=2026-06-20T03:46:17.696Z caller=main.go:1441 level=info msg="updated GOGC" old=100 new=75
+2026-06-20T03:46:17.696757881Z ts=2026-06-20T03:46:17.696Z caller=main.go:1452 level=info msg="Completed loading of configuration file" filename=/etc/prometheus/prometheus.yml totalDuration=2.09108ms db_storage=1.72µs remote_storage=1.92µs web_handler=790ns query_engine=1.66µs scrape=758.84µs scrape_sd=717.66µs notify=1.37µs notify_sd=1.26µs rules=3.24µs tracing=5.53µs
+2026-06-20T03:46:17.696762031Z ts=2026-06-20T03:46:17.696Z caller=main.go:1182 level=info msg="Server is ready to receive web requests."
+2026-06-20T03:46:17.696820751Z ts=2026-06-20T03:46:17.696Z caller=manager.go:164 level=info component="rule manager" msg="Starting rule manager..."
+2026-06-20T06:46:23.664264643Z ts=2026-06-20T06:46:23.662Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781927183188 maxt=1781928000000 ulid=01KVHWFM276EKM2M7KH4ZYBBNC duration=103.742289ms ooo=false
+2026-06-20T06:46:23.674805474Z ts=2026-06-20T06:46:23.674Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=11.062989ms
+2026-06-20T07:00:00.404917414Z ts=2026-06-20T07:00:00.404Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781928000104 maxt=1781935200000 ulid=01KVHX8HFQTPT5TH51D7V6E8RD duration=285.259007ms ooo=false
+2026-06-20T07:00:00.431522373Z ts=2026-06-20T07:00:00.431Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=26.126209ms
+2026-06-20T09:00:00.398814292Z ts=2026-06-20T09:00:00.398Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781935200113 maxt=1781942400000 ulid=01KVJ448SD09SD06H2FGCSS10T duration=225.364217ms ooo=false
+2026-06-20T09:00:00.407736432Z ts=2026-06-20T09:00:00.407Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=8.43118ms
+2026-06-20T11:00:00.411470888Z ts=2026-06-20T11:00:00.411Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781942400113 maxt=1781949600000 ulid=01KVJB001DEZCR639GK9SETSGM duration=237.790947ms ooo=false
+2026-06-20T11:00:00.422524538Z ts=2026-06-20T11:00:00.422Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=10.48241ms
+2026-06-20T11:00:00.426828078Z ts=2026-06-20T11:00:00.426Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=0 to_segment=1 mint=1781949600000
+2026-06-20T11:00:00.891084072Z ts=2026-06-20T11:00:00.890Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=0 last=1 duration=464.325524ms
+2026-06-20T13:00:00.390131757Z ts=2026-06-20T13:00:00.389Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781949600113 maxt=1781956800000 ulid=01KVJHVQ9CCK6ZRP8025YNAGMA duration=217.047857ms ooo=false
+2026-06-20T13:00:00.398446217Z ts=2026-06-20T13:00:00.398Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=7.78994ms
+2026-06-20T15:00:00.423789148Z ts=2026-06-20T15:00:00.422Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781956800113 maxt=1781964000000 ulid=01KVJRQEHGDY32C4R62R86S0KH duration=246.308726ms ooo=false
+2026-06-20T15:00:00.431824068Z ts=2026-06-20T15:00:00.431Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=8.650551ms
+2026-06-20T15:00:00.436409637Z ts=2026-06-20T15:00:00.436Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=2 to_segment=3 mint=1781964000000
+2026-06-20T15:00:01.052184490Z ts=2026-06-20T15:00:01.051Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=2 last=3 duration=615.655622ms
+2026-06-20T17:00:00.385291659Z ts=2026-06-20T17:00:00.384Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781964000113 maxt=1781971200000 ulid=01KVJZK5SD7QYYPNF3Z56PNWY1 duration=210.954437ms ooo=false
+2026-06-20T17:00:00.394132519Z ts=2026-06-20T17:00:00.393Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=8.2234ms
+2026-06-20T19:00:00.389225137Z ts=2026-06-20T19:00:00.387Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781971200113 maxt=1781978400000 ulid=01KVK6EX1F9YGV9ZETSWWYWAZ5 duration=212.035287ms ooo=false
+2026-06-20T19:00:00.395956187Z ts=2026-06-20T19:00:00.395Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=7.87586ms
+2026-06-20T19:00:00.399879167Z ts=2026-06-20T19:00:00.399Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=4 to_segment=5 mint=1781978400000
+2026-06-20T19:00:00.987129800Z ts=2026-06-20T19:00:00.986Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=4 last=5 duration=587.191283ms
+2026-06-20T21:00:00.418096774Z ts=2026-06-20T21:00:00.417Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781978400113 maxt=1781985600000 ulid=01KVKDAM9ENP1NT2Q913FR3RYA duration=243.172397ms ooo=false
+2026-06-20T21:00:00.426888094Z ts=2026-06-20T21:00:00.426Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=8.154389ms
+2026-06-20T23:00:00.419543978Z ts=2026-06-20T23:00:00.418Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781985600113 maxt=1781992800000 ulid=01KVKM6BHE1E0Z8JV8CTXW7JRF duration=244.295368ms ooo=false
+2026-06-20T23:00:00.429782508Z ts=2026-06-20T23:00:00.429Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=9.91805ms
+2026-06-20T23:00:00.434415748Z ts=2026-06-20T23:00:00.433Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=6 to_segment=7 mint=1781992800000
+2026-06-20T23:00:00.989702931Z ts=2026-06-20T23:00:00.989Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=6 last=7 duration=555.772373ms
+2026-06-21T01:00:00.416109077Z ts=2026-06-21T01:00:00.415Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1781992800113 maxt=1782000000000 ulid=01KVKV22SCKJY487KGWXVKM91Q duration=242.910267ms ooo=false
+2026-06-21T01:00:00.429250677Z ts=2026-06-21T01:00:00.429Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=11.6017ms
+2026-06-21T03:00:00.394252431Z ts=2026-06-21T03:00:00.393Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782000000113 maxt=1782007200000 ulid=01KVM1XT1HVD3R9XPKJAFYHRN8 duration=216.366667ms ooo=false
+2026-06-21T03:00:00.406738351Z ts=2026-06-21T03:00:00.406Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=11.44421ms
+2026-06-21T03:00:00.411037131Z ts=2026-06-21T03:00:00.410Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=8 to_segment=9 mint=1782007200000
+2026-06-21T03:00:01.146978462Z ts=2026-06-21T03:00:01.146Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=8 last=9 duration=735.971031ms
+2026-06-21T05:00:00.364617073Z ts=2026-06-21T05:00:00.364Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782007200113 maxt=1782014400000 ulid=01KVM8SH9D8XFBK0JKC7ANAEYK duration=190.559628ms ooo=false
+2026-06-21T05:00:00.367390013Z ts=2026-06-21T05:00:00.367Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVHWFM276EKM2M7KH4ZYBBNC
+2026-06-21T05:00:00.374559143Z ts=2026-06-21T05:00:00.374Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=7.11401ms
+2026-06-21T07:00:00.336133073Z ts=2026-06-21T07:00:00.335Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782014400113 maxt=1782021600000 ulid=01KVMFN8HERZ02Z6SHQH6JN85V duration=161.624218ms ooo=false
+2026-06-21T07:00:00.339188164Z ts=2026-06-21T07:00:00.339Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVHX8HFQTPT5TH51D7V6E8RD
+2026-06-21T07:00:00.345721743Z ts=2026-06-21T07:00:00.345Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=6.490819ms
+2026-06-21T07:00:00.348774223Z ts=2026-06-21T07:00:00.348Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=10 to_segment=11 mint=1782021600000
+2026-06-21T07:00:00.802941358Z ts=2026-06-21T07:00:00.802Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=10 last=11 duration=454.190435ms
+2026-06-21T09:00:00.331625819Z ts=2026-06-21T09:00:00.331Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782021600113 maxt=1782028800000 ulid=01KVMPGZSCPCF4MBHHFQNFCRYV duration=158.403398ms ooo=false
+2026-06-21T09:00:00.339562459Z ts=2026-06-21T09:00:00.339Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVJ448SD09SD06H2FGCSS10T
+2026-06-21T09:00:00.346194498Z ts=2026-06-21T09:00:00.346Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=6.60417ms
+2026-06-21T11:00:00.333612646Z ts=2026-06-21T11:00:00.332Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782028800113 maxt=1782036000000 ulid=01KVMXCQ1D5F4YCXHKG6C411YE duration=158.655888ms ooo=false
+2026-06-21T11:00:00.336907316Z ts=2026-06-21T11:00:00.336Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVJB001DEZCR639GK9SETSGM
+2026-06-21T11:00:00.344576626Z ts=2026-06-21T11:00:00.344Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=7.63073ms
+2026-06-21T11:00:00.349557606Z ts=2026-06-21T11:00:00.347Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=12 to_segment=13 mint=1782036000000
+2026-06-21T11:00:01.055140937Z ts=2026-06-21T11:00:01.054Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=12 last=13 duration=707.720671ms
+2026-06-21T11:54:57.222767677Z ts=2026-06-21T11:54:57.218Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJHVQ9CCK6ZRP8025YNAGMA
+2026-06-21T11:54:57.222993227Z ts=2026-06-21T11:54:57.222Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJRQEHGDY32C4R62R86S0KH
+2026-06-21T11:54:57.223300037Z ts=2026-06-21T11:54:57.223Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJZK5SD7QYYPNF3Z56PNWY1
+2026-06-21T11:54:57.223494897Z ts=2026-06-21T11:54:57.223Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVK6EX1F9YGV9ZETSWWYWAZ5
+2026-06-21T11:54:57.223710287Z ts=2026-06-21T11:54:57.223Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKDAM9ENP1NT2Q913FR3RYA
+2026-06-21T11:54:57.223988107Z ts=2026-06-21T11:54:57.223Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKM6BHE1E0Z8JV8CTXW7JRF
+2026-06-21T11:54:57.224223297Z ts=2026-06-21T11:54:57.224Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKV22SCKJY487KGWXVKM91Q
+2026-06-21T11:54:57.224475377Z ts=2026-06-21T11:54:57.224Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM1XT1HVD3R9XPKJAFYHRN8
+2026-06-21T11:54:57.224691257Z ts=2026-06-21T11:54:57.224Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM8SH9D8XFBK0JKC7ANAEYK
+2026-06-21T11:54:57.224906237Z ts=2026-06-21T11:54:57.224Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMFN8HERZ02Z6SHQH6JN85V
+2026-06-21T11:54:57.225131287Z ts=2026-06-21T11:54:57.225Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMPGZSCPCF4MBHHFQNFCRYV
+2026-06-21T11:54:57.225334057Z ts=2026-06-21T11:54:57.225Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMXCQ1D5F4YCXHKG6C411YE
+2026-06-21T11:54:57.401425815Z ts=2026-06-21T11:54:57.401Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782036000113 maxt=1782042897021 ulid=01KVN0HAT93BH7SGRM7EKRMVCJ duration=175.678158ms ooo=false
+2026-06-21T13:00:00.347135936Z ts=2026-06-21T13:00:00.346Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782036000113 maxt=1782043200000 ulid=01KVN48E9F7JK8N73PVSAYE2PW duration=171.799338ms ooo=false
+2026-06-21T13:00:00.349442726Z ts=2026-06-21T13:00:00.349Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVJHVQ9CCK6ZRP8025YNAGMA
+2026-06-21T13:00:00.356475306Z ts=2026-06-21T13:00:00.356Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=7.03071ms
+2026-06-21T14:00:42.178484797Z ts=2026-06-21T14:00:42.178Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJRQEHGDY32C4R62R86S0KH
+2026-06-21T14:00:42.178854767Z ts=2026-06-21T14:00:42.178Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJZK5SD7QYYPNF3Z56PNWY1
+2026-06-21T14:00:42.179211847Z ts=2026-06-21T14:00:42.179Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVK6EX1F9YGV9ZETSWWYWAZ5
+2026-06-21T14:00:42.181006097Z ts=2026-06-21T14:00:42.179Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKDAM9ENP1NT2Q913FR3RYA
+2026-06-21T14:00:42.181152177Z ts=2026-06-21T14:00:42.179Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKM6BHE1E0Z8JV8CTXW7JRF
+2026-06-21T14:00:42.181160507Z ts=2026-06-21T14:00:42.180Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKV22SCKJY487KGWXVKM91Q
+2026-06-21T14:00:42.181369417Z ts=2026-06-21T14:00:42.181Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM1XT1HVD3R9XPKJAFYHRN8
+2026-06-21T14:00:42.183866607Z ts=2026-06-21T14:00:42.183Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM8SH9D8XFBK0JKC7ANAEYK
+2026-06-21T14:00:42.183879757Z ts=2026-06-21T14:00:42.183Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMFN8HERZ02Z6SHQH6JN85V
+2026-06-21T14:00:42.184113007Z ts=2026-06-21T14:00:42.183Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMPGZSCPCF4MBHHFQNFCRYV
+2026-06-21T14:00:42.185431557Z ts=2026-06-21T14:00:42.185Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMXCQ1D5F4YCXHKG6C411YE
+2026-06-21T14:00:42.185733077Z ts=2026-06-21T14:00:42.185Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVN48E9F7JK8N73PVSAYE2PW
+2026-06-21T14:00:42.595194733Z ts=2026-06-21T14:00:42.590Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782043200113 maxt=1782050442021 ulid=01KVN7QJY97GSGY6BEE50F91TE duration=404.228066ms ooo=false
+2026-06-21T15:00:00.449121154Z ts=2026-06-21T15:00:00.448Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782043200113 maxt=1782050400000 ulid=01KVNB45KMH01J0PV1SBPR5TRE duration=204.174147ms ooo=false
+2026-06-21T15:00:00.451374603Z ts=2026-06-21T15:00:00.451Z caller=db.go:1791 level=info component=tsdb msg="Deleting obsolete block" block=01KVJRQEHGDY32C4R62R86S0KH
+2026-06-21T15:00:00.464016573Z ts=2026-06-21T15:00:00.463Z caller=head.go:1360 level=info component=tsdb msg="Head GC completed" caller=truncateMemory duration=12.53116ms
+2026-06-21T15:00:00.467127454Z ts=2026-06-21T15:00:00.466Z caller=checkpoint.go:101 level=info component=tsdb msg="Creating checkpoint" from_segment=14 to_segment=15 mint=1782050400000
+2026-06-21T15:00:01.229040014Z ts=2026-06-21T15:00:01.228Z caller=head.go:1322 level=info component=tsdb msg="WAL checkpoint complete" first=14 last=15 duration=761.840261ms
+2026-06-21T15:16:04.829835233Z ts=2026-06-21T15:16:04.829Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVJZK5SD7QYYPNF3Z56PNWY1
+2026-06-21T15:16:04.830016013Z ts=2026-06-21T15:16:04.829Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVK6EX1F9YGV9ZETSWWYWAZ5
+2026-06-21T15:16:04.830243842Z ts=2026-06-21T15:16:04.830Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKDAM9ENP1NT2Q913FR3RYA
+2026-06-21T15:16:04.830391742Z ts=2026-06-21T15:16:04.830Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKM6BHE1E0Z8JV8CTXW7JRF
+2026-06-21T15:16:04.830533493Z ts=2026-06-21T15:16:04.830Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVKV22SCKJY487KGWXVKM91Q
+2026-06-21T15:16:04.830712653Z ts=2026-06-21T15:16:04.830Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM1XT1HVD3R9XPKJAFYHRN8
+2026-06-21T15:16:04.830874093Z ts=2026-06-21T15:16:04.830Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVM8SH9D8XFBK0JKC7ANAEYK
+2026-06-21T15:16:04.831146293Z ts=2026-06-21T15:16:04.831Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMFN8HERZ02Z6SHQH6JN85V
+2026-06-21T15:16:04.831349313Z ts=2026-06-21T15:16:04.831Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMPGZSCPCF4MBHHFQNFCRYV
+2026-06-21T15:16:04.831515622Z ts=2026-06-21T15:16:04.831Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVMXCQ1D5F4YCXHKG6C411YE
+2026-06-21T15:16:04.831648922Z ts=2026-06-21T15:16:04.831Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVN48E9F7JK8N73PVSAYE2PW
+2026-06-21T15:16:04.831806362Z ts=2026-06-21T15:16:04.831Z caller=db.go:1998 level=info component=tsdb msg="Snapshotting block" block=01KVNB45KMH01J0PV1SBPR5TRE
+2026-06-21T15:16:05.078618350Z ts=2026-06-21T15:16:05.078Z caller=compact.go:580 level=info component=tsdb msg="write block" mint=1782050400117 maxt=1782054964794 ulid=01KVNC1KJZ7HETSJR7DANZ4PQJ duration=246.453697ms ooo=false

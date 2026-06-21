@@ -1,0 +1,1603 @@
+apiVersion: v1
+items:
+- apiVersion: v1
+  kind: Pod
+  metadata:
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generateName: bigfleet-coordinator-
+    labels:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      apps.kubernetes.io/pod-index: "0"
+      controller-revision-hash: bigfleet-coordinator-6f6dfc9897
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+      statefulset.kubernetes.io/pod-name: bigfleet-coordinator-0
+    name: bigfleet-coordinator-0
+    namespace: bigfleet-scaletest
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: StatefulSet
+      name: bigfleet-coordinator
+      uid: cf01e370-641f-4a2f-9ef0-NODEID
+    resourceVersion: "107909"
+    uid: a222b9e4-714a-4c0c-8b0e-NODEID
+  spec:
+    containers:
+    - args:
+      - coordinator
+      - --listen=:7790
+      - --metrics-addr=:8790
+      - --raft-bind=:7791
+      - --raft-advertise=$(POD_IP):7791
+      - --data-dir=/var/lib/bigfleet
+      - --bootstrap=true
+      - --id=$(POD_NAME)
+      env:
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: metadata.name
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+      image: registry:5000/bigfleet:cee793e
+      imagePullPolicy: IfNotPresent
+      name: coordinator
+      ports:
+      - containerPort: 7790
+        name: grpc
+        protocol: TCP
+      - containerPort: 7791
+        name: raft
+        protocol: TCP
+      - containerPort: 8790
+        name: metrics
+        protocol: TCP
+      resources:
+        limits:
+          cpu: "2"
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+      - mountPath: /var/lib/bigfleet
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-9tghh
+        readOnly: true
+    dnsPolicy: ClusterFirst
+    enableServiceLinks: true
+    hostname: bigfleet-coordinator-0
+    nodeName: NODEID
+    preemptionPolicy: PreemptLowerPriority
+    priority: 0
+    restartPolicy: Always
+    schedulerName: default-scheduler
+    securityContext: {}
+    serviceAccount: default
+    serviceAccountName: default
+    subdomain: bigfleet-coordinator
+    terminationGracePeriodSeconds: 30
+    tolerations:
+    - effect: NoExecute
+      key: node.kubernetes.io/not-ready
+      operator: Exists
+      tolerationSeconds: 300
+    - effect: NoExecute
+      key: node.kubernetes.io/unreachable
+      operator: Exists
+      tolerationSeconds: 300
+    volumes:
+    - emptyDir: {}
+      name: data
+    - name: kube-api-access-9tghh
+      projected:
+        defaultMode: 420
+        sources:
+        - serviceAccountToken:
+            expirationSeconds: 3607
+            path: token
+        - configMap:
+            items:
+            - key: ca.crt
+              path: ca.crt
+            name: kube-root-ca.crt
+        - downwardAPI:
+            items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+              path: namespace
+  status:
+    conditions:
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: PodReadyToStartContainers
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: Initialized
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: Ready
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: ContainersReady
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: PodScheduled
+    containerStatuses:
+    - containerID: containerd://1844c0c5dabe93ed7c5a3a035acba083e848a042f72b66410e30ce8608abc015
+      image: registry:5000/bigfleet:cee793e
+      imageID: registry:5000/bigfleet@sha256:dbc57a26c8e45072709bb4644cc06028e61a52d072966d3b038fa918f4b80db9
+      lastState: {}
+      name: coordinator
+      ready: true
+      restartCount: 0
+      started: true
+      state:
+        running:
+          startedAt: "2026-06-21T14:35:07Z"
+      volumeMounts:
+      - mountPath: /var/lib/bigfleet
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-9tghh
+        readOnly: true
+        recursiveReadOnly: Disabled
+    hostIP: 172.18.0.3
+    hostIPs:
+    - ip: 172.18.0.3
+    phase: Running
+    podIP: 10.42.0.147
+    podIPs:
+    - ip: 10.42.0.147
+    qosClass: Burstable
+    startTime: "2026-06-21T14:35:06Z"
+- apiVersion: v1
+  kind: Pod
+  metadata:
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generateName: bigfleet-shard-
+    labels:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      apps.kubernetes.io/pod-index: "0"
+      controller-revision-hash: bigfleet-shard-759c778bb5
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+      statefulset.kubernetes.io/pod-name: bigfleet-shard-0
+    name: bigfleet-shard-0
+    namespace: bigfleet-scaletest
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: StatefulSet
+      name: bigfleet-shard
+      uid: 516b1611-a820-4670-a69b-NODEID
+    resourceVersion: "107898"
+    uid: 81f8c599-2a72-45ed-9d24-NODEID
+  spec:
+    containers:
+    - args:
+      - shard
+      - --listen=:7780
+      - --metrics-addr=:8780
+      - --id=$(POD_NAME)
+      - --data-dir=/var/lib/bigfleet
+      - --advertise-addr=$(POD_NAME).bigfleet-shard-headless.bigfleet-scaletest.svc:7780
+      - --coordinator-addr=bigfleet-coordinator.bigfleet-scaletest.svc:7790
+      - --seed-machines=10000
+      - --seed-speculative=150000
+      - --seed-density-multiplier=100
+      - --seed-configured-per-cluster=250
+      - --seed-cluster-total=200
+      - --seed-cluster-stride=1
+      - --archetypes=/etc/loadgen/profile.yaml
+      - --max-actions-per-cycle=4096
+      - --execute-concurrency=256
+      - --metrics-warmup-cycles=5
+      - --failure-rate-per-sec=1.16e-07
+      env:
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: metadata.name
+      image: registry:5000/bigfleet:cee793e
+      imagePullPolicy: IfNotPresent
+      name: shard
+      ports:
+      - containerPort: 7780
+        name: grpc
+        protocol: TCP
+      - containerPort: 8780
+        name: metrics
+        protocol: TCP
+      resources:
+        limits:
+          cpu: "24"
+          memory: 64Gi
+        requests:
+          cpu: "8"
+          memory: 16Gi
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+      - mountPath: /var/lib/bigfleet
+        name: data
+      - mountPath: /etc/loadgen
+        name: loadgen
+        readOnly: true
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-rq44q
+        readOnly: true
+    dnsPolicy: ClusterFirst
+    enableServiceLinks: true
+    hostname: bigfleet-shard-0
+    nodeName: NODEID
+    preemptionPolicy: PreemptLowerPriority
+    priority: 0
+    restartPolicy: Always
+    schedulerName: default-scheduler
+    securityContext: {}
+    serviceAccount: default
+    serviceAccountName: default
+    subdomain: bigfleet-shard-headless
+    terminationGracePeriodSeconds: 30
+    tolerations:
+    - effect: NoExecute
+      key: node.kubernetes.io/not-ready
+      operator: Exists
+      tolerationSeconds: 300
+    - effect: NoExecute
+      key: node.kubernetes.io/unreachable
+      operator: Exists
+      tolerationSeconds: 300
+    volumes:
+    - emptyDir: {}
+      name: data
+    - configMap:
+        defaultMode: 420
+        name: kwok-load-profile
+      name: loadgen
+    - name: kube-api-access-rq44q
+      projected:
+        defaultMode: 420
+        sources:
+        - serviceAccountToken:
+            expirationSeconds: 3607
+            path: token
+        - configMap:
+            items:
+            - key: ca.crt
+              path: ca.crt
+            name: kube-root-ca.crt
+        - downwardAPI:
+            items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+              path: namespace
+  status:
+    conditions:
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: PodReadyToStartContainers
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: Initialized
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: Ready
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: ContainersReady
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: PodScheduled
+    containerStatuses:
+    - containerID: containerd://5525c9715e9b5f2464583946fd360207f6560905cca97b781b1104eaed906230
+      image: registry:5000/bigfleet:cee793e
+      imageID: registry:5000/bigfleet@sha256:dbc57a26c8e45072709bb4644cc06028e61a52d072966d3b038fa918f4b80db9
+      lastState: {}
+      name: shard
+      ready: true
+      restartCount: 0
+      started: true
+      state:
+        running:
+          startedAt: "2026-06-21T14:35:07Z"
+      volumeMounts:
+      - mountPath: /var/lib/bigfleet
+        name: data
+      - mountPath: /etc/loadgen
+        name: loadgen
+        readOnly: true
+        recursiveReadOnly: Disabled
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-rq44q
+        readOnly: true
+        recursiveReadOnly: Disabled
+    hostIP: 172.18.0.3
+    hostIPs:
+    - ip: 172.18.0.3
+    phase: Running
+    podIP: 10.42.0.148
+    podIPs:
+    - ip: 10.42.0.148
+    qosClass: Burstable
+    startTime: "2026-06-21T14:35:06Z"
+- apiVersion: v1
+  kind: Pod
+  metadata:
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generateName: grafana-7c5dbf74b9-
+    labels:
+      app.kubernetes.io/component: grafana
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+      pod-template-hash: 7c5dbf74b9
+    name: grafana-7c5dbf74b9-t778t
+    namespace: bigfleet-scaletest
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: ReplicaSet
+      name: grafana-7c5dbf74b9
+      uid: 59e011d4-fbb4-4d52-af57-NODEID
+    resourceVersion: "107919"
+    uid: 35497a27-1944-4ccb-8e97-NODEID
+  spec:
+    containers:
+    - env:
+      - name: GF_AUTH_ANONYMOUS_ENABLED
+        value: "true"
+      - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+        value: Viewer
+      - name: GF_AUTH_BASIC_ENABLED
+        value: "true"
+      - name: GF_SECURITY_ADMIN_USER
+        value: admin
+      - name: GF_SECURITY_ADMIN_PASSWORD
+        value: admin
+      - name: GF_USERS_DEFAULT_THEME
+        value: dark
+      - name: GF_LOG_LEVEL
+        value: warn
+      image: grafana/grafana:10.4.7
+      imagePullPolicy: IfNotPresent
+      name: grafana
+      ports:
+      - containerPort: 3000
+        name: web
+        protocol: TCP
+      readinessProbe:
+        failureThreshold: 3
+        httpGet:
+          path: /api/health
+          port: web
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        successThreshold: 1
+        timeoutSeconds: 1
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+      - mountPath: /etc/grafana/provisioning/datasources
+        name: datasources
+      - mountPath: /etc/grafana/provisioning/dashboards
+        name: dashboard-provider
+      - mountPath: /var/lib/grafana/dashboards
+        name: dashboards
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-xvr9v
+        readOnly: true
+    dnsPolicy: ClusterFirst
+    enableServiceLinks: true
+    nodeName: NODEID
+    preemptionPolicy: PreemptLowerPriority
+    priority: 0
+    restartPolicy: Always
+    schedulerName: default-scheduler
+    securityContext: {}
+    serviceAccount: default
+    serviceAccountName: default
+    terminationGracePeriodSeconds: 30
+    tolerations:
+    - effect: NoExecute
+      key: node.kubernetes.io/not-ready
+      operator: Exists
+      tolerationSeconds: 300
+    - effect: NoExecute
+      key: node.kubernetes.io/unreachable
+      operator: Exists
+      tolerationSeconds: 300
+    volumes:
+    - configMap:
+        defaultMode: 420
+        name: grafana-datasources
+      name: datasources
+    - configMap:
+        defaultMode: 420
+        name: grafana-dashboard-provider
+      name: dashboard-provider
+    - configMap:
+        defaultMode: 420
+        name: grafana-dashboards
+      name: dashboards
+    - name: kube-api-access-xvr9v
+      projected:
+        defaultMode: 420
+        sources:
+        - serviceAccountToken:
+            expirationSeconds: 3607
+            path: token
+        - configMap:
+            items:
+            - key: ca.crt
+              path: ca.crt
+            name: kube-root-ca.crt
+        - downwardAPI:
+            items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+              path: namespace
+  status:
+    conditions:
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: PodReadyToStartContainers
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: Initialized
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:12Z"
+      status: "True"
+      type: Ready
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:12Z"
+      status: "True"
+      type: ContainersReady
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: PodScheduled
+    containerStatuses:
+    - containerID: containerd://11458d1209a75763ffac99bc6a74dc3a178f59bddda259787f25f47e74e72d75
+      image: docker.io/grafana/grafana:10.4.7
+      imageID: docker.io/grafana/grafana@sha256:578309639f1343b02883d7d4fc2b7f3783747a9f53e7b3ec34224e92eedb55ad
+      lastState: {}
+      name: grafana
+      ready: true
+      restartCount: 0
+      started: true
+      state:
+        running:
+          startedAt: "2026-06-21T14:35:07Z"
+      volumeMounts:
+      - mountPath: /etc/grafana/provisioning/datasources
+        name: datasources
+      - mountPath: /etc/grafana/provisioning/dashboards
+        name: dashboard-provider
+      - mountPath: /var/lib/grafana/dashboards
+        name: dashboards
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-xvr9v
+        readOnly: true
+        recursiveReadOnly: Disabled
+    hostIP: 172.18.0.3
+    hostIPs:
+    - ip: 172.18.0.3
+    phase: Running
+    podIP: 10.42.0.149
+    podIPs:
+    - ip: 10.42.0.149
+    qosClass: Burstable
+    startTime: "2026-06-21T14:35:06Z"
+- apiVersion: v1
+  kind: Pod
+  metadata:
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generateName: prometheus-
+    labels:
+      app.kubernetes.io/component: prometheus
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      apps.kubernetes.io/pod-index: "0"
+      controller-revision-hash: prometheus-7d44d8767b
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+      statefulset.kubernetes.io/pod-name: prometheus-0
+    name: prometheus-0
+    namespace: bigfleet-scaletest
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: StatefulSet
+      name: prometheus
+      uid: f3288869-e646-45ba-8684-NODEID
+    resourceVersion: "107915"
+    uid: 7e89ff0c-5b5f-4be1-8911-NODEID
+  spec:
+    containers:
+    - args:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=1d
+      - --web.enable-admin-api
+      - --web.listen-address=:9090
+      image: prom/prometheus:v2.55.0
+      imagePullPolicy: IfNotPresent
+      name: prometheus
+      ports:
+      - containerPort: 9090
+        name: web
+        protocol: TCP
+      resources:
+        limits:
+          cpu: "8"
+          memory: 48Gi
+        requests:
+          cpu: "4"
+          memory: 16Gi
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+      - mountPath: /etc/prometheus
+        name: config
+      - mountPath: /prometheus
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-jlmhk
+        readOnly: true
+    - command:
+      - sleep
+      - infinity
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      name: tools
+      resources:
+        limits:
+          cpu: 100m
+          memory: 64Mi
+        requests:
+          cpu: 10m
+          memory: 16Mi
+      terminationMessagePath: /dev/termination-log
+      terminationMessagePolicy: File
+      volumeMounts:
+      - mountPath: /prometheus
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-jlmhk
+        readOnly: true
+    dnsPolicy: ClusterFirst
+    enableServiceLinks: true
+    hostname: prometheus-0
+    nodeName: NODEID
+    preemptionPolicy: PreemptLowerPriority
+    priority: 0
+    restartPolicy: Always
+    schedulerName: default-scheduler
+    securityContext: {}
+    serviceAccount: prometheus
+    serviceAccountName: prometheus
+    subdomain: prometheus
+    terminationGracePeriodSeconds: 30
+    tolerations:
+    - effect: NoExecute
+      key: node.kubernetes.io/not-ready
+      operator: Exists
+      tolerationSeconds: 300
+    - effect: NoExecute
+      key: node.kubernetes.io/unreachable
+      operator: Exists
+      tolerationSeconds: 300
+    volumes:
+    - configMap:
+        defaultMode: 420
+        name: prometheus-config
+      name: config
+    - emptyDir: {}
+      name: data
+    - name: kube-api-access-jlmhk
+      projected:
+        defaultMode: 420
+        sources:
+        - serviceAccountToken:
+            expirationSeconds: 3607
+            path: token
+        - configMap:
+            items:
+            - key: ca.crt
+              path: ca.crt
+            name: kube-root-ca.crt
+        - downwardAPI:
+            items:
+            - fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+              path: namespace
+  status:
+    conditions:
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: PodReadyToStartContainers
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: Initialized
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: Ready
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:07Z"
+      status: "True"
+      type: ContainersReady
+    - lastProbeTime: null
+      lastTransitionTime: "2026-06-21T14:35:06Z"
+      status: "True"
+      type: PodScheduled
+    containerStatuses:
+    - containerID: containerd://01d91098c2ea38f286fe9cc4041408f5b902e3050a4913e7c4d96e7bce65bfec
+      image: docker.io/prom/prometheus:v2.55.0
+      imageID: docker.io/prom/prometheus@sha256:378f4e03703557d1c6419e6caccf922f96e6d88a530f7431d66a4c4f4b1000fe
+      lastState: {}
+      name: prometheus
+      ready: true
+      restartCount: 0
+      started: true
+      state:
+        running:
+          startedAt: "2026-06-21T14:35:07Z"
+      volumeMounts:
+      - mountPath: /etc/prometheus
+        name: config
+      - mountPath: /prometheus
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-jlmhk
+        readOnly: true
+        recursiveReadOnly: Disabled
+    - containerID: containerd://dc193941bd627940cc3942fcf3eae8091b33a45b2116dcb6758bf394510b776d
+      image: docker.io/curlimages/curl:8.10.1
+      imageID: docker.io/curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b
+      lastState: {}
+      name: tools
+      ready: true
+      restartCount: 0
+      started: true
+      state:
+        running:
+          startedAt: "2026-06-21T14:35:07Z"
+      volumeMounts:
+      - mountPath: /prometheus
+        name: data
+      - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+        name: kube-api-access-jlmhk
+        readOnly: true
+        recursiveReadOnly: Disabled
+    hostIP: 172.18.0.3
+    hostIPs:
+    - ip: 172.18.0.3
+    phase: Running
+    podIP: 10.42.0.150
+    podIPs:
+    - ip: 10.42.0.150
+    qosClass: Burstable
+    startTime: "2026-06-21T14:35:06Z"
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-coordinator","namespace":"bigfleet-scaletest"},"spec":{"clusterIP":"None","ports":[{"name":"grpc","port":7790,"targetPort":"grpc"},{"name":"metrics","port":8790,"targetPort":"metrics"}],"selector":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:05Z"
+    labels:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-coordinator
+    namespace: bigfleet-scaletest
+    resourceVersion: "107811"
+    uid: 8805bcb4-4e61-40e0-8a5e-NODEID
+  spec:
+    clusterIP: None
+    clusterIPs:
+    - None
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: grpc
+      port: 7790
+      protocol: TCP
+      targetPort: grpc
+    - name: metrics
+      port: 8790
+      protocol: TCP
+      targetPort: metrics
+    selector:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-coordinator-nodeport","namespace":"bigfleet-scaletest"},"spec":{"ports":[{"name":"grpc","nodePort":30790,"port":7790,"targetPort":"grpc"}],"selector":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/part-of":"bigfleet-scaletest"},"type":"NodePort"}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    labels:
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-coordinator-nodeport
+    namespace: bigfleet-scaletest
+    resourceVersion: "107828"
+    uid: 2189026d-e58d-4089-943e-NODEID
+  spec:
+    clusterIP: 10.43.168.163
+    clusterIPs:
+    - 10.43.168.163
+    externalTrafficPolicy: Cluster
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: grpc
+      nodePort: 30790
+      port: 7790
+      protocol: TCP
+      targetPort: grpc
+    selector:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: NodePort
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"shard","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-shard","namespace":"bigfleet-scaletest"},"spec":{"ports":[{"name":"grpc","port":7780,"targetPort":"grpc"},{"name":"metrics","port":8780,"targetPort":"metrics"}],"selector":{"app.kubernetes.io/component":"shard","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    labels:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-shard
+    namespace: bigfleet-scaletest
+    resourceVersion: "107839"
+    uid: 43058849-b121-43c6-88e4-NODEID
+  spec:
+    clusterIP: 10.43.75.157
+    clusterIPs:
+    - 10.43.75.157
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: grpc
+      port: 7780
+      protocol: TCP
+      targetPort: grpc
+    - name: metrics
+      port: 8780
+      protocol: TCP
+      targetPort: metrics
+    selector:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"shard","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-shard-headless","namespace":"bigfleet-scaletest"},"spec":{"clusterIP":"None","ports":[{"name":"grpc","port":7780,"targetPort":"grpc"},{"name":"metrics","port":8780,"targetPort":"metrics"}],"selector":{"app.kubernetes.io/component":"shard","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    labels:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-shard-headless
+    namespace: bigfleet-scaletest
+    resourceVersion: "107835"
+    uid: 433d7419-5f2f-4a96-ad91-NODEID
+  spec:
+    clusterIP: None
+    clusterIPs:
+    - None
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: grpc
+      port: 7780
+      protocol: TCP
+      targetPort: grpc
+    - name: metrics
+      port: 8780
+      protocol: TCP
+      targetPort: metrics
+    selector:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-shard-nodeport","namespace":"bigfleet-scaletest"},"spec":{"ports":[{"name":"grpc","nodePort":30780,"port":7780,"targetPort":"grpc"}],"selector":{"app.kubernetes.io/component":"shard","app.kubernetes.io/part-of":"bigfleet-scaletest"},"type":"NodePort"}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    labels:
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-shard-nodeport
+    namespace: bigfleet-scaletest
+    resourceVersion: "107823"
+    uid: 626925f1-7630-4ce0-b6d6-NODEID
+  spec:
+    clusterIP: 10.43.194.203
+    clusterIPs:
+    - 10.43.194.203
+    externalTrafficPolicy: Cluster
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: grpc
+      nodePort: 30780
+      port: 7780
+      protocol: TCP
+      targetPort: grpc
+    selector:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: NodePort
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"grafana","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"grafana","namespace":"bigfleet-scaletest"},"spec":{"ports":[{"name":"web","port":3000,"targetPort":"web"}],"selector":{"app.kubernetes.io/component":"grafana","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:05Z"
+    labels:
+      app.kubernetes.io/component: grafana
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: grafana
+    namespace: bigfleet-scaletest
+    resourceVersion: "107815"
+    uid: b1d7035a-d295-4558-a47c-NODEID
+  spec:
+    clusterIP: 10.43.58.25
+    clusterIPs:
+    - 10.43.58.25
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: web
+      port: 3000
+      protocol: TCP
+      targetPort: web
+    selector:
+      app.kubernetes.io/component: grafana
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"kwok-cluster","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"kwok-cluster-headless","namespace":"bigfleet-scaletest"},"spec":{"clusterIP":"None","ports":[{"name":"operator-met","port":8770}],"selector":{"app.kubernetes.io/component":"kwok-cluster","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:05Z"
+    labels:
+      app.kubernetes.io/component: kwok-cluster
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: kwok-cluster-headless
+    namespace: bigfleet-scaletest
+    resourceVersion: "107818"
+    uid: d3bcd89f-18a5-48b5-bb7a-NODEID
+  spec:
+    clusterIP: None
+    clusterIPs:
+    - None
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: operator-met
+      port: 8770
+      protocol: TCP
+      targetPort: 8770
+    selector:
+      app.kubernetes.io/component: kwok-cluster
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"prometheus","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"prometheus","namespace":"bigfleet-scaletest"},"spec":{"ports":[{"name":"web","port":9090,"targetPort":"web"}],"selector":{"app.kubernetes.io/component":"prometheus","app.kubernetes.io/part-of":"bigfleet-scaletest"}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    labels:
+      app.kubernetes.io/component: prometheus
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: prometheus
+    namespace: bigfleet-scaletest
+    resourceVersion: "107832"
+    uid: 2ce1715e-2d72-421d-8951-NODEID
+  spec:
+    clusterIP: 10.43.223.88
+    clusterIPs:
+    - 10.43.223.88
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: web
+      port: 9090
+      protocol: TCP
+      targetPort: web
+    selector:
+      app.kubernetes.io/component: prometheus
+      app.kubernetes.io/part-of: bigfleet-scaletest
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "1"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"grafana","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"grafana","namespace":"bigfleet-scaletest"},"spec":{"replicas":1,"selector":{"matchLabels":{"app.kubernetes.io/component":"grafana","app.kubernetes.io/part-of":"bigfleet-scaletest"}},"template":{"metadata":{"labels":{"app.kubernetes.io/component":"grafana","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"}},"spec":{"containers":[{"env":[{"name":"GF_AUTH_ANONYMOUS_ENABLED","value":"true"},{"name":"GF_AUTH_ANONYMOUS_ORG_ROLE","value":"Viewer"},{"name":"GF_AUTH_BASIC_ENABLED","value":"true"},{"name":"GF_SECURITY_ADMIN_USER","value":"admin"},{"name":"GF_SECURITY_ADMIN_PASSWORD","value":"admin"},{"name":"GF_USERS_DEFAULT_THEME","value":"dark"},{"name":"GF_LOG_LEVEL","value":"warn"}],"image":"grafana/grafana:10.4.7","name":"grafana","ports":[{"containerPort":3000,"name":"web"}],"readinessProbe":{"httpGet":{"path":"/api/health","port":"web"},"initialDelaySeconds":5,"periodSeconds":5},"resources":{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"100m","memory":"128Mi"}},"volumeMounts":[{"mountPath":"/etc/grafana/provisioning/datasources","name":"datasources"},{"mountPath":"/etc/grafana/provisioning/dashboards","name":"dashboard-provider"},{"mountPath":"/var/lib/grafana/dashboards","name":"dashboards"}]}],"volumes":[{"configMap":{"name":"grafana-datasources"},"name":"datasources"},{"configMap":{"name":"grafana-dashboard-provider"},"name":"dashboard-provider"},{"configMap":{"name":"grafana-dashboards"},"name":"dashboards"}]}}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generation: 1
+    labels:
+      app.kubernetes.io/component: grafana
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: grafana
+    namespace: bigfleet-scaletest
+    resourceVersion: "107923"
+    uid: bd7c4d19-b707-400b-a6f7-NODEID
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: grafana
+        app.kubernetes.io/part-of: bigfleet-scaletest
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: grafana
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: bigfleet-scaletest
+          helm.sh/chart: bigfleet-scaletest-0.1.0
+      spec:
+        containers:
+        - env:
+          - name: GF_AUTH_ANONYMOUS_ENABLED
+            value: "true"
+          - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+            value: Viewer
+          - name: GF_AUTH_BASIC_ENABLED
+            value: "true"
+          - name: GF_SECURITY_ADMIN_USER
+            value: admin
+          - name: GF_SECURITY_ADMIN_PASSWORD
+            value: admin
+          - name: GF_USERS_DEFAULT_THEME
+            value: dark
+          - name: GF_LOG_LEVEL
+            value: warn
+          image: grafana/grafana:10.4.7
+          imagePullPolicy: IfNotPresent
+          name: grafana
+          ports:
+          - containerPort: 3000
+            name: web
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /api/health
+              port: web
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /etc/grafana/provisioning/datasources
+            name: datasources
+          - mountPath: /etc/grafana/provisioning/dashboards
+            name: dashboard-provider
+          - mountPath: /var/lib/grafana/dashboards
+            name: dashboards
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: grafana-datasources
+          name: datasources
+        - configMap:
+            defaultMode: 420
+            name: grafana-dashboard-provider
+          name: dashboard-provider
+        - configMap:
+            defaultMode: 420
+            name: grafana-dashboards
+          name: dashboards
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-06-21T14:35:12Z"
+      lastUpdateTime: "2026-06-21T14:35:12Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-06-21T14:35:06Z"
+      lastUpdateTime: "2026-06-21T14:35:12Z"
+      message: ReplicaSet "grafana-7c5dbf74b9" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 1
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: ReplicaSet
+  metadata:
+    annotations:
+      deployment.kubernetes.io/desired-replicas: "1"
+      deployment.kubernetes.io/max-replicas: "2"
+      deployment.kubernetes.io/revision: "1"
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generation: 1
+    labels:
+      app.kubernetes.io/component: grafana
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+      pod-template-hash: 7c5dbf74b9
+    name: grafana-7c5dbf74b9
+    namespace: bigfleet-scaletest
+    ownerReferences:
+    - apiVersion: apps/v1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Deployment
+      name: grafana
+      uid: bd7c4d19-b707-400b-a6f7-NODEID
+    resourceVersion: "107922"
+    uid: 59e011d4-fbb4-4d52-af57-NODEID
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: grafana
+        app.kubernetes.io/part-of: bigfleet-scaletest
+        pod-template-hash: 7c5dbf74b9
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: grafana
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: bigfleet-scaletest
+          helm.sh/chart: bigfleet-scaletest-0.1.0
+          pod-template-hash: 7c5dbf74b9
+      spec:
+        containers:
+        - env:
+          - name: GF_AUTH_ANONYMOUS_ENABLED
+            value: "true"
+          - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+            value: Viewer
+          - name: GF_AUTH_BASIC_ENABLED
+            value: "true"
+          - name: GF_SECURITY_ADMIN_USER
+            value: admin
+          - name: GF_SECURITY_ADMIN_PASSWORD
+            value: admin
+          - name: GF_USERS_DEFAULT_THEME
+            value: dark
+          - name: GF_LOG_LEVEL
+            value: warn
+          image: grafana/grafana:10.4.7
+          imagePullPolicy: IfNotPresent
+          name: grafana
+          ports:
+          - containerPort: 3000
+            name: web
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /api/health
+              port: web
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /etc/grafana/provisioning/datasources
+            name: datasources
+          - mountPath: /etc/grafana/provisioning/dashboards
+            name: dashboard-provider
+          - mountPath: /var/lib/grafana/dashboards
+            name: dashboards
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: grafana-datasources
+          name: datasources
+        - configMap:
+            defaultMode: 420
+            name: grafana-dashboard-provider
+          name: dashboard-provider
+        - configMap:
+            defaultMode: 420
+            name: grafana-dashboards
+          name: dashboards
+  status:
+    availableReplicas: 1
+    fullyLabeledReplicas: 1
+    observedGeneration: 1
+    readyReplicas: 1
+    replicas: 1
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"StatefulSet","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-coordinator","namespace":"bigfleet-scaletest"},"spec":{"replicas":1,"selector":{"matchLabels":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/part-of":"bigfleet-scaletest"}},"serviceName":"bigfleet-coordinator","template":{"metadata":{"labels":{"app.kubernetes.io/component":"coordinator","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"}},"spec":{"containers":[{"args":["coordinator","--listen=:7790","--metrics-addr=:8790","--raft-bind=:7791","--raft-advertise=$(POD_IP):7791","--data-dir=/var/lib/bigfleet","--bootstrap=true","--id=$(POD_NAME)"],"env":[{"name":"POD_NAME","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}},{"name":"POD_IP","valueFrom":{"fieldRef":{"fieldPath":"status.podIP"}}}],"image":"registry:5000/bigfleet:cee793e","imagePullPolicy":"IfNotPresent","name":"coordinator","ports":[{"containerPort":7790,"name":"grpc"},{"containerPort":7791,"name":"raft"},{"containerPort":8790,"name":"metrics"}],"resources":{"limits":{"cpu":"2","memory":"4Gi"},"requests":{"cpu":"500m","memory":"1Gi"}},"volumeMounts":[{"mountPath":"/var/lib/bigfleet","name":"data"}]}],"volumes":[{"emptyDir":{},"name":"data"}]}}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generation: 1
+    labels:
+      app.kubernetes.io/component: coordinator
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-coordinator
+    namespace: bigfleet-scaletest
+    resourceVersion: "107914"
+    uid: cf01e370-641f-4a2f-9ef0-NODEID
+  spec:
+    persistentVolumeClaimRetentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+    podManagementPolicy: OrderedReady
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: coordinator
+        app.kubernetes.io/part-of: bigfleet-scaletest
+    serviceName: bigfleet-coordinator
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: coordinator
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: bigfleet-scaletest
+          helm.sh/chart: bigfleet-scaletest-0.1.0
+      spec:
+        containers:
+        - args:
+          - coordinator
+          - --listen=:7790
+          - --metrics-addr=:8790
+          - --raft-bind=:7791
+          - --raft-advertise=$(POD_IP):7791
+          - --data-dir=/var/lib/bigfleet
+          - --bootstrap=true
+          - --id=$(POD_NAME)
+          env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.podIP
+          image: registry:5000/bigfleet:cee793e
+          imagePullPolicy: IfNotPresent
+          name: coordinator
+          ports:
+          - containerPort: 7790
+            name: grpc
+            protocol: TCP
+          - containerPort: 7791
+            name: raft
+            protocol: TCP
+          - containerPort: 8790
+            name: metrics
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+            requests:
+              cpu: 500m
+              memory: 1Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/bigfleet
+            name: data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: data
+    updateStrategy:
+      rollingUpdate:
+        partition: 0
+      type: RollingUpdate
+  status:
+    availableReplicas: 1
+    collisionCount: 0
+    currentReplicas: 1
+    currentRevision: bigfleet-coordinator-6f6dfc9897
+    observedGeneration: 1
+    readyReplicas: 1
+    replicas: 1
+    updateRevision: bigfleet-coordinator-6f6dfc9897
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"StatefulSet","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"shard","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"bigfleet-shard","namespace":"bigfleet-scaletest"},"spec":{"podManagementPolicy":"Parallel","replicas":1,"selector":{"matchLabels":{"app.kubernetes.io/component":"shard","app.kubernetes.io/part-of":"bigfleet-scaletest"}},"serviceName":"bigfleet-shard-headless","template":{"metadata":{"labels":{"app.kubernetes.io/component":"shard","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"}},"spec":{"containers":[{"args":["shard","--listen=:7780","--metrics-addr=:8780","--id=$(POD_NAME)","--data-dir=/var/lib/bigfleet","--advertise-addr=$(POD_NAME).bigfleet-shard-headless.bigfleet-scaletest.svc:7780","--coordinator-addr=bigfleet-coordinator.bigfleet-scaletest.svc:7790","--seed-machines=10000","--seed-speculative=150000","--seed-density-multiplier=100","--seed-configured-per-cluster=250","--seed-cluster-total=200","--seed-cluster-stride=1","--archetypes=/etc/loadgen/profile.yaml","--max-actions-per-cycle=4096","--execute-concurrency=256","--metrics-warmup-cycles=5","--failure-rate-per-sec=1.16e-07"],"env":[{"name":"POD_NAME","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}}],"image":"registry:5000/bigfleet:cee793e","imagePullPolicy":"IfNotPresent","name":"shard","ports":[{"containerPort":7780,"name":"grpc"},{"containerPort":8780,"name":"metrics"}],"resources":{"limits":{"cpu":"24","memory":"64Gi"},"requests":{"cpu":"8","memory":"16Gi"}},"volumeMounts":[{"mountPath":"/var/lib/bigfleet","name":"data"},{"mountPath":"/etc/loadgen","name":"loadgen","readOnly":true}]}],"volumes":[{"emptyDir":{},"name":"data"},{"configMap":{"name":"kwok-load-profile"},"name":"loadgen"}]}}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generation: 1
+    labels:
+      app.kubernetes.io/component: shard
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: bigfleet-shard
+    namespace: bigfleet-scaletest
+    resourceVersion: "107904"
+    uid: 516b1611-a820-4670-a69b-NODEID
+  spec:
+    persistentVolumeClaimRetentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+    podManagementPolicy: Parallel
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: shard
+        app.kubernetes.io/part-of: bigfleet-scaletest
+    serviceName: bigfleet-shard-headless
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: shard
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: bigfleet-scaletest
+          helm.sh/chart: bigfleet-scaletest-0.1.0
+      spec:
+        containers:
+        - args:
+          - shard
+          - --listen=:7780
+          - --metrics-addr=:8780
+          - --id=$(POD_NAME)
+          - --data-dir=/var/lib/bigfleet
+          - --advertise-addr=$(POD_NAME).bigfleet-shard-headless.bigfleet-scaletest.svc:7780
+          - --coordinator-addr=bigfleet-coordinator.bigfleet-scaletest.svc:7790
+          - --seed-machines=10000
+          - --seed-speculative=150000
+          - --seed-density-multiplier=100
+          - --seed-configured-per-cluster=250
+          - --seed-cluster-total=200
+          - --seed-cluster-stride=1
+          - --archetypes=/etc/loadgen/profile.yaml
+          - --max-actions-per-cycle=4096
+          - --execute-concurrency=256
+          - --metrics-warmup-cycles=5
+          - --failure-rate-per-sec=1.16e-07
+          env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          image: registry:5000/bigfleet:cee793e
+          imagePullPolicy: IfNotPresent
+          name: shard
+          ports:
+          - containerPort: 7780
+            name: grpc
+            protocol: TCP
+          - containerPort: 8780
+            name: metrics
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "24"
+              memory: 64Gi
+            requests:
+              cpu: "8"
+              memory: 16Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/bigfleet
+            name: data
+          - mountPath: /etc/loadgen
+            name: loadgen
+            readOnly: true
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: data
+        - configMap:
+            defaultMode: 420
+            name: kwok-load-profile
+          name: loadgen
+    updateStrategy:
+      rollingUpdate:
+        partition: 0
+      type: RollingUpdate
+  status:
+    availableReplicas: 1
+    collisionCount: 0
+    currentReplicas: 1
+    currentRevision: bigfleet-shard-759c778bb5
+    observedGeneration: 1
+    readyReplicas: 1
+    replicas: 1
+    updateRevision: bigfleet-shard-759c778bb5
+    updatedReplicas: 1
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"StatefulSet","metadata":{"annotations":{},"labels":{"app.kubernetes.io/component":"prometheus","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"},"name":"prometheus","namespace":"bigfleet-scaletest"},"spec":{"replicas":1,"selector":{"matchLabels":{"app.kubernetes.io/component":"prometheus","app.kubernetes.io/part-of":"bigfleet-scaletest"}},"serviceName":"prometheus","template":{"metadata":{"labels":{"app.kubernetes.io/component":"prometheus","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/part-of":"bigfleet-scaletest","helm.sh/chart":"bigfleet-scaletest-0.1.0"}},"spec":{"containers":[{"args":["--config.file=/etc/prometheus/prometheus.yml","--storage.tsdb.path=/prometheus","--storage.tsdb.retention.time=1d","--web.enable-admin-api","--web.listen-address=:9090"],"image":"prom/prometheus:v2.55.0","name":"prometheus","ports":[{"containerPort":9090,"name":"web"}],"resources":{"limits":{"cpu":"8","memory":"48Gi"},"requests":{"cpu":"4","memory":"16Gi"}},"volumeMounts":[{"mountPath":"/etc/prometheus","name":"config"},{"mountPath":"/prometheus","name":"data"}]},{"command":["sleep","infinity"],"image":"curlimages/curl:8.10.1","name":"tools","resources":{"limits":{"cpu":"100m","memory":"64Mi"},"requests":{"cpu":"10m","memory":"16Mi"}},"volumeMounts":[{"mountPath":"/prometheus","name":"data"}]}],"serviceAccountName":"prometheus","volumes":[{"configMap":{"name":"prometheus-config"},"name":"config"},{"emptyDir":{},"name":"data"}]}}}}
+    creationTimestamp: "2026-06-21T14:35:06Z"
+    generation: 1
+    labels:
+      app.kubernetes.io/component: prometheus
+      app.kubernetes.io/managed-by: Helm
+      app.kubernetes.io/part-of: bigfleet-scaletest
+      helm.sh/chart: bigfleet-scaletest-0.1.0
+    name: prometheus
+    namespace: bigfleet-scaletest
+    resourceVersion: "107918"
+    uid: f3288869-e646-45ba-8684-NODEID
+  spec:
+    persistentVolumeClaimRetentionPolicy:
+      whenDeleted: Retain
+      whenScaled: Retain
+    podManagementPolicy: OrderedReady
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app.kubernetes.io/component: prometheus
+        app.kubernetes.io/part-of: bigfleet-scaletest
+    serviceName: prometheus
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app.kubernetes.io/component: prometheus
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: bigfleet-scaletest
+          helm.sh/chart: bigfleet-scaletest-0.1.0
+      spec:
+        containers:
+        - args:
+          - --config.file=/etc/prometheus/prometheus.yml
+          - --storage.tsdb.path=/prometheus
+          - --storage.tsdb.retention.time=1d
+          - --web.enable-admin-api
+          - --web.listen-address=:9090
+          image: prom/prometheus:v2.55.0
+          imagePullPolicy: IfNotPresent
+          name: prometheus
+          ports:
+          - containerPort: 9090
+            name: web
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "8"
+              memory: 48Gi
+            requests:
+              cpu: "4"
+              memory: 16Gi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /etc/prometheus
+            name: config
+          - mountPath: /prometheus
+            name: data
+        - command:
+          - sleep
+          - infinity
+          image: curlimages/curl:8.10.1
+          imagePullPolicy: IfNotPresent
+          name: tools
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /prometheus
+            name: data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: prometheus
+        serviceAccountName: prometheus
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - configMap:
+            defaultMode: 420
+            name: prometheus-config
+          name: config
+        - emptyDir: {}
+          name: data
+    updateStrategy:
+      rollingUpdate:
+        partition: 0
+      type: RollingUpdate
+  status:
+    availableReplicas: 1
+    collisionCount: 0
+    currentReplicas: 1
+    currentRevision: prometheus-7d44d8767b
+    observedGeneration: 1
+    readyReplicas: 1
+    replicas: 1
+    updateRevision: prometheus-7d44d8767b
+    updatedReplicas: 1
+kind: List
+metadata:
+  resourceVersion: ""

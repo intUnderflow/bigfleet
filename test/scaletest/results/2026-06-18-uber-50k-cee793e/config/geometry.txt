@@ -1,0 +1,6 @@
+label=uber-50k-cee793e-receipt
+fleet=40 satellites x 5 kwok clusters = 200 clusters / 5,000,000 Pods + 1 dedicated single-shard hub + coordinator
+regions=5 regions, anonymized (40 boot_id-distinct hosts)
+hub=hub (shard + coordinator + prometheus, no kwok load)
+committed_sample=hub + 5 satellites (one per region: sat-1..sat-5, regions anonymized) — a representative TSDB/log sample of the 40-sat fleet
+fleet_aggregate_gates=summed-by-le across all 40 satellites (see summary.json / MANIFEST.md)

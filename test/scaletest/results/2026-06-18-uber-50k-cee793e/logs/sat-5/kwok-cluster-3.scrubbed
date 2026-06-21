@@ -1,0 +1,20 @@
+2026-06-21T14:48:38.238868884Z [14:48:38 entrypoint] waiting for apiserver-side
+2026-06-21T14:48:42.253532169Z [14:48:42 entrypoint] apiserver-side ready
+2026-06-21T14:48:42.258314858Z [14:48:42 node-creator] starting (kube-scheduler path)
+2026-06-21T14:48:42.259918917Z [14:48:42 upc] starting (qps=200)
+2026-06-21T14:48:42.261886257Z [14:48:42 entrypoint] waiting for node-creator upc cache sync
+2026-06-21T14:48:42.768241509Z [14:48:42 entrypoint] node-creator cache synced
+2026-06-21T14:48:42.770902139Z [14:48:42 entrypoint] upc cache synced
+2026-06-21T14:48:42.772620798Z [14:48:42 loadgen] starting (profile=/etc/loadgen/profile.yaml mode=cr)
+2026-06-21T14:48:42.774499538Z [14:48:42 entrypoint] waiting for demand-ready signal before starting operator
+2026-06-21T14:48:46.778928485Z [14:48:46 operator] starting (cluster=kwok-cluster-3 shard=BASTION_IP:30780 qps=200 ack=64)
+2026-06-21T14:48:46.780968744Z [14:48:46 entrypoint] workload-side up
+2026-06-21T14:48:38.158948600Z [14:48:38 entrypoint] minting certs
+2026-06-21T14:48:39.120712544Z [14:48:39 etcd] starting
+2026-06-21T14:48:39.625453036Z [14:48:39 apiserver] starting
+2026-06-21T14:48:41.879463731Z [14:48:41 apiserver] ready
+2026-06-21T14:48:41.880610651Z [14:48:41 crds] applying
+2026-06-21T14:48:42.050117988Z [14:48:42 kwok] starting
+2026-06-21T14:48:42.051638838Z [14:48:42 kcm] starting (gc + namespace + deployment/replicaset/statefulset)
+2026-06-21T14:48:42.054599877Z [14:48:42 scheduler] starting (MostAllocated scoring for ADR-0022 density)
+2026-06-21T14:48:42.057462727Z [14:48:42 entrypoint] apiserver-side ready; signalled workload container

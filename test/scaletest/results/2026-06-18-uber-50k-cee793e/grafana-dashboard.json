@@ -1,0 +1,33 @@
+{
+  "title": "BigFleet uber-5k receipt",
+  "uid": "bigfleet-receipt-uber50k",
+  "timezone": "utc",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "",
+  "schemaVersion": 39,
+  "panels": [
+    { "type": "timeseries", "title": "shard-cycle p99 (s) — gate ≤25", "gridPos": {"h":8,"w":12,"x":0,"y":0},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [{"expr":"histogram_quantile(0.99, sum by(le)(rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))","legendFormat":"cycle p99"}] },
+    { "type": "timeseries", "title": "configure-phase p99 (s) — gate ≤15", "gridPos": {"h":8,"w":12,"x":12,"y":0},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [{"expr":"histogram_quantile(0.99, sum by(le)(rate(bigfleet_shard_configure_phase_seconds_bucket[5m])))","legendFormat":"configure p99"}] },
+    { "type": "timeseries", "title": "bootstrap success ratio — gate ≥0.99", "gridPos": {"h":8,"w":12,"x":0,"y":8},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [{"expr":"sum(increase(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\",outcome=\"success\"}[5m]))/sum(increase(bigfleet_shard_action_execute_outcomes_total{kind=\"Bootstrap\"}[5m]))","legendFormat":"bootstrap ratio"}] },
+    { "type": "timeseries", "title": "active sessions / shortfalls", "gridPos": {"h":8,"w":12,"x":12,"y":8},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [{"expr":"sum(bigfleet_shard_active_sessions)","legendFormat":"sessions"},{"expr":"sum(bigfleet_shard_shortfalls)","legendFormat":"shortfalls"}] },
+    { "type": "timeseries", "title": "inventory by state", "gridPos": {"h":8,"w":12,"x":0,"y":16},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [{"expr":"sum by(state)(bigfleet_shard_inventory_machines)","legendFormat":"{{state}}"}] },
+    { "type": "timeseries", "title": "Phase-3 reclaim rate (/s) + operator gates p99", "gridPos": {"h":8,"w":12,"x":12,"y":16},
+      "datasource": {"type":"prometheus","uid":"bigfleet-prom"},
+      "targets": [
+        {"expr":"sum(rate(bigfleet_shard_actions_total{kind=\"Reclaim\"}[5m]))","legendFormat":"reclaim /s"},
+        {"expr":"histogram_quantile(0.99, sum by(le)(rate(bigfleet_operator_node_state_update_duration_seconds_bucket[5m])))","legendFormat":"node-state p99"},
+        {"expr":"histogram_quantile(0.99, sum by(le)(rate(bigfleet_operator_rollup_duration_seconds_bucket[5m])))","legendFormat":"rollup p99"},
+        {"expr":"histogram_quantile(0.99, sum by(le)(rate(bigfleet_operator_acknowledge_duration_seconds_bucket[5m])))","legendFormat":"ack p99"}
+      ] }
+  ]
+}
