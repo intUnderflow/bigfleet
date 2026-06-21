@@ -186,7 +186,7 @@ make scaletest PROFILE=test/scaletest/profiles/5k.yaml SUBSTRATE=test/scaletest/
 
 **Recreate the dashboard.** The Grafana dashboard ships in the repo ([`dashboards/scaletest.json`](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/chart/dashboards/scaletest.json)); point it at any Prometheus carrying BigFleet's metrics. Published canonical runs also include a Prometheus snapshot you can load to replay the run's status over time (added per run as it is published).
 
-**Per-run artefacts.** Raw run data (logs, full Prometheus) is dev-box-local and not committed; this page is the canonical record. The sanitised numeric results that *are* committed — each run's `summary.json` plus a `chain-numbers.csv` time-series — live in that run's folder, linked from the ladder and the configuration-variant table.
+**Per-run artefacts.** Each run's sanitised numeric results — `summary.json` plus a time-series CSV — are committed in that run's folder, linked from the ladder. Runs carrying a 📦 **Receipts** link go further: the full scrubbed component logs + rendered config/state are committed in the run folder, and the complete Grafana-loadable Prometheus TSDB is published as a release asset (load it via that run's `LOAD-RECIPE.md`) — open the whole run in Grafana and check every number yourself. Runs without a receipt keep their raw logs/TSDB dev-box-local; this page remains the canonical record.
 
 ## How a result is graded
 
