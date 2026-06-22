@@ -1,0 +1,44 @@
+---
+title: Providers
+description: The capacity providers you deploy alongside BigFleet to create and reclaim machines — one per substrate, each conformance-certified. Plus how to write your own.
+---
+
+BigFleet decides *which* machines should exist. **Capacity providers** are what actually create, configure, drain, and delete them on a real substrate. BigFleet never talks to a cloud API directly — it dials a provider you run, and the provider does the work.
+
+> The canonical, always-current registry lives at **[bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh)**. This page is the orientation; that site is the list.
+
+## What a provider is
+
+A provider is a small process implementing the `CapacityProvider` contract — **six RPCs, no `Watch`**:
+
+`Create` · `Configure` · `Drain` · `Delete` · `Get` · `List`
+
+Reconciliation is pull-based: BigFleet learns the real state of the world through `List` + `Get`, never a streamed watch. You run the provider as a container alongside BigFleet, ship it with a Helm chart, give it scoped credentials for its substrate, and BigFleet dials out to it.
+
+## The ecosystem
+
+There are **12 conformance-certified providers** today, spanning hyperscalers, regional clouds, and bare metal:
+
+| | |
+|---|---|
+| **Hyperscale** | AWS EC2 · Azure · GCP (GCE) · Oracle Cloud (OCI) |
+| **Regional cloud** | DigitalOcean · Hetzner Cloud · OVHcloud · Scaleway · UpCloud |
+| **Bare metal & on-prem** | Latitude.sh · libvirt · Proxmox VE |
+
+Each links from [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh) to its own repository, chart, and credentials guide.
+
+## Out of tree, by design
+
+BigFleet ships the provider contract, the dial-out client, and a test-only fake — **never a real provider**. Real providers live in their own repositories. Kubernetes spent years undoing in-tree cloud providers; BigFleet doesn't repeat that mistake. The payoff is operational: a provider's release cadence is decoupled from BigFleet's. When BigFleet ships a new version you don't redeploy your provider; when your provider ships you don't coordinate with BigFleet maintainers.
+
+## Writing your own
+
+Covering a new substrate doesn't mean re-solving the hard parts. Providers are built on **`providerkit`**, a shared library that gets fencing, idempotency, async dispatch, transition timeouts, and the machine-state contract right once — so a new provider is mostly a small backend describing how to create, configure, and drain an instance on your substrate.
+
+Correctness is gated by a conformance suite covering **92 behaviors across 11 areas** — idempotency, transitional-state recovery, cursor correctness, drain-grace handling, and more. Passing it is what lets a provider claim compatibility. Point the suite at your endpoint:
+
+```sh
+make conformance TARGET=host:port
+```
+
+Start from the [provider author guide](/provider-author-guide/), which walks the contract, the conformance categories, and the `providerkit` backend interface end to end.

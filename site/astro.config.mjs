@@ -23,16 +23,9 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Overview", link: "/" },
-            { label: "User stories", link: "/user-stories/" },
             { label: "Quickstart", link: "/quickstart/" },
             { label: "Concepts", link: "/concepts/" },
-          ],
-        },
-        {
-          label: "Architecture",
-          items: [
-            { label: "Architecture overview", link: "/architecture/" },
-            { label: "API reference", link: "/api-reference/" },
+            { label: "User stories", link: "/user-stories/" },
           ],
         },
         {
@@ -47,9 +40,17 @@ export default defineConfig({
           ],
         },
         {
-          label: "Extending",
+          label: "Providers",
           items: [
+            { label: "Providers", link: "/providers/" },
             { label: "Provider author guide", link: "/provider-author-guide/" },
+          ],
+        },
+        {
+          label: "Architecture",
+          items: [
+            { label: "Architecture overview", link: "/architecture/" },
+            { label: "API reference", link: "/api-reference/" },
           ],
         },
         {

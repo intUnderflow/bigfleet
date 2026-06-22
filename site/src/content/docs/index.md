@@ -5,15 +5,12 @@ template: splash
 hero:
   tagline: Many Kubernetes clusters. One fleet. One decision engine.
   actions:
-    - text: Read the operating model
-      link: https://lucy.sh/fleet-scale-kubernetes
-      icon: right-arrow
-      variant: primary
-      attrs:
-        target: _blank
-        rel: noopener
     - text: Quickstart
       link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: Operator guide
+      link: /operator-guide/
       icon: external
       variant: secondary
     - text: GitHub
@@ -45,20 +42,6 @@ Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch th
 
 ![BigFleet sits one tier above per-cluster autoscalers: each Kubernetes cluster runs an operator that reports capacity needs to BigFleet, which provisions from a fleet-wide pool of bare metal, cloud, and spot machines.](/architecture-diagram.svg)
 
-It's the reference implementation of two papers — the [operating model](/papers/fleet-scale-kubernetes/) (how cluster fleets should work) and the [architecture](/papers/bigfleet/) (how this autoscaler is built).
-
-## Tested at scale
-
-Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — `uber-50k`: a **~50,000-machine fleet** carrying **~5,000,000 pods** across 200 clusters on 40 hosts in 5 regions, served by a single shard — held **every capacity-delivery hop BigFleet owns inside SLO with zero unmet demand** under a real, default, *uncapped* kube-scheduler (shard cycle p99 **4.08 s** under a 5 s bar, roll-up p99 0.76 s, configure-phase p99 1.21 s).
-
-Every gate figure on the [scale-test results page](/scaletest-results/) is read straight from each run's committed run summary — the page is generated from the data, not hand-entered.
-
-## Why this exists
-
-The hyperscalers built fleet-level capacity control planes in-house — Google has [Borg](https://research.google/pubs/pub43438/), Meta has [Twine](https://www.usenix.org/conference/osdi20/presentation/tang). They did because per-cluster capacity management collapses at fleet scale.
-
-Most organisations now run tens to thousands of Kubernetes clusters and manage capacity per-cluster. The result is well documented: Datadog's *State of Cloud Costs* report puts average enterprise CPU utilisation around 18 %, with overprovisioning factors of 2× to 5× and waste estimates between $50 000 and $500 000 per cluster per year. A team's GPUs sitting idle in cluster A can't help that team's training job in cluster B. Multi-node training, gang scheduling, and priority-based preemption — all the things AI/ML workloads actually need — require fleet-wide capacity decisions. Per-cluster autoscalers can't make them.
-
 ## What changes for you
 
 - **GPUs serve the team that needs them, not the team that owns the cluster.** Capacity is a fleet-wide pool, not a per-cluster allocation.
@@ -66,6 +49,49 @@ Most organisations now run tens to thousands of Kubernetes clusters and manage c
 - **Clusters become disposable.** No more "GPU cluster" / "batch cluster" snowflakes; every cluster looks identical to BigFleet, and to your platform team's runbooks.
 - **The autoscaler is not on the critical path.** Static stability is a hard rule: clusters keep running with BigFleet entirely down. Running pods, kubelet, kube-scheduler are unaffected. Only new provisioning pauses.
 - **Integration is small.** An operator pod runs alongside each cluster. Three CRDs (`CapacityRequest`, `UpcomingNode`, `AvailableCapacity`) and one protobuf message. Nothing touches kube-scheduler or kubelet.
+
+## Proven at scale — and you can check the receipts
+
+Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — `uber-50k`: a **~50,000-machine fleet** carrying **~5,000,000 pods** across 200 clusters on 40 hosts in 5 regions, served by a single shard — held **every capacity-delivery hop BigFleet owns inside SLO with zero unmet demand** under a real, default, *uncapped* kube-scheduler (shard cycle p99 **4.08 s** under a 5 s bar, roll-up p99 0.76 s, configure-phase p99 1.21 s).
+
+You don't have to take the numbers on faith. **Every run on the [scale-test results page](/scaletest-results/) now ships a full Prometheus TSDB you can load straight into Grafana** and inspect for yourself — the gate figures on the page are read from each run's committed summary, generated from the data, not hand-entered. Receipts, not just a scorecard.
+
+## Providers — the substrate is covered
+
+BigFleet decides *which* machines should exist; **capacity providers** actually create, configure, and reclaim them. There's already an ecosystem: **12 conformance-certified providers** spanning hyperscalers, regional clouds, and bare metal —
+
+> AWS EC2 · Azure · DigitalOcean · GCP (GCE) · Hetzner Cloud · Latitude.sh · libvirt · Oracle Cloud (OCI) · OVHcloud · Proxmox VE · Scaleway · UpCloud
+
+Each is a container you deploy alongside BigFleet with a Helm chart and scoped credentials; BigFleet dials out to it. Providers are **out of tree by design** — Kubernetes spent years undoing in-tree providers, and we don't repeat that, so a provider's release cadence is decoupled from BigFleet's. Writing one for a new substrate means implementing a small backend on top of the shared `providerkit` library (which gets fencing, idempotency, and the machine contract right once) and passing a 92-behavior conformance suite.
+
+Browse them, or write your own → **[Providers](/providers/)** · the canonical registry lives at [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh).
+
+## How you run it
+
+A cluster joins the fleet by running the operator chart — outbound-only, no inbound listener, no per-cluster autoscaler tuning:
+
+```sh
+helm install bigfleet-operator oci://ghcr.io/intunderflow/charts/bigfleet-operator \
+  --version 0.1.0 \
+  --namespace bigfleet-system --create-namespace \
+  --set clusterID=cluster-prod-eu-1 \
+  --set shardAddress=bigfleet-shard.bigfleet-system.svc:7780
+```
+
+From there it's standard platform work: the operator rolls up the cluster's needs, BigFleet provisions, and you watch a handful of signals —
+
+```promql
+# Any shard reporting demand it can't satisfy?
+bigfleet_shard_shortfalls > 0
+
+# Are shards keeping up? (cycle p99)
+histogram_quantile(0.99, sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m])))
+
+# Any cluster's session to its shard flapping?
+sum by (cluster) (rate(bigfleet_operator_session_reconnects_total[5m])) > 0
+```
+
+Day-to-day, most days are quiet — static stability means an outage in BigFleet itself is felt as the *absence* of new provisioning, not a fleet-wide incident. The full operating story (install, runbook, incident modes, FinOps queries, on-call triage) is in the **[operator guide](/operator-guide/)**, with sizing in the [scaling guide](/scaling-guide/), the contract in the [SLOs](/slos/), and release-gating in the [scale-test runbook](/scaletest/).
 
 ## Compared to the cluster autoscalers
 
@@ -77,16 +103,23 @@ What BigFleet does **not** replace: kube-scheduler. Pod placement stays cluster-
 
 If your fleet is one cluster, you don't need BigFleet. If it's a hundred, you start to.
 
+## Why fleet-level
+
+The hyperscalers built fleet-level capacity control planes in-house — Google has [Borg](https://research.google/pubs/pub43438/), Meta has [Twine](https://www.usenix.org/conference/osdi20/presentation/tang). They did because per-cluster capacity management collapses at fleet scale.
+
+Most organisations now run tens to thousands of Kubernetes clusters and manage capacity per-cluster. The result is well documented: Datadog's *State of Cloud Costs* report puts average enterprise CPU utilisation around 18 %, with overprovisioning factors of 2× to 5× and waste estimates between $50 000 and $500 000 per cluster per year. A team's GPUs sitting idle in cluster A can't help that team's training job in cluster B. Multi-node training, gang scheduling, and priority-based preemption — all the things AI/ML workloads actually need — require fleet-wide capacity decisions. Per-cluster autoscalers can't make them.
+
 ## Where to go next
 
-- If you're **evaluating** whether this fits your fleet → start with the [operating-model paper](/papers/fleet-scale-kubernetes/) (~15 minutes), then the [architecture paper](/papers/bigfleet/).
-- If you're an **engineer** wanting to try it → [quickstart on kind in 5 minutes](/quickstart/), then the [concepts page](/concepts/).
-- If you build **infrastructure providers** (AWS / GCP / bare-metal) → [provider author guide](/provider-author-guide/) and the conformance suite.
-- If you want the **source** → [GitHub](https://github.com/intUnderflow/bigfleet).
+- **Run it** → [quickstart on kind in 5 minutes](/quickstart/), then the [operator guide](/operator-guide/) for a real deployment and the [concepts page](/concepts/) for the mental model.
+- **See the proof** → the [scale-test results](/scaletest-results/), each with a Grafana-loadable receipt.
+- **Cover your substrate** → the [providers](/providers/) you can deploy today, or the [provider author guide](/provider-author-guide/) to write your own.
+- **Read the source** → [GitHub](https://github.com/intUnderflow/bigfleet).
+- **Evaluating the design?** → the [operating-model paper](/papers/fleet-scale-kubernetes/) (~15 minutes) and the [architecture paper](/papers/bigfleet/).
 
 ## Status
 
-v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh). Coverage: race-detector unit tests, deterministic simulator with golden traces, steady-state soak under churn, multi-cluster end-to-end on kind, [provider conformance suite](/provider-author-guide/), and the [scale-test results](/scaletest-results/) on a real multi-host cloud fleet. Real provider implementations live in separate repositories by design — see the [provider author guide](/provider-author-guide/).
+v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh), as the reference implementation of two papers — the [operating model](/papers/fleet-scale-kubernetes/) and the [architecture](/papers/bigfleet/). Coverage: race-detector unit tests, deterministic simulator with golden traces, steady-state soak under churn, multi-cluster end-to-end on kind, a [conformance suite](/provider-author-guide/) with a 12-provider ecosystem, and [scale-test results](/scaletest-results/) on a real multi-host cloud fleet — each published run shipping a full Grafana-loadable Prometheus receipt. Real provider implementations live in [separate repositories](https://bigfleet-providers.lucy.sh) by design.
 
 <hr style="margin-top: 3rem; opacity: 0.3;" />
 
