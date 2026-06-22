@@ -60,9 +60,13 @@ This is consistent with the out-of-tree-provider model (the contract is the surf
 1. **Obligation stated in the provider contract** — `docs/provider-author-guide.md` ("`Configured` means the node has joined and is Ready"): a machine must not be reported `Configured` until the provider observes the node `Ready`; until then it stays `Configuring` (or `Failed` with `last_error` on timeout). Because `ConfigureRequest` carries only `cluster_id` (a name, not credentials), the guide states the two valid mechanisms — out-of-band cluster read-access, or a substrate signal that reliably implies kubelet registration. (A `provider.proto` doc comment is a toolchain-gated follow-up; the author-guide is the authoritative contract surface.)
 2. **Conformance** — `TestConformance_NodeReadiness_ADR0056` proves the reference fake holds `Configuring` until a readiness signal and only then reports `Configured`; wired into `make conformance-self`. It is a *reference-fake* test by necessity (the black-box surface has no readiness ground truth — see rationale point 2).
 
-**Pending (separate `bigfleet-providers` commit):**
+**Done (separate `bigfleet-providers` commit):**
 
-3. **`providerkit` `ReadinessChecker` hook** so providers built on the kit inherit the gate — the kit holds the machine at `Configuring` until the check passes and drives it to `Failed` on timeout — plus a catalogued conformance behaviour.
+3. **`providerkit` `ReadinessChecker` hook** — an optional `Backend` capability (`ConfirmNodeReady`). When a backend implements it the kit runs it after `ConfigureInstance` succeeds, under the remaining Configure timeout, holding the machine at `Configuring` until it returns nil and driving it to `Failed` on error/timeout — so a kit-based provider inherits the gate centrally. A backend that does not implement it keeps prior behaviour and the kit logs once at startup that the gate is unenforced. The `_template` provider documents how to implement it.
+
+**Deferred (needs its own pass):**
+
+4. **Frozen conformance-catalogue behaviour + per-provider re-certification.** Adding a `B-id` for "Configured only after Ready" to the *frozen* `bigfleet-providers` registry would retroactively un-certify all 12 providers (they would become 92/93 against a behaviour none has implemented), so it is held until (a) a readiness-injection harness exists to actually run it (it is non-black-box — the six RPCs carry no readiness ground truth) and (b) the providers are re-certified against the new count. Tracked as a re-certification item, not shipped with this ADR.
 
 No `pkg/shard` / coverage-math change is required by this option.
 
