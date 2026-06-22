@@ -50,6 +50,7 @@ export default defineConfig({
           label: "Architecture",
           items: [
             { label: "Architecture overview", link: "/architecture/" },
+            { label: "Networking", link: "/networking/" },
             { label: "API reference", link: "/api-reference/" },
           ],
         },

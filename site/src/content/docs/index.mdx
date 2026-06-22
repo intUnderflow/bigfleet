@@ -38,8 +38,8 @@ Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch th
 
 ## What changes for you
 
-- **Capacity is a fleet-wide pool, not a per-cluster allocation.** A machine idle in one cluster serves an unschedulable workload in another — CPU, memory, or a scarce GPU rack alike — so the hardware goes to the team that needs it, not the team that owns the cluster.
-- **Costs are comparable across capacity classes.** Bare metal, reserved, on-demand, and spot are scored apples-to-apples by `price + interruption_probability × interruption_penalty`. The autoscaler picks the cheapest option that fits the workload's interruption tolerance.
+- **Capacity is a fleet-wide pool, not a per-cluster allocation.** A machine idle in one cluster serves an unschedulable workload in another (both bound to the same shard) — CPU, memory, or a scarce GPU rack alike — so the hardware goes to the team that needs it, not the team that owns the cluster.
+- **Costs are comparable across capacity classes.** Bare metal, reserved, on-demand, and spot are scored apples-to-apples by `price + interruption_probability × interruption_penalty`. The autoscaler picks the lowest-cost option — by compute and interruption risk — among the machines that satisfy the request's requirements and interruption tolerance.
 - **Clusters become disposable.** No more "GPU cluster" / "batch cluster" snowflakes; every cluster looks identical to BigFleet, and to your platform team's runbooks.
 - **The autoscaler is not on the critical path.** Static stability is a hard rule: clusters keep running with BigFleet entirely down. Running pods, kubelet, kube-scheduler are unaffected. Only new provisioning pauses.
 - **Integration is small.** An operator pod runs alongside each cluster. Three CRDs (`CapacityRequest`, `UpcomingNode`, `AvailableCapacity`) and one protobuf message. Nothing touches kube-scheduler or kubelet.
@@ -91,7 +91,7 @@ Day-to-day, most days are quiet — static stability means an outage in BigFleet
 
 BigFleet replaces the **cluster-level capacity autoscaler** — [Cluster Autoscaler](https://github.com/kubernetes/autoscaler) or [Karpenter](https://karpenter.sh/). Both consume the same input signal (`PodScheduled=False, reason=Unschedulable`) and produce the same kind of output (a new node). Running them alongside BigFleet would have two deciders racing for the same trigger; one would always be undoing what the other just did.
 
-The difference is *where* the decision happens. Cluster Autoscaler and Karpenter run inside each cluster and provision per-cluster, in isolation. BigFleet runs once across the fleet and makes the same kind of decision with full cross-cluster context — so a GPU rack idle in cluster A can satisfy a training job's unschedulable pods in cluster B without the rack having to be moved or re-provisioned.
+The difference is *where* the decision happens. Cluster Autoscaler and Karpenter run inside each cluster and provision per-cluster, in isolation. BigFleet runs once across the fleet and makes the same kind of decision with full cross-cluster context — so a GPU rack idle in cluster A can be reclaimed and re-provisioned to serve a training job's unschedulable pods in cluster B: the same physical hardware, repurposed in place, with no new capacity to procure (A and B must be served by the same shard).
 
 What BigFleet does **not** replace: kube-scheduler. Pod placement stays cluster-local, the same as it is today.
 
@@ -108,6 +108,7 @@ Most organisations now run tens to thousands of Kubernetes clusters and manage c
 - **Run it** → [quickstart on kind in 5 minutes](/quickstart/), then the [operator guide](/operator-guide/) for a real deployment and the [concepts page](/concepts/) for the mental model.
 - **See the proof** → the [scale-test results](/scaletest-results/), each with a Grafana-loadable receipt.
 - **Cover your substrate** → the [providers](/providers/) you can deploy today, or the [provider author guide](/provider-author-guide/) to write your own.
+- **Wondering about networking?** → BigFleet expresses networking needs as capacity *requirements* rather than modelling the network → [BigFleet and networking](/networking/).
 - **Read the source** → [GitHub](https://github.com/intUnderflow/bigfleet).
 - **Evaluating the design?** → the [operating-model paper](/papers/fleet-scale-kubernetes/) (~15 minutes) and the [architecture paper](/papers/bigfleet/).
 
