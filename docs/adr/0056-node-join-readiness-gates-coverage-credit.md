@@ -2,7 +2,9 @@
 
 ## Status
 
-**Proposed**, 2026-06-22. **Author decision required** — this touches the provider contract and/or the shard hot path; do not implement pending greenlight.
+**Accepted — Option A (provider-contract obligation)**, 2026-06-22 (author decision, Lucy Sweet).
+
+`Configure` MUST NOT report a machine `Configured` until the provider has observed the node `Ready` in its target cluster, and the conformance suite gains a real (or faithfully simulated) cluster-join scenario that enforces it. Options B (shard-side readback) and C (two-phase credit) were considered and not chosen — see "Decision rationale" below. Implementation pending: provider-contract documentation + the conformance join scenario, with the gating ideally centralised in `providerkit` so every real provider inherits it.
 
 ## Context
 
@@ -27,7 +29,7 @@ The failure mode: a provider that reports `Configured` on VM-boot produces **pha
 
 **Proposed — choose one of the following. Author decision required.**
 
-### Option A — Provider-contract obligation
+### Option A — Provider-contract obligation ← **CHOSEN**
 `Configure` MUST NOT report `Configured` until the provider has observed the node `Ready` in its target cluster. Verification moves into every out-of-tree provider; the conformance suite must add a real (or faithfully simulated) cluster-join scenario — today it never exercises an actual join, so this gap is untested.
 - **Pro:** shard stays simple; no change to the outbound-only node-state property.
 - **Con:** trusts every provider to implement and not regress the check; a non-conformant provider silently re-introduces the gap. Pushes a cluster-readiness dependency into the provider, which otherwise need not talk to the target cluster's API server.
@@ -42,8 +44,22 @@ The provider asserts `Configured` on infra-up (preserving [ADR-0054]'s `shardCon
 - **Pro:** keeps configure-phase latency fast and honest while making coverage reflect reality.
 - **Con:** most moving parts; two notions of "done" to keep coherent with [ADR-0052]/[ADR-0054].
 
-### Recommendation (not a decision)
-Lean **B or C**: put the correctness check where BigFleet can observe ground truth rather than trusting every out-of-tree provider to verify and never regress. Either way, pair it with a conformance scenario that exercises a real cluster join, since the current suite does not. Option A alone leaves the guarantee only as strong as the least-careful provider.
+### Decision rationale (Option A chosen)
+
+The Proposed draft *recommended* B or C (put ground truth where BigFleet observes it). The author chose **A** instead, for two reasons that outweigh that:
+
+1. **It keeps the boundary clean.** Node-join correctness is the provider's job — the provider is the only component that talks to the cloud/substrate and to the target cluster. Pushing the check there preserves the engine's simplicity and, critically, **does not reverse the deliberate "the shard never reads node-state back" property** (wire-protocols) — no operator→shard readback enters the hot path, and the shard's coverage math is unchanged.
+2. **The "only as strong as the least-careful provider" objection is answered by conformance, not by relocating the check.** Making "observe `Ready` before reporting `Configured`" a **hard conformance requirement** with a real (or faithfully simulated) cluster-join scenario means a provider that skips the check **fails certification** — it cannot claim BigFleet compatibility. The guarantee is enforced at the certification boundary that already gates every provider, rather than by adding hot-path machinery to defend against a non-conformant provider that, by definition, isn't certified.
+
+This is consistent with the out-of-tree-provider model (the contract is the surface; conformance is the enforcement) and with the hard rule that `pkg/shard` stays lean.
+
+### Implementation (pending, follows from Option A)
+
+1. **State the obligation in the provider contract** — `provider.proto` `Configure` doc comment + `provider-author-guide.md`: a machine must not be reported `Configured` until the provider has observed the node `Ready` on its target cluster; until then it stays `Configuring` (or `Failed` with `last_error` on timeout).
+2. **Add the conformance scenario** — the suite must exercise a real or faithfully simulated cluster join and assert the provider does **not** report `Configured` for a node that never reaches `Ready` (the suite currently never exercises an actual join — `provider-protocol.md`).
+3. **Centralise in `providerkit`** (recommended) so every real provider inherits the gate rather than each re-implementing it.
+
+No `pkg/shard` / coverage-math change is required by this option.
 
 ## Consequences / open questions
 
