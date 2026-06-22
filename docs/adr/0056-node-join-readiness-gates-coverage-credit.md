@@ -64,9 +64,9 @@ This is consistent with the out-of-tree-provider model (the contract is the surf
 
 3. **`providerkit` `ReadinessChecker` hook** — an optional `Backend` capability (`ConfirmNodeReady`). When a backend implements it the kit runs it after `ConfigureInstance` succeeds, under the remaining Configure timeout, holding the machine at `Configuring` until it returns nil and driving it to `Failed` on error/timeout — so a kit-based provider inherits the gate centrally. A backend that does not implement it keeps prior behaviour and the kit logs once at startup that the gate is unenforced. The `_template` provider documents how to implement it.
 
-**Deferred (needs its own pass):**
+**In review (`bigfleet-providers` PR #22):**
 
-4. **Frozen conformance-catalogue behaviour + per-provider re-certification.** Adding a `B-id` for "Configured only after Ready" to the *frozen* `bigfleet-providers` registry would retroactively un-certify all 12 providers (they would become 92/93 against a behaviour none has implemented), so it is held until (a) a readiness-injection harness exists to actually run it (it is non-black-box — the six RPCs carry no readiness ground truth) and (b) the providers are re-certified against the new count. Tracked as a re-certification item, not shipped with this ADR.
+4. **Frozen conformance-catalogue behaviour + re-certification.** `B708` is added to the frozen registry (set 92 → 93). It is kit-level, not per-provider: the reference `faultprovider` implements `ReadinessChecker` with a `fault-readiness-block` selector, and `TestB708` in the shared fault lane asserts the machine stays `Configuring` (never `Configured`) and times out to `Failed`. The fault lane runs once and merges into every provider's certification, so all 12 re-certify at **93/93** with no per-provider code; the ~31 hardcoded `92` count references are bumped in the same PR. Verified locally (fault lane CERTIFIED, "Timeouts & Failure 8/8 passed", 93 total); the full multi-lane matrix runs in CI. (This resolves the earlier concern that cataloguing would un-certify providers — it does not, because B708 passes via the shared lane the moment it lands.)
 
 No `pkg/shard` / coverage-math change is required by this option.
 
