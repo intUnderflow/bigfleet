@@ -1,14 +1,3 @@
-2026-06-21T14:48:59.031303481Z [14:48:59 entrypoint] waiting for apiserver-side
-2026-06-21T14:49:03.548921548Z [14:49:03 entrypoint] apiserver-side ready
-2026-06-21T14:49:03.554121051Z [14:49:03 node-creator] starting (kube-scheduler path)
-2026-06-21T14:49:03.555844032Z [14:49:03 upc] starting (qps=200)
-2026-06-21T14:49:03.557791153Z [14:49:03 entrypoint] waiting for node-creator upc cache sync
-2026-06-21T14:49:04.064487546Z [14:49:04 entrypoint] node-creator cache synced
-2026-06-21T14:49:04.067509527Z [14:49:04 entrypoint] upc cache synced
-2026-06-21T14:49:04.069861179Z [14:49:04 loadgen] starting (profile=/etc/loadgen/profile.yaml mode=cr)
-2026-06-21T14:49:04.073002100Z [14:49:04 entrypoint] waiting for demand-ready signal before starting operator
-2026-06-21T14:49:10.081125119Z [14:49:10 operator] starting (cluster=kwok-cluster-129 shard=SHARD_HOST:30780 qps=200 ack=64)
-2026-06-21T14:49:10.082844720Z [14:49:10 entrypoint] workload-side up
 2026-06-21T14:48:58.899196007Z [14:48:58 entrypoint] minting certs
 2026-06-21T14:49:00.259161175Z [14:49:00 etcd] starting
 2026-06-21T14:49:00.763908236Z [14:49:00 apiserver] starting
@@ -18,3 +7,14 @@
 2026-06-21T14:49:03.282321470Z [14:49:03 kcm] starting (gc + namespace + deployment/replicaset/statefulset)
 2026-06-21T14:49:03.285583452Z [14:49:03 scheduler] starting (MostAllocated scoring for ADR-0022 density)
 2026-06-21T14:49:03.289064834Z [14:49:03 entrypoint] apiserver-side ready; signalled workload container
+2026-06-21T14:48:59.031303481Z [14:48:59 entrypoint] waiting for apiserver-side
+2026-06-21T14:49:03.548921548Z [14:49:03 entrypoint] apiserver-side ready
+2026-06-21T14:49:03.554121051Z [14:49:03 node-creator] starting (kube-scheduler path)
+2026-06-21T14:49:03.555844032Z [14:49:03 upc] starting (qps=200)
+2026-06-21T14:49:03.557791153Z [14:49:03 entrypoint] waiting for node-creator upc cache sync
+2026-06-21T14:49:04.064487546Z [14:49:04 entrypoint] node-creator cache synced
+2026-06-21T14:49:04.067509527Z [14:49:04 entrypoint] upc cache synced
+2026-06-21T14:49:04.069861179Z [14:49:04 loadgen] starting (profile=/etc/loadgen/profile.yaml mode=cr)
+2026-06-21T14:49:04.073002100Z [14:49:04 entrypoint] waiting for demand-ready signal before starting operator
+2026-06-21T14:49:10.081125119Z [14:49:10 operator] starting (cluster=kwok-cluster-129 shard=BASTION_IP:30780 qps=200 ack=64)
+2026-06-21T14:49:10.082844720Z [14:49:10 entrypoint] workload-side up

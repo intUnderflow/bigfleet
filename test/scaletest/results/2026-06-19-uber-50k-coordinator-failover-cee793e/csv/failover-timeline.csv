@@ -1,0 +1,9 @@
+phase,t_rel_seconds,coordinator,raft_term,active_sessions,shortfalls,shardCycleP99
+baseline,-0,1/1 Running,2,200,0,4.08
+killed,0,deleted,,,,
+soak,31,1/1-Running,2,200,0,4.08
+soak,69,1/1-Running,2,200,0,4.08
+soak,108,1/1-Running,2,200,0,4.08
+soak,145,1/1-Running,2,200,0,4.08
+soak,182,1/1-Running,2,200,0,4.08
+soak,220,1/1-Running,2,200,0,4.08

@@ -18,6 +18,7 @@ One shard sustaining the full realistic-catalog demand of a ~50,000-machine flee
 | shard cycle p99 | 4.08 s | 4.08 s | 4.08 s | 4.08 s | ≤ 5 s |
 | ack p99 | 1.28 s | 1.28 s | 1.28 s | 1.28 s | ≤ 12 s |
 | pod-bind p50 | 1.60 s | 1.60 s | 1.60 s | 1.60 s | ≤ 10 s |
+| 📦 receipt | [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-cee793e.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-cee793e/LOAD-RECIPE.md) | [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-run1-cee793e.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run1-cee793e/LOAD-RECIPE.md) | [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-run2-cee793e.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run2-cee793e/LOAD-RECIPE.md) | [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-run3-cee793e.tar.gz) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-18-uber-50k-run3-cee793e/LOAD-RECIPE.md) | |
 
 Each `result` column header links to that run's committed run summary. Every result clears every SLA.
 
@@ -85,6 +86,8 @@ _Steady reclaim held at the documented bounded floor (≈2.93/s) — the endogen
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-soak-cee793e)
 
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-soak-cee793e.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-soak-cee793e) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-soak-cee793e/LOAD-RECIPE.md)
+
 ### `uber-50k — coordinator failover` — ✅ passed · commit `cee793e`
 
 *5M pods · coordinator killed · 1 shard*
@@ -104,6 +107,8 @@ Static stability: kill the coordinator at 5M pods — does the data plane keep d
 _Single coordinator replica — this validates data-plane static stability while the coordinator is absent/restarting (the hard rule), not a multi-node Raft leader election._
 
 [run folder ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-coordinator-failover-cee793e)
+
+📦 **Receipts:** [Prometheus snapshot ↗](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-coordinator-failover-cee793e.tar.gz) · [scrubbed logs + config ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-coordinator-failover-cee793e) · [load in Grafana ↗](https://github.com/intUnderflow/bigfleet/tree/main/test/scaletest/results/2026-06-19-uber-50k-coordinator-failover-cee793e/LOAD-RECIPE.md)
 
 ### `2-shard shard failover` — ✅ passed · commit `c24dfc8`
 

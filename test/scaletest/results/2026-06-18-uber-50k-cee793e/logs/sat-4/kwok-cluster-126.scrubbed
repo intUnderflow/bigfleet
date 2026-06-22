@@ -16,5 +16,5 @@
 2026-06-21T14:49:19.938578942Z [14:49:19 entrypoint] upc cache synced
 2026-06-21T14:49:19.940432423Z [14:49:19 loadgen] starting (profile=/etc/loadgen/profile.yaml mode=cr)
 2026-06-21T14:49:19.942190424Z [14:49:19 entrypoint] waiting for demand-ready signal before starting operator
-2026-06-21T14:49:25.949543132Z [14:49:25 operator] starting (cluster=kwok-cluster-126 shard=SHARD_HOST:30780 qps=200 ack=64)
+2026-06-21T14:49:25.949543132Z [14:49:25 operator] starting (cluster=kwok-cluster-126 shard=BASTION_IP:30780 qps=200 ack=64)
 2026-06-21T14:49:25.951708233Z [14:49:25 entrypoint] workload-side up

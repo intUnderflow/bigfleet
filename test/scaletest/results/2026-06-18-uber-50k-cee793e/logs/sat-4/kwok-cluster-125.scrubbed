@@ -1,12 +1,3 @@
-2026-06-21T14:49:22.557815762Z [14:49:22 entrypoint] minting certs
-2026-06-21T14:49:23.246667626Z [14:49:23 etcd] starting
-2026-06-21T14:49:23.752045857Z [14:49:23 apiserver] starting
-2026-06-21T14:49:25.805261902Z [14:49:25 apiserver] ready
-2026-06-21T14:49:25.806966732Z [14:49:25 crds] applying
-2026-06-21T14:49:25.914468192Z [14:49:25 kwok] starting
-2026-06-21T14:49:25.916585864Z [14:49:25 kcm] starting (gc + namespace + deployment/replicaset/statefulset)
-2026-06-21T14:49:25.920301046Z [14:49:25 scheduler] starting (MostAllocated scoring for ADR-0022 density)
-2026-06-21T14:49:25.923815128Z [14:49:25 entrypoint] apiserver-side ready; signalled workload container
 2026-06-21T14:49:22.654681376Z [14:49:22 entrypoint] waiting for apiserver-side
 2026-06-21T14:49:26.168006454Z [14:49:26 entrypoint] apiserver-side ready
 2026-06-21T14:49:26.173392477Z [14:49:26 node-creator] starting (kube-scheduler path)
@@ -16,5 +7,14 @@
 2026-06-21T14:49:26.686687083Z [14:49:26 entrypoint] upc cache synced
 2026-06-21T14:49:26.688470854Z [14:49:26 loadgen] starting (profile=/etc/loadgen/profile.yaml mode=cr)
 2026-06-21T14:49:26.690602875Z [14:49:26 entrypoint] waiting for demand-ready signal before starting operator
-2026-06-21T14:49:30.696142947Z [14:49:30 operator] starting (cluster=kwok-cluster-125 shard=SHARD_HOST:30780 qps=200 ack=64)
+2026-06-21T14:49:30.696142947Z [14:49:30 operator] starting (cluster=kwok-cluster-125 shard=BASTION_IP:30780 qps=200 ack=64)
 2026-06-21T14:49:30.698370149Z [14:49:30 entrypoint] workload-side up
+2026-06-21T14:49:22.557815762Z [14:49:22 entrypoint] minting certs
+2026-06-21T14:49:23.246667626Z [14:49:23 etcd] starting
+2026-06-21T14:49:23.752045857Z [14:49:23 apiserver] starting
+2026-06-21T14:49:25.805261902Z [14:49:25 apiserver] ready
+2026-06-21T14:49:25.806966732Z [14:49:25 crds] applying
+2026-06-21T14:49:25.914468192Z [14:49:25 kwok] starting
+2026-06-21T14:49:25.916585864Z [14:49:25 kcm] starting (gc + namespace + deployment/replicaset/statefulset)
+2026-06-21T14:49:25.920301046Z [14:49:25 scheduler] starting (MostAllocated scoring for ADR-0022 density)
+2026-06-21T14:49:25.923815128Z [14:49:25 entrypoint] apiserver-side ready; signalled workload container

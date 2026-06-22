@@ -1,0 +1,3 @@
+global:
+  scrape_interval: 15s
+# No scrape jobs — this instance only serves the loaded receipt TSDB (./data).

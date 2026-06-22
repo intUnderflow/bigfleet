@@ -1,16 +1,17 @@
 # Load this receipt in Grafana — one command
 
-This bundle's `tsdb-snapshot.tar.gz ([download](https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-cee793e.tar.gz))` is a full Prometheus TSDB: the **hub** shard/coordinator
-Prometheus + a **representative one-satellite-per-region sample** (one per region (5 regions)) of the 40-satellite, 5,000,000-Pod uber-50k fleet. (The published canonical
-`2026-06-18-uber-50k-cee793e` committed only its hub `blocks` dir, 86M; this bundle additionally
-carries 5 regional satellite TSDBs — it *exceeds* the published committed evidence. The full
-40-satellite TSDB is ~6GB and is not committed; the fleet-aggregate operator gates in `summary.json`
-are measured live, summed-by-le across all 40 satellites, exactly as the published run measured them.)
+This bundle's `tsdb-snapshot.tar.gz` (release asset — see `https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-cee793e.tar.gz`) is a full Prometheus TSDB:
+the **hub** shard/coordinator Prometheus + a **representative one-satellite-per-region sample** (5
+regions) of the 40-satellite, 5,000,000-Pod uber-50k fleet. (The published canonical committed only
+its hub `blocks` dir, 86M; this bundle additionally carries 5 regional satellite TSDBs — it *exceeds*
+the published committed evidence. The full 40-satellite TSDB is ~6GB and is not committed; the
+fleet-aggregate operator gates in `summary.json` are measured live, summed-by-le across all 40
+satellites, exactly as the published run measured them.)
 
 To open it and explore every metric:
 
 ```bash
-# 1. unpack the TSDB next to this file
+# 1. unpack the TSDB next to this file (download it from the release asset first)
 mkdir -p data && tar -xzf tsdb-snapshot.tar.gz -C /tmp/_recv && \
   find /tmp/_recv -mindepth 2 -maxdepth 2 -type d -exec cp -r {} data/ \;   # flatten all hub+sat blocks into one TSDB dir
 

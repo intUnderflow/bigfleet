@@ -1,6 +1,6 @@
 {
   "title": "BigFleet uber-5k receipt",
-  "uid": "bigfleet-receipt-uber50k",
+  "uid": "bigfleet-receipt-uber-50k-cee793e",
   "timezone": "utc",
   "time": { "from": "now-6h", "to": "now" },
   "refresh": "",

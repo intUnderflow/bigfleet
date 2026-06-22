@@ -1,0 +1,2 @@
+window,goroutines_min,goroutines_max,fds_min,fds_max,rss_mb_min,rss_mb_max,rss_mb_delta,verdict
+steady-3h,1274,1275,210,210,1405,1595,-7.4,leak-free (goroutines+fds dead-flat; RSS bounded GC-sawtooth non-monotonic; matches published #85 1274/210)

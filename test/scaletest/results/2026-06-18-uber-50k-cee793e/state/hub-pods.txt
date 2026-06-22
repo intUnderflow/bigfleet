@@ -1,5 +1,5 @@
-NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE           NOMINATED NODE   READINESS GATES
-bigfleet-coordinator-0     1/1     Running   0          49m   10.42.0.147   NODEID   <none>           <none>
-bigfleet-shard-0           1/1     Running   0          49m   10.42.0.148   NODEID   <none>           <none>
-grafana-7c5dbf74b9-t778t   1/1     Running   0          49m   10.42.0.149   NODEID   <none>           <none>
-prometheus-0               2/2     Running   0          49m   10.42.0.150   NODEID   <none>           <none>
+NAME                       READY   STATUS    RESTARTS   AGE     IP            NODE           NOMINATED NODE   READINESS GATES
+bigfleet-coordinator-0     1/1     Running   0          165m    10.42.0.151   NODEID   <none>           <none>
+bigfleet-shard-0           1/1     Running   0          6h16m   10.42.0.148   NODEID   <none>           <none>
+grafana-7c5dbf74b9-t778t   1/1     Running   0          6h16m   10.42.0.149   NODEID   <none>           <none>
+prometheus-0               2/2     Running   0          6h16m   10.42.0.150   NODEID   <none>           <none>

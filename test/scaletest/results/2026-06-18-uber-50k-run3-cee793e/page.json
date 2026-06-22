@@ -2,5 +2,9 @@
   "section": "reproducibility",
   "of": "uber-50k",
   "displayName": "run 3",
-  "order": 3
+  "order": 3,
+  "receipt": {
+    "snapshot": "https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-run3-cee793e.tar.gz",
+    "grafana": true
+  }
 }

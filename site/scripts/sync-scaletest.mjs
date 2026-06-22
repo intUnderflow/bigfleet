@@ -252,6 +252,12 @@ ${capitalise(page.shape)} — every hop BigFleet owns inside SLO, **zero unmet d
     });
     s += `| ${g.name} | ${cells.join(" | ")} | ${g.gate} |\n`;
   }
+  // Per-result receipts row: each run (canonical + reproducibility) links its
+  // own Grafana-loadable receipt when it has one, so every result is verifiable.
+  if (runs.some((r) => r.page.receipt)) {
+    const cells = runs.map((r) => receiptLinks(r.page, r.dir, true) || "—");
+    s += `| 📦 receipt | ${cells.join(" | ")} | |\n`;
+  }
   if (runs.length > 1) {
     s += `\nEach \`result\` column header links to that run's committed run summary.${allGreen ? " Every result clears every SLA." : ""}\n`;
   }

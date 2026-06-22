@@ -1,0 +1,5 @@
+label=uber-50k-run1-cee793e-receipt
+fleet=40 satellites x 5 kwok clusters = 200 clusters / 5,000,000 Pods + 1 dedicated single-shard hub + coordinator
+regions=5 regions, 40 boot_id-distinct hosts
+state=stable clean 200/200 sessions; reproducibility sample #1
+committed_sample=hub + 5 satellites (one per region: sat-1..sat-5, regions anonymized)

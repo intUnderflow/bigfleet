@@ -7,13 +7,48 @@
   "scenario": "Endurance at headline scale: 5,000,000 pods sustained for five hours under churn — does anything leak or drift?",
   "criterion": "All eight capacity-delivery gates hold throughout, no resource leak (flat goroutines / open fds, bounded RSS), and zero leaked machines.",
   "highlights": [
-    { "label": "duration", "metric": "soakSeconds", "kind": "duration" },
-    { "label": "goroutines (start → end)", "metricStart": "leakGoroutinesStart", "metricEnd": "leakGoroutinesEnd", "kind": "count" },
-    { "label": "open fds (start → end)", "metricStart": "leakOpenFdsStart", "metricEnd": "leakOpenFdsEnd", "kind": "count" },
-    { "label": "shard RSS (start → end)", "metricStart": "leakShardRssMbStart", "metricEnd": "leakShardRssMbEnd", "kind": "rawMb" },
-    { "label": "leaked machines (max, transitional)", "metric": "leakedMachinesMaxTransitional", "kind": "count" },
-    { "label": "shortfalls", "metric": "shardShortfalls", "kind": "count" },
-    { "label": "shard cycle p99", "metric": "shardCycleDurationP99Seconds", "kind": "secs" }
+    {
+      "label": "duration",
+      "metric": "soakSeconds",
+      "kind": "duration"
+    },
+    {
+      "label": "goroutines (start → end)",
+      "metricStart": "leakGoroutinesStart",
+      "metricEnd": "leakGoroutinesEnd",
+      "kind": "count"
+    },
+    {
+      "label": "open fds (start → end)",
+      "metricStart": "leakOpenFdsStart",
+      "metricEnd": "leakOpenFdsEnd",
+      "kind": "count"
+    },
+    {
+      "label": "shard RSS (start → end)",
+      "metricStart": "leakShardRssMbStart",
+      "metricEnd": "leakShardRssMbEnd",
+      "kind": "rawMb"
+    },
+    {
+      "label": "leaked machines (max, transitional)",
+      "metric": "leakedMachinesMaxTransitional",
+      "kind": "count"
+    },
+    {
+      "label": "shortfalls",
+      "metric": "shardShortfalls",
+      "kind": "count"
+    },
+    {
+      "label": "shard cycle p99",
+      "metric": "shardCycleDurationP99Seconds",
+      "kind": "secs"
+    }
   ],
-  "caveat": "Steady reclaim held at the documented bounded floor (≈2.93/s) — the endogenous in-flight-churn rate, now codified as the bounded-reclaim gate, not drift."
+  "caveat": "Steady reclaim held at the documented bounded floor (≈2.93/s) — the endogenous in-flight-churn rate, now codified as the bounded-reclaim gate, not drift.",
+  "receipt": {
+    "snapshot": "https://github.com/intUnderflow/bigfleet/releases/download/scaletest-receipts-uber50k-20260621/tsdb-uber-50k-soak-cee793e.tar.gz",
+    "grafana": true
+  }
 }
