@@ -4,7 +4,7 @@ What it's actually like to interact with BigFleet from each role. These walk thr
 
 ## Submitting a workload (application developer)
 
-You're writing a Pod spec like you would on any Kubernetes cluster. BigFleet enters the picture only if the cluster runs the optional `bigfleet-unschedulable-pod-controller` and your Pod can't schedule on the existing node pool.
+You're writing a Pod spec like you would on any Kubernetes cluster. BigFleet enters the picture if the cluster runs the optional `bigfleet-unschedulable-pod-controller`, which creates a `CapacityRequest` for your Pod — one CR per Pod, owned by it (ADR-0039) — so the fleet can provision a node that satisfies it when none already exists.
 
 ```yaml
 apiVersion: v1
@@ -22,13 +22,13 @@ spec:
         limits: { nvidia.com/gpu: 8 }
 ```
 
-If the cluster has no `a3-highgpu-8g` idle, the controller observes your Pod's `Pending` status and the scheduler's `0/N nodes available` message, and creates a `CapacityRequest` with the matching profile derived from the Pod:
+The controller derives a `CapacityRequest` from the Pod — its `generateName` is `cr-pod-<podName>-`, and it carries an `ownerReference` back to the Pod so it's garbage-collected with it:
 
 ```yaml
 apiVersion: bigfleet.lucy.sh/v1alpha1
 kind: CapacityRequest
 metadata:
-  name: pod-trainer-2026-05-01-a
+  generateName: cr-pod-trainer-2026-05-01-a-
   ownerReferences: [{ kind: Pod, name: trainer-2026-05-01-a, ... }]
 spec:
   requirements:
@@ -42,7 +42,7 @@ spec:
 
 You watch `kubectl get pods -w`. The Pod transitions Pending → Running once a node joins. The CR's `.status.phase` walks `Pending → Acknowledged` once the autoscaler has it in its NeedsTable; that's the only transition the lifecycle supports.
 
-What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted.
+What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted. If your workload is locality-sensitive, *express that* — see [Expressing networking locality](#expressing-networking-locality).
 
 ## Running a high-priority job (ML platform engineer)
 
@@ -65,14 +65,30 @@ If you want this run to *not* be interruptible once started, raise `interruption
 What you watch:
 
 ```promql
-# Are any shards reporting unresolved demand?
+# Is any demand going unmet at all?
 bigfleet_shard_shortfalls > 0
+
+# Sharper: is any demand ABOVE the batch tier going unmet? Priority is the
+# sole throttle, so under scarcity only the lowest tier should ever shortfall.
+# A non-zero result here means high-priority demand is being starved.
+sum(bigfleet_shard_shortfalls_by_priority{priority_class!="batch"}) > 0
 
 # Did Phase 2 preempt anything to make room?
 sum by (kind) (rate(bigfleet_shard_actions_total{kind="Preempt"}[5m]))
 ```
 
-If you see Preempt actions firing, the affected nodes are written into per-cluster `UpcomingNode` CRs whose status walks toward `Draining` / `Drained`. You can watch your own cluster's nodes via `kubectl get upcomingnodes`.
+`priority_class` is one of `batch` (~100), `service` (~1000), `critical` (~1000000), or `other`; `sum(bigfleet_shard_shortfalls_by_priority)` equals `bigfleet_shard_shortfalls`. If you see Preempt actions firing, the affected nodes are written into per-cluster `UpcomingNode` CRs whose status walks toward `Draining` / `Drained`. You can watch your own cluster's nodes via `kubectl get upcomingnodes`.
+
+## Expressing networking locality
+
+BigFleet matches the requirements a workload **expresses**, and only those — so locality is something you ask for, not something BigFleet infers. The unit of fungibility is "any node satisfying the same requirements," and matching is requirement-gated *before* cost is consulted: a Need that pins its zone, names its `Same` domain, or selects its region can never be served by capacity that violates it (if nothing in the shard satisfies it, it becomes a shortfall, not a wrong placement).
+
+The corollary is the footgun: a Need that **omits** its region can be served by capacity anywhere in its shard — including a different region or VPC, where it may not actually reach the cluster's network. Capacity is fungible only *within a shard*, and BigFleet does not stamp a default locality onto your Needs.
+
+- **What you choose:** the locality your workload requires — `topology.kubernetes.io/zone`, a region selector, or a `Same` co-location domain — expressed as nodeSelector-style requirements on the Pod (and thus the CR).
+- **What the platform team chooses:** to align each cluster's shard with one network domain (AZ / VPC / region), so the shard's whole pool is reachable rather than relying on every workload to self-describe.
+
+Network/egress *cost* is deliberately not in the cost formula — if a workload's transfer cost dominates, express its locality as a hard requirement rather than expecting BigFleet to price it. Full detail: [BigFleet and networking](/networking/).
 
 ## Per-cluster operator install (cluster owner)
 
@@ -95,14 +111,18 @@ kubectl -n bigfleet-system logs deploy/bigfleet-operator | head
 # expect: "operator started ... rollup_interval=10s"
 
 kubectl get availablecapacity
-# CRs auto-written by the operator. If empty after 30s, the rollup loop hasn't synced.
+# Written by the operator's roll-up loop. If empty after 30s, the operator
+# hasn't completed a roll-up to the shard yet.
 ```
 
 You don't tune autoscaler parameters per-cluster anymore — there are none in the operator chart. The shard owns those. What stays your responsibility:
 
 - The PriorityClasses your cluster offers (and the unschedulable-pod-controller's mapping to BigFleet `priority` int values).
 - Per-cluster compliance: which `nodeSelector` keys your `BootstrapTemplate` knows how to render userdata for.
+- **Locality.** Express the region/zone/`Same` domain your locality-sensitive workloads need, and ask the platform team to align your shard with one network domain — capacity is fungible only within a shard. See [Expressing networking locality](#expressing-networking-locality).
 - Pod Disruption Budgets your workloads carry — every drain (Phase 2 preempt and Phase 3 reclaim alike) reaches the operator as a `ReclaimInstruction`, and the operator evicts through the PDB-respecting `policy/v1` Eviction API within the instruction's grace period. The exception is an operator that is disconnected when the drain fires: the shard then drains via the provider directly (kubelet default grace, no PDB pass) and logs `reclaim fallback`.
+
+A node only counts as delivered capacity once it has actually joined and reached `Ready` — a conformant provider holds it at `Configuring` until then (ADR-0056), so a node that shows up in `UpcomingNode` but never goes `Ready` is a provider/bootstrap problem on your side, not silent BigFleet over-counting.
 
 Watch `bigfleet_operator_session_reconnects_total`: a steady non-zero rate means the stream to the shard is unstable.
 
@@ -119,7 +139,7 @@ You're running the coordinator + shards on a management cluster. Day-to-day work
 Useful queries:
 
 ```promql
-# Are any shards falling behind?
+# Are any shards falling behind? (the gated cycle p99 — see "The SLO posture")
 histogram_quantile(0.99,
   sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))
 )
@@ -132,15 +152,33 @@ histogram_quantile(0.99,
 # Coordinator throughput.
 sum(rate(bigfleet_coordinator_apply_total[5m]))
 
-# Any cluster sessions flapping?
-sum by (cluster) (rate(bigfleet_operator_session_reconnects_total[5m])) > 0
+# Are operator sessions flapping anywhere? (the counter has no per-cluster
+# label, so aggregate across the fleet.)
+sum(rate(bigfleet_operator_session_reconnects_total[5m])) > 0
 ```
 
-The shape of the day depends on whether anything is alarming. Most days: nothing.
+The shape of the day depends on whether anything is alarming. Most days: nothing. For what "behind" actually means — and why a high *pod-bind* p99 is not a BigFleet regression — read the next section.
+
+## The SLO posture (ADR-0054)
+
+The one thing to internalise before reading dashboards: **BigFleet gates on its own capacity-delivery hops, not on the cluster's pod-bind tail.** Under a real, uncapped kube-scheduler the end-to-end "Pod created → Pod bound" time is dominated by the scheduler's retry/backoff and the reprovision back-edge — neither of which BigFleet controls — so that number is reported as *informational context*, never gated. The release gate is the set of things BigFleet is actually responsible for (production bars; dev substrates run looser):
+
+| Gate | Bar |
+|---|---|
+| Capacity-materialization latency (`shardConfigurePhaseP99Seconds`) | ≤ 15 s |
+| Bootstrap success ratio (`bootstrapSuccessRatio`) | ≥ 0.99 |
+| Node-publish latency (`operatorNodeStateUpdateP99Seconds`) | ≤ 1.5 s |
+| Roll-up turn (`operatorRollupP99Seconds`) | ≤ 1 s |
+| Roll-up ack (`operatorAckP99Seconds`) | ≤ 12 s |
+| Decision-engine cycle (`shardCycleDurationP99Seconds`) | ≤ 5 s |
+| Unmet demand (`bigfleet_shard_shortfalls`) | == 0 |
+| Common-path bind liveness (`endToEndPodBindP50Seconds`) | ≤ 10 s (loose) |
+
+End-to-end pod-bind **p99** and raw-max are informational, not gated. The misread to avoid: a high bind p99 on an uncapped scheduler is not a BigFleet regression — check the gated hops above first. The full rationale and per-gate "why" is the [SLOs reference](/slos/).
 
 ## Cost analysis (FinOps)
 
-The penalty bucket field on `Profile` is the cost-policy lever. Penalties are quantised to powers of 2 from $0.50 to $10M, so cardinality is bounded and aggregations are stable.
+The penalty bucket field on `Profile` is the cost-policy lever. Penalties are quantised to powers of 2 from $0.50 up to $8,388,608 (2²³), plus a `pinned` bucket, so cardinality is bounded and aggregations are stable.
 
 The metrics carry the cost dimensions:
 
@@ -160,8 +198,9 @@ sum by (capacity_type, interruption_penalty_bucket) (
   bigfleet_shard_inventory_machines{state="Configured"}
 )
 
-# Same dimensional breakdown on the demand side — what the
-# NeedsTable is currently asking for, before any allocation.
+# The demand side — what the NeedsTable is asking for, by penalty bucket.
+# Note: this counts NeedsTable rows (aggregated demand), not machine units,
+# so read it as a demand-shape signal, not a units-for-units inventory mirror.
 sum by (interruption_penalty_bucket) (bigfleet_shard_demand_machines)
 
 # Per-action throughput from the decision engine — useful for spotting
@@ -181,7 +220,14 @@ For an end-to-end "are we paying for the right thing" signal, layer `bigfleet_sh
 
 ## Triaging a capacity-stockout page (on-call)
 
-The standard alert is `bigfleet_shard_shortfalls > 0 for 5m`. The runbook:
+The standard alert is `bigfleet_shard_shortfalls > 0 for 5m`. First question — **is this page serious?** Priority is the sole throttle, so a shortfall confined to the `batch` tier is the system working as designed; a shortfall *above* it is not:
+
+```promql
+# Real-incident discriminator: any unmet demand above the batch tier?
+sum(bigfleet_shard_shortfalls_by_priority{priority_class!="batch"})
+```
+
+Then the runbook:
 
 ```sh
 # 1. Which clusters / Profiles have CRs sitting Pending for longer
@@ -198,52 +244,32 @@ kubectl get capacityrequests -A \
 # 2. The shard's own view of what it can't satisfy. Each cycle with
 #    non-zero unresolved demand emits a "shortfalls detected" log
 #    line with the top-3 oldest profile fingerprints — useful for
-#    correlating against the affected CRs above.
-kubectl -n bigfleet-system logs deploy/bigfleet-shard | grep -i shortfall | tail -50
+#    correlating against the affected CRs above. (The shard is a
+#    StatefulSet, not a Deployment.)
+kubectl -n bigfleet-system logs statefulset/bigfleet-shard | grep -i shortfall | tail -50
 ```
 
 Decision tree:
 
 - **Phase 1, no idle inventory, provider out of capacity.** File a quota-increase request, wait. Optionally raise the priorities of the shortfalled CRs above some other workloads — but only if you can justify the preemption to the affected teams.
 - **Phase 1, no idle inventory, provider has capacity but isn't being asked.** Likely a Speculative-pool sizing issue. Check the coordinator's quota assignments for this shard.
+- **Zero shortfall but pods still Pending.** Suspect phantom capacity: a provider that reported `Configured` before the node actually reached `Ready` (ADR-0056 forbids this; a non-conformant provider can still do it). Check the affected nodes are genuinely `Ready`.
 - **Topology unsatisfiable within a shard.** A `Same`-rack request that the current shard can't fulfil. Cross-shard topology resolution is a hard rule of the design — it doesn't happen — so the workload either needs a different topology constraint or a different shard binding. Rare in steady state.
 - **Aging shortfalls escalating.** The shortfall buffer has a max age before it pages louder. Long-aged shortfalls usually mean a cluster's been mis-bound to a shard that doesn't have the right capacity profiles.
 
-## Implementing a CapacityProvider (provider author)
-
-You're writing a separate process that implements `CapacityProvider`. Six RPCs, no `Watch`.
-
-```sh
-# Stub it out:
-go mod init github.com/yourcorp/your-provider
-# Copy the .proto from the BigFleet repo, generate Go bindings.
-# Implement Create/Configure/Drain/Delete/Get/List against your backend.
-
-# Run the conformance suite against your endpoint. The suite is a
-# Go test under build tag `conformance`, not a built binary — wire
-# your provider up at TARGET=host:port.
-make conformance TARGET=localhost:9001
-
-# Smoke-test against the in-tree fake provider before shipping:
-make conformance-self
-```
-
-The suite walks the lifecycle scenarios end-to-end. Categories:
-
-- **Idempotency**: re-issue the same `Create` 100x with the same machine_id. Should return the same op_id every time and only act once.
-- **Transitional-state recovery**: kill the provider mid-`Configure`. Restart. The shard's next `List + Get` should observe the in-progress state correctly.
-- **Cursor correctness**: if you support `since_revision`, the suite verifies that List with a cursor returns only deltas, that the cursor advances monotonically, and that resuming from an old cursor still works.
-- **Drain-grace handling**: a Drain that's interrupted partway must end up in `Failed` with `last_error`, not silently revert.
-
-What the suite *won't* catch: backend-specific edge cases (cloud quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The suite establishes that your provider is *protocol-correct*.
-
 ## Capacity planning (capacity planner)
 
-Your input is fleet-level demand history. The query is the aggregate, not the per-cluster sum:
+Your input is fleet-level demand history. The query is the fleet aggregate across shards, not a per-cluster sum:
 
 ```promql
+# Provisioned-inventory p99 over 90 days (size to this + headroom).
 quantile_over_time(0.99,
   sum(bigfleet_shard_inventory_machines{state=~"Configured|Configuring"})[90d:1h]
+)
+
+# The demand-side complement — what was actually being asked for.
+quantile_over_time(0.99,
+  sum(bigfleet_shard_demand_machines)[90d:1h]
 )
 ```
 
@@ -252,54 +278,75 @@ The headroom buffer you apply to the p99 is a policy choice. Two factors push it
 - **Provisioning lead time of the underlying capacity**. If your cloud takes 4 minutes to bring a node up and your workloads spike on a 2-minute timescale, you need static headroom for the gap.
 - **Demand bursts that are correlated across clusters**. The point of the fleet-aggregate query is that uncorrelated peaks cancel out — but if your fleet has a daily synchronised batch job, that's a correlated peak that won't smooth.
 
-The scaling guide ([`scaling-guide.md`](scaling-guide.md)) tabulates per-tier sizing assumptions; calibrate against it, then look at your actual demand to decide where you actually sit.
+The [scaling guide](/scaling-guide/) tabulates per-tier sizing assumptions against the measured `uber-*` ladder; calibrate against it, then look at your actual demand to decide where you actually sit.
+
+## Writing a provider (provider author)
+
+You're adding support for a new substrate. You almost never hand-roll the wire contract: real providers build on the out-of-tree **`providerkit`** library, which implements the cross-cutting BigFleet obligations once — fencing, idempotency, async dispatch, transition timeouts, the `shard_metadata` lifecycle, machine field-shape — so you write a small substrate backend (create / configure / drain, and optionally delete a host) and the kit speaks the protocol. The contract underneath is six RPCs, no `Watch`: `Create`, `Configure`, `Drain`, `Delete`, `Get`, `List`; reconciliation is `List` + `Get`, never a stream.
+
+The one rule whose violation is silently invisible: **a machine must not be reported `Configured` until the node has actually joined and reached `Ready` on its target cluster** (ADR-0056) — otherwise you credit capacity that isn't schedulable. Hold it at `Configuring` until then; on timeout, `Failed`.
+
+Conformance is what "BigFleet-compatible" means — a frozen catalogue of **93 behaviours across 11 areas** (idempotency, transitional-state recovery, cursor correctness, drain-grace, the readiness gate, and more). Run it against your endpoint, and smoke-test the in-tree reference fake before shipping:
+
+```sh
+make conformance TARGET=localhost:9001   # your provider
+make conformance-self                    # the in-tree reference fake
+```
+
+What conformance *won't* catch: backend-specific edge cases (cloud quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The deep guide is the [provider author guide](/provider-author-guide/); a dozen conformance-certified providers (AWS, GCP, Azure, Hetzner, bare metal, and more) already exist at [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh).
+
+## Reading a scale-test receipt
+
+You don't have to take BigFleet's published numbers on faith. Every run on the [scale-test results page](/scaletest-results/) ships a full **receipt**: a Grafana-loadable Prometheus TSDB snapshot, scrubbed per-node logs and config/state, and a `LOAD-RECIPE.md` describing exactly how the run was constructed — all as release assets.
+
+So the workflow is: open the run, load its TSDB into Grafana, and check every gate number on the page against the raw series yourself — the scorecard is generated from each run's committed summary, not hand-entered. Use the same receipts to sanity-check your own capacity model against a real fleet's behaviour at scale.
 
 ## Pre-release validation (reliability)
 
-You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The runner ships four failover profiles, each scoped to one type of disturbance. Pick by what you want to validate:
+You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The runner ships four failover profiles, each scoped to one type of disturbance. Run them through the `make scaletest` entrypoint, pairing each V2 profile with your substrate:
 
 ```sh
-# Single coordinator-leader-kill at t=600s. ~30 min, $0.38 on a
-# 2-node Kapsule.
-scaletest-runner \
-  --profile=test/scaletest/profiles/failover-leader-kill.yaml \
-  --output=./results/$(date +%Y%m%d)-leader-kill/
+# Single coordinator-leader-kill mid-soak. Validates coordinator failover.
+make scaletest PROFILE=failover-leader-kill SUBSTRATE=<your-substrate>
 
-# Single shard-pod-kill (bigfleet-shard-1) at t=600s. Validates
-# StatefulSet recovery + cluster-to-shard binding stability.
-scaletest-runner --profile=test/scaletest/profiles/failover-shard-kill.yaml \
-  --output=./results/$(date +%Y%m%d)-shard-kill/
+# Single shard-pod-kill mid-soak. Validates StatefulSet recovery +
+# cluster-to-shard binding stability.
+make scaletest PROFILE=failover-shard-kill SUBSTRATE=<your-substrate>
 
-# 60-second NetworkPolicy-based partition between bigfleet-shard-1
-# and the coordinator. Validates static stability under control-plane
-# disconnect. Requires a CNI that enforces NetworkPolicy (Cilium does).
-scaletest-runner --profile=test/scaletest/profiles/failover-partition.yaml \
-  --output=./results/$(date +%Y%m%d)-partition/
+# NetworkPolicy-based partition between a shard and the coordinator.
+# Validates static stability under control-plane disconnect. Requires a
+# CNI that enforces NetworkPolicy (Cilium does).
+make scaletest PROFILE=failover-partition SUBSTRATE=<your-substrate>
 
-# Belt-and-braces release run: 60-min soak with two leader-kills and
-# one shard-kill. Use this once before tagging a release.
-scaletest-runner --profile=test/scaletest/profiles/failover-soak.yaml \
-  --output=./results/$(date +%Y%m%d)-failover-soak/
+# Belt-and-braces release run: a longer soak with leader-kills and a
+# shard-kill. Use this once before tagging a release.
+make scaletest PROFILE=failover-soak SUBSTRATE=<your-substrate>
 ```
 
-Each profile's `runnerActions:` block declares actions with `atSeconds` offsets. The runner fires them during the soak and asserts the expected outcome via Prometheus queries (e.g. `delta(bigfleet_coordinator_raft_term[5m]) ≥ 1` after a leader-kill, `rate(bigfleet_shard_cycle_duration_seconds_count{pod=…}[1m]) > 0` after a shard-kill). The summary.json `failures: []` field is the regression signal: empty = the static-stability invariant held; non-empty = the run failed regardless of SLO numbers.
+Each profile's `runnerActions:` block declares disturbances with `atSeconds` offsets. The runner fires them during the soak and asserts the expected outcome via Prometheus — e.g. that the coordinator's raft term advanced after a leader-kill, and that the killed shard's cycle counter resumed after a shard-kill. The `summary.json` `failures: []` field is the regression signal: empty = the static-stability invariant held; non-empty = the run failed regardless of SLO numbers.
 
 What you're checking after a passing run:
-- `summary.json` `passed: true`
-- `summary.json` `failures: []`
-- `summary.json` `metrics.shardCycleDurationP99Seconds` ≤ 100 ms throughout
-- `summary.json` `metrics.loadgenCRsActive` ≥ 99.9 % of target throughout (sustained-load gate already in pass())
+
+- `summary.json` `passed: true` and `failures: []`
+- the [ADR-0054 capacity-delivery gates](#the-slo-posture-adr-0054) held throughout — cycle p99 ≤ 5 s, configure-phase p99 ≤ 15 s, bootstrap success ratio ≥ 0.99, node-state-update p99 ≤ 1.5 s, and `bigfleet_shard_shortfalls` == 0
+- the end-to-end pod-bind tail is *informational* — read it for context, don't gate on it
+
+Every run also produces a receipt you (or anyone) can re-inspect — see [Reading a scale-test receipt](#reading-a-scale-test-receipt).
 
 ## Notes that aren't role-specific
 
 - **Priority + interruption-penalty + reclamation-penalty are the three numbers everyone looks at.** Different roles read them differently — workload owners as a self-description, BigFleet operators as inputs to the engine, FinOps as a cost lever — but it's the same fields.
+- **BigFleet enforces only the requirements a workload expresses.** Locality, fabric, and residency are capacity requirements, not a separate networking subsystem — and a Need that omits them is matched without them. Express what you need; align shards to network domains. See [BigFleet and networking](/networking/).
 - **Static stability is felt as the absence of incidents.** Most users never see BigFleet's failure modes because the property holds; the people who *do* see it are the ones running BigFleet itself, and even then mostly in pre-release tests.
 - **Out-of-tree providers means the platform team's provider release cadence is decoupled from BigFleet's.** When BigFleet ships a new version, you don't have to redeploy your provider; when your provider ships, you don't have to coordinate with BigFleet maintainers.
 
 ## See also
 
-- [Quickstart](quickstart/) — bring up BigFleet on a kind cluster.
-- [Architecture](architecture/) — how the engine works.
-- [Operator guide](operator-guide/) — install and runbook.
-- [Provider author guide](provider-author-guide/) — writing your own CapacityProvider.
-- [Scale-test runbook](scaletest/) — running the scenarios above against any cluster.
+- [Quickstart](/quickstart/) — bring up BigFleet on a kind cluster.
+- [Architecture](/architecture/) — how the engine works.
+- [BigFleet and networking](/networking/) — how locality is expressed and matched.
+- [The SLOs reference](/slos/) — the full gate table and the per-gate rationale.
+- [Operator guide](/operator-guide/) — install and runbook.
+- [Provider author guide](/provider-author-guide/) — writing your own provider on `providerkit`.
+- [Scale-test results](/scaletest-results/) — published runs, each with a Grafana-loadable receipt.
+- [Scale-test runbook](/scaletest/) — running the scenarios above against any cluster.
