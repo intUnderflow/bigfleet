@@ -38,7 +38,7 @@ Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch th
 
 ## What changes for you
 
-- **GPUs serve the team that needs them, not the team that owns the cluster.** Capacity is a fleet-wide pool, not a per-cluster allocation.
+- **Capacity is a fleet-wide pool, not a per-cluster allocation.** A machine idle in one cluster serves an unschedulable workload in another — CPU, memory, or a scarce GPU rack alike — so the hardware goes to the team that needs it, not the team that owns the cluster.
 - **Costs are comparable across capacity classes.** Bare metal, reserved, on-demand, and spot are scored apples-to-apples by `price + interruption_probability × interruption_penalty`. The autoscaler picks the cheapest option that fits the workload's interruption tolerance.
 - **Clusters become disposable.** No more "GPU cluster" / "batch cluster" snowflakes; every cluster looks identical to BigFleet, and to your platform team's runbooks.
 - **The autoscaler is not on the critical path.** Static stability is a hard rule: clusters keep running with BigFleet entirely down. Running pods, kubelet, kube-scheduler are unaffected. Only new provisioning pauses.
@@ -48,11 +48,11 @@ Inside each cluster, kube-scheduler still places pods. BigFleet doesn't touch th
 
 Designed for fleets of **up to 100 million machines** across thousands of clusters, horizontally sharded. The most recent passing benchmark — `uber-50k`: a **~50,000-machine fleet** carrying **~5,000,000 pods** across 200 clusters on 40 hosts in 5 regions, served by a single shard — held **every capacity-delivery hop BigFleet owns inside SLO with zero unmet demand** under a real, default, *uncapped* kube-scheduler (shard cycle p99 **4.08 s** under a 5 s bar, roll-up p99 0.76 s, configure-phase p99 1.21 s).
 
-You don't have to take the numbers on faith. **Every run on the [scale-test results page](/scaletest-results/) now ships a full Prometheus TSDB you can load straight into Grafana** and inspect for yourself — the gate figures on the page are read from each run's committed summary, generated from the data, not hand-entered. Receipts, not just a scorecard.
+You don't have to take the numbers on faith. **Every run on the [scale-test results page](/scaletest-results/) ships a full Prometheus TSDB you can load straight into Grafana** and inspect for yourself — the gate figures on the page are read from each run's committed summary, generated from the data, not hand-entered. Receipts, not just a scorecard.
 
 ## Providers for every substrate
 
-BigFleet decides *which* machines should exist; **capacity providers** actually create, configure, and reclaim them. There's already an ecosystem — **12 conformance-certified providers** spanning hyperscalers, regional clouds, and bare metal:
+BigFleet decides *which* machines should exist; **capacity providers** actually create, configure, and reclaim them — across an ecosystem of **12 conformance-certified providers** spanning hyperscalers, regional clouds, and bare metal:
 
 <ProviderStrip />
 
