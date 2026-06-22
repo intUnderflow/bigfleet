@@ -25,3 +25,86 @@
 .sl-markdown-content pre.astro-code {
   line-height: 1.4;
 }
+
+/* "Scale testing supported by" Uber logo block on the homepage. Inline styles
+   moved here so the homepage can be .mdx (JSX) without string-style attrs. */
+.supported-by {
+  margin: 2rem 0;
+}
+.supported-by-label {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin: 0 0 0.5rem;
+}
+.supported-by-logo {
+  height: 32px;
+  width: auto;
+  max-width: none;
+  opacity: 0.85;
+  display: inline-block;
+}
+:root[data-theme="dark"] .supported-by-logo {
+  filter: invert(1);
+}
+.page-footnote {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  margin-top: 1rem;
+}
+
+/* Compact provider strip (ProviderStrip.astro): a wrap of logo + short-name
+   chips linking to the canonical registry. Ported from bigfleet-providers. */
+.provider-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin: 1.75rem 0;
+}
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  color: var(--sl-color-white);
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+.provider-chip:hover {
+  border-color: var(--sl-color-accent);
+  background-color: var(--sl-color-gray-6);
+}
+.provider-chip-logo {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  object-fit: contain;
+}
+.provider-chip-logo--fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.3rem;
+  background-color: var(--sl-color-gray-5);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+/* Dark-theme logo variants: show the dark mark only in dark mode. Providers
+   without a dark variant render the default in both themes. */
+.provider-chip-logo--dark {
+  display: none;
+}
+:root[data-theme="dark"] .provider-chip-logo--light {
+  display: none;
+}
+:root[data-theme="dark"] .provider-chip-logo--dark {
+  display: block;
+}

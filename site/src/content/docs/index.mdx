@@ -19,20 +19,14 @@ hero:
       variant: minimal
 ---
 
-<div style="margin: 2rem 0;">
-  <p style="font-size: 0.85rem; opacity: 0.7; margin: 0 0 0.5rem;">Scale testing supported by</p>
+import ProviderStrip from "../../components/ProviderStrip.astro";
+
+<div class="supported-by">
+  <p class="supported-by-label">Scale testing supported by</p>
   <a href="https://uber.com" target="_blank" rel="noopener">
-    <img
-      class="supported-by-logo"
-      src="/uber-logo.svg"
-      alt="Uber"
-      style="height: 32px; width: auto; max-width: none; opacity: 0.85; display: inline-block;"
-    />
+    <img class="supported-by-logo" src="/uber-logo.svg" alt="Uber" />
   </a>
 </div>
-<style>
-  :root[data-theme='dark'] .supported-by-logo { filter: invert(1); }
-</style>
 
 ## What it is
 
@@ -58,9 +52,9 @@ You don't have to take the numbers on faith. **Every run on the [scale-test resu
 
 ## Providers — the substrate is covered
 
-BigFleet decides *which* machines should exist; **capacity providers** actually create, configure, and reclaim them. There's already an ecosystem: **12 conformance-certified providers** spanning hyperscalers, regional clouds, and bare metal —
+BigFleet decides *which* machines should exist; **capacity providers** actually create, configure, and reclaim them. There's already an ecosystem — **12 conformance-certified providers** spanning hyperscalers, regional clouds, and bare metal:
 
-> AWS EC2 · Azure · DigitalOcean · GCP (GCE) · Hetzner Cloud · Latitude.sh · libvirt · Oracle Cloud (OCI) · OVHcloud · Proxmox VE · Scaleway · UpCloud
+<ProviderStrip />
 
 Each is a container you deploy alongside BigFleet with a Helm chart and scoped credentials; BigFleet dials out to it. Providers are **out of tree by design** — Kubernetes spent years undoing in-tree providers, and we don't repeat that, so a provider's release cadence is decoupled from BigFleet's. Writing one for a new substrate means implementing a small backend on top of the shared `providerkit` library (which gets fencing, idempotency, and the machine contract right once) and passing a 92-behavior conformance suite.
 
@@ -121,9 +115,9 @@ Most organisations now run tens to thousands of Kubernetes clusters and manage c
 
 v1 feature-complete. Designed and implemented by [Lucy Sweet](https://lucy.sh), as the reference implementation of two papers — the [operating model](/papers/fleet-scale-kubernetes/) and the [architecture](/papers/bigfleet/). Coverage: race-detector unit tests, deterministic simulator with golden traces, steady-state soak under churn, multi-cluster end-to-end on kind, a [conformance suite](/provider-author-guide/) with a 12-provider ecosystem, and [scale-test results](/scaletest-results/) on a real multi-host cloud fleet — each published run shipping a full Grafana-loadable Prometheus receipt. Real provider implementations live in [separate repositories](https://bigfleet-providers.lucy.sh) by design.
 
-<hr style="margin-top: 3rem; opacity: 0.3;" />
+---
 
-<p style="font-size: 0.75rem; opacity: 0.6; margin-top: 1rem;">
+<p class="page-footnote">
   Uber's support is limited to providing compute for scale-test runs.
   BigFleet is otherwise independent of Uber and is not sponsored, endorsed, or
   maintained by Uber. All trademarks belong to their respective owners.

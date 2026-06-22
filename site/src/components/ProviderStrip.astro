@@ -1,0 +1,54 @@
+---
+// Compact provider strip: a logo + short-name chip per provider, linking to its
+// overview on the canonical registry (bigfleet-providers.lucy.sh — this site
+// doesn't host the per-provider pages). Driven by src/data/providers.json, a
+// verbatim copy of the registry's own list, so the set matches and re-syncing is
+// a straight file copy. Logos render via <img> (not inline SVG) so a provider's
+// SVG can't execute script.
+import providers from "../data/providers.json";
+
+const BASE = "https://bigfleet-providers.lucy.sh";
+const shortName = (title) => title.replace(/\s+provider$/i, "");
+---
+
+<div class="provider-strip not-content">
+  {
+    providers.map((p) => (
+      <a
+        class="provider-chip"
+        href={BASE + p.href}
+        target="_blank"
+        rel="noopener"
+      >
+        {p.logo ? (
+          p.logoDark ? (
+            <>
+              <img
+                class="provider-chip-logo provider-chip-logo--light"
+                src={p.logo}
+                alt=""
+                loading="lazy"
+              />
+              <img
+                class="provider-chip-logo provider-chip-logo--dark"
+                src={p.logoDark}
+                alt=""
+                loading="lazy"
+              />
+            </>
+          ) : (
+            <img class="provider-chip-logo" src={p.logo} alt="" loading="lazy" />
+          )
+        ) : (
+          <span
+            class="provider-chip-logo provider-chip-logo--fallback"
+            aria-hidden="true"
+          >
+            {p.title.slice(0, 1)}
+          </span>
+        )}
+        <span class="provider-chip-name">{shortName(p.title)}</span>
+      </a>
+    ))
+  }
+</div>

@@ -3,6 +3,8 @@ title: Providers
 description: The capacity providers you deploy alongside BigFleet to create and reclaim machines — one per substrate, each conformance-certified. Plus how to write your own.
 ---
 
+import ProviderStrip from "../../components/ProviderStrip.astro";
+
 BigFleet decides *which* machines should exist. **Capacity providers** are what actually create, configure, drain, and delete them on a real substrate. BigFleet never talks to a cloud API directly — it dials a provider you run, and the provider does the work.
 
 > The canonical, always-current registry lives at **[bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh)**. This page is the orientation; that site is the list.
@@ -17,15 +19,11 @@ Reconciliation is pull-based: BigFleet learns the real state of the world throug
 
 ## The ecosystem
 
-There are **12 conformance-certified providers** today, spanning hyperscalers, regional clouds, and bare metal:
+There are **12 conformance-certified providers** today, spanning hyperscalers, regional clouds, and bare metal. Pick yours:
 
-| | |
-|---|---|
-| **Hyperscale** | AWS EC2 · Azure · GCP (GCE) · Oracle Cloud (OCI) |
-| **Regional cloud** | DigitalOcean · Hetzner Cloud · OVHcloud · Scaleway · UpCloud |
-| **Bare metal & on-prem** | Latitude.sh · libvirt · Proxmox VE |
+<ProviderStrip />
 
-Each links from [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh) to its own repository, chart, and credentials guide.
+Each chip links to that provider's overview on [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh), where its pages cover install, configuration, credentials, observability, security, and how it's certified.
 
 ## Out of tree, by design
 

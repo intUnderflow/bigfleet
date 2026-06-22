@@ -1,0 +1,86 @@
+[
+  {
+    "name": "aws",
+    "title": "AWS EC2 provider",
+    "href": "/providers/aws/",
+    "logo": "/providers/aws.svg",
+    "logoDark": null
+  },
+  {
+    "name": "azure",
+    "title": "Azure provider",
+    "href": "/providers/azure/",
+    "logo": "/providers/azure.svg",
+    "logoDark": null
+  },
+  {
+    "name": "digitalocean",
+    "title": "DigitalOcean provider",
+    "href": "/providers/digitalocean/",
+    "logo": "/providers/digitalocean.svg",
+    "logoDark": null
+  },
+  {
+    "name": "gcp",
+    "title": "GCP (GCE) provider",
+    "href": "/providers/gcp/",
+    "logo": "/providers/gcp.svg",
+    "logoDark": null
+  },
+  {
+    "name": "hetzner",
+    "title": "Hetzner Cloud provider",
+    "href": "/providers/hetzner/",
+    "logo": "/providers/hetzner.svg",
+    "logoDark": null
+  },
+  {
+    "name": "latitude",
+    "title": "Latitude.sh provider",
+    "href": "/providers/latitude/",
+    "logo": "/providers/latitude.svg",
+    "logoDark": null
+  },
+  {
+    "name": "libvirt",
+    "title": "libvirt provider",
+    "href": "/providers/libvirt/",
+    "logo": "/providers/libvirt.svg",
+    "logoDark": null
+  },
+  {
+    "name": "oracle-cloud",
+    "title": "Oracle Cloud (OCI) provider",
+    "href": "/providers/oracle-cloud/",
+    "logo": "/providers/oracle-cloud.svg",
+    "logoDark": null
+  },
+  {
+    "name": "ovhcloud",
+    "title": "OVHcloud Public Cloud provider",
+    "href": "/providers/ovhcloud/",
+    "logo": "/providers/ovhcloud.svg",
+    "logoDark": null
+  },
+  {
+    "name": "proxmox",
+    "title": "Proxmox VE provider",
+    "href": "/providers/proxmox/",
+    "logo": "/providers/proxmox.svg",
+    "logoDark": null
+  },
+  {
+    "name": "scaleway",
+    "title": "Scaleway provider",
+    "href": "/providers/scaleway/",
+    "logo": "/providers/scaleway.svg",
+    "logoDark": null
+  },
+  {
+    "name": "upcloud",
+    "title": "UpCloud provider",
+    "href": "/providers/upcloud/",
+    "logo": "/providers/upcloud.svg",
+    "logoDark": null
+  }
+]
