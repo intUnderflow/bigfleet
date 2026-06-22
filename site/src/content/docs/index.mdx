@@ -56,7 +56,7 @@ BigFleet decides *which* machines should exist; **capacity providers** actually 
 
 <ProviderStrip />
 
-Each is a container you deploy alongside BigFleet with a Helm chart and scoped credentials; BigFleet dials out to it. Providers are **out of tree by design** — Kubernetes spent years undoing in-tree providers, and we don't repeat that, so a provider's release cadence is decoupled from BigFleet's. Writing one for a new substrate means implementing a small backend on top of the shared `providerkit` library (which gets fencing, idempotency, and the machine contract right once) and passing a 92-behavior conformance suite.
+Each is a container you deploy alongside BigFleet with a Helm chart and scoped credentials; BigFleet dials out to it. Providers are **out of tree by design** — Kubernetes spent years undoing in-tree providers, and we don't repeat that, so a provider's release cadence is decoupled from BigFleet's. Writing one for a new substrate means implementing a small backend on top of the shared `providerkit` library (which gets fencing, idempotency, and the machine contract right once) and passing a 93-behavior conformance suite.
 
 Browse them, or write your own → **[Providers](/providers/)** · the canonical registry lives at [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh).
 
