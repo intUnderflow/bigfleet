@@ -33,7 +33,7 @@ BigFleet ships the provider contract, the dial-out client, and a test-only fake 
 
 Covering a new substrate doesn't mean re-solving the hard parts. Providers are built on **`providerkit`**, a shared library that gets fencing, idempotency, async dispatch, transition timeouts, and the machine-state contract right once — so a new provider is mostly a small backend describing how to create, configure, and drain an instance on your substrate.
 
-Correctness is gated by a conformance suite covering **92 behaviors across 11 areas** — idempotency, transitional-state recovery, cursor correctness, drain-grace handling, and more. Passing it is what lets a provider claim compatibility. Point the suite at your endpoint:
+Correctness is gated by a conformance suite covering **93 behaviors across 11 areas** — idempotency, transitional-state recovery, cursor correctness, drain-grace handling, and more. Passing it is what lets a provider claim compatibility. Point the suite at your endpoint:
 
 ```sh
 make conformance TARGET=host:port
