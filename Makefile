@@ -145,7 +145,7 @@ conformance: ## Run the provider conformance suite (TARGET=addr:port).
 
 .PHONY: conformance-self
 conformance-self: ## Run the conformance suite against pkg/provider/fake (no TARGET needed).
-	$(GO) test -count=1 -tags=conformance -run TestConformance_SelfTest_OnFake ./test/conformance/...
+	$(GO) test -count=1 -tags=conformance -run 'TestConformance_SelfTest_OnFake|TestConformance_NodeReadiness_ADR0056' ./test/conformance/...
 
 ##@ Lint
 

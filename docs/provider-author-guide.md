@@ -49,6 +49,21 @@ Real shards retry on transport failures. They expect retries to be safe.
 
 Each transitional state has a provider-defined timeout. On expiry, move the machine to `MACHINE_STATE_FAILED` with `last_error` populated. The shard takes corrective action depending on which transition failed (clean up, retry on a different slot, escalate).
 
+### `Configured` means the node has joined and is Ready (ADR-0056)
+
+**Do not report a machine `MACHINE_STATE_CONFIGURED` until you have observed the node `Ready` on its target cluster.** Hold it at `CONFIGURING` until then; if readiness is not observed within your Configure timeout, drive it to `FAILED` with `last_error` (see above).
+
+A `CONFIGURED` machine is counted as *delivered capacity*: the shard credits it against demand and stops driving that demand. If you report `CONFIGURED` when the VM has merely booted — before the kubelet registered, the pod-CIDR was assigned, and CNI programmed routes — you create **phantom capacity**: the shard reads zero shortfalls while pods stay `Pending`. The bug is silent, which is why the obligation lives in the contract (ADR-0056).
+
+How you observe readiness is your choice — BigFleet never hands you cluster credentials (`ConfigureRequest` carries only `cluster_id`, a name). Either:
+
+- give your provider **read access to the target cluster** out-of-band (deployment-time kubeconfig / ServiceAccount) and poll the node's `Ready` condition, or
+- use a **substrate signal that reliably implies kubelet registration** (e.g. a bootstrap-completion callback the node makes on join).
+
+What the contract requires is the *guarantee* — `CONFIGURED` ⇒ joined and `Ready` — not a particular mechanism. If you build on **`providerkit`**, implement its `ReadinessChecker` hook: the kit holds the machine at `CONFIGURING` until your check passes and drives it to `FAILED` on timeout, so you don't re-implement the gate.
+
+Conformance note: the six RPCs carry no node-readiness ground-truth signal, so the in-tree black-box suite *cannot* distinguish a provider that waits for `Ready` from one that reports `CONFIGURED` on boot — `make conformance-self` verifies the reference fake honours the gate, but **verifying your own provider against a real cluster is your integration test's job**, not the conformance suite's.
+
 ### Fencing — rejecting zombie shards
 
 Every **mutating** RPC (`Create`, `Configure`, `Drain`, `Delete`) carries the shard's fencing token: `shard_id`, `shard_epoch`, `sequence_number` (BigFleet paper §11). The epoch is persisted shard-side and increments on every shard restart; the sequence number is a per-process monotonic counter, freshly stamped on every call attempt. The token is how your provider refuses a *zombie shard* — an old process (or a duplicate of the same shard identity) whose view of the fleet is stale and whose Drain/Delete would kill the wrong machines.
@@ -113,7 +128,7 @@ Threshold: **support `since_revision` once your provider exposes more than ~10,0
 
 - `SPECULATIVE` — quota slot. Real machine doesn't exist; `host` is null. Returned by `List` so the shard can choose to actuate one via `Create`.
 - `IDLE` — real host, no cluster binding. Bare-metal providers' "free pool" is a sea of these.
-- `CONFIGURED` — real host, currently running a kubelet for a specific cluster.
+- `CONFIGURED` — real host whose node has joined and reached `Ready` on its cluster. Never report it before the node is `Ready` (see "`Configured` means the node has joined and is Ready" above).
 - `CREATING` / `CONFIGURING` / `DRAINING` / `DELETING` — transitional. Your `Get` should report these while work is in flight.
 - `FAILED` — last transition timed out or hit an unrecoverable error. `last_error` populated. The shard intervenes.
 

@@ -49,15 +49,20 @@ The provider asserts `Configured` on infra-up (preserving [ADR-0054]'s `shardCon
 The Proposed draft *recommended* B or C (put ground truth where BigFleet observes it). The author chose **A** instead, for two reasons that outweigh that:
 
 1. **It keeps the boundary clean.** Node-join correctness is the provider's job — the provider is the only component that talks to the cloud/substrate and to the target cluster. Pushing the check there preserves the engine's simplicity and, critically, **does not reverse the deliberate "the shard never reads node-state back" property** (wire-protocols) — no operator→shard readback enters the hot path, and the shard's coverage math is unchanged.
-2. **The "only as strong as the least-careful provider" objection is answered by conformance, not by relocating the check.** Making "observe `Ready` before reporting `Configured`" a **hard conformance requirement** with a real (or faithfully simulated) cluster-join scenario means a provider that skips the check **fails certification** — it cannot claim BigFleet compatibility. The guarantee is enforced at the certification boundary that already gates every provider, rather than by adding hot-path machinery to defend against a non-conformant provider that, by definition, isn't certified.
+2. **The "only as strong as the least-careful provider" objection is mitigated by a layered enforcement — honestly, not fully closed.** During implementation the six-RPC surface proved to carry **no node-readiness ground-truth signal**, so the in-tree *black-box* conformance suite cannot distinguish a provider that waits for `Ready` from one that reports `Configured` on boot. Enforcement is therefore layered: (a) the **contract** states the obligation; (b) the **conformance suite** verifies the *reference* implementation honours it and ships the gate pattern; (c) **`providerkit`** centralises the wait-for-`Ready` so every provider built on it inherits it; (d) verifying a *specific* real provider against a real cluster is that provider's own integration test. This is weaker than "skip it and you fail certification," and it is the honest cost of keeping the check at the provider rather than reading node-state back into the shard (Option B). The author accepted that trade to keep `pkg/shard` lean and the node-state path outbound-only.
 
-This is consistent with the out-of-tree-provider model (the contract is the surface; conformance is the enforcement) and with the hard rule that `pkg/shard` stays lean.
+This is consistent with the out-of-tree-provider model (the contract is the surface; conformance + `providerkit` are the enforcement) and with the hard rule that `pkg/shard` stays lean.
 
-### Implementation (pending, follows from Option A)
+### Implementation
 
-1. **State the obligation in the provider contract** — `provider.proto` `Configure` doc comment + `provider-author-guide.md`: a machine must not be reported `Configured` until the provider has observed the node `Ready` on its target cluster; until then it stays `Configuring` (or `Failed` with `last_error` on timeout).
-2. **Add the conformance scenario** — the suite must exercise a real or faithfully simulated cluster join and assert the provider does **not** report `Configured` for a node that never reaches `Ready` (the suite currently never exercises an actual join — `provider-protocol.md`).
-3. **Centralise in `providerkit`** (recommended) so every real provider inherits the gate rather than each re-implementing it.
+**Done (this ADR's commit, `bigfleet`):**
+
+1. **Obligation stated in the provider contract** — `docs/provider-author-guide.md` ("`Configured` means the node has joined and is Ready"): a machine must not be reported `Configured` until the provider observes the node `Ready`; until then it stays `Configuring` (or `Failed` with `last_error` on timeout). Because `ConfigureRequest` carries only `cluster_id` (a name, not credentials), the guide states the two valid mechanisms — out-of-band cluster read-access, or a substrate signal that reliably implies kubelet registration. (A `provider.proto` doc comment is a toolchain-gated follow-up; the author-guide is the authoritative contract surface.)
+2. **Conformance** — `TestConformance_NodeReadiness_ADR0056` proves the reference fake holds `Configuring` until a readiness signal and only then reports `Configured`; wired into `make conformance-self`. It is a *reference-fake* test by necessity (the black-box surface has no readiness ground truth — see rationale point 2).
+
+**Pending (separate `bigfleet-providers` commit):**
+
+3. **`providerkit` `ReadinessChecker` hook** so providers built on the kit inherit the gate — the kit holds the machine at `Configuring` until the check passes and drives it to `Failed` on timeout — plus a catalogued conformance behaviour.
 
 No `pkg/shard` / coverage-math change is required by this option.
 
