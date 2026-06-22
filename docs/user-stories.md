@@ -42,7 +42,7 @@ spec:
 
 You watch `kubectl get pods -w`. The Pod transitions Pending → Running once a node joins. The CR's `.status.phase` walks `Pending → Acknowledged` once the autoscaler has it in its NeedsTable; that's the only transition the lifecycle supports.
 
-What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted. If your workload is locality-sensitive, *express that* — see [Expressing networking locality](#expressing-networking-locality).
+What you choose: your `priorityClassName` and (if your platform team mapped it differently) your `interruptionPenalty`. Both affect cost and whether you can be preempted.
 
 ## Running a high-priority job (ML platform engineer)
 
@@ -79,17 +79,6 @@ sum by (kind) (rate(bigfleet_shard_actions_total{kind="Preempt"}[5m]))
 
 `priority_class` is one of `batch` (~100), `service` (~1000), `critical` (~1000000), or `other`; `sum(bigfleet_shard_shortfalls_by_priority)` equals `bigfleet_shard_shortfalls`. If you see Preempt actions firing, the affected nodes are written into per-cluster `UpcomingNode` CRs whose status walks toward `Draining` / `Drained`. You can watch your own cluster's nodes via `kubectl get upcomingnodes`.
 
-## Expressing networking locality
-
-BigFleet matches the requirements a workload **expresses**, and only those — so locality is something you ask for, not something BigFleet infers. The unit of fungibility is "any node satisfying the same requirements," and matching is requirement-gated *before* cost is consulted: a Need that pins its zone, names its `Same` domain, or selects its region can never be served by capacity that violates it (if nothing in the shard satisfies it, it becomes a shortfall, not a wrong placement).
-
-The corollary is the footgun: a Need that **omits** its region can be served by capacity anywhere in its shard — including a different region or VPC, where it may not actually reach the cluster's network. Capacity is fungible only *within a shard*, and BigFleet does not stamp a default locality onto your Needs.
-
-- **What you choose:** the locality your workload requires — `topology.kubernetes.io/zone`, a region selector, or a `Same` co-location domain — expressed as nodeSelector-style requirements on the Pod (and thus the CR).
-- **What the platform team chooses:** to align each cluster's shard with one network domain (AZ / VPC / region), so the shard's whole pool is reachable rather than relying on every workload to self-describe.
-
-Network/egress *cost* is deliberately not in the cost formula — if a workload's transfer cost dominates, express its locality as a hard requirement rather than expecting BigFleet to price it. Full detail: [BigFleet and networking](/networking/).
-
 ## Per-cluster operator install (cluster owner)
 
 You own one or more clusters. The platform team owns the BigFleet shard. Your job is the operator chart:
@@ -119,7 +108,7 @@ You don't tune autoscaler parameters per-cluster anymore — there are none in t
 
 - The PriorityClasses your cluster offers (and the unschedulable-pod-controller's mapping to BigFleet `priority` int values).
 - Per-cluster compliance: which `nodeSelector` keys your `BootstrapTemplate` knows how to render userdata for.
-- **Locality.** Express the region/zone/`Same` domain your locality-sensitive workloads need, and ask the platform team to align your shard with one network domain — capacity is fungible only within a shard. See [Expressing networking locality](#expressing-networking-locality).
+- **Locality.** Express the region/zone/`Same` domain your locality-sensitive workloads need, and align your shard with one network domain — capacity is fungible only within a shard. See [BigFleet and networking](/networking/).
 - Pod Disruption Budgets your workloads carry — every drain (Phase 2 preempt and Phase 3 reclaim alike) reaches the operator as a `ReclaimInstruction`, and the operator evicts through the PDB-respecting `policy/v1` Eviction API within the instruction's grace period. The exception is an operator that is disconnected when the drain fires: the shard then drains via the provider directly (kubelet default grace, no PDB pass) and logs `reclaim fallback`.
 
 A node only counts as delivered capacity once it has actually joined and reached `Ready` — a conformant provider holds it at `Configuring` until then (ADR-0056), so a node that shows up in `UpcomingNode` but never goes `Ready` is a provider/bootstrap problem on your side, not silent BigFleet over-counting.
@@ -139,7 +128,7 @@ You're running the coordinator + shards on a management cluster. Day-to-day work
 Useful queries:
 
 ```promql
-# Are any shards falling behind? (the gated cycle p99 — see "The SLO posture")
+# Are any shards falling behind? (the gated cycle p99 — gate ≤ 5 s)
 histogram_quantile(0.99,
   sum by (le) (rate(bigfleet_shard_cycle_duration_seconds_bucket[5m]))
 )
@@ -157,24 +146,7 @@ sum(rate(bigfleet_coordinator_apply_total[5m]))
 sum(rate(bigfleet_operator_session_reconnects_total[5m])) > 0
 ```
 
-The shape of the day depends on whether anything is alarming. Most days: nothing. For what "behind" actually means — and why a high *pod-bind* p99 is not a BigFleet regression — read the next section.
-
-## The SLO posture (ADR-0054)
-
-The one thing to internalise before reading dashboards: **BigFleet gates on its own capacity-delivery hops, not on the cluster's pod-bind tail.** Under a real, uncapped kube-scheduler the end-to-end "Pod created → Pod bound" time is dominated by the scheduler's retry/backoff and the reprovision back-edge — neither of which BigFleet controls — so that number is reported as *informational context*, never gated. The release gate is the set of things BigFleet is actually responsible for (production bars; dev substrates run looser):
-
-| Gate | Bar |
-|---|---|
-| Capacity-materialization latency (`shardConfigurePhaseP99Seconds`) | ≤ 15 s |
-| Bootstrap success ratio (`bootstrapSuccessRatio`) | ≥ 0.99 |
-| Node-publish latency (`operatorNodeStateUpdateP99Seconds`) | ≤ 1.5 s |
-| Roll-up turn (`operatorRollupP99Seconds`) | ≤ 1 s |
-| Roll-up ack (`operatorAckP99Seconds`) | ≤ 12 s |
-| Decision-engine cycle (`shardCycleDurationP99Seconds`) | ≤ 5 s |
-| Unmet demand (`bigfleet_shard_shortfalls`) | == 0 |
-| Common-path bind liveness (`endToEndPodBindP50Seconds`) | ≤ 10 s (loose) |
-
-End-to-end pod-bind **p99** and raw-max are informational, not gated. The misread to avoid: a high bind p99 on an uncapped scheduler is not a BigFleet regression — check the gated hops above first. The full rationale and per-gate "why" is the [SLOs reference](/slos/).
+The shape of the day depends on whether anything is alarming. Most days: nothing.
 
 ## Cost analysis (FinOps)
 
@@ -295,12 +267,6 @@ make conformance-self                    # the in-tree reference fake
 
 What conformance *won't* catch: backend-specific edge cases (cloud quota boundaries, your private cloud's eventual-consistency window). Those are your tests, in your repo. The deep guide is the [provider author guide](/provider-author-guide/); a dozen conformance-certified providers (AWS, GCP, Azure, Hetzner, bare metal, and more) already exist at [bigfleet-providers.lucy.sh](https://bigfleet-providers.lucy.sh).
 
-## Reading a scale-test receipt
-
-You don't have to take BigFleet's published numbers on faith. Every run on the [scale-test results page](/scaletest-results/) ships a full **receipt**: a Grafana-loadable Prometheus TSDB snapshot, scrubbed per-node logs and config/state, and a `LOAD-RECIPE.md` describing exactly how the run was constructed — all as release assets.
-
-So the workflow is: open the run, load its TSDB into Grafana, and check every gate number on the page against the raw series yourself — the scorecard is generated from each run's committed summary, not hand-entered. Use the same receipts to sanity-check your own capacity model against a real fleet's behaviour at scale.
-
 ## Pre-release validation (reliability)
 
 You're gating the release on the static-stability invariant: **clusters keep running with BigFleet entirely down**. The runner ships four failover profiles, each scoped to one type of disturbance. Run them through the `make scaletest` entrypoint, pairing each V2 profile with your substrate:
@@ -328,15 +294,12 @@ Each profile's `runnerActions:` block declares disturbances with `atSeconds` off
 What you're checking after a passing run:
 
 - `summary.json` `passed: true` and `failures: []`
-- the [ADR-0054 capacity-delivery gates](#the-slo-posture-adr-0054) held throughout — cycle p99 ≤ 5 s, configure-phase p99 ≤ 15 s, bootstrap success ratio ≥ 0.99, node-state-update p99 ≤ 1.5 s, and `bigfleet_shard_shortfalls` == 0
+- the [ADR-0054 capacity-delivery gates](/slos/) held throughout — cycle p99 ≤ 5 s, configure-phase p99 ≤ 15 s, bootstrap success ratio ≥ 0.99, node-state-update p99 ≤ 1.5 s, and `bigfleet_shard_shortfalls` == 0
 - the end-to-end pod-bind tail is *informational* — read it for context, don't gate on it
-
-Every run also produces a receipt you (or anyone) can re-inspect — see [Reading a scale-test receipt](#reading-a-scale-test-receipt).
 
 ## Notes that aren't role-specific
 
 - **Priority + interruption-penalty + reclamation-penalty are the three numbers everyone looks at.** Different roles read them differently — workload owners as a self-description, BigFleet operators as inputs to the engine, FinOps as a cost lever — but it's the same fields.
-- **BigFleet enforces only the requirements a workload expresses.** Locality, fabric, and residency are capacity requirements, not a separate networking subsystem — and a Need that omits them is matched without them. Express what you need; align shards to network domains. See [BigFleet and networking](/networking/).
 - **Static stability is felt as the absence of incidents.** Most users never see BigFleet's failure modes because the property holds; the people who *do* see it are the ones running BigFleet itself, and even then mostly in pre-release tests.
 - **Out-of-tree providers means the platform team's provider release cadence is decoupled from BigFleet's.** When BigFleet ships a new version, you don't have to redeploy your provider; when your provider ships, you don't have to coordinate with BigFleet maintainers.
 
