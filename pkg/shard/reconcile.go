@@ -142,12 +142,24 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 		// async) still routes its update to the cluster that owned the
 		// machine — exactly as applyTransition does on the worker path.
 		prevCluster := existing.Cluster
-		dm.AssignedPriority = existing.AssignedPriority
-		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
-		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
-		dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
-		dm.AssignedGroup = existing.AssignedGroup // ADR-0051: gang attribution
-		dm.ShardMetadata = nil                    // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
+		// Assignment state (priority + penalties + Need fingerprint + gang) is
+		// shard-domain: the provider view carries it only as the shard_metadata
+		// echo (nil'd below), so a state-change ingest must re-apply it from the
+		// existing record — but ONLY while the machine stays BOUND. On a
+		// transition to an UNBOUND state — Idle/Speculative reached via an async
+		// drain or delete completion (ADR-0059) — the binding is gone, so the
+		// assignment must clear with it. Preserving it would leave a drained
+		// Idle machine carrying a stale priority/penalty (it would mis-skew the
+		// per-penalty-bucket inventory metric and any Assigned*-keyed logic
+		// until the slot is re-bound). Leaving dm's zero values is the clear.
+		if dm.State == machine.StateConfigured || dm.State == machine.StateConfiguring || dm.State == machine.StateDraining {
+			dm.AssignedPriority = existing.AssignedPriority
+			dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
+			dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
+			dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
+			dm.AssignedGroup = existing.AssignedGroup // ADR-0051: gang attribution
+		}
+		dm.ShardMetadata = nil // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
 		if err := s.inv.Apply(dm); err != nil {
 			return
 		}

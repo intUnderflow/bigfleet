@@ -122,3 +122,86 @@ func TestResyncNodeState_ReplaysBoundMachinesOnConnect(t *testing.T) {
 		t.Errorf("resync sent updates for an unbound Idle machine: %v", states)
 	}
 }
+
+// TestApplyReconciledMachine_DrainToIdleClearsAssignment pins ADR-0059's
+// reconcile half. When an async drain completes — a bound machine observed
+// transitioning to terminal Idle — the assignment (priority + penalties +
+// gang) must clear WITH the binding. A real provider's Idle view carries no
+// Assigned* (they ride only in shard_metadata), so reconcile must NOT
+// re-apply the prior bound record's assignment onto the now-unbound Idle
+// machine; doing so would leave a drained Idle slot carrying a stale priority
+// / penalty bucket (mis-skewing the per-penalty inventory metric and any
+// Assigned*-keyed logic until re-bound).
+func TestApplyReconciledMachine_DrainToIdleClearsAssignment(t *testing.T) {
+	t.Parallel()
+	s := newNodeStateTestShard(t)
+
+	// A bound, Draining machine carrying assignment (an async drain in flight).
+	draining := configuredMachine("m-drain", "cluster-a")
+	draining.State = machine.StateDraining
+	draining.AssignedPriority = 100
+	draining.AssignedInterruptionPenaltyDollars = 64
+	draining.AssignedReclamationPenaltyDollars = 128
+	draining.AssignedGroup = "g1"
+	if err := s.inv.Insert(draining); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// The provider completes the drain: terminal Idle, binding gone, and — as
+	// with every provider view — no Assigned* in the record.
+	idle := configuredMachine("m-drain", "cluster-a")
+	idle.State = machine.StateIdle
+	idle.Cluster = ""
+	s.applyReconciledMachine(idle)
+
+	got, err := s.inv.Get("m-drain")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != machine.StateIdle {
+		t.Fatalf("state = %v, want Idle", got.State)
+	}
+	if got.AssignedPriority != 0 || got.AssignedInterruptionPenaltyDollars != 0 ||
+		got.AssignedReclamationPenaltyDollars != 0 || got.AssignedGroup != "" {
+		t.Errorf("drain-to-Idle kept stale assignment (ADR-0059): priority=%d intPen=%g recPen=%g group=%q — want all cleared",
+			got.AssignedPriority, got.AssignedInterruptionPenaltyDollars, got.AssignedReclamationPenaltyDollars, got.AssignedGroup)
+	}
+}
+
+// TestApplyReconciledMachine_ConfiguringToConfiguredPreservesAssignment is the
+// regression guard for ADR-0059's reconcile gate: a bound→bound transition —
+// the ADR-0057 async-CONFIGURE completion (Configuring → Configured) — must
+// STILL preserve the assignment, because the provider's Configured view
+// carries none (shard_metadata is nil'd at ingest) and the worker stamped it
+// onto the Configuring record. Clearing it here would zero preemption
+// protection fleet-wide on every async configure.
+func TestApplyReconciledMachine_ConfiguringToConfiguredPreservesAssignment(t *testing.T) {
+	t.Parallel()
+	s := newNodeStateTestShard(t)
+
+	configuring := configuredMachine("m-cfg", "cluster-a")
+	configuring.State = machine.StateConfiguring
+	configuring.AssignedPriority = 1000
+	configuring.AssignedInterruptionPenaltyDollars = 256
+	configuring.AssignedReclamationPenaltyDollars = 512
+	configuring.AssignedGroup = "gang-7"
+	if err := s.inv.Insert(configuring); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// Provider observes terminal Configured (no Assigned* in its view).
+	s.applyReconciledMachine(configuredMachine("m-cfg", "cluster-a"))
+
+	got, err := s.inv.Get("m-cfg")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != machine.StateConfigured {
+		t.Fatalf("state = %v, want Configured", got.State)
+	}
+	if got.AssignedPriority != 1000 || got.AssignedInterruptionPenaltyDollars != 256 ||
+		got.AssignedReclamationPenaltyDollars != 512 || got.AssignedGroup != "gang-7" {
+		t.Errorf("Configuring→Configured dropped assignment (must preserve, ADR-0057): priority=%d intPen=%g recPen=%g group=%q",
+			got.AssignedPriority, got.AssignedInterruptionPenaltyDollars, got.AssignedReclamationPenaltyDollars, got.AssignedGroup)
+	}
+}

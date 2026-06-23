@@ -117,6 +117,18 @@ type Provider struct {
 	// still honour instantTransitions.
 	createStaged bool
 
+	// drainStaged: the teardown twin of configureStaged. If true, Drain
+	// returns the machine at Draining (the transitional Configured→Idle
+	// state) even under instantTransitions — modelling an async provider
+	// (the providerkit contract) whose eviction/teardown genuinely takes
+	// time. The binding clears only when the machine reaches terminal Idle
+	// (see Drain), so the held Draining record stays Draining-WITH-cluster,
+	// satisfying machine.Invariant; the caller drives Draining→Idle via
+	// CompleteStaged. This is what exercises the async-drain reconcile path
+	// (ADR-0059) the synchronous default masks. Create / Configure / Delete
+	// still honour instantTransitions.
+	drainStaged bool
+
 	// createLatency is scaletest-only (#66/#74): when >0, a freshly Created
 	// machine is held at Creating for this wall-clock duration before
 	// auto-advancing to Idle, modelling a real cloud provider's provisioning
@@ -151,6 +163,12 @@ type Options struct {
 	// InstantTransitions (see Provider.createStaged). The closed-loop
 	// sim's provision-dwell model drives the Creating→Idle completion.
 	CreateStaged bool
+	// DrainStaged makes Drain leave the machine at Draining even under
+	// InstantTransitions (see Provider.drainStaged) — modelling an async
+	// provider whose teardown takes time. Drive the Draining→Idle completion
+	// (which clears the binding) via CompleteStaged. Exercises the async-drain
+	// reconcile-finalize path (ADR-0059).
+	DrainStaged bool
 	// CreateLatency is scaletest-only; 0 = instant (Create settles directly
 	// at Idle, the default). >0 holds a freshly Created machine at Creating
 	// for this wall-clock duration before auto-advancing to Idle, modelling
@@ -183,6 +201,7 @@ func New(opts Options) *Provider {
 		instantTransitions: opts.InstantTransitions,
 		configureStaged:    opts.ConfigureStaged,
 		createStaged:       createStaged,
+		drainStaged:        opts.DrainStaged,
 		createLatency:      opts.CreateLatency,
 	}
 }
@@ -397,6 +416,16 @@ func (p *Provider) completeStagedLocked(id machine.ID) bool {
 		m.Host = machine.HostRef{Provider: "fake", Ref: string(id)}
 	case machine.StateConfiguring:
 		m.State = machine.StateConfigured
+	case machine.StateDraining:
+		// DrainStaged completion (ADR-0059): the binding clears with the host
+		// release at terminal Idle — the same fields Drain clears in the
+		// synchronous path, applied now that the machine has settled.
+		m.State = machine.StateIdle
+		m.Cluster = ""
+		m.AssignedPriority = 0
+		m.AssignedInterruptionPenaltyDollars = 0
+		m.AssignedReclamationPenaltyDollars = 0
+		m.ShardMetadata = nil
 	default:
 		return false
 	}
@@ -596,6 +625,16 @@ func (p *Provider) Configure(_ context.Context, req provider.ConfigureRequest) (
 // Drain implements provider.Provider.
 func (p *Provider) Drain(_ context.Context, req provider.DrainRequest) (provider.TransitionAck, error) {
 	return p.applyTransition(req.MachineID, opDrain, req.Fence, func(m *machine.Machine) {
+		// The binding clears only when the drain reaches terminal Idle —
+		// mirroring Delete's terminal gate. Under DrainStaged the machine is
+		// held at Draining, which machine.Invariant requires to carry a
+		// cluster; clearing it there would produce an invalid
+		// Draining-without-cluster record the shard would reject at reconcile.
+		// In the synchronous default (instantTransitions, not staged) the
+		// machine lands directly at Idle, so this fires exactly as before.
+		if m.State != machine.StateIdle {
+			return
+		}
 		m.Cluster = ""
 		m.AssignedPriority = 0
 		m.AssignedInterruptionPenaltyDollars = 0
@@ -690,7 +729,8 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, fence provider.Fe
 	// createStaged: Creating (provision/pre-Configuring dwell — the
 	// invisible runway seed.go's coverage walk does not count).
 	staged := (p.configureStaged && kind == opConfigure) ||
-		(p.createStaged && kind == opCreate)
+		(p.createStaged && kind == opCreate) ||
+		(p.drainStaged && kind == opDrain)
 	if p.instantTransitions && !staged {
 		m.State = stable
 	} else {

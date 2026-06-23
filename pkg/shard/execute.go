@@ -453,18 +453,32 @@ func (s *Shard) executeDrain(ctx context.Context, a decision.Action) error {
 	}
 	drained, mErr := conv.MachineFromProto(conv.MachineToProto(ack.Machine))
 	_ = mErr
-	if err := s.applyTransition(a.MachineID, drained.State, func(m *machine.Machine) {
-		m.Cluster = ""
-		m.AssignedPriority = 0
-		m.AssignedInterruptionPenaltyDollars = 0
-		m.AssignedReclamationPenaltyDollars = 0
-		m.AssignedNeedFingerprint = ""
-		m.AssignedGroup = "" // ADR-0051: gang attribution clears with the binding
-		if !drained.Host.Empty() {
-			m.Host = drained.Host
+	// ADR-0059: clear the binding ONLY when the drain has reached terminal
+	// Idle. An async (providerkit) provider returns the TransitionAck in the
+	// transitional Draining state and reaches Idle out-of-band, observed via
+	// applyReconciledMachine (the path ADR-0057 taught to finalize + notify).
+	// Applying the binding-clearing mutator to a Draining ack would set
+	// Draining-without-a-cluster, tripping "Draining state must have a
+	// cluster" (machine.Invariant) — the bug that froze every Reclaim/Preempt
+	// against a real async provider. For an async Draining ack the machine is
+	// already Draining-with-cluster (the → Draining transition above); leave
+	// it and let reconcile clear the binding when Idle is observed. This
+	// mirrors executeDelete, which already gates its clear on terminal
+	// Speculative.
+	if drained.State == machine.StateIdle {
+		if err := s.applyTransition(a.MachineID, machine.StateIdle, func(m *machine.Machine) {
+			m.Cluster = ""
+			m.AssignedPriority = 0
+			m.AssignedInterruptionPenaltyDollars = 0
+			m.AssignedReclamationPenaltyDollars = 0
+			m.AssignedNeedFingerprint = ""
+			m.AssignedGroup = "" // ADR-0051: gang attribution clears with the binding
+			if !drained.Host.Empty() {
+				m.Host = drained.Host
+			}
+		}); err != nil {
+			return formatErr("drain: post-Drain transition", err)
 		}
-	}); err != nil {
-		return formatErr("drain: post-Drain transition", err)
 	}
 	metrics.ShardDrainPhase.Observe(time.Since(drainStart).Seconds())
 	return nil
