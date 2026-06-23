@@ -131,7 +131,17 @@ type SeedPool struct {
 
 	ConfiguredPerCluster int // Configured machines seeded per cluster
 	Idle                 int // shard-wide Idle headroom
-	Speculative          int // shard-wide Speculative slots
+	Speculative          int // shard-wide Speculative slots (on-demand)
+
+	// InterruptibleSpeculative seeds a SECOND Speculative tier that is
+	// cheaper but has a higher interruption probability, with profiles
+	// IDENTICAL to the primary Speculative tier (same instance type, zone,
+	// resources, and CapacityType), so both compete for the same Need and
+	// Phase 1's effective-cost sort alone decides between them (#354
+	// cost-routing). The tiers differ only in (price, interruption
+	// probability) — BigFleet routes on effective_cost, not a "spot" label.
+	// Zero → no second tier (byte-identical to before).
+	InterruptibleSpeculative int
 }
 
 // TargetScale rescales every workload object of Shape (across all
@@ -319,6 +329,10 @@ type ClosedLoopResult struct {
 	Cycles     []CycleStats
 	Workloads  []WorkloadStanding
 	TargetPods int
+	// FinalSnapshot is the shard inventory after the last cycle, so tests
+	// can assert on the converged per-machine state (e.g. which capacity
+	// tier each cluster's machines were routed to). Not serialized.
+	FinalSnapshot *inventory.Snapshot
 }
 
 // Last returns the trailing k cycles (or all, if fewer ran).
@@ -945,6 +959,18 @@ func seedClosedLoop(prov *fake.Provider, sh *shard.Shard, sc *ClosedLoopScenario
 	const (
 		specPricePerHour  = 1.0
 		specInterruptProb = 0.05
+		// A second Speculative tier (#354 cost-routing): cheaper per-hour but a
+		// much higher interruption probability. BigFleet has no "spot" concept —
+		// the engine routes purely on effective_cost = price + prob×penalty
+		// (sortSpeculativeCandidates / EffectiveCost never read CapacityType).
+		// With these two tiers the effective_cost ordering flips at penalty
+		// ≈ (specPrice − interruptiblePrice)/(interruptibleProb − specInterruptProb)
+		// ≈ 2.8: interruption-tolerant demand (low/zero penalty) routes to the
+		// cheap/high-interruption tier; sensitive demand (high penalty) routes to
+		// the stable tier. Both tiers carry the SAME CapacityType, so the proof
+		// isolates cost from any type-based grouping.
+		interruptibleSpecPricePerHour  = 0.3
+		interruptibleSpecInterruptProb = 0.30
 	)
 	for pi := range sc.Seeds {
 		pool := &sc.Seeds[pi]
@@ -1069,6 +1095,31 @@ func seedClosedLoop(prov *fake.Provider, sh *shard.Shard, sc *ClosedLoopScenario
 				InterruptionProbability: specInterruptProb,
 			}); err != nil {
 				return fmt.Errorf("seed speculative %s: %w", id, err)
+			}
+		}
+		// #354 cost-routing: a second Speculative tier with a profile
+		// IDENTICAL to the primary tier above (same mkProfile(OnDemand) →
+		// same instance-type/zone/resources/CapacityType), so both are
+		// candidates for the same Need and the effective-cost sort
+		// (sortSpeculativeCandidates) — which reads only price and
+		// interruption probability — is the sole decider. The two tiers
+		// differ only in (price, interruption probability); there is no
+		// "spot" type involved. A distinct id prefix avoids colliding with
+		// the primary spec ids.
+		for i := 0; i < pool.InterruptibleSpeculative; i++ {
+			id := machine.ID(fmt.Sprintf("clp-%s-intr-%d", pool.Shape, i))
+			profile := mkProfile(machine.CapacityTypeOnDemand)
+			prov.AddSpeculative(id, profile, machine.CapacityTypeOnDemand, interruptibleSpecPricePerHour, interruptibleSpecInterruptProb)
+			prov.SetAllocatable(id, allocatable)
+			if err := sh.SeedInventory(machine.Machine{
+				ID:                      id,
+				State:                   machine.StateSpeculative,
+				Profile:                 profile,
+				Allocatable:             allocatable,
+				PricePerHour:            interruptibleSpecPricePerHour,
+				InterruptionProbability: interruptibleSpecInterruptProb,
+			}); err != nil {
+				return fmt.Errorf("seed interruptible speculative %s: %w", id, err)
 			}
 		}
 	}
@@ -1312,6 +1363,7 @@ func RunClosedLoop(ctx context.Context, sc ClosedLoopScenario) (*ClosedLoopResul
 			res.Workloads = append(res.Workloads, st)
 		}
 	}
+	res.FinalSnapshot = sh.Inventory().Snapshot()
 	return res, nil
 }
 
