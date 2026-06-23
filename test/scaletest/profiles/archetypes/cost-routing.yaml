@@ -1,0 +1,58 @@
+# Cost-routing engine-correctness catalog (#354).
+#
+# BigFleet routes capacity by effective_cost = price +
+# interruption_probability × interruption_penalty — NOT by a "spot" label
+# (sortSpeculativeCandidates / Machine.EffectiveCost never read
+# CapacityType; it is read only by the Phase-3 idle-hold, ADR-0049). This
+# catalog isolates that routing: two archetypes IDENTICAL in every
+# routing-relevant field — same instance types, zones, resources, priority,
+# packing density, weight — differing ONLY in interruption penalty:
+#
+#   tolerant   interruptionPenalty 0  → bucket "0"  (below the flip)
+#   sensitive  interruptionPenalty 8  → bucket "8"  (above the flip)
+#
+# The shard seeds two cost-distinct elastic tiers from this same catalog
+# (--seed-speculative = OnDemand 1.0/0.05, --seed-spot = Spot 0.3/0.30).
+# Both tiers therefore have machines whose profiles satisfy BOTH archetypes'
+# Needs, so candidacy is identical and the effective_cost sort is the sole
+# decider. The flip sits at penalty ≈ (1.0−0.3)/(0.30−0.05) = 2.8:
+# tolerant demand (penalty 0) routes to Spot, sensitive demand (penalty 8)
+# to OnDemand. Same constants and the same flip as the deterministic sim
+# proof (sim/closedloop.go, sim/cost_routing_test.go).
+#
+# Equal priority (no preemption between them) and equal weight (≈50/50
+# demand split). meanLifetimeSeconds 0 = immortal services, so demand is
+# steady and the end-of-soak snapshot is a converged routing state. Both
+# carry reclamationPenalty 0 so the ONLY asymmetry is interruption penalty —
+# the variable under test.
+
+archetypes:
+  - name: tolerant
+    # Interruption-TOLERANT workload (e.g. stateless batch / best-effort
+    # replicas): a node interruption is cheap, so the engine should place it
+    # on the cheap/high-interruption (Spot) tier.
+    weight: 100
+    instanceTypes: [c6i.4xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "4", memory: "8Gi" } }
+    priorityClasses: [100]
+    interruptionPenalty: 0
+    reclamationPenalty: 0
+    podsPerNode: 100
+
+  - name: sensitive
+    # Interruption-SENSITIVE workload (e.g. a latency-critical service whose
+    # interruption is expensive): the high interruption penalty makes the
+    # Spot tier's effective_cost exceed OnDemand's, so the engine should
+    # place it on the stable (OnDemand) tier. Identical to `tolerant` in
+    # every field except interruptionPenalty — the variable under test.
+    weight: 100
+    instanceTypes: [c6i.4xlarge, m6i.2xlarge]
+    zones: [zone-a, zone-b, zone-c]
+    sizeBuckets:
+      - { weight: 100, resources: { cpu: "4", memory: "8Gi" } }
+    priorityClasses: [100]
+    interruptionPenalty: 8
+    reclamationPenalty: 0
+    podsPerNode: 100

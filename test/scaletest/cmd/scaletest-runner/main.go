@@ -235,6 +235,39 @@ type sloOverrides struct {
 	// runner-feasible. Empty string = off (default); every existing
 	// profile is byte-identical.
 	ShortfallConfinedBelowPriorityClass string `yaml:"shortfallConfinedBelowPriorityClass"`
+
+	// --- Cost-routing engine-correctness gate (#354) ---
+	//
+	// BigFleet routes capacity by effective_cost = price +
+	// interruption_probability × interruption_penalty, NOT by a "spot"
+	// label (sortSpeculativeCandidates / Machine.EffectiveCost never read
+	// CapacityType; it is read only by the Phase-3 idle-hold, ADR-0049). A
+	// cost-routing profile seeds two cost-distinct Speculative tiers — a
+	// cheap/high-interruption tier (CapacityType Spot, the FinOps label) via
+	// seed.spotCount and a stable tier (OnDemand) via seed.speculativeCount —
+	// and drives two workloads that differ ONLY in interruption penalty. The
+	// tolerant workload (low penalty) must route to Spot, the sensitive
+	// workload (high penalty) to OnDemand. Backed by the existing
+	// ShardInventoryMachines GaugeVec {state, capacity_type,
+	// interruption_penalty_bucket} — no new metric. All fields default
+	// zero/off, so every existing profile's pass() is byte-identical.
+
+	// ExpectCostRouting enables the gate: among Configured machines, the
+	// interruption-tolerant penalty bucket must sit on Spot capacity and the
+	// sensitive bucket on OnDemand. Default false = off.
+	ExpectCostRouting bool `yaml:"expectCostRouting"`
+	// CostRoutingTolerantPenaltyBucket / ...Sensitive... name the
+	// interruption_penalty_bucket label values (needs.PenaltyBucket.Label(),
+	// e.g. "0" and "8") the two workloads' bound machines carry. The gate
+	// asserts Spot machines carry the tolerant bucket and OnDemand machines
+	// the sensitive bucket. Required (non-empty) when ExpectCostRouting.
+	CostRoutingTolerantPenaltyBucket  string `yaml:"costRoutingTolerantPenaltyBucket"`
+	CostRoutingSensitivePenaltyBucket string `yaml:"costRoutingSensitivePenaltyBucket"`
+	// CostRoutingMisroutedMax bounds the misrouted machine count (tolerant
+	// demand landed on OnDemand, or sensitive demand on Spot) — slack for
+	// transient churn-time stragglers in a converged snapshot. Default 0 =
+	// strict (no misrouting tolerated). Only consulted when ExpectCostRouting.
+	CostRoutingMisroutedMax float64 `yaml:"costRoutingMisroutedMax"`
 }
 
 type runnerAction struct {
@@ -382,7 +415,16 @@ type profileV2 struct {
 		// high-priority burst must Preempt, not bind spare). Per-shard, NOT
 		// divided by replicas (mirrors the shard's --seed-speculative).
 		// Mutually exclusive with SpeculativeMultiplier.
-		SpeculativeCount     int     `yaml:"speculativeCount"`
+		SpeculativeCount int `yaml:"speculativeCount"`
+		// SpotCount is an ABSOLUTE per-shard seed for the Spot
+		// (cheap/high-interruption) elastic tier — the cost-routing
+		// counterpart to SpeculativeCount (#354). When > 0 the shard seeds a
+		// SECOND Speculative pool, CapacityType Spot, drawn from the same
+		// demand catalog as the OnDemand tier, so both compete for the same
+		// Need and Phase 1's effective_cost sort decides. Only the
+		// cost-routing profile sets it; per-shard, NOT divided by replicas
+		// (mirrors the shard's --seed-spot). 0 = no Spot tier.
+		SpotCount            int     `yaml:"spotCount"`
 		IdleHeadroomFraction float64 `yaml:"idleHeadroomFraction"`
 		// PreBind (M52.B, ADR-0035): when true, the load-driver
 		// fast-binds the initial Pod fill to fake-Nodes via the Bind
@@ -509,6 +551,30 @@ func (p profileV2) validate() error {
 	}
 	if p.Seed.SpeculativeCount > 0 && p.Seed.SpeculativeMultiplier > 0 {
 		return fmt.Errorf("profile %q: seed.speculativeCount and seed.speculativeMultiplier are mutually exclusive (got %d and %d)", name, p.Seed.SpeculativeCount, p.Seed.SpeculativeMultiplier)
+	}
+	if p.Seed.SpotCount < 0 {
+		return fmt.Errorf("profile %q: seed.spotCount must be ≥ 0 (got %d)", name, p.Seed.SpotCount)
+	}
+	// #354 cost-routing gate wiring must be self-consistent: the gate needs
+	// both tiers seeded (so there's a real choice) and both penalty buckets
+	// named (so the queries can be built), else the run would pass vacuously
+	// or scrape an empty query.
+	if p.SLO.ExpectCostRouting {
+		if p.Seed.SpotCount <= 0 {
+			return fmt.Errorf("profile %q: slo.expectCostRouting requires seed.spotCount > 0 (the cheap/high-interruption tier the gate routes tolerant demand to)", name)
+		}
+		if p.Seed.SpeculativeCount <= 0 && p.Seed.SpeculativeMultiplier <= 0 {
+			return fmt.Errorf("profile %q: slo.expectCostRouting requires an OnDemand elastic tier — set seed.speculativeCount (or speculativeMultiplier) > 0", name)
+		}
+		if p.SLO.CostRoutingTolerantPenaltyBucket == "" || p.SLO.CostRoutingSensitivePenaltyBucket == "" {
+			return fmt.Errorf("profile %q: slo.expectCostRouting requires costRoutingTolerantPenaltyBucket and costRoutingSensitivePenaltyBucket (the interruption_penalty_bucket labels, e.g. \"0\" and \"8\")", name)
+		}
+		if p.SLO.CostRoutingTolerantPenaltyBucket == p.SLO.CostRoutingSensitivePenaltyBucket {
+			return fmt.Errorf("profile %q: slo.costRoutingTolerantPenaltyBucket and costRoutingSensitivePenaltyBucket must differ (got both %q) — the two workloads must straddle the effective_cost flip", name, p.SLO.CostRoutingTolerantPenaltyBucket)
+		}
+		if p.SLO.CostRoutingMisroutedMax < 0 {
+			return fmt.Errorf("profile %q: slo.costRoutingMisroutedMax must be ≥ 0 (got %g)", name, p.SLO.CostRoutingMisroutedMax)
+		}
 	}
 	return nil
 }
@@ -725,6 +791,9 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 		// of machinesEffective overshoots demand (#89 preemption-5k).
 		speculativePerShard = p.Seed.SpeculativeCount
 	}
+	// #354 cost-routing: the Spot tier is an absolute per-shard seed (like
+	// SpeculativeCount). 0 for every profile except cost-routing-*.
+	spotPerShard := p.Seed.SpotCount
 
 	values := map[string]any{
 		"namespace": "bigfleet-scaletest",
@@ -749,6 +818,7 @@ func renderHelmValues(p profileV2, s substrateFile, m mergedConfig, archetypes [
 			"replicas":                 replicas,
 			"seedMachines":             idlePerShard,
 			"seedSpeculative":          speculativePerShard,
+			"seedSpot":                 spotPerShard,
 			"seedConfiguredPerCluster": configuredPerCluster,
 			"seedDensityMultiplier":    p.Scale.Density,
 			"maxActionsPerCycle":       4096,
@@ -2247,6 +2317,25 @@ func readKeyMetrics(ctx context.Context, kubeconfig, ns string, soak time.Durati
 			`sum(bigfleet_shard_shortfalls_by_priority{priority_class!=%q}) or on() vector(0)`,
 			slo.ShortfallConfinedBelowPriorityClass)
 	}
+	// #354 cost-routing: count Configured machines on the correct vs wrong
+	// tier for their bound workload's interruption penalty. Correct =
+	// tolerant-bucket demand on Spot + sensitive-bucket demand on OnDemand;
+	// misrouted = the two crossed cases. `or on() vector(0)` folds an absent
+	// label child to a real 0 (so 0 means "none", not a failed scrape; -1 is
+	// reserved for the scrape error). Added only when the gate is declared,
+	// so non-cost-routing runs never scrape these — every other profile
+	// byte-identical.
+	if slo.ExpectCostRouting {
+		const inv = `bigfleet_shard_inventory_machines{state="Configured",capacity_type=%q,interruption_penalty_bucket=%q}`
+		tol := slo.CostRoutingTolerantPenaltyBucket
+		sen := slo.CostRoutingSensitivePenaltyBucket
+		queries["costRoutingCorrect"] = fmt.Sprintf(
+			`(sum(`+inv+`) or on() vector(0)) + (sum(`+inv+`) or on() vector(0))`,
+			"Spot", tol, "OnDemand", sen)
+		queries["costRoutingMisrouted"] = fmt.Sprintf(
+			`(sum(`+inv+`) or on() vector(0)) + (sum(`+inv+`) or on() vector(0))`,
+			"OnDemand", tol, "Spot", sen)
+	}
 	win := sloWindow(soak)
 	out := make(map[string]float64, len(queries))
 	for k, q := range queries {
@@ -2483,6 +2572,9 @@ func unmeasuredGated(m map[string]float64, slo sloOverrides) []string {
 	if slo.ExpectPreemptions {
 		gated = append(gated, "preemptActions")
 	}
+	if slo.ExpectCostRouting {
+		gated = append(gated, "costRoutingCorrect", "costRoutingMisrouted")
+	}
 	var out []string
 	for _, k := range gated {
 		if v, ok := m[k]; ok && v < 0 {
@@ -2609,6 +2701,21 @@ func pass(m map[string]float64, totalCRs, shardReplicas int, slo sloOverrides) (
 	if slo.ExpectPreemptions {
 		if v, ok := m["preemptActions"]; ok && v >= 0 && v == 0 {
 			return false, "preemptActions == 0 but expectPreemptions is set — the engine never emitted a Phase-2 Preempt action (a HIGH-priority burst against a zero-headroom LOW-priority fill must bind by preempting incumbents)"
+		}
+	}
+	// Cost-routing assertion (#354): with two cost-distinct elastic tiers
+	// (Spot cheap/high-interruption, OnDemand stable) the engine must route
+	// interruption-tolerant demand to Spot and sensitive demand to OnDemand,
+	// purely via effective_cost. Two halves: (a) anti-vacuous — routing must
+	// have actually happened (correct > 0, else nothing provisioned or the
+	// seed lacked one of the tiers); (b) the misroute count must be within
+	// tolerance. -1 = failed scrape (skip), matching every other gate.
+	if slo.ExpectCostRouting {
+		if v, ok := m["costRoutingCorrect"]; ok && v >= 0 && v == 0 {
+			return false, "costRoutingCorrect == 0 but expectCostRouting is set — no Configured machine landed on the correct tier for its workload's interruption penalty (vacuous: demand never provisioned onto the two tiers, or the profile didn't seed both a Spot and an OnDemand elastic tier)"
+		}
+		if v, ok := m["costRoutingMisrouted"]; ok && v >= 0 && v > slo.CostRoutingMisroutedMax {
+			return false, fmt.Sprintf("costRoutingMisrouted %.0f > %.0f tolerance — interruption-tolerant demand landed on stable (OnDemand) capacity or sensitive demand on interruptible (Spot) capacity; the engine did not route by effective_cost (price + interruption_probability × interruption_penalty)", v, slo.CostRoutingMisroutedMax)
 		}
 	}
 	// ADR-0054 Half 2 — LOOSE end-to-end pod-bind p50 liveness floor. NOT

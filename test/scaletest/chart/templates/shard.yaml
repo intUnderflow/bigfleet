@@ -84,6 +84,7 @@ spec:
             {{- end }}
             - --seed-machines={{ .Values.shard.seedMachines | default 0 }}
             - --seed-speculative={{ .Values.shard.seedSpeculative | default 0 }}
+            - --seed-spot={{ .Values.shard.seedSpot | default 0 }}
             {{- if .Values.shard.seedDensityMultiplier }}
             - --seed-density-multiplier={{ .Values.shard.seedDensityMultiplier }}
             {{- end }}

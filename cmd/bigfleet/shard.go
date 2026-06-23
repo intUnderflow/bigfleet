@@ -319,7 +319,7 @@ func sumInts(xs []int) int {
 	return total
 }
 
-func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
+func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative, nSpot, nConfiguredPerCluster, totalClusters, clusterStride, shardOrdinal, densityMultiplier int, archetypes, demandArchetypes []archetype.Archetype, logger *slog.Logger) {
 	// The no-catalog rotation tables live in pkg/scaletest/preflight so
 	// the matching-capacity preflight models exactly the shapes seeded
 	// here (M60: the dev-50 stall happened because these tables and the
@@ -445,6 +445,21 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 		specPricePerHour  = 1.0
 		specInterruptProb = 0.05
 		specRacksPerZone  = 10
+		// Spot tier (#354 cost-routing): a SECOND elastic Speculative tier,
+		// cheaper per-hour but with a much higher interruption probability.
+		// BigFleet has no "spot" concept in its routing — effective_cost =
+		// price + interruption_probability × interruption_penalty is the only
+		// thing Phase 1 sorts on; CapacityType is read only by the Phase-3
+		// idle-hold (ADR-0049), never by routing. CapacityTypeSpot here is the
+		// FinOps OBSERVABILITY label (bigfleet_shard_inventory_machines carries
+		// capacity_type) — what makes the tier route differently is its
+		// (price, prob). With these values the effective_cost ordering vs the
+		// OnDemand spec tier flips at interruption penalty ≈ 2.8: tolerant
+		// demand (low penalty) routes here, sensitive demand (high penalty)
+		// routes to OnDemand. Same constants as the deterministic sim proof
+		// (sim/closedloop.go) so the two rungs measure the same flip.
+		spotPricePerHour  = 0.3
+		spotInterruptProb = 0.30
 	)
 	specArches := demandArchetypes
 	if len(specArches) == 0 {
@@ -521,6 +536,78 @@ func seedFakeInventory(prov *fake.Provider, sh *shard.Shard, nIdle, nSpeculative
 					"topology.bigfleet/rack": rack,
 				},
 			}, densityMultiplier, false)
+		}
+	}
+
+	// #354 cost-routing: the Spot tier — a second elastic Speculative pool
+	// drawn from the SAME demand catalog as the OnDemand tier above, so its
+	// machines have overlapping profiles and both compete for the same Need.
+	// CapacityType Spot (the FinOps label) + cheaper price + higher
+	// interruption probability; Phase 1's effective_cost sort, not the
+	// label, decides which tier a Need binds. Distinct id prefix ("spot-")
+	// avoids colliding with the OnDemand spec ids. nSpot == 0 (every profile
+	// except the cost-routing one) seeds nothing — byte-identical to before.
+	spotRng := rand.New(rand.NewSource(int64(shardOrdinal) + 47))
+	spotRackCounters := map[string]int{}
+	spotSeeded := 0
+	addSpot := func(profile machine.Profile, factor int, scaleExtended bool) {
+		id := machine.ID("spot-" + strconv.Itoa(spotSeeded))
+		prov.AddSpeculative(id, profile, machine.CapacityTypeSpot, spotPricePerHour, spotInterruptProb)
+		allocatable := scaleResourceMap(profile.Resources, factor, scaleExtended)
+		prov.SetAllocatable(id, allocatable)
+		_ = sh.SeedInventory(machine.Machine{
+			ID:                      id,
+			State:                   machine.StateSpeculative,
+			Profile:                 profile,
+			Allocatable:             allocatable,
+			PricePerHour:            spotPricePerHour,
+			InterruptionProbability: spotInterruptProb,
+		})
+		spotSeeded++
+	}
+	if nSpot > 0 {
+		if len(specArches) > 0 {
+			alloc := archetype.MachineAllocation(specArches, densityMultiplier, nSpot, archetypeZones)
+			if total := sumInts(alloc); total > nSpot {
+				logger.Info("seed: gang floors raised spot slots", "requested", nSpot, "seeding", total)
+			}
+			for ai := range specArches {
+				a := &specArches[ai]
+				factor, scaleExtended := archetype.SeedScale(a, densityMultiplier)
+				for n := 0; n < alloc[ai]; n++ {
+					it := a.InstanceTypes[spotSeeded%len(a.InstanceTypes)]
+					z, rack := seedZoneRack(a, spotRackCounters[a.Name], specRacksPerZone, a.Zones)
+					spotRackCounters[a.Name]++
+					labels := map[string]string{
+						"topology.bigfleet/rack":       rack,
+						"scaletest.bigfleet/archetype": a.Name,
+					}
+					for k, v := range a.PickLabels(spotRng) {
+						labels[k] = v
+					}
+					addSpot(machine.Profile{
+						InstanceType: it,
+						Zone:         z,
+						CapacityType: machine.CapacityTypeSpot,
+						Resources:    a.PickSize(spotRng),
+						Labels:       labels,
+					}, factor, scaleExtended)
+				}
+			}
+		} else {
+			for i := 0; i < nSpot; i++ {
+				t := types[i%len(types)]
+				z, rack := seedZoneRack(nil, i, specRacksPerZone, zones)
+				addSpot(machine.Profile{
+					InstanceType: t,
+					Zone:         z,
+					CapacityType: machine.CapacityTypeSpot,
+					Resources:    resources[t],
+					Labels: map[string]string{
+						"topology.bigfleet/rack": rack,
+					},
+				}, densityMultiplier, false)
+			}
 		}
 	}
 
@@ -657,6 +744,7 @@ func runShard(args []string) error {
 	providerAddr := fs.String("provider-addr", "", "host:port of the out-of-tree CapacityProvider's gRPC service (M71). When set, the shard dials it via pkg/provider/grpcclient and stamps the paper §11 fencing token (shard_id, shard_epoch, sequence_number) on every mutating call. Empty = in-process fake provider, for laptop / kind / scaletest only — the fake is never deployed against real machines.")
 	seedMachines := fs.Int("seed-machines", 0, "scaletest: pre-seed the in-process fake provider with N synthetic idle machines spread across instance types and zones; 0 disables")
 	seedSpeculative := fs.Int("seed-speculative", 0, "scaletest ADR-0026: pre-seed N synthetic Speculative quota slots — the elastic-procurement tier Phase 1 falls back to (Create + bootstrap) when Idle can't satisfy a Need. Drawn from the demand archetype catalog, CapacityType OnDemand with a non-zero price. Every profile that seeds Idle should also set this; without it the harness models only the owned-capacity half of BigFleet's design. 0 disables.")
+	seedSpot := fs.Int("seed-spot", 0, "scaletest #354 cost-routing: pre-seed N synthetic Spot Speculative slots — a SECOND elastic tier drawn from the same demand catalog as --seed-speculative but CapacityType Spot, cheaper price, higher interruption probability. With both tiers present Phase 1's effective_cost sort (price + interruption_probability × interruption_penalty) routes interruption-tolerant demand here and sensitive demand to the OnDemand tier. Only the cost-routing profile sets this; 0 disables (no Spot tier).")
 	seedConfiguredPerCluster := fs.Int("seed-configured-per-cluster", 0, "scaletest M29: pre-seed the in-process fake provider with N synthetic Configured machines per kwok cluster owned by this shard (cluster IDs of the form kwok-cluster-{c} where c % --seed-cluster-stride == this shard's ordinal). Models the production-realistic shape where most fleet inventory is running workloads. Combined with --seed-cluster-total + --seed-cluster-stride.")
 	seedClusterTotal := fs.Int("seed-cluster-total", 0, "scaletest M29: total number of kwok clusters across the whole harness (i.e. kwok.clusterCount). Used by the Configured-seed loop along with --seed-cluster-stride to pick the cluster IDs this shard owns.")
 	seedClusterStride := fs.Int("seed-cluster-stride", 0, "scaletest M29: total number of shard replicas in the harness (i.e. shard.replicas). The seed enumerates clusters c where c % stride == this shard's ordinal. 0 disables the Configured seed.")
@@ -720,7 +808,7 @@ func runShard(args []string) error {
 		fakeProv *fake.Provider
 	)
 	if *providerAddr != "" {
-		if *seedMachines > 0 || *seedSpeculative > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 || *speculativeShedAtSeconds > 0 {
+		if *seedMachines > 0 || *seedSpeculative > 0 || *seedSpot > 0 || *seedConfiguredPerCluster > 0 || *failureRatePerSec > 0 || *speculativeShedAtSeconds > 0 {
 			return errors.New("--seed-*, --failure-rate-per-sec and --speculative-shed-* drive the in-process fake provider and cannot be combined with --provider-addr")
 		}
 		pc, err := grpcclient.New(*providerAddr, grpcclient.Identity{ShardID: *shardID, Epoch: epoch}, tlsCfg)
@@ -792,7 +880,7 @@ func runShard(args []string) error {
 	}
 
 	configuredEnabled := *seedConfiguredPerCluster > 0 && *seedClusterTotal > 0 && *seedClusterStride > 0
-	if *seedMachines > 0 || *seedSpeculative > 0 || configuredEnabled {
+	if *seedMachines > 0 || *seedSpeculative > 0 || *seedSpot > 0 || configuredEnabled {
 		shardOrdinal := 0
 		if configuredEnabled {
 			ord, err := parseStatefulSetOrdinal(*shardID)
@@ -816,7 +904,7 @@ func runShard(args []string) error {
 			demandArches = cat.ForDemand()
 			logger.Info("archetype catalog loaded", "path", *archetypesPath, "seed_count", len(arches), "demand_count", len(demandArches))
 		}
-		seedFakeInventory(fakeProv, sh, *seedMachines, *seedSpeculative, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
+		seedFakeInventory(fakeProv, sh, *seedMachines, *seedSpeculative, *seedSpot, *seedConfiguredPerCluster, *seedClusterTotal, *seedClusterStride, shardOrdinal, *seedDensityMultiplier, arches, demandArches, logger)
 	}
 
 	serverOpts, err := tlsCfg.ServerOptions()

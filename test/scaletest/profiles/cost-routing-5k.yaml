@@ -1,0 +1,93 @@
+# cost-routing-5k — effective_cost tier routing (engine-correctness).
+#
+# Two cost-distinct elastic tiers and two workloads that differ ONLY in
+# interruption penalty. BigFleet must route each workload to the tier its
+# effective_cost prefers — proving capacity is routed by
+#   effective_cost = price + interruption_probability × interruption_penalty
+# and NOT by a "spot" label (sortSpeculativeCandidates / Machine.EffectiveCost
+# never read CapacityType; ADR-0049's idle-hold is the only place CapacityType
+# is read, and it is orthogonal to routing). This is the cloud counterpart of
+# the deterministic sim proof (sim/cost_routing_test.go) — same tiers, same
+# ~2.8 flip — measured through real binaries / real gRPC / real metrics.
+#
+# THE TWO TIERS (cmd/bigfleet seedFakeInventory, same constants as the sim):
+#   - OnDemand (--seed-speculative): price 1.0, interruption probability 0.05
+#   - Spot     (--seed-spot):        price 0.3, interruption probability 0.30
+#   effective_cost ties at interruption penalty ≈ (1.0−0.3)/(0.30−0.05) = 2.8.
+# capacity_type=Spot is the FinOps OBSERVABILITY label (the existing
+# bigfleet_shard_inventory_machines GaugeVec carries it); routing is decided
+# by (price, probability), not the label.
+#
+# THE TWO WORKLOADS (archetypes/cost-routing.yaml — identical but for penalty):
+#   - tolerant   interruptionPenalty 0  → bucket "0", below the flip → Spot
+#   - sensitive  interruptionPenalty 8  → bucket "8", above the flip → OnDemand
+#
+# CONSTRUCTION:
+#   - configuredFraction 0 + idleHeadroomFraction 0 — NO pre-bound seed and NO
+#     bare-metal Idle, so all demand must provision from the two elastic tiers
+#     (where sortSpeculativeCandidates' effective_cost sort runs; the Idle pool
+#     sorts on raw price and would mask the interruption-probability term).
+#   - speculativeCount 5000 + spotCount 5000 — each tier alone can absorb ALL
+#     demand (≈5000 machines), so neither workload is ever pushed off its
+#     preferred tier by scarcity. Any cross-tier landing is a routing choice,
+#     not a shortage — exactly the discriminator the gate needs.
+#   - preBind false — the fill goes through the REAL capacity path
+#     (Unschedulable → UPC → CapacityRequest → engine provisions from a tier).
+#     preBind true fast-binds to fake-Nodes and bypasses the routing decision
+#     entirely, which would make the whole test vacuous.
+#
+# SLO POSTURE — THE INVERSION (slo.expectCostRouting):
+#   - costRoutingCorrect > 0: routing actually happened (Spot machines carry
+#     the tolerant bucket AND OnDemand machines carry the sensitive bucket).
+#   - costRoutingMisrouted == 0: NO tolerant demand on OnDemand and NO
+#     sensitive demand on Spot. (Backed by bigfleet_shard_inventory_machines
+#     {state="Configured", capacity_type, interruption_penalty_bucket}.)
+#   - shardShortfalls == 0 (default, UN-inverted): both tiers oversupply
+#     demand, so the fleet must be fully covered.
+
+apiVersion: bigfleet.io/scaletest/v1
+kind: Profile
+
+metadata:
+  name: "cost-routing-5k"
+  description: "effective_cost tier routing: tolerant demand → Spot (cheap/high-interruption), sensitive demand → OnDemand (stable), via two cost-distinct elastic tiers (uber-5k)."
+
+scale:
+  machines: 5000
+  density: 100
+
+catalog:
+  archetypes: cost-routing
+
+seed:
+  configuredFraction: 0
+  idleHeadroomFraction: 0
+  # Each elastic tier oversized to absorb all demand on its own → no
+  # scarcity-forced misrouting. Per-shard absolute counts (NOT ×replicas).
+  speculativeCount: 5000
+  spotCount: 5000
+  preBind: false
+
+loadProfile:
+  # preBind=false fills through the slow real capacity path; give it room.
+  rampSeconds: 1800
+  # Hold the converged, fully-routed fleet long enough for a clean snapshot.
+  soakSeconds: 1200
+  churnPerMinute: 0.02
+
+rampBudget: 60m
+
+slo:
+  # THE INVERSION: the engine must route by effective_cost.
+  expectCostRouting: true
+  costRoutingTolerantPenaltyBucket: "0"
+  costRoutingSensitivePenaltyBucket: "8"
+  costRoutingMisroutedMax: 0
+  # Demand is fully satisfiable (each tier oversupplies), so the default
+  # shortfall-zero gate holds — no inversion here.
+  # ADR-0054 capacity-delivery gates — must hold across the routing.
+  shardCycleDurationP99Seconds: 5
+  shardConfigurePhaseP99Seconds: 15
+  bootstrapSuccessRatio: 0.99
+  operatorNodeStateUpdateP99Seconds: 1.5
+  endToEndPodBindP50Seconds: 10

@@ -111,6 +111,14 @@ shard:
   # paper's capacity model is two-tier; an Idle-only harness only
   # exercises half of BigFleet. 0 = no Speculative tier (not advised).
   seedSpeculative: 0
+  # #354 cost-routing: pre-seed N Spot Speculative slots — a SECOND elastic
+  # tier drawn from the same demand catalog as seedSpeculative but
+  # CapacityType Spot (cheaper price, higher interruption probability). With
+  # both tiers present, Phase 1's effective_cost sort routes
+  # interruption-tolerant demand to Spot and sensitive demand to OnDemand —
+  # the cost-routing engine-correctness regime. 0 = no Spot tier (every
+  # profile except cost-routing-*).
+  seedSpot: 0
   # Each seeded machine carries Allocatable = N × Profile.Resources —
   # one machine has the real capacity of N replicas of its Profile
   # (CPU services pack ~10/machine, GPU inference ~8/machine). N=1 (or

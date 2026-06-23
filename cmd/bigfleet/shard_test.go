@@ -4,13 +4,17 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/intUnderflow/bigfleet/pkg/fencing"
 	"github.com/intUnderflow/bigfleet/pkg/machine"
 	"github.com/intUnderflow/bigfleet/pkg/provider/fake"
 	"github.com/intUnderflow/bigfleet/pkg/scaletest/archetype"
+	"github.com/intUnderflow/bigfleet/pkg/shard"
 )
 
 func quietLogger() *slog.Logger {
@@ -208,4 +212,90 @@ func TestParseStatefulSetOrdinal(t *testing.T) {
 			t.Errorf("parseStatefulSetOrdinal(%q) = %d, want %d", c.in, got, c.want)
 		}
 	}
+}
+
+// TestSeedFakeInventory_SpotTier pins the #354 Spot tier: --seed-spot mints a
+// second Speculative pool, CapacityType Spot, with the cheap/high-interruption
+// constants, distinct ids, alongside the OnDemand --seed-speculative tier. The
+// effective_cost flip the cost-routing regime relies on is asserted directly on
+// the seeded machines: a tolerant Need (penalty 0) prefers Spot, a sensitive
+// Need (penalty 8) prefers OnDemand. nSpot == 0 must seed nothing.
+func TestSeedFakeInventory_SpotTier(t *testing.T) {
+	newShard := func(t *testing.T) (*fake.Provider, *shard.Shard) {
+		t.Helper()
+		prov := fake.New(fake.Options{InstantTransitions: true})
+		epoch, err := fencing.LoadEpoch(filepath.Join(t.TempDir(), "epoch"))
+		if err != nil {
+			t.Fatalf("LoadEpoch: %v", err)
+		}
+		sh, err := shard.New(shard.Config{
+			ID:               "shard-0",
+			Epoch:            epoch,
+			Provider:         prov,
+			CycleInterval:    50 * time.Millisecond,
+			BootstrapTimeout: 2 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("shard.New: %v", err)
+		}
+		return prov, sh
+	}
+
+	t.Run("seeds a Spot tier alongside the OnDemand tier", func(t *testing.T) {
+		prov, sh := newShard(t)
+		// No catalog (legacy path): 20 OnDemand spec slots + 12 Spot slots.
+		seedFakeInventory(prov, sh, 0, 20, 12, 0, 0, 0, 0, 1, nil, nil, quietLogger())
+
+		var onDemand, spot int
+		var sampleSpot, sampleOnDemand machine.Machine
+		for _, m := range sh.Inventory().Snapshot().ListByState(machine.StateSpeculative) {
+			switch m.Profile.CapacityType {
+			case machine.CapacityTypeOnDemand:
+				onDemand++
+				sampleOnDemand = m
+			case machine.CapacityTypeSpot:
+				spot++
+				sampleSpot = m
+				if m.PricePerHour != 0.3 {
+					t.Errorf("spot machine %s price = %g, want 0.3", m.ID, m.PricePerHour)
+				}
+				if m.InterruptionProbability != 0.30 {
+					t.Errorf("spot machine %s interruption probability = %g, want 0.30", m.ID, m.InterruptionProbability)
+				}
+				if !strings.HasPrefix(string(m.ID), "spot-") {
+					t.Errorf("spot machine id = %q, want a spot- prefix", m.ID)
+				}
+			default:
+				t.Errorf("unexpected capacity type %v on Speculative machine %s", m.Profile.CapacityType, m.ID)
+			}
+		}
+		if onDemand != 20 {
+			t.Errorf("OnDemand speculative machines = %d, want 20", onDemand)
+		}
+		if spot != 12 {
+			t.Errorf("Spot speculative machines = %d, want 12", spot)
+		}
+
+		// The effective_cost flip the cost-routing regime turns on: tolerant
+		// demand (penalty 0) prefers Spot; sensitive demand (penalty 8) prefers
+		// OnDemand. EffectiveCost = price + prob × penalty.
+		if sampleSpot.EffectiveCost(0) >= sampleOnDemand.EffectiveCost(0) {
+			t.Errorf("at penalty 0, spot cost %g is not < ondemand cost %g (tolerant demand would not route to spot)",
+				sampleSpot.EffectiveCost(0), sampleOnDemand.EffectiveCost(0))
+		}
+		if sampleSpot.EffectiveCost(8) <= sampleOnDemand.EffectiveCost(8) {
+			t.Errorf("at penalty 8, spot cost %g is not > ondemand cost %g (sensitive demand would not route to ondemand)",
+				sampleSpot.EffectiveCost(8), sampleOnDemand.EffectiveCost(8))
+		}
+	})
+
+	t.Run("nSpot 0 seeds no Spot machines", func(t *testing.T) {
+		prov, sh := newShard(t)
+		seedFakeInventory(prov, sh, 0, 20, 0, 0, 0, 0, 0, 1, nil, nil, quietLogger())
+		for _, m := range sh.Inventory().Snapshot().ListByState(machine.StateSpeculative) {
+			if m.Profile.CapacityType == machine.CapacityTypeSpot {
+				t.Fatalf("seeded a Spot machine (%s) with nSpot=0", m.ID)
+			}
+		}
+	})
 }
