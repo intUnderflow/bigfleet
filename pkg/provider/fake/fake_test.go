@@ -322,10 +322,16 @@ func TestFake_Fencing_Contract(t *testing.T) {
 	t.Run("fence checked before not-found", func(t *testing.T) {
 		t.Parallel()
 		p := newFake(t)
-		if _, err := p.Create(ctx, provider.CreateRequest{MachineID: "m-1", Fence: fence(5, 1)}); err != nil {
-			t.Fatalf("establish: %v", err)
+		// First contact for the unknown machine passes the fence (no prior
+		// mark for this (shard, machine) — keying is per-machine, ADR-0058)
+		// and only THEN surfaces NotFound, proving fence-before-not-found and
+		// establishing the (shard, missing) mark.
+		if _, err := p.Delete(ctx, provider.DeleteRequest{MachineID: "missing", Fence: fence(5, 5)}); !errors.Is(err, provider.ErrNotFound) {
+			t.Fatalf("first contact on unknown machine: got %v, want ErrNotFound (fence passes, then not-found)", err)
 		}
-		// A zombie must not learn whether a machine exists.
+		// A zombie's STALE token (not strictly newer than the mark just set)
+		// is now rejected with ErrFenced before the not-found check — it must
+		// not learn whether the machine exists.
 		_, err := p.Delete(ctx, provider.DeleteRequest{MachineID: "missing", Fence: fence(4, 9)})
 		if !errors.Is(err, provider.ErrFenced) {
 			t.Fatalf("stale token on unknown machine: got %v, want ErrFenced (not ErrNotFound)", err)

@@ -62,14 +62,17 @@ type Provider struct {
 	// stable state, a future call of the same kind mints a fresh op.
 	ops map[opKey]string
 
-	// fenceHWM is the per-shard_id high-water mark of accepted fencing
-	// tokens (paper §11, M71). Mutating calls that carry a token must be
-	// strictly newer than this mark or they're rejected with ErrFenced;
-	// calls with a zero token (in-process harness construction) bypass
-	// fencing entirely. The fake enforces this because it is what the
-	// conformance suite's self-test runs against — it has to model the
-	// contract real providers are held to.
-	fenceHWM map[string]fenceMark
+	// fenceHWM is the per-(shard_id, machine_id) high-water mark of accepted
+	// fencing tokens (paper §11, M71; keyed per machine per ADR-0058).
+	// Mutating calls that carry a token must be strictly newer than this
+	// mark or they're rejected with ErrFenced; calls with a zero token
+	// (in-process harness construction) bypass fencing entirely. Keying per
+	// (shard, machine) — not per shard — matches the providerkit contract: a
+	// shard's concurrent execute pool draws monotonic sequence numbers but
+	// races the sends, so a per-shard mark would fence the shard against its
+	// own out-of-order arrivals on different machines (a false zombie). The
+	// fake models the contract real providers are held to.
+	fenceHWM map[fenceKey]fenceMark
 
 	// nextOp mints fresh operation IDs.
 	nextOp int
@@ -194,7 +197,7 @@ func New(opts Options) *Provider {
 		machines:           make(map[machine.ID]*machine.Machine),
 		lastModRev:         make(map[machine.ID]int),
 		ops:                make(map[opKey]string),
-		fenceHWM:           make(map[string]fenceMark),
+		fenceHWM:           make(map[fenceKey]fenceMark),
 		failNext:           make(map[failKey]error),
 		creatingSince:      make(map[machine.ID]time.Time),
 		rand:               rand.New(rand.NewPCG(seed, seed^0xA5A5A5A5)),
@@ -400,6 +403,29 @@ func (p *Provider) CompleteStaged(id machine.ID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.completeStagedLocked(id)
+}
+
+// CompleteAllStaged advances every machine currently held in a staged
+// transitional state (Creating / Configuring / Draining) to its stable
+// target, returning the count advanced. It models a real async provider's
+// out-of-band work all completing — a test driving a real shard against the
+// gRPC-served fake can call this on a ticker so the shard's reconcile loop
+// observes the terminal states (the async path the synchronous default
+// masks; ADR-0057/0059). Safe to call repeatedly; a no-op when nothing is
+// staged.
+func (p *Provider) CompleteAllStaged() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for id, m := range p.machines {
+		switch m.State {
+		case machine.StateCreating, machine.StateConfiguring, machine.StateDraining:
+			if p.completeStagedLocked(id) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // completeStagedLocked is the body of CompleteStaged, factored out so the
@@ -669,22 +695,30 @@ func (p *Provider) Delete(_ context.Context, req provider.DeleteRequest) (provid
 // machine exists. A token that passes advances the high-water mark even
 // if the operation itself then fails (the mark records "newest shard
 // process seen", not "operations that succeeded").
-func (p *Provider) checkFence(f provider.Fence) error {
+func (p *Provider) checkFence(id machine.ID, f provider.Fence) error {
 	if f.Zero() {
 		return nil // unfenced in-process caller; see fenceHWM doc
 	}
-	hwm, known := p.fenceHWM[f.ShardID]
+	key := fenceKey{shardID: f.ShardID, machineID: id}
+	hwm, known := p.fenceHWM[key]
 	newer := f.ShardEpoch > hwm.epoch ||
 		(f.ShardEpoch == hwm.epoch && f.SequenceNumber > hwm.seq)
 	if known && !newer {
-		return fmt.Errorf("%w: shard %q sent (epoch=%d, seq=%d), high-water mark is (epoch=%d, seq=%d)",
-			provider.ErrFenced, f.ShardID, f.ShardEpoch, f.SequenceNumber, hwm.epoch, hwm.seq)
+		return fmt.Errorf("%w: shard %q sent (epoch=%d, seq=%d) for machine %q, high-water mark is (epoch=%d, seq=%d)",
+			provider.ErrFenced, f.ShardID, f.ShardEpoch, f.SequenceNumber, id, hwm.epoch, hwm.seq)
 	}
-	p.fenceHWM[f.ShardID] = fenceMark{epoch: f.ShardEpoch, seq: f.SequenceNumber}
+	p.fenceHWM[key] = fenceMark{epoch: f.ShardEpoch, seq: f.SequenceNumber}
 	return nil
 }
 
-// fenceMark is the highest (epoch, seq) accepted for one shard_id.
+// fenceKey scopes a high-water mark to one (shard_id, machine_id) — see
+// fenceHWM and ADR-0058.
+type fenceKey struct {
+	shardID   string
+	machineID machine.ID
+}
+
+// fenceMark is the highest (epoch, seq) accepted for one (shard_id, machine_id).
 type fenceMark struct {
 	epoch, seq int64
 }
@@ -696,7 +730,7 @@ func (p *Provider) applyTransition(id machine.ID, kind opKind, fence provider.Fe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if err := p.checkFence(fence); err != nil {
+	if err := p.checkFence(id, fence); err != nil {
 		return provider.TransitionAck{}, err
 	}
 	m, ok := p.machines[id]

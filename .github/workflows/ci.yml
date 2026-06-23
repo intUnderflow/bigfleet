@@ -65,6 +65,13 @@ jobs:
       - name: Test
         run: make test
 
+      - name: Integration
+        # The in-process multi-component suite (build-tagged `integration`):
+        # real shard <-> real provider over gRPC, incl. the async-provider
+        # lifecycle the synchronous in-process fake masks (guards the
+        # ADR-0057/0058/0059 class). Vetted above; run here so it can't rot.
+        run: make integration
+
   sim:
     name: simulator
     runs-on: ubuntu-latest

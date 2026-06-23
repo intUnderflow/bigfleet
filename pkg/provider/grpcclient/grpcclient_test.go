@@ -111,31 +111,36 @@ func TestClient_LifecycleRoundTrip(t *testing.T) {
 }
 
 // TestClient_ZombieEpochFenced is the paper §11 scenario end-to-end: a
-// client whose epoch predates the one the provider has already seen for
-// the same shard_id is rejected with ErrFenced, and the original gRPC
-// status survives the wrap.
+// client whose epoch predates the one the provider has already seen for the
+// same (shard_id, machine_id) is rejected with ErrFenced, and the original
+// gRPC status survives the wrap. The high-water mark is per (shard, machine)
+// (ADR-0058): the successor establishes the mark on the machine it acts on,
+// and the zombie is fenced when it touches THAT machine with the older epoch.
 func TestClient_ZombieEpochFenced(t *testing.T) {
 	addr, prov := startServer(t)
 	prov.AddSpeculative("m-1", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
-	prov.AddSpeculative("m-2", machine.Profile{InstanceType: "p5"}, machine.CapacityTypeOnDemand, 6.0, 0.0)
 	ctx := context.Background()
 
 	current := newClient(t, addr, "shard-0", newEpoch(t, 2)) // epoch 2
 	zombie := newClient(t, addr, "shard-0", newEpoch(t, 1))  // epoch 1
 
+	// The successor provisions m-1, establishing the (shard-0, m-1) mark at
+	// epoch 2; m-1 lands at Idle.
 	if _, err := current.Create(ctx, provider.CreateRequest{MachineID: "m-1"}); err != nil {
 		t.Fatalf("current epoch Create: %v", err)
 	}
-	_, err := zombie.Create(ctx, provider.CreateRequest{MachineID: "m-2"})
+	// The zombie (older epoch) tries to Configure the SAME machine — fenced on
+	// epoch, per (shard, machine), before it can bind anything.
+	_, err := zombie.Configure(ctx, provider.ConfigureRequest{MachineID: "m-1", ClusterID: "c", BootstrapBlob: []byte("# z\n")})
 	if !errors.Is(err, provider.ErrFenced) {
-		t.Fatalf("zombie Create: got %v, want ErrFenced", err)
+		t.Fatalf("zombie Configure: got %v, want ErrFenced", err)
 	}
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("gRPC status lost in wrap: code=%s, want FailedPrecondition", status.Code(err))
 	}
-	// The zombie's stale view must not have actuated anything.
-	if got, err := current.Get(ctx, "m-2"); err != nil || got.State != machine.StateSpeculative {
-		t.Errorf("m-2 = %+v (err=%v), want untouched Speculative", got, err)
+	// The zombie's stale view must not have actuated m-1: still Idle, unbound.
+	if got, err := current.Get(ctx, "m-1"); err != nil || got.State != machine.StateIdle || got.Cluster != "" {
+		t.Errorf("m-1 = %+v (err=%v), want untouched Idle with no cluster", got, err)
 	}
 }
 
