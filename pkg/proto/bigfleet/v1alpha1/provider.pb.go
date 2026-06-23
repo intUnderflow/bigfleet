@@ -17,17 +17,30 @@
 // Together they let a provider refuse a zombie shard (an old process, or a
 // duplicate of the same shard identity) whose view of the fleet is stale.
 //
-// Providers MUST track, per shard_id, the highest (shard_epoch,
-// sequence_number) pair accepted so far, compared lexicographically:
-// (e1, s1) is newer than (e2, s2) iff e1 > e2, or e1 == e2 and s1 > s2.
-// A mutating request whose token is NOT strictly newer than that
-// high-water mark MUST be rejected with FAILED_PRECONDITION and MUST NOT
-// be applied (the fencing check runs before idempotent-retry
-// short-circuiting). A token that passes advances the high-water mark
-// even if the operation itself then fails. First contact from an unknown
-// shard_id is accepted and establishes the high-water mark. A new epoch
-// resets the sequence space: once the epoch advances, any sequence_number
-// is acceptable.
+// Providers MUST track, per (shard_id, machine_id), the highest
+// (shard_epoch, sequence_number) pair accepted so far, compared
+// lexicographically: (e1, s1) is newer than (e2, s2) iff e1 > e2, or
+// e1 == e2 and s1 > s2. A mutating request whose token is NOT strictly
+// newer than that machine's high-water mark for that shard MUST be rejected
+// with FAILED_PRECONDITION and MUST NOT be applied (the fencing check runs
+// before idempotent-retry short-circuiting). A token that passes advances
+// the high-water mark even if the operation itself then fails. First contact
+// from an unknown (shard_id, machine_id) is accepted and establishes the
+// mark. A new epoch resets the sequence space: once the epoch advances, any
+// sequence_number is acceptable.
+//
+// The mark is keyed per (shard, machine), NOT per shard. A single live
+// shard runs a concurrent execute pool: it draws monotonic sequence numbers
+// but races the sends (stamp-then-send is not atomic, and a gRPC server
+// dispatches each RPC on its own goroutine), so tokens for DIFFERENT
+// machines arrive out of order. A per-shard mark would fence the shard
+// against its own out-of-order arrivals — a false zombie — bricking
+// machines under any burst with execute-concurrency > 1. Per-machine keying
+// stays monotonic for real traffic (the shard serializes transitions per
+// machine: one in-flight mutation per machine) while letting concurrent ops
+// on different machines proceed. A TRUE zombie is still caught: a superseded
+// shard process loads a strictly LOWER persisted epoch than its successor,
+// so its tokens are rejected on epoch, per machine.
 //
 // FAILED_PRECONDITION is reserved on this service for fencing rejections,
 // so callers can alert on zombie-shard incidents mechanically. Reject

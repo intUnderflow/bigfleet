@@ -67,11 +67,15 @@ var ErrNotFound = errors.New("provider: machine not found")
 var ErrNotSupported = errors.New("provider: operation not supported")
 
 // ErrFenced is returned by a mutating call whose fencing token is not
-// strictly newer than the provider's high-water mark for this shard_id
-// (paper §11; wire code FAILED_PRECONDITION). It means a newer epoch of
-// this shard identity has already contacted the provider — the caller is
-// a zombie. That is an incident (duplicate shard identity / split brain),
-// not a transient failure: do not blind-retry.
+// strictly newer than the provider's high-water mark for this
+// (shard_id, machine_id) (paper §11; wire code FAILED_PRECONDITION). The
+// mark is per (shard, machine), not per shard, so a shard's concurrent
+// execute pool never fences itself on out-of-order arrivals across
+// different machines. A rejection therefore means a newer epoch of this
+// shard identity has already contacted the provider for this machine — the
+// caller is a zombie (a superseded process holds a strictly lower epoch).
+// That is an incident (duplicate shard identity / split brain), not a
+// transient failure: do not blind-retry.
 var ErrFenced = errors.New("provider: fencing token rejected; this shard is stale (zombie)")
 
 // Fence is the paper §11 shard→provider fencing token carried by every
