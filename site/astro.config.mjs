@@ -24,6 +24,7 @@ export default defineConfig({
           items: [
             { label: "Overview", link: "/" },
             { label: "Quickstart", link: "/quickstart/" },
+            { label: "The demo", link: "/demo/" },
             { label: "Concepts", link: "/concepts/" },
             { label: "User stories", link: "/user-stories/" },
           ],
