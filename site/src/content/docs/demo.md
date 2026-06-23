@@ -58,10 +58,11 @@ On a Docker-capable machine with Go installed:
 ```sh
 git clone https://github.com/intUnderflow/bigfleet-demo
 cd bigfleet-demo
-# the sibling engine + providers checkouts must be present alongside it:
-#   ../bigfleet  ../bigfleet-providers   (pinned in ci/sibling-pins.env)
 hack/demo-up.sh
 ```
+
+The demo depends on the published `bigfleet` and `bigfleet-providers` modules (pinned in its `go.mod`), so
+there's nothing else to clone — `demo-up.sh` fetches the engine binaries and CRDs from the Go module cache.
 
 `demo-up.sh` builds the binaries, stands up three `kwokctl` clusters, starts the shard + the three
 providers + per-cluster controllers, and serves a browser UI on `http://localhost:8090`. We'll drive
