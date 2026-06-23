@@ -5,6 +5,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,10 +26,14 @@ import (
 // end-to-end without an actual cluster.
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWith(t, fake.Options{InstantTransitions: true})
+}
+
+func newTestEnvWith(t *testing.T, opts fake.Options) *testEnv {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	prov := fake.New(fake.Options{InstantTransitions: true})
+	prov := fake.New(opts)
 	epoch, err := fencing.LoadEpoch(filepath.Join(t.TempDir(), "epoch"))
 	if err != nil {
 		t.Fatalf("LoadEpoch: %v", err)
@@ -101,6 +106,12 @@ type scriptedOperator struct {
 	bootstrapRequests   chan *pb.BootstrapRequest
 	reclaimInstructions chan *pb.ReclaimInstruction
 	availableCapacity   chan *pb.AvailableCapacityUpdate
+
+	// nodeStateUpdates accumulates every NodeStateUpdate the shard pushes,
+	// queried via sawNodeState. A slice (not a channel) so assertions can
+	// poll "has state X arrived for machine Y yet" without consuming.
+	nsMu             sync.Mutex
+	nodeStateUpdates []*pb.NodeStateUpdate
 }
 
 func newScriptedOperator(t *testing.T, env *testEnv, cluster string) *scriptedOperator {
@@ -165,8 +176,25 @@ func (op *scriptedOperator) readLoop() {
 			case op.availableCapacity <- p.AvailableCapacity:
 			default:
 			}
+		case *pb.ShardMessage_NodeStateUpdate:
+			op.nsMu.Lock()
+			op.nodeStateUpdates = append(op.nodeStateUpdates, p.NodeStateUpdate)
+			op.nsMu.Unlock()
 		}
 	}
+}
+
+// sawNodeState reports whether the operator has received a NodeStateUpdate
+// putting machineID into state.
+func (op *scriptedOperator) sawNodeState(machineID string, state pb.MachineState) bool {
+	op.nsMu.Lock()
+	defer op.nsMu.Unlock()
+	for _, u := range op.nodeStateUpdates {
+		if u.GetMachineId() == machineID && u.GetState() == state {
+			return true
+		}
+	}
+	return false
 }
 
 func (op *scriptedOperator) sendRollup(needs []*pb.CapacityNeed) {
@@ -248,6 +276,56 @@ func TestShard_TrainingJob_BootstrapFromIdle(t *testing.T) {
 	}
 	if count != 4 {
 		t.Errorf("BootstrapRequests received = %d, want 4", count)
+	}
+}
+
+// TestShard_AsyncProvider_ConfiguredReachesOperatorViaReconcile is the
+// ADR-0057 integration guard for the path the synchronous in-process fake
+// masked. With an ASYNC provider (Configure acks in the transitional state
+// and completes out-of-band — the providerkit contract, modelled here with
+// ConfigureStaged), the worker leaves the machine at Configuring; terminal
+// Configured is reached only via the shard's reconcile of provider.List. The
+// operator must still learn the terminal Configured. Before ADR-0057 the
+// reconcile path never emitted it, so the operator never heard the node and
+// the workload never scheduled — and no scaletest caught it because the fake
+// was synchronous.
+func TestShard_AsyncProvider_ConfiguredReachesOperatorViaReconcile(t *testing.T) {
+	t.Parallel()
+	env := newTestEnvWith(t, fake.Options{InstantTransitions: true, ConfigureStaged: true})
+	env.provider.AddIdle("gpu-0",
+		machine.Profile{InstanceType: "a3-highgpu-8g", Zone: "us-east-1a", Resources: map[string]string{"nvidia.com/gpu": "8"}},
+		machine.CapacityTypeBareMetal, 0, 0)
+	op := newScriptedOperator(t, env, "cluster-async")
+	op.sendRollup([]*pb.CapacityNeed{gpuNeed(1_000_000, 1)})
+
+	// The async Configure acks in Configuring; the worker leaves it there.
+	waitFor(t, 5*time.Second, func() bool {
+		return env.shard.Inventory().Snapshot().CountByState(machine.StateConfiguring) == 1
+	}, "machine reaches Configuring (async Configure ack)")
+
+	// The worker delivered a Configuring update but CANNOT deliver Configured:
+	// for an async provider it tops out at the ack state. (This is the gap
+	// ADR-0057 closes — without the reconcile-side emit, Configured never
+	// reaches the operator at all.)
+	if !op.sawNodeState("gpu-0", pb.MachineState_MACHINE_STATE_CONFIGURING) {
+		t.Errorf("operator did not see the Configuring update from the worker path")
+	}
+	if op.sawNodeState("gpu-0", pb.MachineState_MACHINE_STATE_CONFIGURED) {
+		t.Fatalf("operator saw Configured before the provider completed the transition")
+	}
+
+	// The provider completes the transition out-of-band; the next reconcile of
+	// provider.List observes Configured and (ADR-0057) notifies the operator.
+	if !env.provider.CompleteStaged("gpu-0") {
+		t.Fatalf("CompleteStaged: expected the staged Configuring machine to advance")
+	}
+
+	waitFor(t, 5*time.Second, func() bool {
+		return op.sawNodeState("gpu-0", pb.MachineState_MACHINE_STATE_CONFIGURED)
+	}, "operator receives the terminal Configured via reconcile (ADR-0057)")
+
+	if got := env.shard.Inventory().Snapshot().CountByState(machine.StateConfigured); got != 1 {
+		t.Errorf("inventory Configured = %d, want 1", got)
 	}
 }
 
