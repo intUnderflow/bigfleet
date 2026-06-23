@@ -137,13 +137,32 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 		return
 	}
 	if getErr == nil {
+		// ADR-0057: capture the binding before Apply so a binding-clearing
+		// terminal transition observed here (e.g. Draining → Idle completed
+		// async) still routes its update to the cluster that owned the
+		// machine — exactly as applyTransition does on the worker path.
+		prevCluster := existing.Cluster
 		dm.AssignedPriority = existing.AssignedPriority
 		dm.AssignedInterruptionPenaltyDollars = existing.AssignedInterruptionPenaltyDollars
 		dm.AssignedReclamationPenaltyDollars = existing.AssignedReclamationPenaltyDollars
 		dm.AssignedNeedFingerprint = existing.AssignedNeedFingerprint
 		dm.AssignedGroup = existing.AssignedGroup // ADR-0051: gang attribution
 		dm.ShardMetadata = nil                    // provider-domain echo; never retained in inventory (see Machine.ShardMetadata)
-		_ = s.inv.Apply(dm)
+		if err := s.inv.Apply(dm); err != nil {
+			return
+		}
+		// ADR-0057: an async provider drives a transition to completion
+		// out-of-band — it returns a TransitionAck in the transitional state
+		// and reaches the terminal state (e.g. Configuring → Configured)
+		// only via this reconcile, never via the worker's applyTransition.
+		// So this is the ONLY place the operator can learn the terminal
+		// state. Emit the node-state update here, the symmetric counterpart
+		// to applyTransition's notify; without it, every async out-of-tree
+		// provider's Configured nodes are invisible to the operator and the
+		// workload never schedules. (We only get here on a real state change
+		// — the state-match fast path returned above — so this never floods,
+		// and the update coalesces by supersedes_key=node:<id> regardless.)
+		s.notifyNodeState(dm, prevCluster)
 		return
 	}
 	// M72: a machine with no local record is either genuinely new or —
@@ -161,7 +180,14 @@ func (s *Shard) applyReconciledMachine(dm machine.Machine) {
 			"machine", dm.ID, "err", err)
 	}
 	dm.ShardMetadata = nil // decoded above; don't carry the map onto the hot path
-	_ = s.inv.Insert(dm)
+	if err := s.inv.Insert(dm); err != nil {
+		return
+	}
+	// ADR-0057: a machine first seen already in a bound state (e.g. a
+	// restart-rebuilt Configured record, or an async provider whose first
+	// observed state for a fresh id is already terminal) must reach the
+	// operator too.
+	s.notifyNodeState(dm, "")
 }
 
 func equivalentErrNotFound(err error) bool {

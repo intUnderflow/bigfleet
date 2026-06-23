@@ -467,6 +467,24 @@ func (s *Snapshot) CountByClusterStateMatching(cluster machine.ClusterID, state 
 	return n
 }
 
+// ListByCluster returns every machine bound to the given cluster, across
+// all states, as a fresh slice the caller may keep and mutate. Only a
+// cluster's own bound machines (Configuring / Configured / Draining) live
+// in its bucket — unbound Idle / Speculative machines carry no cluster and
+// are absent. O(K) in the cluster's population, not the fleet's. Used by
+// the operator-reconnect node-state resync (ADR-0057).
+func (s *Snapshot) ListByCluster(cluster machine.ClusterID) []machine.Machine {
+	byState := s.bucketsByClusterState[cluster]
+	if byState == nil {
+		return nil
+	}
+	var out []machine.Machine
+	for _, bucket := range byState {
+		out = append(out, bucket...)
+	}
+	return out
+}
+
 // Len returns the number of machines.
 func (s *Snapshot) Len() int { return len(s.machines) }
 

@@ -77,6 +77,15 @@ func (s *Shard) Session(stream pb.Shard_SessionServer) error {
 		}},
 	})
 
+	// ADR-0057: replay current node state for this cluster to the freshly
+	// (re)connected operator. notifyNodeState is best-effort (a frame for a
+	// disconnected session is dropped) and a machine's terminal state is
+	// reached via reconcile for async providers — so without this resync an
+	// operator that connects after the shard already knows a node's state
+	// never hears it. The session is installed above, so this routes to it;
+	// the coalescing supersedes_key dedups against any concurrent live update.
+	s.resyncNodeState(cluster)
+
 	// M44.4 Drop B: split the recv pump from message handling. Slow
 	// handlers (Rollup → needs.Replace + triggerCycle) used to run
 	// inline and block delivery of every later message — including the

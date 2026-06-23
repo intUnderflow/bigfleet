@@ -1558,6 +1558,22 @@ func (s *Shard) notifyNodeState(m machine.Machine, prevCluster machine.ClusterID
 	}
 }
 
+// resyncNodeState replays the current state of every machine bound to
+// cluster to its freshly-(re)connected operator session. ADR-0057:
+// node-state notifies are best-effort and a disconnected session drops the
+// frame, and for async providers a machine's terminal state is reached via
+// reconcile — so an operator that (re)connects after the shard already
+// learned a machine's state would otherwise never hear it. (notifyNodeState's
+// own doc assumed this resync existed; this is it.) Called once per session
+// establish, after the Hello-Ack. Bounded by the cluster's own population,
+// and each frame coalesces by supersedes_key=node:<id> against any
+// concurrent live update.
+func (s *Shard) resyncNodeState(cluster machine.ClusterID) {
+	for _, m := range s.inv.Snapshot().ListByCluster(cluster) {
+		s.notifyNodeState(m, "")
+	}
+}
+
 // SeedInventory inserts a machine straight into the shard's inventory.
 // Used during startup to import a provider's existing inventory and
 // during component tests to set up scenarios without a full reconcile.
