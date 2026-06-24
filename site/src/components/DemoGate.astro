@@ -1,0 +1,45 @@
+---
+/**
+ * Invisible reCAPTCHA v3 gate for the homepage "Demo" call-to-action.
+ *
+ * reCAPTCHA loads quietly in the background. When a visitor clicks the Demo button
+ * (any <a data-demo-cta>), we fetch a reputation token and hand it to the demo
+ * coordinator at bigfleet-demo.lucy.sh, which decides — by score + live capacity —
+ * whether to spend a real session on them or fall through to the /demo tour. The site
+ * key is public by design (it's a client-side key); the secret lives only in the Worker.
+ */
+---
+
+<script
+  is:inline
+  async
+  defer
+  src="https://www.google.com/recaptcha/api.js?render=6Lfu5zAtAAAAAO0Q7uXkJq7PlSHBOheVQnifOmzA"
+></script>
+<script is:inline>
+  (function () {
+    var SITE_KEY = "6Lfu5zAtAAAAAO0Q7uXkJq7PlSHBOheVQnifOmzA";
+    var DEMO_URL = "https://bigfleet-demo.lucy.sh/";
+    function go(token) {
+      window.location.href = DEMO_URL + (token ? "?rc=" + encodeURIComponent(token) : "");
+    }
+    function onClick(e) {
+      e.preventDefault();
+      try {
+        grecaptcha.ready(function () {
+          grecaptcha.execute(SITE_KEY, { action: "demo" }).then(go, function () {
+            go("");
+          });
+        });
+      } catch (_) {
+        go(""); // reCAPTCHA not ready -> no token; the coordinator routes to the tour
+      }
+    }
+    function wire() {
+      var btns = document.querySelectorAll("a[data-demo-cta]");
+      for (var i = 0; i < btns.length; i++) btns[i].addEventListener("click", onClick);
+    }
+    if (document.readyState !== "loading") wire();
+    else document.addEventListener("DOMContentLoaded", wire);
+  })();
+</script>

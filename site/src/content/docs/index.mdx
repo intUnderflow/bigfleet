@@ -10,8 +10,7 @@ hero:
       icon: right-arrow
       variant: primary
       attrs:
-        target: _blank
-        rel: noopener
+        data-demo-cta: "true"
     - text: Quickstart
       link: /quickstart/
       icon: right-arrow
@@ -27,6 +26,9 @@ hero:
 ---
 
 import ProviderStrip from "../../components/ProviderStrip.astro";
+import DemoGate from "../../components/DemoGate.astro";
+
+<DemoGate />
 
 <div class="supported-by not-content">
   <p class="supported-by-label">Scale testing supported by</p>
