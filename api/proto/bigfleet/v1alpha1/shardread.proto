@@ -1,0 +1,120 @@
+// ShardRead is the shard's read-only diagnostic surface (ADR-0061),
+// separate from the operator-initiated Shard.Session stream. It exposes
+// the per-Need last-cycle verdict the decision engine computes every cycle
+// and would otherwise discard, so operator tooling — a CLI, alerting, and
+// the bigfleet-web-dashboard — can explore "which of a cluster's needs are
+// satisfied vs unmet, and why".
+//
+// Read-only and general-purpose. Under mTLS the RPCs are gated by the
+// bigfleet://readonly (or admin) URI SAN, exactly like the coordinator's
+// read RPCs (ADR-0048 / ADR-0060); on plaintext the gate is skipped (the
+// trust-the-network default). The data is leader-local-equivalent shard
+// soft state: at most one cycle stale, empty before the first cycle.
+syntax = "proto3";
+
+package bigfleet.v1alpha1;
+
+import "bigfleet/v1alpha1/capacity.proto";
+import "bigfleet/v1alpha1/provider.proto";
+
+service ShardRead {
+  // InspectNeeds streams the shard's last-cycle per-Need verdicts. The
+  // first frame is always an InspectNeedsHeader (cycle + freshness);
+  // subsequent frames are NeedView rows in the shard's Snapshot order
+  // (priority desc, then arrival asc, then cluster asc). Filter to one
+  // cluster via InspectNeedsRequest.cluster_id.
+  rpc InspectNeeds(InspectNeedsRequest) returns (stream InspectNeedsResponse);
+}
+
+message InspectNeedsRequest {
+  // Restrict to one cluster. Empty = every cluster the shard currently
+  // holds needs for. The NeedsTable is indexed by cluster, so the filter
+  // is free.
+  string cluster_id = 1;
+
+  // Optional cap on the number of NeedView rows streamed (0 = no cap).
+  // total_needs in the header reports the pre-cap count.
+  int32 limit = 2;
+}
+
+message InspectNeedsResponse {
+  oneof frame {
+    InspectNeedsHeader header = 1;  // always the first frame
+    NeedView           need   = 2;
+  }
+}
+
+// InspectNeedsHeader is the first streamed frame: which cycle the verdicts
+// are from and when it was computed. Soft state — one cycle stale at most;
+// an empty stream (header with cycle 0 / no rows) means "not yet computed",
+// not "no demand".
+message InspectNeedsHeader {
+  int64 cycle                  = 1;
+  int64 computed_at_unix_nanos = 2;
+  // Needs matching the filter before `limit` was applied.
+  int32 total_needs            = 3;
+}
+
+// NeedView is one Need plus the decision engine's last-cycle verdict for it.
+// The verdict fields are observation-only: they reflect what the engine
+// decided, they never feed back into it.
+message NeedView {
+  // The demand: requirements / aggregate_resources / min_unit / priority /
+  // spread / both penalty buckets / group (ADR-0027).
+  CapacityNeed need               = 1;
+  string       cluster_id         = 2;
+  int64        arrival_unix_nanos = 3;
+  string       profile_fingerprint = 4;
+
+  // --- last-cycle verdict ---
+
+  // Whether the engine satisfied this Need's full aggregate demand.
+  bool satisfied = 5;
+
+  // The residual unmet demand vector (ADR-0027); absent/empty when satisfied.
+  Resources residual_deficit = 6;
+
+  // The Need's complete claimed-machine count this cycle (credited
+  // Configured/Configuring + worker-committed Idle/Speculative), and the
+  // acquired subsets.
+  int32 claimed_machine_count = 7;
+  int32 bootstrap_count       = 8;  // idle → configured acquired this cycle
+  int32 provision_count       = 9;  // speculative → configured acquired
+
+  // Co-location (Same) bookkeeping. same_domain is the domain the engine
+  // chose for a Same-Need ("" for plain Needs); same_satisfiable is the
+  // structural verdict (some domain's joint total could cover the deficit).
+  string same_domain      = 10;
+  bool   same_satisfiable = 11;
+
+  // ADR-0042 acquisition parking: a Same-Need the shard stopped acquiring
+  // for after it was structurally unsatisfiable for parkAfterCycles, plus
+  // how long it has been parked.
+  bool  acquisition_parked = 12;
+  int32 parked_age_cycles  = 13;
+
+  // Cycles this Need has been unmet (from the shard's shortfall ledger;
+  // 0 when satisfied).
+  int32 age_cycles_unmet = 14;
+
+  // Why the Need is unmet. UNSPECIFIED when satisfied.
+  UnmetReason unmet_reason = 15;
+}
+
+// UnmetReason classifies why a Need is unmet (ADR-0061). SATISFIED Needs
+// carry UNMET_REASON_UNSPECIFIED.
+enum UnmetReason {
+  UNMET_REASON_UNSPECIFIED = 0;
+  // Matching supply exists but is held by equal-or-higher-precedence
+  // incumbents with nothing displaceable below the cut-line.
+  UNMET_REASON_PRIORITY_STARVED = 1;
+  // No machine of a satisfying shape exists in the shard's inventory at any
+  // price (provisioning could not produce one this cycle).
+  UNMET_REASON_NO_MATCHING_SUPPLY = 2;
+  // A Same/co-location constraint cannot be satisfied within the shard
+  // (topology constraints never cross a shard boundary).
+  UNMET_REASON_TOPOLOGY_UNSATISFIABLE = 3;
+  // Phase 2 found lower-precedence victims of the right shape but could not
+  // free enough to cover the deficit.
+  UNMET_REASON_PREEMPTION_EXHAUSTED = 4;
+}
