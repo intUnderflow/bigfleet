@@ -170,9 +170,50 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		}
 		r.Deficit = needs.SubResources(r.Need.AggregateResources, sumAlloc)
 		r.Unsatisfied = !needs.IsZero(r.Deficit)
+		// ADR-0061: classify why an Unsatisfied Need is short. A Need that
+		// claimed anything trivially has matching supply; otherwise scan
+		// the inventory for any machine of the right shape (held by anyone,
+		// at any priority). Observation-only, after the barrier — no claim
+		// decision rides on it.
+		if r.Unsatisfied {
+			r.MatchingSupplyExists = len(r.ClaimedMachines) > 0 ||
+				anyMatchingSupply(snap, r.Need.Profile, r.Need.MinUnit)
+		}
 	}
 
 	return CycleResult{Results: results, Claimed: claimed}
+}
+
+// anyMatchingSupply reports whether the inventory holds at least one
+// machine — in any of Idle / Speculative / Configured — whose shape
+// MatchProfile-passes profile and covers minUnit, ignoring claims and
+// priority. It reuses the snapshot's instance-type buckets (no sort, no
+// copy) and early-returns on the first match, so the common pinned case is
+// a small bucket walk; the unpinned fallback walks the full per-state slice
+// but still early-returns. Read-only; called only for Unsatisfied Needs at
+// the barrier (ADR-0061).
+func anyMatchingSupply(snap *inventory.Snapshot, profile needs.Profile, minUnit []needs.ResourceQty) bool {
+	types := pinnedInstanceTypes(profile)
+	for _, st := range []machine.State{machine.StateIdle, machine.StateSpeculative, machine.StateConfigured} {
+		var pool []machine.Machine
+		if len(types) == 0 {
+			pool = snap.ListByState(st)
+		} else {
+			for _, t := range types {
+				pool = append(pool, snap.ListByStateInstanceType(st, t)...)
+			}
+		}
+		for i := range pool {
+			m := &pool[i]
+			if !matchProfile(profile, *m) {
+				continue
+			}
+			if needs.Covers(needs.ResourceQtysFromMap(m.EffectiveAllocatable()), minUnit) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // processNeed runs one Need through the broker. Tries Idle then

@@ -248,6 +248,10 @@ func Phase2(snap *inventory.Snapshot, unresolved []UnsatisfiedNeed, opts Phase2O
 			out.Unresolved = append(out.Unresolved, UnsatisfiedNeed{
 				Need:    u.Need,
 				Deficit: remaining,
+				// ADR-0061: Preempted distinguishes "found victims, freed
+				// some, fell short" (PREEMPTION_EXHAUSTED) from "no
+				// displaceable victim at all" (PRIORITY_STARVED).
+				Preempted: len(picks) > 0,
 			})
 		}
 	}

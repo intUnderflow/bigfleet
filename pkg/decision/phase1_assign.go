@@ -35,6 +35,30 @@ type Phase1Result struct {
 	// flag-gated phase-attribution probe, no engine behaviour rides on
 	// it.
 	SatisfiedGangs []SatisfiedGang
+
+	// Verdicts is the per-Need Phase-1 outcome for EVERY Need this cycle
+	// (satisfied and unsatisfied alike), in cycle order. It exists so the
+	// ADR-0061 needs-inspection ledger can report a verdict for the
+	// satisfied majority — which otherwise leaves no per-Need record here
+	// (only Unsatisfied/SatisfiedGangs survive). Read-only/diagnostic; the
+	// engine reasons over Actions/Unsatisfied/Claimed, never this.
+	Verdicts []NeedVerdict
+}
+
+// NeedVerdict is the Phase-1 outcome of one Need, projected for the
+// ADR-0061 needs-inspection ledger. Need points into the cycle's demand
+// slice (alive for the cycle's duration); the shard copies the scalar
+// fields it retains and never holds the pointer.
+type NeedVerdict struct {
+	Need                 *needs.Need
+	Satisfied            bool
+	Deficit              []needs.ResourceQty
+	ClaimedCount         int
+	BootstrapCount       int
+	ProvisionCount       int
+	SameDomain           string
+	SameSatisfiable      bool
+	MatchingSupplyExists bool
 }
 
 // SatisfiedGang is the per-cycle attribution of one SATISFIED Same-Need
@@ -66,6 +90,13 @@ type UnsatisfiedNeed struct {
 	SameDomain      string
 	Acquired        int
 	SameSatisfiable bool
+	// Preempted is set ONLY by Phase 2 on a still-Unresolved Need: it
+	// issued at least one Preempt for this Need but the freed capacity
+	// still fell short of the deficit. It distinguishes PREEMPTION_EXHAUSTED
+	// (preempted some, fell short) from PRIORITY_STARVED (no displaceable
+	// victim at all) for the ADR-0061 verdict. Always false on the Phase-1
+	// Unsatisfied path. Observation-only.
+	Preempted bool
 }
 
 // Phase1 emits Bootstrap (idle → configured) and Provision
@@ -101,11 +132,26 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 	cycle := occ.RunCycle(snap, allNeeds)
 
 	result := Phase1Result{Claimed: cycle.Claimed}
+	result.Verdicts = make([]NeedVerdict, 0, len(cycle.Results))
 	for _, r := range cycle.Results {
 		if r.Need == nil {
 			continue
 		}
 		profile := r.Need.Profile
+
+		// ADR-0061: record every Need's verdict (satisfied + unsatisfied)
+		// for the needs-inspection ledger. Additive; nothing below reads it.
+		result.Verdicts = append(result.Verdicts, NeedVerdict{
+			Need:                 r.Need,
+			Satisfied:            !r.Unsatisfied,
+			Deficit:              r.Deficit,
+			ClaimedCount:         len(r.ClaimedMachines),
+			BootstrapCount:       len(r.BootstrapMachines),
+			ProvisionCount:       len(r.ProvisionMachines),
+			SameDomain:           r.SameDomain,
+			SameSatisfiable:      r.SameSatisfiable,
+			MatchingSupplyExists: r.MatchingSupplyExists,
+		})
 
 		// Existing-supply credit is the OCC pre-pass; nothing to emit.
 		// Idle commits become Bootstrap actions.

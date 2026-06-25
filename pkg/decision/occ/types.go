@@ -175,6 +175,17 @@ type NeedResult struct {
 	// after the barrier walk. Read-only/diagnostic; the engine reasons
 	// over the flattened CycleResult.Claimed, not this per-Need view.
 	ClaimedMachines []machine.ID
+	// MatchingSupplyExists records, for an Unsatisfied Need, whether the
+	// inventory holds ANY machine (Idle/Speculative/Configured) whose
+	// shape both MatchProfile-passes and covers MinUnit — regardless of
+	// who currently holds it or its priority. It separates "no machine of
+	// this shape exists at all" (NO_MATCHING_SUPPLY) from "machines of the
+	// shape exist but are held above the cut-line" (PRIORITY_STARVED) for
+	// the ADR-0061 needs-inspection verdict. Computed at the barrier
+	// (single-threaded, post-claim) for Unsatisfied Needs only; it is
+	// observation-only and never feeds a claim decision. False for
+	// satisfied Needs (not computed).
+	MatchingSupplyExists bool
 }
 
 // Result is what Propose returns.
