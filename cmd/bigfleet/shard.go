@@ -913,6 +913,9 @@ func runShard(args []string) error {
 	}
 	srv := grpc.NewServer(serverOpts...)
 	pb.RegisterShardServer(srv, sh)
+	// ADR-0061: the read-only needs-inspection surface, on the same server,
+	// gated by the bigfleet://readonly SAN.
+	pb.RegisterShardReadServer(srv, shard.NewReadServer(sh))
 
 	lis, err := net.Listen("tcp", *listen)
 	if err != nil {

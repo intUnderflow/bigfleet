@@ -117,6 +117,7 @@ func runAllInOne(args []string) error {
 	}
 	shardGRPC := grpc.NewServer(grpcutil.ServerOptions()...)
 	pb.RegisterShardServer(shardGRPC, sh)
+	pb.RegisterShardReadServer(shardGRPC, shard.NewReadServer(sh)) // ADR-0061
 	shardLis, err := net.Listen("tcp", *shardListen)
 	if err != nil {
 		return fmt.Errorf("shard listen: %w", err)
