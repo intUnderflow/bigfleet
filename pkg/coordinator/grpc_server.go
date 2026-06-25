@@ -49,7 +49,7 @@ func (g *GRPCServer) requireShardIdentity(ctx context.Context, shardID string) e
 }
 
 // requireAdminIdentity enforces the bigfleet://admin SAN on the admin
-// surface.
+// (mutating) surface.
 func (g *GRPCServer) requireAdminIdentity(ctx context.Context, rpc string) error {
 	uri, mtls, err := grpcutil.PeerIdentity(ctx)
 	if !mtls {
@@ -60,6 +60,26 @@ func (g *GRPCServer) requireAdminIdentity(ctx context.Context, rpc string) error
 			"rpc", rpc, "presented_identity", uri, "err", err)
 		return status.Errorf(codes.PermissionDenied,
 			"coordinator: %s requires client certificate URI SAN %q (got %q)", rpc, grpcutil.AdminURI, uri)
+	}
+	return nil
+}
+
+// requireReadIdentity enforces the READ surface contract (ADR-0060): the
+// caller must carry EITHER bigfleet://readonly (read-only operator tooling)
+// OR bigfleet://admin (admin is a superset). It MUST NOT accept the write
+// surface's identities for free — the mutating RPCs stay on
+// requireAdminIdentity. On plaintext transports the check is skipped, like
+// every other gate (the trust-the-network default).
+func (g *GRPCServer) requireReadIdentity(ctx context.Context, rpc string) error {
+	uri, mtls, err := grpcutil.PeerIdentity(ctx)
+	if !mtls {
+		return nil
+	}
+	if err != nil || (uri != grpcutil.ReadonlyURI && uri != grpcutil.AdminURI) {
+		g.c.log.Error("coordinator rejected read identity",
+			"rpc", rpc, "presented_identity", uri, "err", err)
+		return status.Errorf(codes.PermissionDenied,
+			"coordinator: %s requires client certificate URI SAN %q or %q (got %q)", rpc, grpcutil.ReadonlyURI, grpcutil.AdminURI, uri)
 	}
 	return nil
 }
@@ -364,7 +384,7 @@ func (g *GRPCServer) ListShards(ctx context.Context, _ *pb.ListShardsRequest) (*
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
 	}
-	if err := g.requireAdminIdentity(ctx, "ListShards"); err != nil {
+	if err := g.requireReadIdentity(ctx, "ListShards"); err != nil {
 		return nil, err
 	}
 	entries := g.c.State().Shards()
@@ -387,7 +407,7 @@ func (g *GRPCServer) ListQuotas(ctx context.Context, _ *pb.ListQuotasRequest) (*
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
 	}
-	if err := g.requireAdminIdentity(ctx, "ListQuotas"); err != nil {
+	if err := g.requireReadIdentity(ctx, "ListQuotas"); err != nil {
 		return nil, err
 	}
 	all := g.c.State().Quotas()
@@ -488,7 +508,7 @@ func (g *GRPCServer) ListDomainAssignments(ctx context.Context, _ *pb.ListDomain
 	if !g.c.IsLeader() {
 		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
 	}
-	if err := g.requireAdminIdentity(ctx, "ListDomainAssignments"); err != nil {
+	if err := g.requireReadIdentity(ctx, "ListDomainAssignments"); err != nil {
 		return nil, err
 	}
 	entries := g.c.State().Shards()
@@ -503,6 +523,101 @@ func (g *GRPCServer) ListDomainAssignments(ctx context.Context, _ *pb.ListDomain
 		}
 	}
 	return &pb.ListDomainAssignmentsResponse{Assignments: out}, nil
+}
+
+// ListProviders returns the registered provider backends (ADR-0060). Read
+// path; same leader-only + read-gated contract as ListShards.
+func (g *GRPCServer) ListProviders(ctx context.Context, _ *pb.ListProvidersRequest) (*pb.ListProvidersResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireReadIdentity(ctx, "ListProviders"); err != nil {
+		return nil, err
+	}
+	entries := g.c.State().Providers()
+	out := make([]*pb.ProviderEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, &pb.ProviderEntry{
+			Name:    e.Name,
+			Address: e.Address,
+			Region:  e.Region,
+		})
+	}
+	return &pb.ListProvidersResponse{Providers: out}, nil
+}
+
+// ListShardReports returns the coordinator's leader-local soft-state
+// snapshot per shard (ADR-0060): the latest ShardSummary + top-N Shortfall
+// it accumulated from each shard's ReportShard. Read path; leader-only +
+// read-gated. Leader-local soft state — empty right after a failover until
+// shards re-report; each snapshot carries received_at so callers can label
+// freshness. Reconstructed from the same g.latestSummary / g.latestShortfalls
+// the LatestSummary / LatestShortfalls accessors expose, read here directly
+// under g.mu (those accessors take g.mu, so calling them here would deadlock).
+func (g *GRPCServer) ListShardReports(ctx context.Context, req *pb.ListShardReportsRequest) (*pb.ListShardReportsResponse, error) {
+	if !g.c.IsLeader() {
+		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
+	}
+	if err := g.requireReadIdentity(ctx, "ListShardReports"); err != nil {
+		return nil, err
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	want := ShardID(req.GetShardId())
+	idSet := make(map[ShardID]struct{}, len(g.latestSummary))
+	for id := range g.latestSummary {
+		idSet[id] = struct{}{}
+	}
+	for id := range g.latestShortfalls {
+		idSet[id] = struct{}{}
+	}
+	ids := make([]ShardID, 0, len(idSet))
+	for id := range idSet {
+		if want != "" && id != want {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	out := make([]*pb.ShardReportSnapshot, 0, len(ids))
+	for _, id := range ids {
+		snap := &pb.ShardReportSnapshot{ShardId: string(id)}
+		if s, ok := g.latestSummary[id]; ok {
+			snap.Cycle = s.Cycle
+			snap.ReceivedAtUnixNs = s.ReceivedAt.UnixNano()
+			snap.Summary = &pb.ShardSummary{
+				TotalMachines:         s.TotalMachines,
+				FreeMachines:          s.FreeMachines,
+				PerInstanceTypeCounts: cloneIntMap(s.InstanceTypeCounts),
+				PerZoneCounts:         cloneIntMap(s.ZoneCounts),
+			}
+		}
+		for _, sf := range g.latestShortfalls[id] {
+			// requirements are not retained in soft state (see proto doc).
+			snap.Shortfalls = append(snap.Shortfalls, &pb.Shortfall{
+				Deficit:                   &pb.Resources{Resources: cloneStrMap(sf.Deficit)},
+				Priority:                  sf.Priority,
+				AgeCycles:                 sf.AgeCycles,
+				InterruptionPenaltyBucket: sf.InterruptionPenaltyBucket,
+			})
+		}
+		out = append(out, snap)
+	}
+	return &pb.ListShardReportsResponse{Reports: out}, nil
+}
+
+func cloneStrMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func cloneIntMap(in map[string]int32) map[string]int32 {

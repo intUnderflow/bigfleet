@@ -35,6 +35,8 @@ const (
 	Coordinator_ListShards_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListShards"
 	Coordinator_ListDomainAssignments_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ListDomainAssignments"
 	Coordinator_ListQuotas_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListQuotas"
+	Coordinator_ListProviders_FullMethodName         = "/bigfleet.v1alpha1.Coordinator/ListProviders"
+	Coordinator_ListShardReports_FullMethodName      = "/bigfleet.v1alpha1.Coordinator/ListShardReports"
 	Coordinator_JoinRaftCluster_FullMethodName       = "/bigfleet.v1alpha1.Coordinator/JoinRaftCluster"
 	Coordinator_SnapshotSave_FullMethodName          = "/bigfleet.v1alpha1.Coordinator/SnapshotSave"
 )
@@ -53,10 +55,13 @@ type CoordinatorClient interface {
 	ReportShard(ctx context.Context, in *ShardReport, opts ...grpc.CallOption) (*ReportAck, error)
 	// M15 admin surface. Each RPC is leader-only and returns
 	// FailedPrecondition on followers (the same redirect contract as
-	// ReportShard). v1 ships unauthenticated — the coordinator's gRPC
-	// service is a cluster-internal endpoint; exposing it externally
-	// requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
-	// intended client.
+	// ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
+	// RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
+	// bigfleet://admin SAN; the READ RPCs (ListShards /
+	// ListDomainAssignments / ListQuotas / ListProviders /
+	// ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
+	// read-only operator tooling needs no admin certificate. On plaintext
+	// transports both checks are skipped (trust-the-network default).
 	AssignDomain(ctx context.Context, in *AssignDomainRequest, opts ...grpc.CallOption) (*AssignDomainResponse, error)
 	UnassignDomain(ctx context.Context, in *UnassignDomainRequest, opts ...grpc.CallOption) (*UnassignDomainResponse, error)
 	RemoveShard(ctx context.Context, in *RemoveShardRequest, opts ...grpc.CallOption) (*RemoveShardResponse, error)
@@ -68,6 +73,19 @@ type CoordinatorClient interface {
 	// the FSM (idempotent overwrite of the per-shard slice for a
 	// (provider, region) key); ListQuotas is a read.
 	ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error)
+	// General-purpose read surface for operator tooling (ADR-0060). Both
+	// are leader-only and read-gated (bigfleet://readonly or admin).
+	// ListProviders enumerates the registered provider backends.
+	// ListShardReports returns the coordinator's leader-local soft-state
+	// snapshot — the latest ShardSummary + top-N Shortfall per shard, the
+	// inventory/demand picture it already accumulates from every
+	// ReportShard heartbeat. Leader-local (not Raft-replicated): it is
+	// observability-grade, empty right after a failover until shards
+	// re-report, and each snapshot carries received_at so callers can
+	// label freshness. Useful to any CLI / dashboard / alerting /
+	// capacity tool, not just one consumer.
+	ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error)
+	ListShardReports(ctx context.Context, in *ListShardReportsRequest, opts ...grpc.CallOption) (*ListShardReportsResponse, error)
 	// M75 Raft membership (ADR-0047). A coordinator replica with no
 	// existing Raft state asks the leader to AddVoter it into the
 	// cluster. Leader-only (FailedPrecondition on followers / on
@@ -163,6 +181,26 @@ func (c *coordinatorClient) ListQuotas(ctx context.Context, in *ListQuotasReques
 	return out, nil
 }
 
+func (c *coordinatorClient) ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProvidersResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListProviders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorClient) ListShardReports(ctx context.Context, in *ListShardReportsRequest, opts ...grpc.CallOption) (*ListShardReportsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListShardReportsResponse)
+	err := c.cc.Invoke(ctx, Coordinator_ListShardReports_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *coordinatorClient) JoinRaftCluster(ctx context.Context, in *JoinRaftClusterRequest, opts ...grpc.CallOption) (*JoinRaftClusterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(JoinRaftClusterResponse)
@@ -206,10 +244,13 @@ type CoordinatorServer interface {
 	ReportShard(context.Context, *ShardReport) (*ReportAck, error)
 	// M15 admin surface. Each RPC is leader-only and returns
 	// FailedPrecondition on followers (the same redirect contract as
-	// ReportShard). v1 ships unauthenticated — the coordinator's gRPC
-	// service is a cluster-internal endpoint; exposing it externally
-	// requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
-	// intended client.
+	// ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
+	// RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
+	// bigfleet://admin SAN; the READ RPCs (ListShards /
+	// ListDomainAssignments / ListQuotas / ListProviders /
+	// ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
+	// read-only operator tooling needs no admin certificate. On plaintext
+	// transports both checks are skipped (trust-the-network default).
 	AssignDomain(context.Context, *AssignDomainRequest) (*AssignDomainResponse, error)
 	UnassignDomain(context.Context, *UnassignDomainRequest) (*UnassignDomainResponse, error)
 	RemoveShard(context.Context, *RemoveShardRequest) (*RemoveShardResponse, error)
@@ -221,6 +262,19 @@ type CoordinatorServer interface {
 	// the FSM (idempotent overwrite of the per-shard slice for a
 	// (provider, region) key); ListQuotas is a read.
 	ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error)
+	// General-purpose read surface for operator tooling (ADR-0060). Both
+	// are leader-only and read-gated (bigfleet://readonly or admin).
+	// ListProviders enumerates the registered provider backends.
+	// ListShardReports returns the coordinator's leader-local soft-state
+	// snapshot — the latest ShardSummary + top-N Shortfall per shard, the
+	// inventory/demand picture it already accumulates from every
+	// ReportShard heartbeat. Leader-local (not Raft-replicated): it is
+	// observability-grade, empty right after a failover until shards
+	// re-report, and each snapshot carries received_at so callers can
+	// label freshness. Useful to any CLI / dashboard / alerting /
+	// capacity tool, not just one consumer.
+	ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error)
+	ListShardReports(context.Context, *ListShardReportsRequest) (*ListShardReportsResponse, error)
 	// M75 Raft membership (ADR-0047). A coordinator replica with no
 	// existing Raft state asks the leader to AddVoter it into the
 	// cluster. Leader-only (FailedPrecondition on followers / on
@@ -266,6 +320,12 @@ func (UnimplementedCoordinatorServer) ListDomainAssignments(context.Context, *Li
 }
 func (UnimplementedCoordinatorServer) ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListQuotas not implemented")
+}
+func (UnimplementedCoordinatorServer) ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListProviders not implemented")
+}
+func (UnimplementedCoordinatorServer) ListShardReports(context.Context, *ListShardReportsRequest) (*ListShardReportsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListShardReports not implemented")
 }
 func (UnimplementedCoordinatorServer) JoinRaftCluster(context.Context, *JoinRaftClusterRequest) (*JoinRaftClusterResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method JoinRaftCluster not implemented")
@@ -420,6 +480,42 @@ func _Coordinator_ListQuotas_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Coordinator_ListProviders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProvidersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListProviders(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListProviders_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListProviders(ctx, req.(*ListProvidersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Coordinator_ListShardReports_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListShardReportsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServer).ListShardReports(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Coordinator_ListShardReports_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoordinatorServer).ListShardReports(ctx, req.(*ListShardReportsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Coordinator_JoinRaftCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(JoinRaftClusterRequest)
 	if err := dec(in); err != nil {
@@ -483,6 +579,14 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListQuotas",
 			Handler:    _Coordinator_ListQuotas_Handler,
+		},
+		{
+			MethodName: "ListProviders",
+			Handler:    _Coordinator_ListProviders_Handler,
+		},
+		{
+			MethodName: "ListShardReports",
+			Handler:    _Coordinator_ListShardReports_Handler,
 		},
 		{
 			MethodName: "JoinRaftCluster",

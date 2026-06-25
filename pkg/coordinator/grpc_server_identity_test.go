@@ -17,10 +17,13 @@ import (
 	pb "github.com/intUnderflow/bigfleet/pkg/proto/bigfleet/v1alpha1"
 )
 
-// ADR-0048 coordinator SAN binding: under mTLS, ReportShard binds the
-// asserted shard_id to bigfleet://shard/<shard_id>, and the admin
-// surface (M15 domain/shard admin, M24 ListQuotas, M75
-// JoinRaftCluster/SnapshotSave) requires bigfleet://admin.
+// ADR-0048 + ADR-0060 coordinator SAN binding: under mTLS, ReportShard binds
+// the asserted shard_id to bigfleet://shard/<shard_id>; the MUTATING surface
+// (AssignDomain / UnassignDomain / RemoveShard / JoinRaftCluster /
+// SnapshotSave) requires bigfleet://admin; and the READ surface (ListShards /
+// ListDomainAssignments / ListQuotas / ListProviders / ListShardReports)
+// accepts bigfleet://readonly OR bigfleet://admin (the read-only role can read
+// but never mutate the fleet).
 
 // startMTLSCoordinator brings up a single-node leader with an mTLS
 // gRPC front and returns a client-builder keyed by certificate URI SAN.
@@ -124,5 +127,64 @@ func TestCoordinatorIdentity_AdminSurfaceRequiresAdminSAN(t *testing.T) {
 	asAdmin := dial(grpcutil.AdminURI)
 	if _, err := asAdmin.ListShards(ctx, &pb.ListShardsRequest{}); err != nil {
 		t.Fatalf("ListShards with admin SAN: %v", err)
+	}
+}
+
+// TestCoordinatorIdentity_ReadonlyRole pins ADR-0060: the bigfleet://readonly
+// SAN may call EVERY read RPC but NO mutating RPC, and admin remains a
+// superset (it passes the reads too). The whole point is that a read-only
+// dashboard/CLI cert cannot change the fleet — the auth check fires before the
+// request is even examined, so empty requests suffice for the rejection cases.
+func TestCoordinatorIdentity_ReadonlyRole(t *testing.T) {
+	dial := startMTLSCoordinator(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	asReadonly := dial(grpcutil.ReadonlyURI)
+
+	// Every READ RPC is allowed.
+	if _, err := asReadonly.ListShards(ctx, &pb.ListShardsRequest{}); err != nil {
+		t.Errorf("ListShards with readonly SAN: %v", err)
+	}
+	if _, err := asReadonly.ListDomainAssignments(ctx, &pb.ListDomainAssignmentsRequest{}); err != nil {
+		t.Errorf("ListDomainAssignments with readonly SAN: %v", err)
+	}
+	if _, err := asReadonly.ListQuotas(ctx, &pb.ListQuotasRequest{}); err != nil {
+		t.Errorf("ListQuotas with readonly SAN: %v", err)
+	}
+	if _, err := asReadonly.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil {
+		t.Errorf("ListProviders with readonly SAN: %v", err)
+	}
+	if _, err := asReadonly.ListShardReports(ctx, &pb.ListShardReportsRequest{}); err != nil {
+		t.Errorf("ListShardReports with readonly SAN: %v", err)
+	}
+
+	// Every MUTATING RPC is rejected — the read-only cert cannot change the fleet.
+	if _, err := asReadonly.AssignDomain(ctx, &pb.AssignDomainRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("AssignDomain with readonly SAN = %v; want PermissionDenied", err)
+	}
+	if _, err := asReadonly.UnassignDomain(ctx, &pb.UnassignDomainRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("UnassignDomain with readonly SAN = %v; want PermissionDenied", err)
+	}
+	if _, err := asReadonly.RemoveShard(ctx, &pb.RemoveShardRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("RemoveShard with readonly SAN = %v; want PermissionDenied", err)
+	}
+	if _, err := asReadonly.JoinRaftCluster(ctx, &pb.JoinRaftClusterRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("JoinRaftCluster with readonly SAN = %v; want PermissionDenied", err)
+	}
+
+	// Admin is a superset: it passes the new reads too.
+	asAdmin := dial(grpcutil.AdminURI)
+	if _, err := asAdmin.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil {
+		t.Errorf("ListProviders with admin SAN: %v", err)
+	}
+	if _, err := asAdmin.ListShardReports(ctx, &pb.ListShardReportsRequest{}); err != nil {
+		t.Errorf("ListShardReports with admin SAN: %v", err)
+	}
+
+	// A shard SAN is neither a read nor an admin role — rejected on reads too.
+	asShard := dial(grpcutil.ShardURI("shard-a"))
+	if _, err := asShard.ListShardReports(ctx, &pb.ListShardReportsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("ListShardReports with shard SAN = %v; want PermissionDenied", err)
 	}
 }

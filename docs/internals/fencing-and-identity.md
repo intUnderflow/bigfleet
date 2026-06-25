@@ -77,6 +77,7 @@ Identity rides on **exactly one** `bigfleet://` URI SAN of the client certificat
 | `bigfleet://cluster/<cluster_id>` | the cluster operator (`ClusterURI`) |
 | `bigfleet://shard/<shard_id>` | the shard, presented to coordinator and provider (`ShardURI`) |
 | `bigfleet://admin` | bigfleetctl and the coordinator replicas themselves (`AdminURI`) |
+| `bigfleet://readonly` | read-only operator tooling — dashboards, CLIs, alerting (`ReadonlyURI`, ADR-0060) |
 
 `PeerIdentity(ctx)` (`tls.go:249-272`) extracts that SAN from the *verified* client chain and returns a three-valued result that encodes ADR-0048's "identity is only as strong as the transport" rule:
 
@@ -90,7 +91,8 @@ Authenticating "some cluster" is not enough; the server must bind the SAN to the
 
 - **Shard Session.** On the `Hello`, when the transport is mTLS, the SAN must equal `ClusterURI(Hello.cluster_id)`; mismatch, missing, or ambiguous identity terminates the stream with `PermissionDenied`, a loud error log, and a `bigfleet_shard_session_identity_rejected` increment (`pkg/shard/session.go:47-63`). This is the line that closes the forged-roll-up impersonation vector — `Hello.cluster_id` is no longer free text.
 - **Coordinator `ReportShard`.** `requireShardIdentity` binds the SAN to `ShardURI(ShardReport.shard_id)` (`pkg/coordinator/grpc_server.go:36-49, 133`). The binding is **strict, not hierarchical** — an admin cert does not pass as a shard.
-- **Coordinator admin surface.** `requireAdminIdentity` requires exactly `bigfleet://admin` on `AssignDomain`, `UnassignDomain`, `RemoveShard`, `ListShards`, `ListDomainAssignments`, `ListQuotas`, `JoinRaftCluster`, `SnapshotSave` (`grpc_server.go:51-63, 301-348`). Coordinator replicas carry the admin SAN because they call `JoinRaftCluster` on each other (ADR-0047) and are inherently the admin domain.
+- **Coordinator mutating surface.** `requireAdminIdentity` requires exactly `bigfleet://admin` on the RPCs that change the fleet — `AssignDomain`, `UnassignDomain`, `RemoveShard`, `JoinRaftCluster`, `SnapshotSave` (`grpc_server.go:51-65`). Coordinator replicas carry the admin SAN because they call `JoinRaftCluster` on each other (ADR-0047) and are inherently the admin domain.
+- **Coordinator read surface (ADR-0060).** `requireReadIdentity` gates the read RPCs — `ListShards`, `ListDomainAssignments`, `ListQuotas`, `ListProviders`, `ListShardReports` — accepting `bigfleet://readonly` **or** `bigfleet://admin` (admin is a superset). This lets read-only operator tooling (a dashboard, a CLI, alerting) query the coordinator with a certificate that **cannot** call the mutating RPCs above — closing the over-privileged-read hole (the Kubernetes-Dashboard footgun). `ReportShard` keeps its strict per-shard binding; the mutating surface is unchanged.
 - **Provider dial-out.** The shard *presents* `ShardURI(shard_id)`; enforcement is the provider's job — providers are out of tree, so the validation point is the provider boundary (ADR-0048 §2, ADR-0005). This is the identity counterpart to the epoch/sequence fence above: the SAN says *which* shard, the fence says *which generation* of it.
 
 What stays out (ADR-0048 §3): Raft inter-replica transport TLS (a separate `raft.StreamLayer`, keep the Raft port cluster-internal until then), SPIFFE/SPIRE (the SAN convention is SPIFFE-shaped on purpose but v1 takes files on disk), in-chart cert generation (cert-manager is the documented issuer, charts take `kubernetes.io/tls` Secret names), and metrics/pprof (HTTP-plaintext — they carry no control authority).

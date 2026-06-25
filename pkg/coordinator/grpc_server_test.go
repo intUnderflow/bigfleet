@@ -327,3 +327,99 @@ func TestGRPCServer_ReportShard_RejectsNonLeader(t *testing.T) {
 		t.Errorf("expected FailedPrecondition, got %v", err)
 	}
 }
+
+// TestGRPCServer_ListShardReports pins the ADR-0060 soft-state read RPC: a
+// shard's ReportShard summary + shortfalls round-trip out through
+// ListShardReports (plaintext skips fencing/auth), and the optional shard_id
+// filter narrows the result.
+func TestGRPCServer_ListShardReports(t *testing.T) {
+	_, _, cli, ctx := startCoordinatorWithGRPC(t)
+
+	if _, err := cli.ReportShard(ctx, &pb.ShardReport{
+		ShardId:      "shard-a",
+		Cycle:        7,
+		ShardAddress: "host:1",
+		Summary: &pb.ShardSummary{
+			TotalMachines:         100,
+			FreeMachines:          20,
+			PerInstanceTypeCounts: map[string]int32{"m5.large": 60, "c6i.xlarge": 40},
+			PerZoneCounts:         map[string]int32{"z-a": 100},
+		},
+		Shortfalls: []*pb.Shortfall{{
+			Priority:                  1000,
+			Deficit:                   &pb.Resources{Resources: map[string]string{"cpu": "8"}},
+			AgeCycles:                 3,
+			InterruptionPenaltyBucket: pb.PenaltyBucket_PENALTY_BUCKET_1,
+		}},
+	}); err != nil {
+		t.Fatalf("ReportShard: %v", err)
+	}
+
+	resp, err := cli.ListShardReports(ctx, &pb.ListShardReportsRequest{})
+	if err != nil {
+		t.Fatalf("ListShardReports: %v", err)
+	}
+	if len(resp.GetReports()) != 1 {
+		t.Fatalf("reports = %d, want 1", len(resp.GetReports()))
+	}
+	r := resp.GetReports()[0]
+	if r.GetShardId() != "shard-a" {
+		t.Errorf("shard_id = %q, want shard-a", r.GetShardId())
+	}
+	if r.GetCycle() != 7 {
+		t.Errorf("cycle = %d, want 7", r.GetCycle())
+	}
+	if r.GetReceivedAtUnixNs() == 0 {
+		t.Errorf("received_at_unix_ns not set")
+	}
+	if s := r.GetSummary(); s.GetTotalMachines() != 100 || s.GetFreeMachines() != 20 ||
+		s.GetPerInstanceTypeCounts()["m5.large"] != 60 || s.GetPerZoneCounts()["z-a"] != 100 {
+		t.Errorf("summary round-trip wrong: %+v", s)
+	}
+	if len(r.GetShortfalls()) != 1 {
+		t.Fatalf("shortfalls = %d, want 1", len(r.GetShortfalls()))
+	}
+	sf := r.GetShortfalls()[0]
+	if sf.GetPriority() != 1000 || sf.GetAgeCycles() != 3 ||
+		sf.GetInterruptionPenaltyBucket() != pb.PenaltyBucket_PENALTY_BUCKET_1 ||
+		sf.GetDeficit().GetResources()["cpu"] != "8" {
+		t.Errorf("shortfall round-trip wrong: %+v", sf)
+	}
+
+	// shard_id filter: an unknown shard returns nothing; the real one returns it.
+	if got, _ := cli.ListShardReports(ctx, &pb.ListShardReportsRequest{ShardId: "nope"}); len(got.GetReports()) != 0 {
+		t.Errorf("filter on unknown shard returned %d reports, want 0", len(got.GetReports()))
+	}
+	if got, _ := cli.ListShardReports(ctx, &pb.ListShardReportsRequest{ShardId: "shard-a"}); len(got.GetReports()) != 1 {
+		t.Errorf("filter on shard-a returned %d reports, want 1", len(got.GetReports()))
+	}
+}
+
+// TestGRPCServer_ListProviders pins the ADR-0060 provider read RPC: a
+// Raft-applied provider registration surfaces through ListProviders.
+func TestGRPCServer_ListProviders(t *testing.T) {
+	c, _, cli, ctx := startCoordinatorWithGRPC(t)
+
+	if got, err := cli.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil || len(got.GetProviders()) != 0 {
+		t.Fatalf("ListProviders (empty) = (%v, %v); want ([], nil)", got, err)
+	}
+
+	if err := c.Apply(ctx, coordinator.Command{
+		Kind:           coordinator.CmdUpsertProvider,
+		UpsertProvider: &coordinator.UpsertProviderCmd{Provider: coordinator.ProviderEntry{Name: "aws", Address: "aws-provider:7790", Region: "eu-west-1"}},
+	}); err != nil {
+		t.Fatalf("Apply UpsertProvider: %v", err)
+	}
+
+	resp, err := cli.ListProviders(ctx, &pb.ListProvidersRequest{})
+	if err != nil {
+		t.Fatalf("ListProviders: %v", err)
+	}
+	if len(resp.GetProviders()) != 1 {
+		t.Fatalf("providers = %d, want 1", len(resp.GetProviders()))
+	}
+	p := resp.GetProviders()[0]
+	if p.GetName() != "aws" || p.GetAddress() != "aws-provider:7790" || p.GetRegion() != "eu-west-1" {
+		t.Errorf("provider round-trip wrong: %+v", p)
+	}
+}

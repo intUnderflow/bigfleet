@@ -25,10 +25,13 @@ service Coordinator {
 
   // M15 admin surface. Each RPC is leader-only and returns
   // FailedPrecondition on followers (the same redirect contract as
-  // ReportShard). v1 ships unauthenticated — the coordinator's gRPC
-  // service is a cluster-internal endpoint; exposing it externally
-  // requires a sidecar (mTLS / OIDC). cmd/bigfleetctl is the
-  // intended client.
+  // ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
+  // RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
+  // bigfleet://admin SAN; the READ RPCs (ListShards /
+  // ListDomainAssignments / ListQuotas / ListProviders /
+  // ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
+  // read-only operator tooling needs no admin certificate. On plaintext
+  // transports both checks are skipped (trust-the-network default).
   rpc AssignDomain(AssignDomainRequest) returns (AssignDomainResponse);
   rpc UnassignDomain(UnassignDomainRequest) returns (UnassignDomainResponse);
   rpc RemoveShard(RemoveShardRequest) returns (RemoveShardResponse);
@@ -41,6 +44,20 @@ service Coordinator {
   // the FSM (idempotent overwrite of the per-shard slice for a
   // (provider, region) key); ListQuotas is a read.
   rpc ListQuotas(ListQuotasRequest) returns (ListQuotasResponse);
+
+  // General-purpose read surface for operator tooling (ADR-0060). Both
+  // are leader-only and read-gated (bigfleet://readonly or admin).
+  // ListProviders enumerates the registered provider backends.
+  // ListShardReports returns the coordinator's leader-local soft-state
+  // snapshot — the latest ShardSummary + top-N Shortfall per shard, the
+  // inventory/demand picture it already accumulates from every
+  // ReportShard heartbeat. Leader-local (not Raft-replicated): it is
+  // observability-grade, empty right after a failover until shards
+  // re-report, and each snapshot carries received_at so callers can
+  // label freshness. Useful to any CLI / dashboard / alerting /
+  // capacity tool, not just one consumer.
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+  rpc ListShardReports(ListShardReportsRequest) returns (ListShardReportsResponse);
 
   // M75 Raft membership (ADR-0047). A coordinator replica with no
   // existing Raft state asks the leader to AddVoter it into the
@@ -230,6 +247,42 @@ message Shortfall {
   // Bucketed interruption penalty of the originating CapacityNeed.
   // Lets the coordinator price cross-shard preemption.
   PenaltyBucket interruption_penalty_bucket = 6;
+}
+
+// ListProviders returns the registered provider backends, sorted by name
+// (ADR-0060). Leader-only; read-gated.
+message ListProvidersRequest {}
+message ListProvidersResponse {
+  repeated ProviderEntry providers = 1;
+}
+message ProviderEntry {
+  string name    = 1;
+  string address = 2; // gRPC dial address
+  string region  = 3;
+}
+
+// ListShardReports returns the coordinator's leader-local soft-state
+// snapshot per shard (ADR-0060). Leader-only; read-gated.
+message ListShardReportsRequest {
+  // Optional: restrict to one shard. Empty returns every shard the
+  // coordinator currently holds a report for.
+  string shard_id = 1;
+}
+message ListShardReportsResponse {
+  repeated ShardReportSnapshot reports = 1;
+}
+// ShardReportSnapshot is the coordinator's most-recent soft-state view of
+// one shard, reconstructed from its latest ReportShard. Reuses the existing
+// ShardSummary + Shortfall messages. Note: the soft state does NOT retain a
+// shortfall's requirements (only priority / deficit / age / penalty bucket),
+// so ShardReportSnapshot.shortfalls[].requirements is always empty — query
+// the shard directly for the full requirement set.
+message ShardReportSnapshot {
+  string shard_id              = 1;
+  int64  cycle                 = 2;
+  int64  received_at_unix_ns   = 3;
+  ShardSummary summary         = 4;
+  repeated Shortfall shortfalls = 5;
 }
 
 message ReportAck {
