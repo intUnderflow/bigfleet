@@ -248,6 +248,14 @@ type Shard struct {
 	shortfallMu sync.Mutex
 	shortfalls  map[string]*shortfallEntry
 
+	// needViews is the shard's last-cycle per-Need verdict ledger
+	// (ADR-0061): a trimmed projection of every Need's satisfied/unmet
+	// state + reason, rebuilt each cycle behind an RWMutex with
+	// build-then-swap so reads (ShardRead.InspectNeeds) never contend the
+	// cycle's write. Nil until the first cycle completes.
+	needViewMu sync.RWMutex
+	needViews  *needViewSnapshot
+
 	// assignedDomains is the set of topology domains the coordinator
 	// has assigned to this shard. Empty = take everything (dev mode).
 	// Mutated by AssignDomain / UnassignDomain instruction handlers.
@@ -960,6 +968,12 @@ func (s *Shard) runCycleCapturing(ctx context.Context) []decision.Action {
 		seeds = append(seeds, shortfallSeed{Profile: u.Need.Profile, Deficit: u.Deficit})
 	}
 	s.recordShortfalls(seeds)
+
+	// ADR-0061: capture the per-Need last-cycle verdicts for the
+	// ShardRead.InspectNeeds read surface. Runs right after the shortfall
+	// ledger so it can join the per-fingerprint unmet age; p1/p2 are still
+	// live. Cheap projection + pointer swap — no recomputation.
+	s.recordNeedViews(cycleNum, p1, p2)
 
 	// `all` was already populated above when we built the executor's
 	// queue; reuse it for metrics. (We also need to count any deferred
