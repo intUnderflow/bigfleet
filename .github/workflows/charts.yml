@@ -42,7 +42,7 @@ jobs:
           - bigfleet-operator
           - bigfleet-unschedulable-pod-controller
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.0
@@ -79,7 +79,7 @@ jobs:
           - bigfleet-operator
           - bigfleet-unschedulable-pod-controller
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.0
