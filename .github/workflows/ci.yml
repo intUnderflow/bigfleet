@@ -13,7 +13,7 @@ jobs:
     name: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history: the buf-breaking step diffs the proto module
           # against the merge-base of main, which a depth-1 clone
@@ -76,7 +76,7 @@ jobs:
     name: simulator
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
