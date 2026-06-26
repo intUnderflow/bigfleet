@@ -1,8 +1,7 @@
 // Coordinator is the internal RPC surface between shards and the global
 // coordinator. The coordinator does not make provisioning decisions; it
-// owns shard membership, the cluster→shard map, the topology-domain→shard
-// map, quota allocations, and the provider registry, and it issues
-// rebalancing / cross-shard preemption instructions.
+// owns shard membership, the cluster→shard map, and the topology-domain→shard
+// map, and it issues rebalancing / cross-shard preemption instructions.
 //
 // Every coordinator-issued instruction carries (coordinator_term, sequence_number).
 // Shards reject instructions with stale terms (zombie-leader protection).
@@ -82,7 +81,7 @@ func (x InstructAck_Outcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InstructAck_Outcome.Descriptor instead.
 func (InstructAck_Outcome) EnumDescriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{35, 0}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{29, 0}
 }
 
 type JoinRaftClusterRequest struct {
@@ -299,147 +298,6 @@ func (*SnapshotSaveChunk_MetaJson) isSnapshotSaveChunk_Payload() {}
 
 func (*SnapshotSaveChunk_Data) isSnapshotSaveChunk_Payload() {}
 
-type ListQuotasRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListQuotasRequest) Reset() {
-	*x = ListQuotasRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListQuotasRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListQuotasRequest) ProtoMessage() {}
-
-func (x *ListQuotasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListQuotasRequest.ProtoReflect.Descriptor instead.
-func (*ListQuotasRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{4}
-}
-
-type ListQuotasResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Allocations   []*QuotaAllocation     `protobuf:"bytes,1,rep,name=allocations,proto3" json:"allocations,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListQuotasResponse) Reset() {
-	*x = ListQuotasResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListQuotasResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListQuotasResponse) ProtoMessage() {}
-
-func (x *ListQuotasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListQuotasResponse.ProtoReflect.Descriptor instead.
-func (*ListQuotasResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *ListQuotasResponse) GetAllocations() []*QuotaAllocation {
-	if x != nil {
-		return x.Allocations
-	}
-	return nil
-}
-
-type QuotaAllocation struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Provider string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
-	Region   string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
-	// per_shard maps shard_id → speculative-pool slice size.
-	PerShard      map[string]int32 `protobuf:"bytes,3,rep,name=per_shard,json=perShard,proto3" json:"per_shard,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *QuotaAllocation) Reset() {
-	*x = QuotaAllocation{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *QuotaAllocation) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*QuotaAllocation) ProtoMessage() {}
-
-func (x *QuotaAllocation) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use QuotaAllocation.ProtoReflect.Descriptor instead.
-func (*QuotaAllocation) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *QuotaAllocation) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *QuotaAllocation) GetRegion() string {
-	if x != nil {
-		return x.Region
-	}
-	return ""
-}
-
-func (x *QuotaAllocation) GetPerShard() map[string]int32 {
-	if x != nil {
-		return x.PerShard
-	}
-	return nil
-}
-
 // Admin RPCs: AssignDomain pins a topology domain (rack / zone /
 // region / etc.) to a specific shard. Idempotent — re-assigning a
 // domain to its current shard is a no-op success; assigning to a
@@ -455,7 +313,7 @@ type AssignDomainRequest struct {
 
 func (x *AssignDomainRequest) Reset() {
 	*x = AssignDomainRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[7]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +325,7 @@ func (x *AssignDomainRequest) String() string {
 func (*AssignDomainRequest) ProtoMessage() {}
 
 func (x *AssignDomainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[7]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +338,7 @@ func (x *AssignDomainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignDomainRequest.ProtoReflect.Descriptor instead.
 func (*AssignDomainRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{7}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AssignDomainRequest) GetTopologyKey() string {
@@ -512,7 +370,7 @@ type AssignDomainResponse struct {
 
 func (x *AssignDomainResponse) Reset() {
 	*x = AssignDomainResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[8]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -524,7 +382,7 @@ func (x *AssignDomainResponse) String() string {
 func (*AssignDomainResponse) ProtoMessage() {}
 
 func (x *AssignDomainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[8]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -537,7 +395,7 @@ func (x *AssignDomainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignDomainResponse.ProtoReflect.Descriptor instead.
 func (*AssignDomainResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{8}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{5}
 }
 
 // UnassignDomain removes the domain from coordinator state. Idempotent
@@ -552,7 +410,7 @@ type UnassignDomainRequest struct {
 
 func (x *UnassignDomainRequest) Reset() {
 	*x = UnassignDomainRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -564,7 +422,7 @@ func (x *UnassignDomainRequest) String() string {
 func (*UnassignDomainRequest) ProtoMessage() {}
 
 func (x *UnassignDomainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[9]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -577,7 +435,7 @@ func (x *UnassignDomainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignDomainRequest.ProtoReflect.Descriptor instead.
 func (*UnassignDomainRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{9}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *UnassignDomainRequest) GetTopologyKey() string {
@@ -602,7 +460,7 @@ type UnassignDomainResponse struct {
 
 func (x *UnassignDomainResponse) Reset() {
 	*x = UnassignDomainResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[10]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -614,7 +472,7 @@ func (x *UnassignDomainResponse) String() string {
 func (*UnassignDomainResponse) ProtoMessage() {}
 
 func (x *UnassignDomainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[10]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -627,7 +485,7 @@ func (x *UnassignDomainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignDomainResponse.ProtoReflect.Descriptor instead.
 func (*UnassignDomainResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{10}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{7}
 }
 
 // RemoveShard deletes the shard's registry entry and cascades cleanup
@@ -642,7 +500,7 @@ type RemoveShardRequest struct {
 
 func (x *RemoveShardRequest) Reset() {
 	*x = RemoveShardRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[11]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +512,7 @@ func (x *RemoveShardRequest) String() string {
 func (*RemoveShardRequest) ProtoMessage() {}
 
 func (x *RemoveShardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[11]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +525,7 @@ func (x *RemoveShardRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveShardRequest.ProtoReflect.Descriptor instead.
 func (*RemoveShardRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{11}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RemoveShardRequest) GetShardId() string {
@@ -685,7 +543,7 @@ type RemoveShardResponse struct {
 
 func (x *RemoveShardResponse) Reset() {
 	*x = RemoveShardResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[12]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -697,7 +555,7 @@ func (x *RemoveShardResponse) String() string {
 func (*RemoveShardResponse) ProtoMessage() {}
 
 func (x *RemoveShardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[12]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -710,7 +568,7 @@ func (x *RemoveShardResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveShardResponse.ProtoReflect.Descriptor instead.
 func (*RemoveShardResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{12}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{9}
 }
 
 // ListShards returns the registered shard set, sorted by ID.
@@ -722,7 +580,7 @@ type ListShardsRequest struct {
 
 func (x *ListShardsRequest) Reset() {
 	*x = ListShardsRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[13]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -734,7 +592,7 @@ func (x *ListShardsRequest) String() string {
 func (*ListShardsRequest) ProtoMessage() {}
 
 func (x *ListShardsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[13]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -747,7 +605,7 @@ func (x *ListShardsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardsRequest.ProtoReflect.Descriptor instead.
 func (*ListShardsRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{13}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{10}
 }
 
 type ListShardsResponse struct {
@@ -759,7 +617,7 @@ type ListShardsResponse struct {
 
 func (x *ListShardsResponse) Reset() {
 	*x = ListShardsResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[14]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -771,7 +629,7 @@ func (x *ListShardsResponse) String() string {
 func (*ListShardsResponse) ProtoMessage() {}
 
 func (x *ListShardsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[14]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -784,7 +642,7 @@ func (x *ListShardsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardsResponse.ProtoReflect.Descriptor instead.
 func (*ListShardsResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{14}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListShardsResponse) GetShards() []*ShardRegistryEntry {
@@ -806,7 +664,7 @@ type ShardRegistryEntry struct {
 
 func (x *ShardRegistryEntry) Reset() {
 	*x = ShardRegistryEntry{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[15]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -818,7 +676,7 @@ func (x *ShardRegistryEntry) String() string {
 func (*ShardRegistryEntry) ProtoMessage() {}
 
 func (x *ShardRegistryEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[15]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -831,7 +689,7 @@ func (x *ShardRegistryEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardRegistryEntry.ProtoReflect.Descriptor instead.
 func (*ShardRegistryEntry) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{15}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ShardRegistryEntry) GetShardId() string {
@@ -871,7 +729,7 @@ type ListDomainAssignmentsRequest struct {
 
 func (x *ListDomainAssignmentsRequest) Reset() {
 	*x = ListDomainAssignmentsRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[16]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -883,7 +741,7 @@ func (x *ListDomainAssignmentsRequest) String() string {
 func (*ListDomainAssignmentsRequest) ProtoMessage() {}
 
 func (x *ListDomainAssignmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[16]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -896,7 +754,7 @@ func (x *ListDomainAssignmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDomainAssignmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListDomainAssignmentsRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{16}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{13}
 }
 
 type ListDomainAssignmentsResponse struct {
@@ -908,7 +766,7 @@ type ListDomainAssignmentsResponse struct {
 
 func (x *ListDomainAssignmentsResponse) Reset() {
 	*x = ListDomainAssignmentsResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[17]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -920,7 +778,7 @@ func (x *ListDomainAssignmentsResponse) String() string {
 func (*ListDomainAssignmentsResponse) ProtoMessage() {}
 
 func (x *ListDomainAssignmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[17]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -933,7 +791,7 @@ func (x *ListDomainAssignmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDomainAssignmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListDomainAssignmentsResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{17}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListDomainAssignmentsResponse) GetAssignments() []*DomainAssignment {
@@ -954,7 +812,7 @@ type DomainAssignment struct {
 
 func (x *DomainAssignment) Reset() {
 	*x = DomainAssignment{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[18]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +824,7 @@ func (x *DomainAssignment) String() string {
 func (*DomainAssignment) ProtoMessage() {}
 
 func (x *DomainAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[18]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +837,7 @@ func (x *DomainAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DomainAssignment.ProtoReflect.Descriptor instead.
 func (*DomainAssignment) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{18}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DomainAssignment) GetTopologyKey() string {
@@ -1045,7 +903,7 @@ type ShardReport struct {
 
 func (x *ShardReport) Reset() {
 	*x = ShardReport{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[19]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1057,7 +915,7 @@ func (x *ShardReport) String() string {
 func (*ShardReport) ProtoMessage() {}
 
 func (x *ShardReport) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[19]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1070,7 +928,7 @@ func (x *ShardReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardReport.ProtoReflect.Descriptor instead.
 func (*ShardReport) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{19}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ShardReport) GetShardId() string {
@@ -1143,13 +1001,18 @@ type ShardSummary struct {
 	PerInstanceTypeCounts map[string]int32 `protobuf:"bytes,3,rep,name=per_instance_type_counts,json=perInstanceTypeCounts,proto3" json:"per_instance_type_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// Per-zone counts. Bounded by zones the shard touches.
 	PerZoneCounts map[string]int32 `protobuf:"bytes,4,rep,name=per_zone_counts,json=perZoneCounts,proto3" json:"per_zone_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The out-of-tree CapacityProvider dial address this shard is bound to
+	// (the shard's --provider-addr). Empty = the in-process fake provider
+	// (laptop / kind / scaletest, never deployed). Surfaced per-shard to
+	// operator tooling via ListShardReports.
+	ProviderAddress string `protobuf:"bytes,7,opt,name=provider_address,json=providerAddress,proto3" json:"provider_address,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ShardSummary) Reset() {
 	*x = ShardSummary{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[20]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1161,7 +1024,7 @@ func (x *ShardSummary) String() string {
 func (*ShardSummary) ProtoMessage() {}
 
 func (x *ShardSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[20]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1174,7 +1037,7 @@ func (x *ShardSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardSummary.ProtoReflect.Descriptor instead.
 func (*ShardSummary) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{20}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ShardSummary) GetTotalMachines() int32 {
@@ -1205,6 +1068,13 @@ func (x *ShardSummary) GetPerZoneCounts() map[string]int32 {
 	return nil
 }
 
+func (x *ShardSummary) GetProviderAddress() string {
+	if x != nil {
+		return x.ProviderAddress
+	}
+	return ""
+}
+
 // Shortfall describes a need the shard could not satisfy from its own
 // inventory and could not resolve via in-shard preemption. The coordinator
 // uses these to drive cross-shard rebalancing and preemption.
@@ -1228,7 +1098,7 @@ type Shortfall struct {
 
 func (x *Shortfall) Reset() {
 	*x = Shortfall{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[21]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1240,7 +1110,7 @@ func (x *Shortfall) String() string {
 func (*Shortfall) ProtoMessage() {}
 
 func (x *Shortfall) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[21]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1253,7 +1123,7 @@ func (x *Shortfall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Shortfall.ProtoReflect.Descriptor instead.
 func (*Shortfall) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{21}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Shortfall) GetRequirements() []*NodeSelectorRequirement {
@@ -1291,148 +1161,6 @@ func (x *Shortfall) GetInterruptionPenaltyBucket() PenaltyBucket {
 	return PenaltyBucket_PENALTY_BUCKET_UNSPECIFIED
 }
 
-// ListProviders returns the registered provider backends, sorted by name
-// (ADR-0060). Leader-only; read-gated.
-type ListProvidersRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListProvidersRequest) Reset() {
-	*x = ListProvidersRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[22]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListProvidersRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListProvidersRequest) ProtoMessage() {}
-
-func (x *ListProvidersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[22]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListProvidersRequest.ProtoReflect.Descriptor instead.
-func (*ListProvidersRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{22}
-}
-
-type ListProvidersResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Providers     []*ProviderEntry       `protobuf:"bytes,1,rep,name=providers,proto3" json:"providers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ListProvidersResponse) Reset() {
-	*x = ListProvidersResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[23]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ListProvidersResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ListProvidersResponse) ProtoMessage() {}
-
-func (x *ListProvidersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[23]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ListProvidersResponse.ProtoReflect.Descriptor instead.
-func (*ListProvidersResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{23}
-}
-
-func (x *ListProvidersResponse) GetProviders() []*ProviderEntry {
-	if x != nil {
-		return x.Providers
-	}
-	return nil
-}
-
-type ProviderEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Address       string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"` // gRPC dial address
-	Region        string                 `protobuf:"bytes,3,opt,name=region,proto3" json:"region,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ProviderEntry) Reset() {
-	*x = ProviderEntry{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ProviderEntry) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ProviderEntry) ProtoMessage() {}
-
-func (x *ProviderEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ProviderEntry.ProtoReflect.Descriptor instead.
-func (*ProviderEntry) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *ProviderEntry) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *ProviderEntry) GetAddress() string {
-	if x != nil {
-		return x.Address
-	}
-	return ""
-}
-
-func (x *ProviderEntry) GetRegion() string {
-	if x != nil {
-		return x.Region
-	}
-	return ""
-}
-
 // ListShardReports returns the coordinator's leader-local soft-state
 // snapshot per shard (ADR-0060). Leader-only; read-gated.
 type ListShardReportsRequest struct {
@@ -1446,7 +1174,7 @@ type ListShardReportsRequest struct {
 
 func (x *ListShardReportsRequest) Reset() {
 	*x = ListShardReportsRequest{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[25]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1186,7 @@ func (x *ListShardReportsRequest) String() string {
 func (*ListShardReportsRequest) ProtoMessage() {}
 
 func (x *ListShardReportsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[25]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1199,7 @@ func (x *ListShardReportsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardReportsRequest.ProtoReflect.Descriptor instead.
 func (*ListShardReportsRequest) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{25}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListShardReportsRequest) GetShardId() string {
@@ -1490,7 +1218,7 @@ type ListShardReportsResponse struct {
 
 func (x *ListShardReportsResponse) Reset() {
 	*x = ListShardReportsResponse{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[26]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1502,7 +1230,7 @@ func (x *ListShardReportsResponse) String() string {
 func (*ListShardReportsResponse) ProtoMessage() {}
 
 func (x *ListShardReportsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[26]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1515,7 +1243,7 @@ func (x *ListShardReportsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListShardReportsResponse.ProtoReflect.Descriptor instead.
 func (*ListShardReportsResponse) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{26}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ListShardReportsResponse) GetReports() []*ShardReportSnapshot {
@@ -1544,7 +1272,7 @@ type ShardReportSnapshot struct {
 
 func (x *ShardReportSnapshot) Reset() {
 	*x = ShardReportSnapshot{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[27]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1556,7 +1284,7 @@ func (x *ShardReportSnapshot) String() string {
 func (*ShardReportSnapshot) ProtoMessage() {}
 
 func (x *ShardReportSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[27]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1569,7 +1297,7 @@ func (x *ShardReportSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShardReportSnapshot.ProtoReflect.Descriptor instead.
 func (*ShardReportSnapshot) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{27}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ShardReportSnapshot) GetShardId() string {
@@ -1626,7 +1354,7 @@ type ReportAck struct {
 
 func (x *ReportAck) Reset() {
 	*x = ReportAck{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[28]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1638,7 +1366,7 @@ func (x *ReportAck) String() string {
 func (*ReportAck) ProtoMessage() {}
 
 func (x *ReportAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[28]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1651,7 +1379,7 @@ func (x *ReportAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAck.ProtoReflect.Descriptor instead.
 func (*ReportAck) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{28}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ReportAck) GetCoordinatorTerm() int64 {
@@ -1701,7 +1429,7 @@ type CoordinatorInstruction struct {
 
 func (x *CoordinatorInstruction) Reset() {
 	*x = CoordinatorInstruction{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[29]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1713,7 +1441,7 @@ func (x *CoordinatorInstruction) String() string {
 func (*CoordinatorInstruction) ProtoMessage() {}
 
 func (x *CoordinatorInstruction) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[29]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1726,7 +1454,7 @@ func (x *CoordinatorInstruction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoordinatorInstruction.ProtoReflect.Descriptor instead.
 func (*CoordinatorInstruction) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{29}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CoordinatorInstruction) GetCoordinatorTerm() int64 {
@@ -1848,7 +1576,7 @@ type AssignDomain struct {
 
 func (x *AssignDomain) Reset() {
 	*x = AssignDomain{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[30]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1860,7 +1588,7 @@ func (x *AssignDomain) String() string {
 func (*AssignDomain) ProtoMessage() {}
 
 func (x *AssignDomain) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[30]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1873,7 +1601,7 @@ func (x *AssignDomain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignDomain.ProtoReflect.Descriptor instead.
 func (*AssignDomain) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{30}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AssignDomain) GetTopologyKey() string {
@@ -1902,7 +1630,7 @@ type UnassignDomain struct {
 
 func (x *UnassignDomain) Reset() {
 	*x = UnassignDomain{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[31]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1914,7 +1642,7 @@ func (x *UnassignDomain) String() string {
 func (*UnassignDomain) ProtoMessage() {}
 
 func (x *UnassignDomain) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[31]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1927,7 +1655,7 @@ func (x *UnassignDomain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnassignDomain.ProtoReflect.Descriptor instead.
 func (*UnassignDomain) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{31}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UnassignDomain) GetTopologyKey() string {
@@ -1957,7 +1685,7 @@ type ReassignSpeculative struct {
 
 func (x *ReassignSpeculative) Reset() {
 	*x = ReassignSpeculative{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[32]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1969,7 +1697,7 @@ func (x *ReassignSpeculative) String() string {
 func (*ReassignSpeculative) ProtoMessage() {}
 
 func (x *ReassignSpeculative) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[32]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1982,7 +1710,7 @@ func (x *ReassignSpeculative) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReassignSpeculative.ProtoReflect.Descriptor instead.
 func (*ReassignSpeculative) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{32}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ReassignSpeculative) GetMachineIds() []string {
@@ -2007,7 +1735,7 @@ type CrossShardDrain struct {
 
 func (x *CrossShardDrain) Reset() {
 	*x = CrossShardDrain{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[33]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2019,7 +1747,7 @@ func (x *CrossShardDrain) String() string {
 func (*CrossShardDrain) ProtoMessage() {}
 
 func (x *CrossShardDrain) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[33]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2032,7 +1760,7 @@ func (x *CrossShardDrain) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CrossShardDrain.ProtoReflect.Descriptor instead.
 func (*CrossShardDrain) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{33}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CrossShardDrain) GetMachineIds() []string {
@@ -2062,7 +1790,7 @@ type TransferOwnership struct {
 
 func (x *TransferOwnership) Reset() {
 	*x = TransferOwnership{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[34]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2074,7 +1802,7 @@ func (x *TransferOwnership) String() string {
 func (*TransferOwnership) ProtoMessage() {}
 
 func (x *TransferOwnership) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[34]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2087,7 +1815,7 @@ func (x *TransferOwnership) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TransferOwnership.ProtoReflect.Descriptor instead.
 func (*TransferOwnership) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{34}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *TransferOwnership) GetMachineIds() []string {
@@ -2123,7 +1851,7 @@ type InstructAck struct {
 
 func (x *InstructAck) Reset() {
 	*x = InstructAck{}
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[35]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2135,7 +1863,7 @@ func (x *InstructAck) String() string {
 func (*InstructAck) ProtoMessage() {}
 
 func (x *InstructAck) ProtoReflect() protoreflect.Message {
-	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[35]
+	mi := &file_bigfleet_v1alpha1_coordinator_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2148,7 +1876,7 @@ func (x *InstructAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstructAck.ProtoReflect.Descriptor instead.
 func (*InstructAck) Descriptor() ([]byte, []int) {
-	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{35}
+	return file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *InstructAck) GetInstructionId() string {
@@ -2185,17 +1913,7 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x11SnapshotSaveChunk\x12\x1d\n" +
 	"\tmeta_json\x18\x01 \x01(\fH\x00R\bmetaJson\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
-	"\apayload\"\x13\n" +
-	"\x11ListQuotasRequest\"Z\n" +
-	"\x12ListQuotasResponse\x12D\n" +
-	"\vallocations\x18\x01 \x03(\v2\".bigfleet.v1alpha1.QuotaAllocationR\vallocations\"\xd1\x01\n" +
-	"\x0fQuotaAllocation\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x16\n" +
-	"\x06region\x18\x02 \x01(\tR\x06region\x12M\n" +
-	"\tper_shard\x18\x03 \x03(\v20.bigfleet.v1alpha1.QuotaAllocation.PerShardEntryR\bperShard\x1a;\n" +
-	"\rPerShardEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"z\n" +
+	"\apayload\"z\n" +
 	"\x13AssignDomainRequest\x12!\n" +
 	"\ftopology_key\x18\x01 \x01(\tR\vtopologyKey\x12%\n" +
 	"\x0etopology_value\x18\x02 \x01(\tR\rtopologyValue\x12\x19\n" +
@@ -2234,12 +1952,13 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"shortfalls\x18\x06 \x03(\v2\x1c.bigfleet.v1alpha1.ShortfallR\n" +
 	"shortfalls\x12I\n" +
 	"\x10instruction_acks\x18\a \x03(\v2\x1e.bigfleet.v1alpha1.InstructAckR\x0finstructionAcks\x12#\n" +
-	"\rshard_address\x18\b \x01(\tR\fshardAddress\"\xc3\x03\n" +
+	"\rshard_address\x18\b \x01(\tR\fshardAddress\"\xee\x03\n" +
 	"\fShardSummary\x12%\n" +
 	"\x0etotal_machines\x18\x01 \x01(\x05R\rtotalMachines\x12#\n" +
 	"\rfree_machines\x18\x02 \x01(\x05R\ffreeMachines\x12s\n" +
 	"\x18per_instance_type_counts\x18\x03 \x03(\v2:.bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntryR\x15perInstanceTypeCounts\x12Z\n" +
-	"\x0fper_zone_counts\x18\x04 \x03(\v22.bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntryR\rperZoneCounts\x1aH\n" +
+	"\x0fper_zone_counts\x18\x04 \x03(\v22.bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntryR\rperZoneCounts\x12)\n" +
+	"\x10provider_address\x18\a \x01(\tR\x0fproviderAddress\x1aH\n" +
 	"\x1aPerInstanceTypeCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1a@\n" +
@@ -2252,14 +1971,7 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\bpriority\x18\x03 \x01(\x05R\bpriority\x12\x1d\n" +
 	"\n" +
 	"age_cycles\x18\x05 \x01(\x05R\tageCycles\x12`\n" +
-	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucketJ\x04\b\x04\x10\x05\"\x16\n" +
-	"\x14ListProvidersRequest\"W\n" +
-	"\x15ListProvidersResponse\x12>\n" +
-	"\tproviders\x18\x01 \x03(\v2 .bigfleet.v1alpha1.ProviderEntryR\tproviders\"U\n" +
-	"\rProviderEntry\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x16\n" +
-	"\x06region\x18\x03 \x01(\tR\x06region\"4\n" +
+	"\x1binterruption_penalty_bucket\x18\x06 \x01(\x0e2 .bigfleet.v1alpha1.PenaltyBucketR\x19interruptionPenaltyBucketJ\x04\b\x04\x10\x05\"4\n" +
 	"\x17ListShardReportsRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\"\\\n" +
 	"\x18ListShardReportsResponse\x12@\n" +
@@ -2313,7 +2025,7 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\x10OUTCOME_ACCEPTED\x10\x01\x12\x1a\n" +
 	"\x16OUTCOME_REJECTED_STALE\x10\x02\x12\x1c\n" +
 	"\x18OUTCOME_REJECTED_INVALID\x10\x03\x12\x12\n" +
-	"\x0eOUTCOME_FAILED\x10\x042\xcd\b\n" +
+	"\x0eOUTCOME_FAILED\x10\x042\x8e\a\n" +
 	"\vCoordinator\x12K\n" +
 	"\vReportShard\x12\x1e.bigfleet.v1alpha1.ShardReport\x1a\x1c.bigfleet.v1alpha1.ReportAck\x12_\n" +
 	"\fAssignDomain\x12&.bigfleet.v1alpha1.AssignDomainRequest\x1a'.bigfleet.v1alpha1.AssignDomainResponse\x12e\n" +
@@ -2321,10 +2033,7 @@ const file_bigfleet_v1alpha1_coordinator_proto_rawDesc = "" +
 	"\vRemoveShard\x12%.bigfleet.v1alpha1.RemoveShardRequest\x1a&.bigfleet.v1alpha1.RemoveShardResponse\x12Y\n" +
 	"\n" +
 	"ListShards\x12$.bigfleet.v1alpha1.ListShardsRequest\x1a%.bigfleet.v1alpha1.ListShardsResponse\x12z\n" +
-	"\x15ListDomainAssignments\x12/.bigfleet.v1alpha1.ListDomainAssignmentsRequest\x1a0.bigfleet.v1alpha1.ListDomainAssignmentsResponse\x12Y\n" +
-	"\n" +
-	"ListQuotas\x12$.bigfleet.v1alpha1.ListQuotasRequest\x1a%.bigfleet.v1alpha1.ListQuotasResponse\x12b\n" +
-	"\rListProviders\x12'.bigfleet.v1alpha1.ListProvidersRequest\x1a(.bigfleet.v1alpha1.ListProvidersResponse\x12k\n" +
+	"\x15ListDomainAssignments\x12/.bigfleet.v1alpha1.ListDomainAssignmentsRequest\x1a0.bigfleet.v1alpha1.ListDomainAssignmentsResponse\x12k\n" +
 	"\x10ListShardReports\x12*.bigfleet.v1alpha1.ListShardReportsRequest\x1a+.bigfleet.v1alpha1.ListShardReportsResponse\x12h\n" +
 	"\x0fJoinRaftCluster\x12).bigfleet.v1alpha1.JoinRaftClusterRequest\x1a*.bigfleet.v1alpha1.JoinRaftClusterResponse\x12^\n" +
 	"\fSnapshotSave\x12&.bigfleet.v1alpha1.SnapshotSaveRequest\x1a$.bigfleet.v1alpha1.SnapshotSaveChunk0\x01B\xdd\x01\n" +
@@ -2343,103 +2052,89 @@ func file_bigfleet_v1alpha1_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bigfleet_v1alpha1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_bigfleet_v1alpha1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_bigfleet_v1alpha1_coordinator_proto_goTypes = []any{
 	(InstructAck_Outcome)(0),              // 0: bigfleet.v1alpha1.InstructAck.Outcome
 	(*JoinRaftClusterRequest)(nil),        // 1: bigfleet.v1alpha1.JoinRaftClusterRequest
 	(*JoinRaftClusterResponse)(nil),       // 2: bigfleet.v1alpha1.JoinRaftClusterResponse
 	(*SnapshotSaveRequest)(nil),           // 3: bigfleet.v1alpha1.SnapshotSaveRequest
 	(*SnapshotSaveChunk)(nil),             // 4: bigfleet.v1alpha1.SnapshotSaveChunk
-	(*ListQuotasRequest)(nil),             // 5: bigfleet.v1alpha1.ListQuotasRequest
-	(*ListQuotasResponse)(nil),            // 6: bigfleet.v1alpha1.ListQuotasResponse
-	(*QuotaAllocation)(nil),               // 7: bigfleet.v1alpha1.QuotaAllocation
-	(*AssignDomainRequest)(nil),           // 8: bigfleet.v1alpha1.AssignDomainRequest
-	(*AssignDomainResponse)(nil),          // 9: bigfleet.v1alpha1.AssignDomainResponse
-	(*UnassignDomainRequest)(nil),         // 10: bigfleet.v1alpha1.UnassignDomainRequest
-	(*UnassignDomainResponse)(nil),        // 11: bigfleet.v1alpha1.UnassignDomainResponse
-	(*RemoveShardRequest)(nil),            // 12: bigfleet.v1alpha1.RemoveShardRequest
-	(*RemoveShardResponse)(nil),           // 13: bigfleet.v1alpha1.RemoveShardResponse
-	(*ListShardsRequest)(nil),             // 14: bigfleet.v1alpha1.ListShardsRequest
-	(*ListShardsResponse)(nil),            // 15: bigfleet.v1alpha1.ListShardsResponse
-	(*ShardRegistryEntry)(nil),            // 16: bigfleet.v1alpha1.ShardRegistryEntry
-	(*ListDomainAssignmentsRequest)(nil),  // 17: bigfleet.v1alpha1.ListDomainAssignmentsRequest
-	(*ListDomainAssignmentsResponse)(nil), // 18: bigfleet.v1alpha1.ListDomainAssignmentsResponse
-	(*DomainAssignment)(nil),              // 19: bigfleet.v1alpha1.DomainAssignment
-	(*ShardReport)(nil),                   // 20: bigfleet.v1alpha1.ShardReport
-	(*ShardSummary)(nil),                  // 21: bigfleet.v1alpha1.ShardSummary
-	(*Shortfall)(nil),                     // 22: bigfleet.v1alpha1.Shortfall
-	(*ListProvidersRequest)(nil),          // 23: bigfleet.v1alpha1.ListProvidersRequest
-	(*ListProvidersResponse)(nil),         // 24: bigfleet.v1alpha1.ListProvidersResponse
-	(*ProviderEntry)(nil),                 // 25: bigfleet.v1alpha1.ProviderEntry
-	(*ListShardReportsRequest)(nil),       // 26: bigfleet.v1alpha1.ListShardReportsRequest
-	(*ListShardReportsResponse)(nil),      // 27: bigfleet.v1alpha1.ListShardReportsResponse
-	(*ShardReportSnapshot)(nil),           // 28: bigfleet.v1alpha1.ShardReportSnapshot
-	(*ReportAck)(nil),                     // 29: bigfleet.v1alpha1.ReportAck
-	(*CoordinatorInstruction)(nil),        // 30: bigfleet.v1alpha1.CoordinatorInstruction
-	(*AssignDomain)(nil),                  // 31: bigfleet.v1alpha1.AssignDomain
-	(*UnassignDomain)(nil),                // 32: bigfleet.v1alpha1.UnassignDomain
-	(*ReassignSpeculative)(nil),           // 33: bigfleet.v1alpha1.ReassignSpeculative
-	(*CrossShardDrain)(nil),               // 34: bigfleet.v1alpha1.CrossShardDrain
-	(*TransferOwnership)(nil),             // 35: bigfleet.v1alpha1.TransferOwnership
-	(*InstructAck)(nil),                   // 36: bigfleet.v1alpha1.InstructAck
-	nil,                                   // 37: bigfleet.v1alpha1.QuotaAllocation.PerShardEntry
-	nil,                                   // 38: bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
-	nil,                                   // 39: bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
-	(*NodeSelectorRequirement)(nil),       // 40: bigfleet.v1alpha1.NodeSelectorRequirement
-	(*Resources)(nil),                     // 41: bigfleet.v1alpha1.Resources
-	(PenaltyBucket)(0),                    // 42: bigfleet.v1alpha1.PenaltyBucket
+	(*AssignDomainRequest)(nil),           // 5: bigfleet.v1alpha1.AssignDomainRequest
+	(*AssignDomainResponse)(nil),          // 6: bigfleet.v1alpha1.AssignDomainResponse
+	(*UnassignDomainRequest)(nil),         // 7: bigfleet.v1alpha1.UnassignDomainRequest
+	(*UnassignDomainResponse)(nil),        // 8: bigfleet.v1alpha1.UnassignDomainResponse
+	(*RemoveShardRequest)(nil),            // 9: bigfleet.v1alpha1.RemoveShardRequest
+	(*RemoveShardResponse)(nil),           // 10: bigfleet.v1alpha1.RemoveShardResponse
+	(*ListShardsRequest)(nil),             // 11: bigfleet.v1alpha1.ListShardsRequest
+	(*ListShardsResponse)(nil),            // 12: bigfleet.v1alpha1.ListShardsResponse
+	(*ShardRegistryEntry)(nil),            // 13: bigfleet.v1alpha1.ShardRegistryEntry
+	(*ListDomainAssignmentsRequest)(nil),  // 14: bigfleet.v1alpha1.ListDomainAssignmentsRequest
+	(*ListDomainAssignmentsResponse)(nil), // 15: bigfleet.v1alpha1.ListDomainAssignmentsResponse
+	(*DomainAssignment)(nil),              // 16: bigfleet.v1alpha1.DomainAssignment
+	(*ShardReport)(nil),                   // 17: bigfleet.v1alpha1.ShardReport
+	(*ShardSummary)(nil),                  // 18: bigfleet.v1alpha1.ShardSummary
+	(*Shortfall)(nil),                     // 19: bigfleet.v1alpha1.Shortfall
+	(*ListShardReportsRequest)(nil),       // 20: bigfleet.v1alpha1.ListShardReportsRequest
+	(*ListShardReportsResponse)(nil),      // 21: bigfleet.v1alpha1.ListShardReportsResponse
+	(*ShardReportSnapshot)(nil),           // 22: bigfleet.v1alpha1.ShardReportSnapshot
+	(*ReportAck)(nil),                     // 23: bigfleet.v1alpha1.ReportAck
+	(*CoordinatorInstruction)(nil),        // 24: bigfleet.v1alpha1.CoordinatorInstruction
+	(*AssignDomain)(nil),                  // 25: bigfleet.v1alpha1.AssignDomain
+	(*UnassignDomain)(nil),                // 26: bigfleet.v1alpha1.UnassignDomain
+	(*ReassignSpeculative)(nil),           // 27: bigfleet.v1alpha1.ReassignSpeculative
+	(*CrossShardDrain)(nil),               // 28: bigfleet.v1alpha1.CrossShardDrain
+	(*TransferOwnership)(nil),             // 29: bigfleet.v1alpha1.TransferOwnership
+	(*InstructAck)(nil),                   // 30: bigfleet.v1alpha1.InstructAck
+	nil,                                   // 31: bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
+	nil,                                   // 32: bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
+	(*NodeSelectorRequirement)(nil),       // 33: bigfleet.v1alpha1.NodeSelectorRequirement
+	(*Resources)(nil),                     // 34: bigfleet.v1alpha1.Resources
+	(PenaltyBucket)(0),                    // 35: bigfleet.v1alpha1.PenaltyBucket
 }
 var file_bigfleet_v1alpha1_coordinator_proto_depIdxs = []int32{
-	7,  // 0: bigfleet.v1alpha1.ListQuotasResponse.allocations:type_name -> bigfleet.v1alpha1.QuotaAllocation
-	37, // 1: bigfleet.v1alpha1.QuotaAllocation.per_shard:type_name -> bigfleet.v1alpha1.QuotaAllocation.PerShardEntry
-	16, // 2: bigfleet.v1alpha1.ListShardsResponse.shards:type_name -> bigfleet.v1alpha1.ShardRegistryEntry
-	19, // 3: bigfleet.v1alpha1.ListDomainAssignmentsResponse.assignments:type_name -> bigfleet.v1alpha1.DomainAssignment
-	21, // 4: bigfleet.v1alpha1.ShardReport.summary:type_name -> bigfleet.v1alpha1.ShardSummary
-	22, // 5: bigfleet.v1alpha1.ShardReport.shortfalls:type_name -> bigfleet.v1alpha1.Shortfall
-	36, // 6: bigfleet.v1alpha1.ShardReport.instruction_acks:type_name -> bigfleet.v1alpha1.InstructAck
-	38, // 7: bigfleet.v1alpha1.ShardSummary.per_instance_type_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
-	39, // 8: bigfleet.v1alpha1.ShardSummary.per_zone_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
-	40, // 9: bigfleet.v1alpha1.Shortfall.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
-	41, // 10: bigfleet.v1alpha1.Shortfall.deficit:type_name -> bigfleet.v1alpha1.Resources
-	42, // 11: bigfleet.v1alpha1.Shortfall.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
-	25, // 12: bigfleet.v1alpha1.ListProvidersResponse.providers:type_name -> bigfleet.v1alpha1.ProviderEntry
-	28, // 13: bigfleet.v1alpha1.ListShardReportsResponse.reports:type_name -> bigfleet.v1alpha1.ShardReportSnapshot
-	21, // 14: bigfleet.v1alpha1.ShardReportSnapshot.summary:type_name -> bigfleet.v1alpha1.ShardSummary
-	22, // 15: bigfleet.v1alpha1.ShardReportSnapshot.shortfalls:type_name -> bigfleet.v1alpha1.Shortfall
-	30, // 16: bigfleet.v1alpha1.ReportAck.instructions:type_name -> bigfleet.v1alpha1.CoordinatorInstruction
-	31, // 17: bigfleet.v1alpha1.CoordinatorInstruction.assign_domain:type_name -> bigfleet.v1alpha1.AssignDomain
-	32, // 18: bigfleet.v1alpha1.CoordinatorInstruction.unassign_domain:type_name -> bigfleet.v1alpha1.UnassignDomain
-	33, // 19: bigfleet.v1alpha1.CoordinatorInstruction.reassign_speculative:type_name -> bigfleet.v1alpha1.ReassignSpeculative
-	34, // 20: bigfleet.v1alpha1.CoordinatorInstruction.cross_shard_drain:type_name -> bigfleet.v1alpha1.CrossShardDrain
-	35, // 21: bigfleet.v1alpha1.CoordinatorInstruction.transfer_ownership:type_name -> bigfleet.v1alpha1.TransferOwnership
-	0,  // 22: bigfleet.v1alpha1.InstructAck.outcome:type_name -> bigfleet.v1alpha1.InstructAck.Outcome
-	20, // 23: bigfleet.v1alpha1.Coordinator.ReportShard:input_type -> bigfleet.v1alpha1.ShardReport
-	8,  // 24: bigfleet.v1alpha1.Coordinator.AssignDomain:input_type -> bigfleet.v1alpha1.AssignDomainRequest
-	10, // 25: bigfleet.v1alpha1.Coordinator.UnassignDomain:input_type -> bigfleet.v1alpha1.UnassignDomainRequest
-	12, // 26: bigfleet.v1alpha1.Coordinator.RemoveShard:input_type -> bigfleet.v1alpha1.RemoveShardRequest
-	14, // 27: bigfleet.v1alpha1.Coordinator.ListShards:input_type -> bigfleet.v1alpha1.ListShardsRequest
-	17, // 28: bigfleet.v1alpha1.Coordinator.ListDomainAssignments:input_type -> bigfleet.v1alpha1.ListDomainAssignmentsRequest
-	5,  // 29: bigfleet.v1alpha1.Coordinator.ListQuotas:input_type -> bigfleet.v1alpha1.ListQuotasRequest
-	23, // 30: bigfleet.v1alpha1.Coordinator.ListProviders:input_type -> bigfleet.v1alpha1.ListProvidersRequest
-	26, // 31: bigfleet.v1alpha1.Coordinator.ListShardReports:input_type -> bigfleet.v1alpha1.ListShardReportsRequest
-	1,  // 32: bigfleet.v1alpha1.Coordinator.JoinRaftCluster:input_type -> bigfleet.v1alpha1.JoinRaftClusterRequest
-	3,  // 33: bigfleet.v1alpha1.Coordinator.SnapshotSave:input_type -> bigfleet.v1alpha1.SnapshotSaveRequest
-	29, // 34: bigfleet.v1alpha1.Coordinator.ReportShard:output_type -> bigfleet.v1alpha1.ReportAck
-	9,  // 35: bigfleet.v1alpha1.Coordinator.AssignDomain:output_type -> bigfleet.v1alpha1.AssignDomainResponse
-	11, // 36: bigfleet.v1alpha1.Coordinator.UnassignDomain:output_type -> bigfleet.v1alpha1.UnassignDomainResponse
-	13, // 37: bigfleet.v1alpha1.Coordinator.RemoveShard:output_type -> bigfleet.v1alpha1.RemoveShardResponse
-	15, // 38: bigfleet.v1alpha1.Coordinator.ListShards:output_type -> bigfleet.v1alpha1.ListShardsResponse
-	18, // 39: bigfleet.v1alpha1.Coordinator.ListDomainAssignments:output_type -> bigfleet.v1alpha1.ListDomainAssignmentsResponse
-	6,  // 40: bigfleet.v1alpha1.Coordinator.ListQuotas:output_type -> bigfleet.v1alpha1.ListQuotasResponse
-	24, // 41: bigfleet.v1alpha1.Coordinator.ListProviders:output_type -> bigfleet.v1alpha1.ListProvidersResponse
-	27, // 42: bigfleet.v1alpha1.Coordinator.ListShardReports:output_type -> bigfleet.v1alpha1.ListShardReportsResponse
-	2,  // 43: bigfleet.v1alpha1.Coordinator.JoinRaftCluster:output_type -> bigfleet.v1alpha1.JoinRaftClusterResponse
-	4,  // 44: bigfleet.v1alpha1.Coordinator.SnapshotSave:output_type -> bigfleet.v1alpha1.SnapshotSaveChunk
-	34, // [34:45] is the sub-list for method output_type
-	23, // [23:34] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	13, // 0: bigfleet.v1alpha1.ListShardsResponse.shards:type_name -> bigfleet.v1alpha1.ShardRegistryEntry
+	16, // 1: bigfleet.v1alpha1.ListDomainAssignmentsResponse.assignments:type_name -> bigfleet.v1alpha1.DomainAssignment
+	18, // 2: bigfleet.v1alpha1.ShardReport.summary:type_name -> bigfleet.v1alpha1.ShardSummary
+	19, // 3: bigfleet.v1alpha1.ShardReport.shortfalls:type_name -> bigfleet.v1alpha1.Shortfall
+	30, // 4: bigfleet.v1alpha1.ShardReport.instruction_acks:type_name -> bigfleet.v1alpha1.InstructAck
+	31, // 5: bigfleet.v1alpha1.ShardSummary.per_instance_type_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerInstanceTypeCountsEntry
+	32, // 6: bigfleet.v1alpha1.ShardSummary.per_zone_counts:type_name -> bigfleet.v1alpha1.ShardSummary.PerZoneCountsEntry
+	33, // 7: bigfleet.v1alpha1.Shortfall.requirements:type_name -> bigfleet.v1alpha1.NodeSelectorRequirement
+	34, // 8: bigfleet.v1alpha1.Shortfall.deficit:type_name -> bigfleet.v1alpha1.Resources
+	35, // 9: bigfleet.v1alpha1.Shortfall.interruption_penalty_bucket:type_name -> bigfleet.v1alpha1.PenaltyBucket
+	22, // 10: bigfleet.v1alpha1.ListShardReportsResponse.reports:type_name -> bigfleet.v1alpha1.ShardReportSnapshot
+	18, // 11: bigfleet.v1alpha1.ShardReportSnapshot.summary:type_name -> bigfleet.v1alpha1.ShardSummary
+	19, // 12: bigfleet.v1alpha1.ShardReportSnapshot.shortfalls:type_name -> bigfleet.v1alpha1.Shortfall
+	24, // 13: bigfleet.v1alpha1.ReportAck.instructions:type_name -> bigfleet.v1alpha1.CoordinatorInstruction
+	25, // 14: bigfleet.v1alpha1.CoordinatorInstruction.assign_domain:type_name -> bigfleet.v1alpha1.AssignDomain
+	26, // 15: bigfleet.v1alpha1.CoordinatorInstruction.unassign_domain:type_name -> bigfleet.v1alpha1.UnassignDomain
+	27, // 16: bigfleet.v1alpha1.CoordinatorInstruction.reassign_speculative:type_name -> bigfleet.v1alpha1.ReassignSpeculative
+	28, // 17: bigfleet.v1alpha1.CoordinatorInstruction.cross_shard_drain:type_name -> bigfleet.v1alpha1.CrossShardDrain
+	29, // 18: bigfleet.v1alpha1.CoordinatorInstruction.transfer_ownership:type_name -> bigfleet.v1alpha1.TransferOwnership
+	0,  // 19: bigfleet.v1alpha1.InstructAck.outcome:type_name -> bigfleet.v1alpha1.InstructAck.Outcome
+	17, // 20: bigfleet.v1alpha1.Coordinator.ReportShard:input_type -> bigfleet.v1alpha1.ShardReport
+	5,  // 21: bigfleet.v1alpha1.Coordinator.AssignDomain:input_type -> bigfleet.v1alpha1.AssignDomainRequest
+	7,  // 22: bigfleet.v1alpha1.Coordinator.UnassignDomain:input_type -> bigfleet.v1alpha1.UnassignDomainRequest
+	9,  // 23: bigfleet.v1alpha1.Coordinator.RemoveShard:input_type -> bigfleet.v1alpha1.RemoveShardRequest
+	11, // 24: bigfleet.v1alpha1.Coordinator.ListShards:input_type -> bigfleet.v1alpha1.ListShardsRequest
+	14, // 25: bigfleet.v1alpha1.Coordinator.ListDomainAssignments:input_type -> bigfleet.v1alpha1.ListDomainAssignmentsRequest
+	20, // 26: bigfleet.v1alpha1.Coordinator.ListShardReports:input_type -> bigfleet.v1alpha1.ListShardReportsRequest
+	1,  // 27: bigfleet.v1alpha1.Coordinator.JoinRaftCluster:input_type -> bigfleet.v1alpha1.JoinRaftClusterRequest
+	3,  // 28: bigfleet.v1alpha1.Coordinator.SnapshotSave:input_type -> bigfleet.v1alpha1.SnapshotSaveRequest
+	23, // 29: bigfleet.v1alpha1.Coordinator.ReportShard:output_type -> bigfleet.v1alpha1.ReportAck
+	6,  // 30: bigfleet.v1alpha1.Coordinator.AssignDomain:output_type -> bigfleet.v1alpha1.AssignDomainResponse
+	8,  // 31: bigfleet.v1alpha1.Coordinator.UnassignDomain:output_type -> bigfleet.v1alpha1.UnassignDomainResponse
+	10, // 32: bigfleet.v1alpha1.Coordinator.RemoveShard:output_type -> bigfleet.v1alpha1.RemoveShardResponse
+	12, // 33: bigfleet.v1alpha1.Coordinator.ListShards:output_type -> bigfleet.v1alpha1.ListShardsResponse
+	15, // 34: bigfleet.v1alpha1.Coordinator.ListDomainAssignments:output_type -> bigfleet.v1alpha1.ListDomainAssignmentsResponse
+	21, // 35: bigfleet.v1alpha1.Coordinator.ListShardReports:output_type -> bigfleet.v1alpha1.ListShardReportsResponse
+	2,  // 36: bigfleet.v1alpha1.Coordinator.JoinRaftCluster:output_type -> bigfleet.v1alpha1.JoinRaftClusterResponse
+	4,  // 37: bigfleet.v1alpha1.Coordinator.SnapshotSave:output_type -> bigfleet.v1alpha1.SnapshotSaveChunk
+	29, // [29:38] is the sub-list for method output_type
+	20, // [20:29] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_coordinator_proto_init() }
@@ -2453,7 +2148,7 @@ func file_bigfleet_v1alpha1_coordinator_proto_init() {
 		(*SnapshotSaveChunk_MetaJson)(nil),
 		(*SnapshotSaveChunk_Data)(nil),
 	}
-	file_bigfleet_v1alpha1_coordinator_proto_msgTypes[29].OneofWrappers = []any{
+	file_bigfleet_v1alpha1_coordinator_proto_msgTypes[23].OneofWrappers = []any{
 		(*CoordinatorInstruction_AssignDomain)(nil),
 		(*CoordinatorInstruction_UnassignDomain)(nil),
 		(*CoordinatorInstruction_ReassignSpeculative)(nil),
@@ -2466,7 +2161,7 @@ func file_bigfleet_v1alpha1_coordinator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_coordinator_proto_rawDesc), len(file_bigfleet_v1alpha1_coordinator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   39,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -101,26 +101,6 @@ func TestState_RemoveShard_CleansBindingsAndDomains(t *testing.T) {
 	}
 }
 
-func TestState_QuotaSetGet(t *testing.T) {
-	t.Parallel()
-	s := coordinator.NewState()
-	k := coordinator.QuotaKey{Provider: "aws", Region: "us-east-1"}
-	s.SetQuota(k, map[coordinator.ShardID]int32{"a": 100, "b": 200})
-	got, ok := s.Quota(k)
-	if !ok {
-		t.Fatal("expected quota to exist")
-	}
-	if got.PerShard["a"] != 100 || got.PerShard["b"] != 200 {
-		t.Errorf("quota mismatch: %+v", got)
-	}
-	// Mutating returned copy should not affect state.
-	got.PerShard["a"] = 999
-	again, _ := s.Quota(k)
-	if again.PerShard["a"] != 100 {
-		t.Errorf("returned quota was not isolated; mutation leaked")
-	}
-}
-
 func TestState_MarkHeartbeat(t *testing.T) {
 	t.Parallel()
 	s := coordinator.NewState()
@@ -133,22 +113,4 @@ func TestState_MarkHeartbeat(t *testing.T) {
 	}
 	// Heartbeat for unknown shard is silently ignored.
 	s.MarkHeartbeat("nope", now)
-}
-
-func TestState_ProvidersRoundtrip(t *testing.T) {
-	t.Parallel()
-	s := coordinator.NewState()
-	if err := s.UpsertProvider(coordinator.ProviderEntry{Name: "aws-east", Address: "host:1", Region: "us-east-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertProvider(coordinator.ProviderEntry{Name: "gcp-west", Address: "host:2", Region: "us-west-1"}); err != nil {
-		t.Fatal(err)
-	}
-	got := s.Providers()
-	if len(got) != 2 {
-		t.Errorf("Providers len = %d, want 2", len(got))
-	}
-	if got[0].Name != "aws-east" || got[1].Name != "gcp-west" {
-		t.Errorf("Providers ordering: %+v", got)
-	}
 }

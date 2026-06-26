@@ -24,7 +24,7 @@ import (
 //     bigfleet://shard/<shard_id> — the same binding Session applies
 //     to Hello.cluster_id on the shard.
 //   - The whole admin surface (M15: Assign/UnassignDomain,
-//     RemoveShard, ListShards, ListDomainAssignments; M24: ListQuotas;
+//     RemoveShard, ListShards, ListDomainAssignments;
 //     M75: JoinRaftCluster, SnapshotSave) requires bigfleet://admin.
 //     Coordinator replicas carry the admin SAN themselves: they call
 //     JoinRaftCluster on each other (ADR-0047) and ARE the admin
@@ -113,6 +113,7 @@ type ShardSummarySoft struct {
 	FreeMachines       int32
 	InstanceTypeCounts map[string]int32
 	ZoneCounts         map[string]int32
+	ProviderAddress    string
 }
 
 // ShortfallSoft is the leader-local copy of one outstanding shortfall.
@@ -193,6 +194,7 @@ func (g *GRPCServer) ReportShard(ctx context.Context, req *pb.ShardReport) (*pb.
 			FreeMachines:       s.GetFreeMachines(),
 			InstanceTypeCounts: cloneIntMap(s.GetPerInstanceTypeCounts()),
 			ZoneCounts:         cloneIntMap(s.GetPerZoneCounts()),
+			ProviderAddress:    s.GetProviderAddress(),
 		}
 	}
 	if len(req.GetShortfalls()) > 0 {
@@ -400,39 +402,6 @@ func (g *GRPCServer) ListShards(ctx context.Context, _ *pb.ListShardsRequest) (*
 	return &pb.ListShardsResponse{Shards: out}, nil
 }
 
-// ListQuotas returns the speculative-pool slice for every
-// (provider, region) the coordinator has assigned. Read path; same
-// leader-only contract as ListShards / ListDomainAssignments. M24.
-func (g *GRPCServer) ListQuotas(ctx context.Context, _ *pb.ListQuotasRequest) (*pb.ListQuotasResponse, error) {
-	if !g.c.IsLeader() {
-		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
-	}
-	if err := g.requireReadIdentity(ctx, "ListQuotas"); err != nil {
-		return nil, err
-	}
-	all := g.c.State().Quotas()
-	out := make([]*pb.QuotaAllocation, 0, len(all))
-	for k, a := range all {
-		perShard := make(map[string]int32, len(a.PerShard))
-		for sh, n := range a.PerShard {
-			perShard[string(sh)] = n
-		}
-		out = append(out, &pb.QuotaAllocation{
-			Provider: k.Provider,
-			Region:   k.Region,
-			PerShard: perShard,
-		})
-	}
-	// Stable order for tabwriter output downstream.
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].GetProvider() != out[j].GetProvider() {
-			return out[i].GetProvider() < out[j].GetProvider()
-		}
-		return out[i].GetRegion() < out[j].GetRegion()
-	})
-	return &pb.ListQuotasResponse{Allocations: out}, nil
-}
-
 // JoinRaftCluster adds the calling replica as a Raft voter (M75,
 // ADR-0047). Leader-only — hashicorp/raft membership changes go
 // through the leader's log. AddVoter of an existing voter is
@@ -525,27 +494,6 @@ func (g *GRPCServer) ListDomainAssignments(ctx context.Context, _ *pb.ListDomain
 	return &pb.ListDomainAssignmentsResponse{Assignments: out}, nil
 }
 
-// ListProviders returns the registered provider backends (ADR-0060). Read
-// path; same leader-only + read-gated contract as ListShards.
-func (g *GRPCServer) ListProviders(ctx context.Context, _ *pb.ListProvidersRequest) (*pb.ListProvidersResponse, error) {
-	if !g.c.IsLeader() {
-		return nil, status.Error(codes.FailedPrecondition, "coordinator: not leader")
-	}
-	if err := g.requireReadIdentity(ctx, "ListProviders"); err != nil {
-		return nil, err
-	}
-	entries := g.c.State().Providers()
-	out := make([]*pb.ProviderEntry, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, &pb.ProviderEntry{
-			Name:    e.Name,
-			Address: e.Address,
-			Region:  e.Region,
-		})
-	}
-	return &pb.ListProvidersResponse{Providers: out}, nil
-}
-
 // ListShardReports returns the coordinator's leader-local soft-state
 // snapshot per shard (ADR-0060): the latest ShardSummary + top-N Shortfall
 // it accumulated from each shard's ReportShard. Read path; leader-only +
@@ -593,6 +541,7 @@ func (g *GRPCServer) ListShardReports(ctx context.Context, req *pb.ListShardRepo
 				FreeMachines:          s.FreeMachines,
 				PerInstanceTypeCounts: cloneIntMap(s.InstanceTypeCounts),
 				PerZoneCounts:         cloneIntMap(s.ZoneCounts),
+				ProviderAddress:       s.ProviderAddress,
 			}
 		}
 		for _, sf := range g.latestShortfalls[id] {

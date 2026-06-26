@@ -1,8 +1,7 @@
 // Coordinator is the internal RPC surface between shards and the global
 // coordinator. The coordinator does not make provisioning decisions; it
-// owns shard membership, the cluster→shard map, the topology-domain→shard
-// map, quota allocations, and the provider registry, and it issues
-// rebalancing / cross-shard preemption instructions.
+// owns shard membership, the cluster→shard map, and the topology-domain→shard
+// map, and it issues rebalancing / cross-shard preemption instructions.
 //
 // Every coordinator-issued instruction carries (coordinator_term, sequence_number).
 // Shards reject instructions with stale terms (zombie-leader protection).
@@ -34,8 +33,6 @@ const (
 	Coordinator_RemoveShard_FullMethodName           = "/bigfleet.v1alpha1.Coordinator/RemoveShard"
 	Coordinator_ListShards_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListShards"
 	Coordinator_ListDomainAssignments_FullMethodName = "/bigfleet.v1alpha1.Coordinator/ListDomainAssignments"
-	Coordinator_ListQuotas_FullMethodName            = "/bigfleet.v1alpha1.Coordinator/ListQuotas"
-	Coordinator_ListProviders_FullMethodName         = "/bigfleet.v1alpha1.Coordinator/ListProviders"
 	Coordinator_ListShardReports_FullMethodName      = "/bigfleet.v1alpha1.Coordinator/ListShardReports"
 	Coordinator_JoinRaftCluster_FullMethodName       = "/bigfleet.v1alpha1.Coordinator/JoinRaftCluster"
 	Coordinator_SnapshotSave_FullMethodName          = "/bigfleet.v1alpha1.Coordinator/SnapshotSave"
@@ -58,24 +55,17 @@ type CoordinatorClient interface {
 	// ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
 	// RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
 	// bigfleet://admin SAN; the READ RPCs (ListShards /
-	// ListDomainAssignments / ListQuotas / ListProviders /
-	// ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
-	// read-only operator tooling needs no admin certificate. On plaintext
-	// transports both checks are skipped (trust-the-network default).
+	// ListDomainAssignments / ListShardReports) accept bigfleet://readonly
+	// OR bigfleet://admin so read-only operator tooling needs no admin
+	// certificate. On plaintext transports both checks are skipped
+	// (trust-the-network default).
 	AssignDomain(ctx context.Context, in *AssignDomainRequest, opts ...grpc.CallOption) (*AssignDomainResponse, error)
 	UnassignDomain(ctx context.Context, in *UnassignDomainRequest, opts ...grpc.CallOption) (*UnassignDomainResponse, error)
 	RemoveShard(ctx context.Context, in *RemoveShardRequest, opts ...grpc.CallOption) (*RemoveShardResponse, error)
 	ListShards(ctx context.Context, in *ListShardsRequest, opts ...grpc.CallOption) (*ListShardsResponse, error)
 	ListDomainAssignments(ctx context.Context, in *ListDomainAssignmentsRequest, opts ...grpc.CallOption) (*ListDomainAssignmentsResponse, error)
-	// M24 quota inspection. Lets on-call surface "the coordinator's
-	// quota assignments for this shard" from the user-stories runbook
-	// without going into Raft state directly. SetQuota writes through
-	// the FSM (idempotent overwrite of the per-shard slice for a
-	// (provider, region) key); ListQuotas is a read.
-	ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error)
-	// General-purpose read surface for operator tooling (ADR-0060). Both
-	// are leader-only and read-gated (bigfleet://readonly or admin).
-	// ListProviders enumerates the registered provider backends.
+	// General-purpose read surface for operator tooling (ADR-0060).
+	// Leader-only and read-gated (bigfleet://readonly or admin).
 	// ListShardReports returns the coordinator's leader-local soft-state
 	// snapshot — the latest ShardSummary + top-N Shortfall per shard, the
 	// inventory/demand picture it already accumulates from every
@@ -84,7 +74,6 @@ type CoordinatorClient interface {
 	// re-report, and each snapshot carries received_at so callers can
 	// label freshness. Useful to any CLI / dashboard / alerting /
 	// capacity tool, not just one consumer.
-	ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error)
 	ListShardReports(ctx context.Context, in *ListShardReportsRequest, opts ...grpc.CallOption) (*ListShardReportsResponse, error)
 	// M75 Raft membership (ADR-0047). A coordinator replica with no
 	// existing Raft state asks the leader to AddVoter it into the
@@ -171,26 +160,6 @@ func (c *coordinatorClient) ListDomainAssignments(ctx context.Context, in *ListD
 	return out, nil
 }
 
-func (c *coordinatorClient) ListQuotas(ctx context.Context, in *ListQuotasRequest, opts ...grpc.CallOption) (*ListQuotasResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListQuotasResponse)
-	err := c.cc.Invoke(ctx, Coordinator_ListQuotas_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *coordinatorClient) ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListProvidersResponse)
-	err := c.cc.Invoke(ctx, Coordinator_ListProviders_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *coordinatorClient) ListShardReports(ctx context.Context, in *ListShardReportsRequest, opts ...grpc.CallOption) (*ListShardReportsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListShardReportsResponse)
@@ -247,24 +216,17 @@ type CoordinatorServer interface {
 	// ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
 	// RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
 	// bigfleet://admin SAN; the READ RPCs (ListShards /
-	// ListDomainAssignments / ListQuotas / ListProviders /
-	// ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
-	// read-only operator tooling needs no admin certificate. On plaintext
-	// transports both checks are skipped (trust-the-network default).
+	// ListDomainAssignments / ListShardReports) accept bigfleet://readonly
+	// OR bigfleet://admin so read-only operator tooling needs no admin
+	// certificate. On plaintext transports both checks are skipped
+	// (trust-the-network default).
 	AssignDomain(context.Context, *AssignDomainRequest) (*AssignDomainResponse, error)
 	UnassignDomain(context.Context, *UnassignDomainRequest) (*UnassignDomainResponse, error)
 	RemoveShard(context.Context, *RemoveShardRequest) (*RemoveShardResponse, error)
 	ListShards(context.Context, *ListShardsRequest) (*ListShardsResponse, error)
 	ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error)
-	// M24 quota inspection. Lets on-call surface "the coordinator's
-	// quota assignments for this shard" from the user-stories runbook
-	// without going into Raft state directly. SetQuota writes through
-	// the FSM (idempotent overwrite of the per-shard slice for a
-	// (provider, region) key); ListQuotas is a read.
-	ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error)
-	// General-purpose read surface for operator tooling (ADR-0060). Both
-	// are leader-only and read-gated (bigfleet://readonly or admin).
-	// ListProviders enumerates the registered provider backends.
+	// General-purpose read surface for operator tooling (ADR-0060).
+	// Leader-only and read-gated (bigfleet://readonly or admin).
 	// ListShardReports returns the coordinator's leader-local soft-state
 	// snapshot — the latest ShardSummary + top-N Shortfall per shard, the
 	// inventory/demand picture it already accumulates from every
@@ -273,7 +235,6 @@ type CoordinatorServer interface {
 	// re-report, and each snapshot carries received_at so callers can
 	// label freshness. Useful to any CLI / dashboard / alerting /
 	// capacity tool, not just one consumer.
-	ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error)
 	ListShardReports(context.Context, *ListShardReportsRequest) (*ListShardReportsResponse, error)
 	// M75 Raft membership (ADR-0047). A coordinator replica with no
 	// existing Raft state asks the leader to AddVoter it into the
@@ -317,12 +278,6 @@ func (UnimplementedCoordinatorServer) ListShards(context.Context, *ListShardsReq
 }
 func (UnimplementedCoordinatorServer) ListDomainAssignments(context.Context, *ListDomainAssignmentsRequest) (*ListDomainAssignmentsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDomainAssignments not implemented")
-}
-func (UnimplementedCoordinatorServer) ListQuotas(context.Context, *ListQuotasRequest) (*ListQuotasResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListQuotas not implemented")
-}
-func (UnimplementedCoordinatorServer) ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListProviders not implemented")
 }
 func (UnimplementedCoordinatorServer) ListShardReports(context.Context, *ListShardReportsRequest) (*ListShardReportsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListShardReports not implemented")
@@ -462,42 +417,6 @@ func _Coordinator_ListDomainAssignments_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Coordinator_ListQuotas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListQuotasRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CoordinatorServer).ListQuotas(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Coordinator_ListQuotas_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServer).ListQuotas(ctx, req.(*ListQuotasRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Coordinator_ListProviders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListProvidersRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CoordinatorServer).ListProviders(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Coordinator_ListProviders_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CoordinatorServer).ListProviders(ctx, req.(*ListProvidersRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Coordinator_ListShardReports_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListShardReportsRequest)
 	if err := dec(in); err != nil {
@@ -575,14 +494,6 @@ var Coordinator_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDomainAssignments",
 			Handler:    _Coordinator_ListDomainAssignments_Handler,
-		},
-		{
-			MethodName: "ListQuotas",
-			Handler:    _Coordinator_ListQuotas_Handler,
-		},
-		{
-			MethodName: "ListProviders",
-			Handler:    _Coordinator_ListProviders_Handler,
 		},
 		{
 			MethodName: "ListShardReports",

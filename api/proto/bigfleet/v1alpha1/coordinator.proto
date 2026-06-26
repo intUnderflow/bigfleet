@@ -1,8 +1,7 @@
 // Coordinator is the internal RPC surface between shards and the global
 // coordinator. The coordinator does not make provisioning decisions; it
-// owns shard membership, the cluster→shard map, the topology-domain→shard
-// map, quota allocations, and the provider registry, and it issues
-// rebalancing / cross-shard preemption instructions.
+// owns shard membership, the cluster→shard map, and the topology-domain→shard
+// map, and it issues rebalancing / cross-shard preemption instructions.
 //
 // Every coordinator-issued instruction carries (coordinator_term, sequence_number).
 // Shards reject instructions with stale terms (zombie-leader protection).
@@ -28,26 +27,18 @@ service Coordinator {
   // ReportShard). Auth (ADR-0048 + ADR-0060): under mTLS the MUTATING
   // RPCs (AssignDomain / UnassignDomain / RemoveShard) require the
   // bigfleet://admin SAN; the READ RPCs (ListShards /
-  // ListDomainAssignments / ListQuotas / ListProviders /
-  // ListShardReports) accept bigfleet://readonly OR bigfleet://admin so
-  // read-only operator tooling needs no admin certificate. On plaintext
-  // transports both checks are skipped (trust-the-network default).
+  // ListDomainAssignments / ListShardReports) accept bigfleet://readonly
+  // OR bigfleet://admin so read-only operator tooling needs no admin
+  // certificate. On plaintext transports both checks are skipped
+  // (trust-the-network default).
   rpc AssignDomain(AssignDomainRequest) returns (AssignDomainResponse);
   rpc UnassignDomain(UnassignDomainRequest) returns (UnassignDomainResponse);
   rpc RemoveShard(RemoveShardRequest) returns (RemoveShardResponse);
   rpc ListShards(ListShardsRequest) returns (ListShardsResponse);
   rpc ListDomainAssignments(ListDomainAssignmentsRequest) returns (ListDomainAssignmentsResponse);
 
-  // M24 quota inspection. Lets on-call surface "the coordinator's
-  // quota assignments for this shard" from the user-stories runbook
-  // without going into Raft state directly. SetQuota writes through
-  // the FSM (idempotent overwrite of the per-shard slice for a
-  // (provider, region) key); ListQuotas is a read.
-  rpc ListQuotas(ListQuotasRequest) returns (ListQuotasResponse);
-
-  // General-purpose read surface for operator tooling (ADR-0060). Both
-  // are leader-only and read-gated (bigfleet://readonly or admin).
-  // ListProviders enumerates the registered provider backends.
+  // General-purpose read surface for operator tooling (ADR-0060).
+  // Leader-only and read-gated (bigfleet://readonly or admin).
   // ListShardReports returns the coordinator's leader-local soft-state
   // snapshot — the latest ShardSummary + top-N Shortfall per shard, the
   // inventory/demand picture it already accumulates from every
@@ -56,7 +47,6 @@ service Coordinator {
   // re-report, and each snapshot carries received_at so callers can
   // label freshness. Useful to any CLI / dashboard / alerting /
   // capacity tool, not just one consumer.
-  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
   rpc ListShardReports(ListShardReportsRequest) returns (ListShardReportsResponse);
 
   // M75 Raft membership (ADR-0047). A coordinator replica with no
@@ -97,18 +87,6 @@ message SnapshotSaveChunk {
     // Subsequent frames: the FSM snapshot payload.
     bytes data = 2;
   }
-}
-
-message ListQuotasRequest {}
-message ListQuotasResponse {
-  repeated QuotaAllocation allocations = 1;
-}
-
-message QuotaAllocation {
-  string provider = 1;
-  string region   = 2;
-  // per_shard maps shard_id → speculative-pool slice size.
-  map<string, int32> per_shard = 3;
 }
 
 // Admin RPCs: AssignDomain pins a topology domain (rack / zone /
@@ -224,6 +202,12 @@ message ShardSummary {
 
   reserved 5;  // utilisation_cpu_fraction — never computed, always 0.0; removed M68b
   reserved 6;  // utilisation_memory_fraction — never computed, always 0.0; removed M68b
+
+  // The out-of-tree CapacityProvider dial address this shard is bound to
+  // (the shard's --provider-addr). Empty = the in-process fake provider
+  // (laptop / kind / scaletest, never deployed). Surfaced per-shard to
+  // operator tooling via ListShardReports.
+  string provider_address = 7;
 }
 
 // Shortfall describes a need the shard could not satisfy from its own
@@ -247,18 +231,6 @@ message Shortfall {
   // Bucketed interruption penalty of the originating CapacityNeed.
   // Lets the coordinator price cross-shard preemption.
   PenaltyBucket interruption_penalty_bucket = 6;
-}
-
-// ListProviders returns the registered provider backends, sorted by name
-// (ADR-0060). Leader-only; read-gated.
-message ListProvidersRequest {}
-message ListProvidersResponse {
-  repeated ProviderEntry providers = 1;
-}
-message ProviderEntry {
-  string name    = 1;
-  string address = 2; // gRPC dial address
-  string region  = 3;
 }
 
 // ListShardReports returns the coordinator's leader-local soft-state

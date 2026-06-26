@@ -53,6 +53,13 @@ type Config struct {
 	// Provider is the capacity backend.
 	Provider provider.Provider
 
+	// ProviderAddress is the out-of-tree provider's dial address
+	// (--provider-addr), surfaced per-shard to operator tooling on the
+	// roll-up (ShardSummary.provider_address). Empty = the in-process
+	// fake provider (not deployed). Observability only — the shard
+	// already holds the dialed Provider above.
+	ProviderAddress string
+
 	// CycleInterval is how often the worker loop runs in the absence of
 	// rollup-triggered wakeups. Default 10s.
 	CycleInterval time.Duration
@@ -482,6 +489,11 @@ func (s *Shard) ID() string { return s.cfg.ID }
 
 // Epoch returns the shard's per-process epoch.
 func (s *Shard) Epoch() int64 { return s.cfg.Epoch.Value() }
+
+// ProviderAddress returns the out-of-tree provider dial address the shard
+// is bound to (empty = in-process fake). Surfaced on the roll-up for
+// operator tooling.
+func (s *Shard) ProviderAddress() string { return s.cfg.ProviderAddress }
 
 // FirstReconcileDone reports whether at least one reconcile against
 // the provider has completed successfully. Readiness signal for the

@@ -70,11 +70,6 @@ func TestCoordinator_BootstrapAndApply(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("AssignDomain: %v", err)
 	}
-	if err := c.Apply(ctx, coordinator.MakeUpsertProviderCommand(coordinator.ProviderEntry{
-		Name: "fake-east", Address: "127.0.0.1:9000", Region: "us-east-1",
-	})); err != nil {
-		t.Fatalf("UpsertProvider: %v", err)
-	}
 
 	st := c.State()
 	if shards := st.Shards(); len(shards) != 1 || shards[0].ID != "shard-a" {
@@ -85,9 +80,6 @@ func TestCoordinator_BootstrapAndApply(t *testing.T) {
 	}
 	if got, ok := st.DomainShard(coordinator.DomainKey{Key: "rack", Value: "r-1"}); !ok || got != "shard-a" {
 		t.Errorf("DomainShard = %s ok=%v", got, ok)
-	}
-	if got := st.Providers(); len(got) != 1 {
-		t.Errorf("Providers len = %d, want 1", len(got))
 	}
 }
 

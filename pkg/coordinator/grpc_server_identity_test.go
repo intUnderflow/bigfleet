@@ -21,9 +21,8 @@ import (
 // the asserted shard_id to bigfleet://shard/<shard_id>; the MUTATING surface
 // (AssignDomain / UnassignDomain / RemoveShard / JoinRaftCluster /
 // SnapshotSave) requires bigfleet://admin; and the READ surface (ListShards /
-// ListDomainAssignments / ListQuotas / ListProviders / ListShardReports)
-// accepts bigfleet://readonly OR bigfleet://admin (the read-only role can read
-// but never mutate the fleet).
+// ListDomainAssignments / ListShardReports) accepts bigfleet://readonly OR
+// bigfleet://admin (the read-only role can read but never mutate the fleet).
 
 // startMTLSCoordinator brings up a single-node leader with an mTLS
 // gRPC front and returns a client-builder keyed by certificate URI SAN.
@@ -149,12 +148,6 @@ func TestCoordinatorIdentity_ReadonlyRole(t *testing.T) {
 	if _, err := asReadonly.ListDomainAssignments(ctx, &pb.ListDomainAssignmentsRequest{}); err != nil {
 		t.Errorf("ListDomainAssignments with readonly SAN: %v", err)
 	}
-	if _, err := asReadonly.ListQuotas(ctx, &pb.ListQuotasRequest{}); err != nil {
-		t.Errorf("ListQuotas with readonly SAN: %v", err)
-	}
-	if _, err := asReadonly.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil {
-		t.Errorf("ListProviders with readonly SAN: %v", err)
-	}
 	if _, err := asReadonly.ListShardReports(ctx, &pb.ListShardReportsRequest{}); err != nil {
 		t.Errorf("ListShardReports with readonly SAN: %v", err)
 	}
@@ -175,9 +168,6 @@ func TestCoordinatorIdentity_ReadonlyRole(t *testing.T) {
 
 	// Admin is a superset: it passes the new reads too.
 	asAdmin := dial(grpcutil.AdminURI)
-	if _, err := asAdmin.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil {
-		t.Errorf("ListProviders with admin SAN: %v", err)
-	}
 	if _, err := asAdmin.ListShardReports(ctx, &pb.ListShardReportsRequest{}); err != nil {
 		t.Errorf("ListShardReports with admin SAN: %v", err)
 	}

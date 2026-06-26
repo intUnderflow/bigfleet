@@ -90,6 +90,7 @@ type ShardSummary struct {
 	FreeMachines       int32
 	InstanceTypeCounts map[string]int32
 	ZoneCounts         map[string]int32
+	ProviderAddress    string
 }
 
 // ShardShortfall mirrors pb.Shortfall in domain form.
@@ -306,6 +307,7 @@ func summaryToProto(s ShardSummary) *pb.ShardSummary {
 		FreeMachines:          s.FreeMachines,
 		PerInstanceTypeCounts: s.InstanceTypeCounts,
 		PerZoneCounts:         s.ZoneCounts,
+		ProviderAddress:       s.ProviderAddress,
 	}
 }
 

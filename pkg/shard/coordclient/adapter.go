@@ -25,6 +25,7 @@ func (a shardAdapter) Summary() ShardSummary {
 		FreeMachines:       s.FreeMachines,
 		InstanceTypeCounts: s.InstanceTypeCounts,
 		ZoneCounts:         s.ZoneCounts,
+		ProviderAddress:    a.s.ProviderAddress(),
 	}
 }
 

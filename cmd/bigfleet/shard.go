@@ -842,6 +842,7 @@ func runShard(args []string) error {
 		ID:                        *shardID,
 		Epoch:                     epoch,
 		Provider:                  prov,
+		ProviderAddress:           *providerAddr,
 		Logger:                    logger,
 		MaxActionsPerCycle:        *maxActionsPerCycle,
 		ExecuteConcurrency:        *executeConcurrency,

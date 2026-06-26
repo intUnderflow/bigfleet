@@ -30,7 +30,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"text/tabwriter"
 	"time"
 
@@ -64,7 +63,7 @@ func run(args []string) error {
 	}
 	rest := root.Args()
 	if len(rest) == 0 {
-		return fmt.Errorf("subcommand required: list-shards | list-domain-assignments | list-quotas | assign-domain | unassign-domain | remove-shard | snapshot")
+		return fmt.Errorf("subcommand required: list-shards | list-domain-assignments | assign-domain | unassign-domain | remove-shard | snapshot")
 	}
 
 	// `snapshot restore` is offline — it rewrites a STOPPED
@@ -95,8 +94,6 @@ func run(args []string) error {
 		return cmdListShards(ctx, cli)
 	case "list-domain-assignments":
 		return cmdListDomainAssignments(ctx, cli)
-	case "list-quotas":
-		return cmdListQuotas(ctx, cli)
 	case "assign-domain":
 		return cmdAssignDomain(ctx, cli, subArgs)
 	case "unassign-domain":
@@ -235,27 +232,6 @@ func cmdListDomainAssignments(ctx context.Context, cli pb.CoordinatorClient) err
 	fmt.Fprintln(tw, "TOPOLOGY_KEY\tTOPOLOGY_VALUE\tSHARD")
 	for _, a := range resp.GetAssignments() {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", a.GetTopologyKey(), a.GetTopologyValue(), a.GetShardId())
-	}
-	return tw.Flush()
-}
-
-func cmdListQuotas(ctx context.Context, cli pb.CoordinatorClient) error {
-	resp, err := cli.ListQuotas(ctx, &pb.ListQuotasRequest{})
-	if err != nil {
-		return err
-	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "PROVIDER\tREGION\tSHARD\tSLICE")
-	for _, a := range resp.GetAllocations() {
-		// Stable per-shard ordering for human-readable output.
-		shards := make([]string, 0, len(a.GetPerShard()))
-		for sh := range a.GetPerShard() {
-			shards = append(shards, sh)
-		}
-		sort.Strings(shards)
-		for _, sh := range shards {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\n", a.GetProvider(), a.GetRegion(), sh, a.GetPerShard()[sh])
-		}
 	}
 	return tw.Flush()
 }

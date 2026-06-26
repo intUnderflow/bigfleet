@@ -223,9 +223,9 @@ func (s *fileCertSource) current() (*tls.Certificate, error) {
 const AdminURI = "bigfleet://admin"
 
 // ReadonlyURI is the URI SAN that authorizes the coordinator's READ
-// surface only (ListShards / ListDomainAssignments / ListQuotas /
-// ListProviders / ListShardReports) and NOTHING that mutates the fleet
-// (ADR-0060). It exists so read-only operator tooling — dashboards, CLIs,
+// surface only (ListShards / ListDomainAssignments / ListShardReports)
+// and NOTHING that mutates the fleet (ADR-0060). It exists so
+// read-only operator tooling — dashboards, CLIs,
 // alerting, capacity scripts — can query the coordinator without holding an
 // admin certificate that could also call the write RPCs. AdminURI is a
 // superset: an admin certificate passes every read check too.

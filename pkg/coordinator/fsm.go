@@ -22,8 +22,6 @@ const (
 	CmdBindCluster
 	CmdAssignDomain
 	CmdUnassignDomain
-	CmdSetQuota
-	CmdUpsertProvider
 )
 
 // Command is the wire form of a state mutation. Encoded as JSON for
@@ -38,8 +36,6 @@ type Command struct {
 	BindCluster    *BindClusterCmd    `json:"bind_cluster,omitempty"`
 	AssignDomain   *AssignDomainCmd   `json:"assign_domain,omitempty"`
 	UnassignDomain *UnassignDomainCmd `json:"unassign_domain,omitempty"`
-	SetQuota       *SetQuotaCmd       `json:"set_quota,omitempty"`
-	UpsertProvider *UpsertProviderCmd `json:"upsert_provider,omitempty"`
 }
 
 type AddShardCmd struct {
@@ -58,13 +54,6 @@ type AssignDomainCmd struct {
 }
 type UnassignDomainCmd struct {
 	Domain DomainKey `json:"domain"`
-}
-type SetQuotaCmd struct {
-	Key      QuotaKey          `json:"key"`
-	PerShard map[ShardID]int32 `json:"per_shard"`
-}
-type UpsertProviderCmd struct {
-	Provider ProviderEntry `json:"provider"`
 }
 
 // FSM is the Raft FSM over State. Apply commits commands; Snapshot
@@ -138,38 +127,23 @@ func (f *FSM) applyCommand(cmd Command) error {
 		}
 		f.state.UnassignDomain(cmd.UnassignDomain.Domain)
 		return nil
-	case CmdSetQuota:
-		if cmd.SetQuota == nil {
-			return errors.New("fsm: SetQuota payload missing")
-		}
-		f.state.SetQuota(cmd.SetQuota.Key, cmd.SetQuota.PerShard)
-		return nil
-	case CmdUpsertProvider:
-		if cmd.UpsertProvider == nil {
-			return errors.New("fsm: UpsertProvider payload missing")
-		}
-		return f.state.UpsertProvider(cmd.UpsertProvider.Provider)
 	}
 	return fmt.Errorf("fsm: unknown command kind %d", cmd.Kind)
 }
 
-// snapshot is the JSON-serialised form of the entire State.
+// snapshot is the JSON-serialised form of the entire State. (Older
+// snapshots may carry "quotas"/"providers" keys from the removed
+// provider-registry + quota scaffolding; encoding/json silently drops
+// them on Restore — they were always empty.)
 type snapshot struct {
 	Shards         []ShardEntry          `json:"shards"`
 	ClusterToShard map[ClusterID]ShardID `json:"cluster_to_shard"`
 	DomainToShard  []domainShardPair     `json:"domain_to_shard"`
-	Quotas         []quotaPair           `json:"quotas"`
-	Providers      []ProviderEntry       `json:"providers"`
 }
 
 type domainShardPair struct {
 	Domain DomainKey `json:"domain"`
 	Shard  ShardID   `json:"shard"`
-}
-
-type quotaPair struct {
-	Key      QuotaKey          `json:"key"`
-	PerShard map[ShardID]int32 `json:"per_shard"`
 }
 
 // Snapshot implements raft.FSM. Returns a snapshot that can be
@@ -190,16 +164,6 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	}
 	for d, sh := range st.domainToShard {
 		snap.DomainToShard = append(snap.DomainToShard, domainShardPair{Domain: d, Shard: sh})
-	}
-	for k, a := range st.quotas {
-		cp := make(map[ShardID]int32, len(a.PerShard))
-		for sh, n := range a.PerShard {
-			cp[sh] = n
-		}
-		snap.Quotas = append(snap.Quotas, quotaPair{Key: k, PerShard: cp})
-	}
-	for _, p := range st.providers {
-		snap.Providers = append(snap.Providers, p)
 	}
 
 	data, err := json.Marshal(&snap)
@@ -231,12 +195,6 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	}
 	for _, p := range snap.DomainToShard {
 		_ = fresh.AssignDomain(p.Domain, p.Shard)
-	}
-	for _, q := range snap.Quotas {
-		fresh.SetQuota(q.Key, q.PerShard)
-	}
-	for _, p := range snap.Providers {
-		_ = fresh.UpsertProvider(p)
 	}
 	f.state = fresh
 	return nil
@@ -281,10 +239,4 @@ func MakeAssignDomainCommand(d DomainKey, sh ShardID) Command {
 }
 func MakeUnassignDomainCommand(d DomainKey) Command {
 	return Command{Kind: CmdUnassignDomain, UnassignDomain: &UnassignDomainCmd{Domain: d}}
-}
-func MakeSetQuotaCommand(k QuotaKey, perShard map[ShardID]int32) Command {
-	return Command{Kind: CmdSetQuota, SetQuota: &SetQuotaCmd{Key: k, PerShard: perShard}}
-}
-func MakeUpsertProviderCommand(p ProviderEntry) Command {
-	return Command{Kind: CmdUpsertProvider, UpsertProvider: &UpsertProviderCmd{Provider: p}}
 }

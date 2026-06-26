@@ -260,35 +260,6 @@ func TestGRPCServer_AdminRPCs_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestGRPCServer_ListQuotas: M24 quota inspection surface. Pre-seed a
-// quota allocation via direct State.SetQuota (the FSM path is covered
-// by state_test.go); ListQuotas should round-trip the entries with
-// stable provider/region ordering.
-func TestGRPCServer_ListQuotas(t *testing.T) {
-	c, _, cli, ctx := startCoordinatorWithGRPC(t)
-
-	c.State().SetQuota(coordinator.QuotaKey{Provider: "aws-prov", Region: "us-east-1"},
-		map[coordinator.ShardID]int32{"shard-a": 100, "shard-b": 50})
-	c.State().SetQuota(coordinator.QuotaKey{Provider: "gcp-prov", Region: "europe-west4"},
-		map[coordinator.ShardID]int32{"shard-a": 25})
-
-	resp, err := cli.ListQuotas(ctx, &pb.ListQuotasRequest{})
-	if err != nil {
-		t.Fatalf("ListQuotas: %v", err)
-	}
-	if got := len(resp.GetAllocations()); got != 2 {
-		t.Fatalf("allocations = %d, want 2", got)
-	}
-	// Stable provider sort: aws-prov before gcp-prov.
-	if resp.GetAllocations()[0].GetProvider() != "aws-prov" {
-		t.Errorf("first allocation provider = %q, want aws-prov", resp.GetAllocations()[0].GetProvider())
-	}
-	awsPerShard := resp.GetAllocations()[0].GetPerShard()
-	if awsPerShard["shard-a"] != 100 || awsPerShard["shard-b"] != 50 {
-		t.Errorf("aws per_shard = %v, want shard-a=100 shard-b=50", awsPerShard)
-	}
-}
-
 func TestGRPCServer_ReportShard_RejectsNonLeader(t *testing.T) {
 	// Build a coordinator that never becomes leader (no Bootstrap).
 	c, err := coordinator.New(coordinator.Config{
@@ -392,34 +363,5 @@ func TestGRPCServer_ListShardReports(t *testing.T) {
 	}
 	if got, _ := cli.ListShardReports(ctx, &pb.ListShardReportsRequest{ShardId: "shard-a"}); len(got.GetReports()) != 1 {
 		t.Errorf("filter on shard-a returned %d reports, want 1", len(got.GetReports()))
-	}
-}
-
-// TestGRPCServer_ListProviders pins the ADR-0060 provider read RPC: a
-// Raft-applied provider registration surfaces through ListProviders.
-func TestGRPCServer_ListProviders(t *testing.T) {
-	c, _, cli, ctx := startCoordinatorWithGRPC(t)
-
-	if got, err := cli.ListProviders(ctx, &pb.ListProvidersRequest{}); err != nil || len(got.GetProviders()) != 0 {
-		t.Fatalf("ListProviders (empty) = (%v, %v); want ([], nil)", got, err)
-	}
-
-	if err := c.Apply(ctx, coordinator.Command{
-		Kind:           coordinator.CmdUpsertProvider,
-		UpsertProvider: &coordinator.UpsertProviderCmd{Provider: coordinator.ProviderEntry{Name: "aws", Address: "aws-provider:7790", Region: "eu-west-1"}},
-	}); err != nil {
-		t.Fatalf("Apply UpsertProvider: %v", err)
-	}
-
-	resp, err := cli.ListProviders(ctx, &pb.ListProvidersRequest{})
-	if err != nil {
-		t.Fatalf("ListProviders: %v", err)
-	}
-	if len(resp.GetProviders()) != 1 {
-		t.Fatalf("providers = %d, want 1", len(resp.GetProviders()))
-	}
-	p := resp.GetProviders()[0]
-	if p.GetName() != "aws" || p.GetAddress() != "aws-provider:7790" || p.GetRegion() != "eu-west-1" {
-		t.Errorf("provider round-trip wrong: %+v", p)
 	}
 }

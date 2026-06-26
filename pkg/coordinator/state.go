@@ -8,9 +8,6 @@
 //     unless a shard splits).
 //   - Topology-domain → shard map (per plan §0.1 A; ~100K entries at
 //     full fleet scale, not 100M).
-//   - Quota allocations (per provider+region → per-shard slice).
-//   - Provider registry (list of configured CapacityProviders the
-//     fleet draws from).
 //
 // State changes go through Raft so the three coordinator replicas stay
 // consistent. Shard reports / shortfalls are *soft state* held only on
@@ -49,12 +46,6 @@ type DomainKey struct {
 // String returns a stable canonical form.
 func (d DomainKey) String() string { return d.Key + "=" + d.Value }
 
-// QuotaKey identifies a quota slice by (provider, region).
-type QuotaKey struct {
-	Provider string
-	Region   string
-}
-
 // State is the coordinator's durable, Raft-replicated state. All access
 // must go through methods on *State for thread safety.
 type State struct {
@@ -70,14 +61,6 @@ type State struct {
 	// DomainToShard assigns topology domains to shards. ~100K entries
 	// at 100M-node scale per plan §0.1 A.
 	domainToShard map[DomainKey]ShardID
-
-	// Quotas tracks per-provider+region quota slices the coordinator
-	// has handed to shards. The sum of all slices for a given QuotaKey
-	// must not exceed the provider's declared quota.
-	quotas map[QuotaKey]QuotaAllocations
-
-	// Providers is the registry of configured backends.
-	providers map[string]ProviderEntry
 }
 
 // ShardEntry is the per-shard record persisted in coordinator state.
@@ -90,28 +73,12 @@ type ShardEntry struct {
 	LastHeartbeat time.Time // last successful ReportShard
 }
 
-// QuotaAllocations is the per-shard slice for a single (provider, region).
-type QuotaAllocations struct {
-	// PerShard maps a shard to its slice size (count of speculative
-	// machines it may draw from this provider+region).
-	PerShard map[ShardID]int32
-}
-
-// ProviderEntry is one registered CapacityProvider backend.
-type ProviderEntry struct {
-	Name    string
-	Address string // gRPC dial address
-	Region  string
-}
-
 // NewState constructs an empty State.
 func NewState() *State {
 	return &State{
 		shards:         make(map[ShardID]ShardEntry),
 		clusterToShard: make(map[ClusterID]ShardID),
 		domainToShard:  make(map[DomainKey]ShardID),
-		quotas:         make(map[QuotaKey]QuotaAllocations),
-		providers:      make(map[string]ProviderEntry),
 	}
 }
 
@@ -275,72 +242,5 @@ func (s *State) DomainsForShard(sh ShardID) []DomainKey {
 		}
 		return out[i].Value < out[j].Value
 	})
-	return out
-}
-
-// SetQuota replaces the quota allocation for the given (provider, region).
-func (s *State) SetQuota(k QuotaKey, perShard map[ShardID]int32) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cp := make(map[ShardID]int32, len(perShard))
-	for sh, n := range perShard {
-		cp[sh] = n
-	}
-	s.quotas[k] = QuotaAllocations{PerShard: cp}
-}
-
-// Quota returns the current allocation table for (provider, region).
-func (s *State) Quota(k QuotaKey) (QuotaAllocations, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	a, ok := s.quotas[k]
-	if !ok {
-		return QuotaAllocations{}, false
-	}
-	cp := make(map[ShardID]int32, len(a.PerShard))
-	for sh, n := range a.PerShard {
-		cp[sh] = n
-	}
-	return QuotaAllocations{PerShard: cp}, true
-}
-
-// Quotas returns a deep copy of every quota allocation in coordinator
-// state, keyed by (provider, region). M24: lets bigfleetctl surface
-// the per-shard speculative-pool slices on-call docs reach for to
-// triage "Phase 1 has provider capacity but isn't being asked".
-func (s *State) Quotas() map[QuotaKey]QuotaAllocations {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make(map[QuotaKey]QuotaAllocations, len(s.quotas))
-	for k, a := range s.quotas {
-		cp := make(map[ShardID]int32, len(a.PerShard))
-		for sh, n := range a.PerShard {
-			cp[sh] = n
-		}
-		out[k] = QuotaAllocations{PerShard: cp}
-	}
-	return out
-}
-
-// UpsertProvider adds or replaces a provider registry entry.
-func (s *State) UpsertProvider(p ProviderEntry) error {
-	if p.Name == "" {
-		return errors.New("coordinator: ProviderEntry.Name required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.providers[p.Name] = p
-	return nil
-}
-
-// Providers returns a snapshot of the registry.
-func (s *State) Providers() []ProviderEntry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]ProviderEntry, 0, len(s.providers))
-	for _, p := range s.providers {
-		out = append(out, p)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
