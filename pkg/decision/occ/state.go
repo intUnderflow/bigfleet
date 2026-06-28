@@ -37,6 +37,12 @@ type SharedState struct {
 	// keys on — a gang that merely lost claim races still sees a
 	// satisfiable bucket and must not age toward parking).
 	sameSatisfiable map[*needs.Need]bool
+	// sameCandidates records the top-K candidate domains the pre-pass
+	// weighed for a Same-Need (ADR-0061 amendment): each domain's
+	// coverage of the Need's deficit, best-first. Observation-only —
+	// the engine claims only within SameDomainFor; this is read at the
+	// barrier for the needs-inspection surface.
+	sameCandidates map[*needs.Need][]DomainCoverage
 }
 
 // claim is the per-machine record the broker stores when it
@@ -62,6 +68,7 @@ func NewSharedState(snap *inventory.Snapshot) *SharedState {
 		bucketSeq:       make(map[BucketKey]uint64),
 		sameDomain:      make(map[*needs.Need]string),
 		sameSatisfiable: make(map[*needs.Need]bool),
+		sameCandidates:  make(map[*needs.Need][]DomainCoverage),
 	}
 }
 
@@ -91,6 +98,22 @@ func (s *SharedState) SameSatisfiableFor(n *needs.Need) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sameSatisfiable[n]
+}
+
+// recordSameCandidates stores the top-K candidate-domain coverages the
+// pre-pass weighed for n (ADR-0061 amendment). Observation-only.
+func (s *SharedState) recordSameCandidates(n *needs.Need, cands []DomainCoverage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sameCandidates[n] = cands
+}
+
+// SameCandidatesFor returns the pre-pass's candidate-domain coverages for
+// n (best-first), or nil for plain Needs / Needs with no buckets.
+func (s *SharedState) SameCandidatesFor(n *needs.Need) []DomainCoverage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sameCandidates[n]
 }
 
 // SameDomainFor returns the Same-domain the pre-pass chose for n, or

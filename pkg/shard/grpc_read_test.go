@@ -35,9 +35,19 @@ func newReadTestShard(t *testing.T) *Shard {
 	nB := needs.Need{ClusterID: "cluster-b", Profile: nvProfile(2000, false), AggregateResources: nvQty("8"), MinUnit: nvQty("1")}
 	p1 := decision.Phase1Result{Verdicts: []decision.NeedVerdict{
 		{Need: &nA, Satisfied: true, ClaimedCount: 2},
-		{Need: &nB, Satisfied: false, Deficit: nvQty("8"), MatchingSupplyExists: false},
+		// cluster-b: matching supply exists and Phase 2 preempted but fell
+		// short — PREEMPTION_EXHAUSTED, exercising the ADR-0061-amendment
+		// cardinality + same-candidate + preemption-summary mappings.
+		{Need: &nB, Satisfied: false, Deficit: nvQty("8"),
+			MatchingSupplyExists: true,
+			MatchingSupply:       decision.MatchingSupplyCardinality{Idle: 2, Configured: 5, Speculative: 1},
+			SameCandidates:       []decision.DomainCoverage{{Domain: "rack-3", CoveragePerMille: 750, Satisfiable: false}},
+		},
 	}}
-	s.recordNeedViews(7, p1, decision.Phase2Result{})
+	p2 := decision.Phase2Result{Unresolved: []decision.UnsatisfiedNeed{
+		{Need: nB, Deficit: nvQty("8"), Preempted: true, VictimsFound: 2, CapacityFreed: nvQty("4")},
+	}}
+	s.recordNeedViews(7, p1, p2)
 	return s
 }
 
@@ -66,14 +76,25 @@ func TestInspectNeeds_StreamsHeaderAndRows(t *testing.T) {
 	if first.GetSatisfied() {
 		t.Errorf("cluster-b satisfied=true, want false")
 	}
-	if first.GetUnmetReason() != pb.UnmetReason_UNMET_REASON_NO_MATCHING_SUPPLY {
-		t.Errorf("cluster-b reason = %v, want NO_MATCHING_SUPPLY", first.GetUnmetReason())
+	if first.GetUnmetReason() != pb.UnmetReason_UNMET_REASON_PREEMPTION_EXHAUSTED {
+		t.Errorf("cluster-b reason = %v, want PREEMPTION_EXHAUSTED", first.GetUnmetReason())
 	}
 	if first.GetResidualDeficit().GetResources()["cpu"] != "8" {
 		t.Errorf("cluster-b deficit = %v, want cpu=8", first.GetResidualDeficit().GetResources())
 	}
 	if first.GetNeed().GetPriority() != 2000 {
 		t.Errorf("cluster-b priority = %d, want 2000", first.GetNeed().GetPriority())
+	}
+	// ADR-0061 amendment: matching-supply cardinality, preemption summary,
+	// and same-candidate coverage round-trip through the proto.
+	if ms := first.GetMatchingSupply(); ms.GetIdle() != 2 || ms.GetConfigured() != 5 || ms.GetSpeculative() != 1 {
+		t.Errorf("cluster-b matching_supply = %+v, want idle=2 configured=5 speculative=1", ms)
+	}
+	if ps := first.GetPreemption(); ps.GetVictimsFound() != 2 || ps.GetCapacityFreed().GetResources()["cpu"] != "4" {
+		t.Errorf("cluster-b preemption = %+v, want victims=2 freed cpu=4", ps)
+	}
+	if cs := first.GetSameCandidates(); len(cs) != 1 || cs[0].GetDomain() != "rack-3" || cs[0].GetCoveragePerMille() != 750 {
+		t.Errorf("cluster-b same_candidates = %+v, want [rack-3 @ 750]", cs)
 	}
 
 	second := stream.sent[2].GetNeed()

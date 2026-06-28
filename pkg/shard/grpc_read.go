@@ -113,11 +113,35 @@ func toProtoNeedView(v *NeedView) *pb.NeedView {
 		SameDomain:          v.SameDomain,
 		SameSatisfiable:     v.SameSatisfiable,
 		AcquisitionParked:   v.AcquisitionParked,
+		ParkedAgeCycles:     int32(v.ParkedAgeCycles),
 		AgeCyclesUnmet:      int32(v.AgeCyclesUnmet),
 		UnmetReason:         toProtoReason(v.UnmetReason),
 	}
 	if !v.Satisfied && len(v.Deficit) > 0 {
 		out.ResidualDeficit = &pb.Resources{Resources: qtyMap(v.Deficit)}
+	}
+	// ADR-0061 amendment: observation-only decision context.
+	if !v.Satisfied {
+		out.MatchingSupply = &pb.MatchingSupply{
+			Idle:        int32(v.MatchingSupply.Idle),
+			Configured:  int32(v.MatchingSupply.Configured),
+			Speculative: int32(v.MatchingSupply.Speculative),
+			Capped:      v.MatchingSupply.Capped,
+		}
+		if v.PreemptionVictimsFound > 0 {
+			ps := &pb.PreemptionSummary{VictimsFound: int32(v.PreemptionVictimsFound)}
+			if len(v.PreemptionCapacityFreed) > 0 {
+				ps.CapacityFreed = &pb.Resources{Resources: qtyMap(v.PreemptionCapacityFreed)}
+			}
+			out.Preemption = ps
+		}
+	}
+	for _, c := range v.SameCandidates {
+		out.SameCandidates = append(out.SameCandidates, &pb.DomainCoverage{
+			Domain:           c.Domain,
+			CoveragePerMille: int32(c.CoveragePerMille),
+			Satisfiable:      c.Satisfiable,
+		})
 	}
 	return out
 }

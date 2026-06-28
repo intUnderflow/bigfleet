@@ -44,6 +44,19 @@ type NeedView struct {
 	AcquisitionParked bool
 	AgeCyclesUnmet    int
 	UnmetReason       NeedUnmetReason
+
+	// ADR-0061 amendment — observation-only decision context (bounded):
+	// MatchingSupply is the per-state cardinality of machines of this
+	// Need's shape (quantifies NO_MATCHING_SUPPLY vs PRIORITY_STARVED);
+	// PreemptionVictimsFound / PreemptionCapacityFreed summarise Phase 2's
+	// attempt for a PREEMPTION_EXHAUSTED Need; SameCandidates is the top-K
+	// candidate-domain coverage for a TOPOLOGY_UNSATISFIABLE Same-Need;
+	// ParkedAgeCycles is how long a parked Need has aged (ADR-0042).
+	MatchingSupply          decision.MatchingSupplyCardinality
+	PreemptionVictimsFound  int
+	PreemptionCapacityFreed []needs.ResourceQty
+	SameCandidates          []decision.DomainCoverage
+	ParkedAgeCycles         int
 }
 
 // needViewSnapshot is one cycle's complete ledger, immutable after the
@@ -78,10 +91,19 @@ func (s *Shard) recordNeedViews(cycle int64, p1 decision.Phase1Result, p2 decisi
 		group   string
 	}
 	// Phase 2's still-unresolved needs, keyed by aggregation identity, with
-	// the Preempted discriminator (found victims but fell short).
-	unresolved := make(map[urKey]bool, len(p2.Unresolved))
+	// the Preempted discriminator + the ADR-0061 amendment victim summary.
+	type urSummary struct {
+		preempted     bool
+		victimsFound  int
+		capacityFreed []needs.ResourceQty
+	}
+	unresolved := make(map[urKey]urSummary, len(p2.Unresolved))
 	for _, u := range p2.Unresolved {
-		unresolved[urKey{u.Need.ClusterID, u.Need.Profile.Fingerprint(), u.Need.Group}] = u.Preempted
+		unresolved[urKey{u.Need.ClusterID, u.Need.Profile.Fingerprint(), u.Need.Group}] = urSummary{
+			preempted:     u.Preempted,
+			victimsFound:  u.VictimsFound,
+			capacityFreed: u.CapacityFreed,
+		}
 	}
 
 	// Snapshot the per-fingerprint unmet age from the shortfall ledger
@@ -101,7 +123,7 @@ func (s *Shard) recordNeedViews(cycle int64, p1 decision.Phase1Result, p2 decisi
 		}
 		n := v.Need
 		fp := n.Profile.Fingerprint()
-		preempted, inUnresolved := unresolved[urKey{n.ClusterID, fp, n.Group}]
+		sum, inUnresolved := unresolved[urKey{n.ClusterID, fp, n.Group}]
 
 		nv := NeedView{
 			ClusterID:          n.ClusterID,
@@ -117,11 +139,18 @@ func (s *Shard) recordNeedViews(cycle int64, p1 decision.Phase1Result, p2 decisi
 			SameDomain:         v.SameDomain,
 			SameSatisfiable:    v.SameSatisfiable,
 			AcquisitionParked:  n.AcquisitionParked,
-			UnmetReason:        deriveUnmetReason(v, inUnresolved, preempted),
+			UnmetReason:        deriveUnmetReason(v, inUnresolved, sum.preempted),
+			MatchingSupply:     v.MatchingSupply,
+			SameCandidates:     append([]decision.DomainCoverage(nil), v.SameCandidates...),
 		}
 		if !v.Satisfied {
 			nv.Deficit = cloneQty(v.Deficit)
 			nv.AgeCyclesUnmet = ages[fp]
+			nv.PreemptionVictimsFound = sum.victimsFound
+			nv.PreemptionCapacityFreed = cloneQty(sum.capacityFreed)
+			if n.AcquisitionParked {
+				nv.ParkedAgeCycles = s.unsatSameAge[unsatSameKey(n)]
+			}
 		}
 		byCluster[n.ClusterID] = append(byCluster[n.ClusterID], nv)
 		total++

@@ -338,9 +338,22 @@ type NeedView struct {
 	// 0 when satisfied).
 	AgeCyclesUnmet int32 `protobuf:"varint,14,opt,name=age_cycles_unmet,json=ageCyclesUnmet,proto3" json:"age_cycles_unmet,omitempty"`
 	// Why the Need is unmet. UNSPECIFIED when satisfied.
-	UnmetReason   UnmetReason `protobuf:"varint,15,opt,name=unmet_reason,json=unmetReason,proto3,enum=bigfleet.v1alpha1.UnmetReason" json:"unmet_reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	UnmetReason UnmetReason `protobuf:"varint,15,opt,name=unmet_reason,json=unmetReason,proto3,enum=bigfleet.v1alpha1.UnmetReason" json:"unmet_reason,omitempty"`
+	// Per-state cardinality of machines whose shape matches this Need
+	// (MatchProfile + covers MinUnit), ignoring claims/priority — the count
+	// behind the PRIORITY_STARVED (exist but held) vs NO_MATCHING_SUPPLY (all
+	// zero) split. Capped per state; only populated for unsatisfied Needs.
+	MatchingSupply *MatchingSupply `protobuf:"bytes,16,opt,name=matching_supply,json=matchingSupply,proto3" json:"matching_supply,omitempty"`
+	// Phase 2's preemption summary for a PREEMPTION_EXHAUSTED Need: how many
+	// victims it picked and the aggregate capacity they would free (still-short
+	// is residual_deficit). Absent on the priority-starved path.
+	Preemption *PreemptionSummary `protobuf:"bytes,17,opt,name=preemption,proto3" json:"preemption,omitempty"`
+	// The top-K candidate topology domains the pre-pass weighed for a Same-Need
+	// (best coverage first) — why the chosen same_domain won and how short the
+	// runners-up were. Empty for plain Needs.
+	SameCandidates []*DomainCoverage `protobuf:"bytes,18,rep,name=same_candidates,json=sameCandidates,proto3" json:"same_candidates,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *NeedView) Reset() {
@@ -478,6 +491,215 @@ func (x *NeedView) GetUnmetReason() UnmetReason {
 	return UnmetReason_UNMET_REASON_UNSPECIFIED
 }
 
+func (x *NeedView) GetMatchingSupply() *MatchingSupply {
+	if x != nil {
+		return x.MatchingSupply
+	}
+	return nil
+}
+
+func (x *NeedView) GetPreemption() *PreemptionSummary {
+	if x != nil {
+		return x.Preemption
+	}
+	return nil
+}
+
+func (x *NeedView) GetSameCandidates() []*DomainCoverage {
+	if x != nil {
+		return x.SameCandidates
+	}
+	return nil
+}
+
+// MatchingSupply is the per-state count of machines matching an unsatisfied
+// Need's shape (ADR-0061 amendment). capped is true if any state hit the
+// internal cap (the real number may be higher).
+type MatchingSupply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Idle          int32                  `protobuf:"varint,1,opt,name=idle,proto3" json:"idle,omitempty"`
+	Configured    int32                  `protobuf:"varint,2,opt,name=configured,proto3" json:"configured,omitempty"`
+	Speculative   int32                  `protobuf:"varint,3,opt,name=speculative,proto3" json:"speculative,omitempty"`
+	Capped        bool                   `protobuf:"varint,4,opt,name=capped,proto3" json:"capped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MatchingSupply) Reset() {
+	*x = MatchingSupply{}
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MatchingSupply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MatchingSupply) ProtoMessage() {}
+
+func (x *MatchingSupply) ProtoReflect() protoreflect.Message {
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MatchingSupply.ProtoReflect.Descriptor instead.
+func (*MatchingSupply) Descriptor() ([]byte, []int) {
+	return file_bigfleet_v1alpha1_shardread_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MatchingSupply) GetIdle() int32 {
+	if x != nil {
+		return x.Idle
+	}
+	return 0
+}
+
+func (x *MatchingSupply) GetConfigured() int32 {
+	if x != nil {
+		return x.Configured
+	}
+	return 0
+}
+
+func (x *MatchingSupply) GetSpeculative() int32 {
+	if x != nil {
+		return x.Speculative
+	}
+	return 0
+}
+
+func (x *MatchingSupply) GetCapped() bool {
+	if x != nil {
+		return x.Capped
+	}
+	return false
+}
+
+// PreemptionSummary describes Phase 2's preemption attempt for a still-unmet
+// Need (ADR-0061 amendment).
+type PreemptionSummary struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VictimsFound  int32                  `protobuf:"varint,1,opt,name=victims_found,json=victimsFound,proto3" json:"victims_found,omitempty"`
+	CapacityFreed *Resources             `protobuf:"bytes,2,opt,name=capacity_freed,json=capacityFreed,proto3" json:"capacity_freed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PreemptionSummary) Reset() {
+	*x = PreemptionSummary{}
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PreemptionSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PreemptionSummary) ProtoMessage() {}
+
+func (x *PreemptionSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PreemptionSummary.ProtoReflect.Descriptor instead.
+func (*PreemptionSummary) Descriptor() ([]byte, []int) {
+	return file_bigfleet_v1alpha1_shardread_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PreemptionSummary) GetVictimsFound() int32 {
+	if x != nil {
+		return x.VictimsFound
+	}
+	return 0
+}
+
+func (x *PreemptionSummary) GetCapacityFreed() *Resources {
+	if x != nil {
+		return x.CapacityFreed
+	}
+	return nil
+}
+
+// DomainCoverage is one candidate topology domain the Same pre-pass weighed:
+// coverage_per_mille (0..1000, the worst-covered deficit dimension) and
+// whether it fully covered the deficit (ADR-0061 amendment).
+type DomainCoverage struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Domain           string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"`
+	CoveragePerMille int32                  `protobuf:"varint,2,opt,name=coverage_per_mille,json=coveragePerMille,proto3" json:"coverage_per_mille,omitempty"`
+	Satisfiable      bool                   `protobuf:"varint,3,opt,name=satisfiable,proto3" json:"satisfiable,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *DomainCoverage) Reset() {
+	*x = DomainCoverage{}
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DomainCoverage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DomainCoverage) ProtoMessage() {}
+
+func (x *DomainCoverage) ProtoReflect() protoreflect.Message {
+	mi := &file_bigfleet_v1alpha1_shardread_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DomainCoverage.ProtoReflect.Descriptor instead.
+func (*DomainCoverage) Descriptor() ([]byte, []int) {
+	return file_bigfleet_v1alpha1_shardread_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *DomainCoverage) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *DomainCoverage) GetCoveragePerMille() int32 {
+	if x != nil {
+		return x.CoveragePerMille
+	}
+	return 0
+}
+
+func (x *DomainCoverage) GetSatisfiable() bool {
+	if x != nil {
+		return x.Satisfiable
+	}
+	return false
+}
+
 var File_bigfleet_v1alpha1_shardread_proto protoreflect.FileDescriptor
 
 const file_bigfleet_v1alpha1_shardread_proto_rawDesc = "" +
@@ -495,7 +717,7 @@ const file_bigfleet_v1alpha1_shardread_proto_rawDesc = "" +
 	"\x05cycle\x18\x01 \x01(\x03R\x05cycle\x123\n" +
 	"\x16computed_at_unix_nanos\x18\x02 \x01(\x03R\x13computedAtUnixNanos\x12\x1f\n" +
 	"\vtotal_needs\x18\x03 \x01(\x05R\n" +
-	"totalNeeds\"\xbe\x05\n" +
+	"totalNeeds\"\x9c\a\n" +
 	"\bNeedView\x123\n" +
 	"\x04need\x18\x01 \x01(\v2\x1f.bigfleet.v1alpha1.CapacityNeedR\x04need\x12\x1d\n" +
 	"\n" +
@@ -514,7 +736,26 @@ const file_bigfleet_v1alpha1_shardread_proto_rawDesc = "" +
 	"\x12acquisition_parked\x18\f \x01(\bR\x11acquisitionParked\x12*\n" +
 	"\x11parked_age_cycles\x18\r \x01(\x05R\x0fparkedAgeCycles\x12(\n" +
 	"\x10age_cycles_unmet\x18\x0e \x01(\x05R\x0eageCyclesUnmet\x12A\n" +
-	"\funmet_reason\x18\x0f \x01(\x0e2\x1e.bigfleet.v1alpha1.UnmetReasonR\vunmetReason*\xc3\x01\n" +
+	"\funmet_reason\x18\x0f \x01(\x0e2\x1e.bigfleet.v1alpha1.UnmetReasonR\vunmetReason\x12J\n" +
+	"\x0fmatching_supply\x18\x10 \x01(\v2!.bigfleet.v1alpha1.MatchingSupplyR\x0ematchingSupply\x12D\n" +
+	"\n" +
+	"preemption\x18\x11 \x01(\v2$.bigfleet.v1alpha1.PreemptionSummaryR\n" +
+	"preemption\x12J\n" +
+	"\x0fsame_candidates\x18\x12 \x03(\v2!.bigfleet.v1alpha1.DomainCoverageR\x0esameCandidates\"~\n" +
+	"\x0eMatchingSupply\x12\x12\n" +
+	"\x04idle\x18\x01 \x01(\x05R\x04idle\x12\x1e\n" +
+	"\n" +
+	"configured\x18\x02 \x01(\x05R\n" +
+	"configured\x12 \n" +
+	"\vspeculative\x18\x03 \x01(\x05R\vspeculative\x12\x16\n" +
+	"\x06capped\x18\x04 \x01(\bR\x06capped\"}\n" +
+	"\x11PreemptionSummary\x12#\n" +
+	"\rvictims_found\x18\x01 \x01(\x05R\fvictimsFound\x12C\n" +
+	"\x0ecapacity_freed\x18\x02 \x01(\v2\x1c.bigfleet.v1alpha1.ResourcesR\rcapacityFreed\"x\n" +
+	"\x0eDomainCoverage\x12\x16\n" +
+	"\x06domain\x18\x01 \x01(\tR\x06domain\x12,\n" +
+	"\x12coverage_per_mille\x18\x02 \x01(\x05R\x10coveragePerMille\x12 \n" +
+	"\vsatisfiable\x18\x03 \x01(\bR\vsatisfiable*\xc3\x01\n" +
 	"\vUnmetReason\x12\x1c\n" +
 	"\x18UNMET_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dUNMET_REASON_PRIORITY_STARVED\x10\x01\x12#\n" +
@@ -538,29 +779,36 @@ func file_bigfleet_v1alpha1_shardread_proto_rawDescGZIP() []byte {
 }
 
 var file_bigfleet_v1alpha1_shardread_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bigfleet_v1alpha1_shardread_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_bigfleet_v1alpha1_shardread_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_bigfleet_v1alpha1_shardread_proto_goTypes = []any{
 	(UnmetReason)(0),             // 0: bigfleet.v1alpha1.UnmetReason
 	(*InspectNeedsRequest)(nil),  // 1: bigfleet.v1alpha1.InspectNeedsRequest
 	(*InspectNeedsResponse)(nil), // 2: bigfleet.v1alpha1.InspectNeedsResponse
 	(*InspectNeedsHeader)(nil),   // 3: bigfleet.v1alpha1.InspectNeedsHeader
 	(*NeedView)(nil),             // 4: bigfleet.v1alpha1.NeedView
-	(*CapacityNeed)(nil),         // 5: bigfleet.v1alpha1.CapacityNeed
-	(*Resources)(nil),            // 6: bigfleet.v1alpha1.Resources
+	(*MatchingSupply)(nil),       // 5: bigfleet.v1alpha1.MatchingSupply
+	(*PreemptionSummary)(nil),    // 6: bigfleet.v1alpha1.PreemptionSummary
+	(*DomainCoverage)(nil),       // 7: bigfleet.v1alpha1.DomainCoverage
+	(*CapacityNeed)(nil),         // 8: bigfleet.v1alpha1.CapacityNeed
+	(*Resources)(nil),            // 9: bigfleet.v1alpha1.Resources
 }
 var file_bigfleet_v1alpha1_shardread_proto_depIdxs = []int32{
-	3, // 0: bigfleet.v1alpha1.InspectNeedsResponse.header:type_name -> bigfleet.v1alpha1.InspectNeedsHeader
-	4, // 1: bigfleet.v1alpha1.InspectNeedsResponse.need:type_name -> bigfleet.v1alpha1.NeedView
-	5, // 2: bigfleet.v1alpha1.NeedView.need:type_name -> bigfleet.v1alpha1.CapacityNeed
-	6, // 3: bigfleet.v1alpha1.NeedView.residual_deficit:type_name -> bigfleet.v1alpha1.Resources
-	0, // 4: bigfleet.v1alpha1.NeedView.unmet_reason:type_name -> bigfleet.v1alpha1.UnmetReason
-	1, // 5: bigfleet.v1alpha1.ShardRead.InspectNeeds:input_type -> bigfleet.v1alpha1.InspectNeedsRequest
-	2, // 6: bigfleet.v1alpha1.ShardRead.InspectNeeds:output_type -> bigfleet.v1alpha1.InspectNeedsResponse
-	6, // [6:7] is the sub-list for method output_type
-	5, // [5:6] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	3,  // 0: bigfleet.v1alpha1.InspectNeedsResponse.header:type_name -> bigfleet.v1alpha1.InspectNeedsHeader
+	4,  // 1: bigfleet.v1alpha1.InspectNeedsResponse.need:type_name -> bigfleet.v1alpha1.NeedView
+	8,  // 2: bigfleet.v1alpha1.NeedView.need:type_name -> bigfleet.v1alpha1.CapacityNeed
+	9,  // 3: bigfleet.v1alpha1.NeedView.residual_deficit:type_name -> bigfleet.v1alpha1.Resources
+	0,  // 4: bigfleet.v1alpha1.NeedView.unmet_reason:type_name -> bigfleet.v1alpha1.UnmetReason
+	5,  // 5: bigfleet.v1alpha1.NeedView.matching_supply:type_name -> bigfleet.v1alpha1.MatchingSupply
+	6,  // 6: bigfleet.v1alpha1.NeedView.preemption:type_name -> bigfleet.v1alpha1.PreemptionSummary
+	7,  // 7: bigfleet.v1alpha1.NeedView.same_candidates:type_name -> bigfleet.v1alpha1.DomainCoverage
+	9,  // 8: bigfleet.v1alpha1.PreemptionSummary.capacity_freed:type_name -> bigfleet.v1alpha1.Resources
+	1,  // 9: bigfleet.v1alpha1.ShardRead.InspectNeeds:input_type -> bigfleet.v1alpha1.InspectNeedsRequest
+	2,  // 10: bigfleet.v1alpha1.ShardRead.InspectNeeds:output_type -> bigfleet.v1alpha1.InspectNeedsResponse
+	10, // [10:11] is the sub-list for method output_type
+	9,  // [9:10] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_bigfleet_v1alpha1_shardread_proto_init() }
@@ -580,7 +828,7 @@ func file_bigfleet_v1alpha1_shardread_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bigfleet_v1alpha1_shardread_proto_rawDesc), len(file_bigfleet_v1alpha1_shardread_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

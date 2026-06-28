@@ -1,5 +1,7 @@
 package occ
 
+import "sort"
+
 // SameBucket aggregates one Same-domain's candidate supply for the
 // ADR-0040 single-best-bucket choice: the domain value, the candidate
 // machine count, and Σ EffectiveAllocatable across those candidates as
@@ -195,6 +197,69 @@ func ChooseSameBucket(buckets []SameBucket, deficit []int64) int {
 		}
 	}
 	return best
+}
+
+// sameCandidateCap bounds the candidate-domain coverages retained per
+// Same-Need for the needs-inspection surface (ADR-0061 amendment).
+const sameCandidateCap = 6
+
+// topSameCandidates returns the highest-coverage candidate domains the
+// pre-pass weighed for a Same-Need, best-first, capped at sameCandidateCap.
+// Observation-only: it explains why the chosen domain won and how short the
+// runners-up were, for the ADR-0061 needs-inspection read surface. The
+// engine claims only within ChooseSameBucket's single pick.
+func topSameCandidates(buckets []SameBucket, deficit []int64) []DomainCoverage {
+	cands := make([]DomainCoverage, 0, len(buckets))
+	for i := range buckets {
+		b := &buckets[i]
+		if b.Count == 0 {
+			continue
+		}
+		cands = append(cands, DomainCoverage{
+			Domain:           b.Value,
+			CoveragePerMille: coveragePerMille(b.Total, deficit),
+			Satisfiable:      VecCovers(b.Total, deficit),
+		})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].CoveragePerMille != cands[j].CoveragePerMille {
+			return cands[i].CoveragePerMille > cands[j].CoveragePerMille
+		}
+		return cands[i].Domain < cands[j].Domain
+	})
+	if len(cands) > sameCandidateCap {
+		cands = cands[:sameCandidateCap]
+	}
+	return cands
+}
+
+// coveragePerMille is the minimum across deficit's positive dimensions of
+// min(have, want)·1000/want — the worst-covered dimension (1000 = full
+// coverage), the honest "how close did this domain come" for a Same-Need.
+func coveragePerMille(have, want []int64) int {
+	minCov := 1000
+	any := false
+	for i, w := range want {
+		if w <= 0 {
+			continue
+		}
+		any = true
+		h := int64(0)
+		if i < len(have) {
+			h = have[i]
+		}
+		if h > w {
+			h = w
+		}
+		f := int(h * 1000 / w)
+		if f < minCov {
+			minCov = f
+		}
+	}
+	if !any {
+		return 1000
+	}
+	return minCov
 }
 
 // sameBucketScore reduces a bucket total to a scalar against deficit:

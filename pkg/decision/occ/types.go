@@ -186,6 +186,40 @@ type NeedResult struct {
 	// observation-only and never feeds a claim decision. False for
 	// satisfied Needs (not computed).
 	MatchingSupplyExists bool
+	// MatchingSupply is the per-state cardinality behind MatchingSupplyExists
+	// (ADR-0061 amendment): how many machines of the Need's shape exist in
+	// each state, capped at matchingSupplyCap per state. Quantifies the
+	// NO_MATCHING_SUPPLY (all zero) vs PRIORITY_STARVED (exist but held)
+	// split for the needs-inspection read surface. Computed only for
+	// Unsatisfied Needs at the barrier; observation-only, bounded scan.
+	MatchingSupply MatchingSupplyCardinality
+	// SameCandidates is the top-K domain coverage the joint pre-pass
+	// considered for a Same-Need (ADR-0061 amendment): why the chosen domain
+	// won and how short the runners-up were. Bounded to sameCandidateCap
+	// entries, ordered best-coverage first. Empty for plain Needs.
+	// Observation-only; the engine reasons over the single chosen SameDomain.
+	SameCandidates []DomainCoverage
+}
+
+// MatchingSupplyCardinality counts machines whose shape matches an
+// Unsatisfied Need (MatchProfile + covers MinUnit), by state, ignoring
+// claims and priority. Capped per state to bound the barrier scan; Capped
+// is true if any state hit the cap (the real count may be higher).
+type MatchingSupplyCardinality struct {
+	Idle        int
+	Speculative int
+	Configured  int
+	Capped      bool
+}
+
+// DomainCoverage is one candidate topology domain the Same pre-pass weighed:
+// what fraction of the Need's deficit that domain's joint (creditable +
+// acquirable) supply could cover (CoveragePerMille, 0..1000, the minimum
+// across deficit dimensions), and whether it fully covered it.
+type DomainCoverage struct {
+	Domain           string
+	CoveragePerMille int
+	Satisfiable      bool
 }
 
 // Result is what Propose returns.

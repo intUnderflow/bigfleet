@@ -45,6 +45,14 @@ type Phase1Result struct {
 	Verdicts []NeedVerdict
 }
 
+// MatchingSupplyCardinality and DomainCoverage re-export the occ
+// observation types so consumers (pkg/shard) read the needs-inspection
+// detail through decision without importing pkg/decision/occ.
+type (
+	MatchingSupplyCardinality = occ.MatchingSupplyCardinality
+	DomainCoverage            = occ.DomainCoverage
+)
+
 // NeedVerdict is the Phase-1 outcome of one Need, projected for the
 // ADR-0061 needs-inspection ledger. Need points into the cycle's demand
 // slice (alive for the cycle's duration); the shard copies the scalar
@@ -59,6 +67,12 @@ type NeedVerdict struct {
 	SameDomain           string
 	SameSatisfiable      bool
 	MatchingSupplyExists bool
+	// MatchingSupply is the per-state cardinality behind MatchingSupplyExists
+	// (ADR-0061 amendment); zero-valued for satisfied Needs.
+	MatchingSupply MatchingSupplyCardinality
+	// SameCandidates is the top-K candidate-domain coverage the pre-pass
+	// weighed for a Same-Need (ADR-0061 amendment); nil for plain Needs.
+	SameCandidates []DomainCoverage
 }
 
 // SatisfiedGang is the per-cycle attribution of one SATISFIED Same-Need
@@ -97,6 +111,13 @@ type UnsatisfiedNeed struct {
 	// victim at all) for the ADR-0061 verdict. Always false on the Phase-1
 	// Unsatisfied path. Observation-only.
 	Preempted bool
+	// VictimsFound / CapacityFreed summarise Phase 2's preemption attempt
+	// for this still-unresolved Need (ADR-0061 amendment): how many victims
+	// it picked and the aggregate EffectiveAllocatable they would free.
+	// Still-short is the Deficit above. Observation-only; both zero on the
+	// Phase-1 Unsatisfied path.
+	VictimsFound  int
+	CapacityFreed []needs.ResourceQty
 }
 
 // Phase1 emits Bootstrap (idle → configured) and Provision
@@ -151,6 +172,8 @@ func Phase1(snap *inventory.Snapshot, allNeeds []needs.Need) Phase1Result {
 			SameDomain:           r.SameDomain,
 			SameSatisfiable:      r.SameSatisfiable,
 			MatchingSupplyExists: r.MatchingSupplyExists,
+			MatchingSupply:       r.MatchingSupply,
+			SameCandidates:       r.SameCandidates,
 		})
 
 		// Existing-supply credit is the OCC pre-pass; nothing to emit.

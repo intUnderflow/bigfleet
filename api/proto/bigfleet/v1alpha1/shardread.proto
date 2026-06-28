@@ -99,6 +99,50 @@ message NeedView {
 
   // Why the Need is unmet. UNSPECIFIED when satisfied.
   UnmetReason unmet_reason = 15;
+
+  // --- ADR-0061 amendment: observation-only decision context ---
+
+  // Per-state cardinality of machines whose shape matches this Need
+  // (MatchProfile + covers MinUnit), ignoring claims/priority — the count
+  // behind the PRIORITY_STARVED (exist but held) vs NO_MATCHING_SUPPLY (all
+  // zero) split. Capped per state; only populated for unsatisfied Needs.
+  MatchingSupply matching_supply = 16;
+
+  // Phase 2's preemption summary for a PREEMPTION_EXHAUSTED Need: how many
+  // victims it picked and the aggregate capacity they would free (still-short
+  // is residual_deficit). Absent on the priority-starved path.
+  PreemptionSummary preemption = 17;
+
+  // The top-K candidate topology domains the pre-pass weighed for a Same-Need
+  // (best coverage first) — why the chosen same_domain won and how short the
+  // runners-up were. Empty for plain Needs.
+  repeated DomainCoverage same_candidates = 18;
+}
+
+// MatchingSupply is the per-state count of machines matching an unsatisfied
+// Need's shape (ADR-0061 amendment). capped is true if any state hit the
+// internal cap (the real number may be higher).
+message MatchingSupply {
+  int32 idle        = 1;
+  int32 configured  = 2;
+  int32 speculative = 3;
+  bool  capped      = 4;
+}
+
+// PreemptionSummary describes Phase 2's preemption attempt for a still-unmet
+// Need (ADR-0061 amendment).
+message PreemptionSummary {
+  int32     victims_found  = 1;
+  Resources capacity_freed = 2;
+}
+
+// DomainCoverage is one candidate topology domain the Same pre-pass weighed:
+// coverage_per_mille (0..1000, the worst-covered deficit dimension) and
+// whether it fully covered the deficit (ADR-0061 amendment).
+message DomainCoverage {
+  string domain             = 1;
+  int32  coverage_per_mille = 2;
+  bool   satisfiable        = 3;
 }
 
 // UnmetReason classifies why a Need is unmet (ADR-0061). SATISFIED Needs

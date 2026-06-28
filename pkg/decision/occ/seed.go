@@ -303,6 +303,9 @@ func seedSameProfile(state *SharedState, snap *inventory.Snapshot, acquirable *S
 	}
 	state.recordSameDomain(n, buckets[best].Value)
 	state.recordSameSatisfiable(n, VecCovers(buckets[best].Total, deficitVec))
+	// ADR-0061 amendment: retain the top-K candidate-domain coverages for
+	// the needs-inspection surface (observation-only; no claim rides on it).
+	state.recordSameCandidates(n, topSameCandidates(buckets, deficitVec))
 	// M77h (ADR-0051 extended to machine granularity): claim this gang's
 	// own incumbents BEFORE the rest under stop-when-covered, so a
 	// freshly-matured equivalent — a Configuring→Configured machine that

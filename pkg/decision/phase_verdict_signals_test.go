@@ -73,6 +73,11 @@ func TestPhase1_MatchingSupplyExists_FalseWhenNoSupply(t *testing.T) {
 	if v.MatchingSupplyExists {
 		t.Errorf("MatchingSupplyExists=true on empty inventory, want false")
 	}
+	// ADR-0061 amendment: the cardinality is all-zero — no machine of the
+	// shape exists in any state.
+	if ms := v.MatchingSupply; ms.Idle+ms.Configured+ms.Speculative != 0 || ms.Capped {
+		t.Errorf("MatchingSupply=%+v, want all-zero/uncapped on empty inventory", ms)
+	}
 }
 
 // MatchingSupplyExists must be true when machines of the shape exist but
@@ -97,6 +102,11 @@ func TestPhase1_MatchingSupplyExists_TrueWhenHeldByHigherPriority(t *testing.T) 
 	}
 	if !v.MatchingSupplyExists {
 		t.Errorf("MatchingSupplyExists=false, want true (a matching machine exists, just held above the cut-line)")
+	}
+	// ADR-0061 amendment: the held machine is Configured and matches the
+	// shape, so the cardinality counts it under Configured.
+	if v.MatchingSupply.Configured != 1 {
+		t.Errorf("MatchingSupply.Configured=%d, want 1 (the held matching machine): %+v", v.MatchingSupply.Configured, v.MatchingSupply)
 	}
 }
 
@@ -124,6 +134,14 @@ func TestPhase2_Preempted_TrueWhenFellShort(t *testing.T) {
 	}
 	if !r.Unresolved[0].Preempted {
 		t.Errorf("Preempted=false, want true (one victim freed, deficit still positive)")
+	}
+	// ADR-0061 amendment: the victim summary records the one pick + the
+	// capacity it would free.
+	if got := r.Unresolved[0].VictimsFound; got != 1 {
+		t.Errorf("VictimsFound=%d, want 1", got)
+	}
+	if len(r.Unresolved[0].CapacityFreed) == 0 {
+		t.Errorf("CapacityFreed empty, want the freed victim's allocatable")
 	}
 }
 

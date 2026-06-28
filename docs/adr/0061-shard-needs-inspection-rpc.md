@@ -79,6 +79,40 @@ A `needViewLedger` rebuilt once per cycle at the `recordShortfalls` capture poin
 - **Reconstruct the NeedsTable in the dashboard from `CapacityRequest` CRDs** by replaying the operator's aggregation transform. Rejected as the *primary* mechanism: it is declared pre-aggregation demand with skew, shows zero shard outcome (no satisfied/unmet), and version-locks the dashboard to the operator's bucketing. (Still worth shipping as a complementary "declared demand" view — it needs no core change — but it is not the needs explorer.)
 - **Extend `ListShardReports`** on the coordinator. Rejected: the coordinator never receives the satisfied rows, per-cluster attribution, or requirements; deriving them leader-side is impossible.
 
+## Amendment (2026-06-28): decision-context fields for the debugging surface
+
+The dashboard's Needs view is the most important table in the project; surfacing
+only the verdict + counts told an operator *that* a need was unmet, not enough to
+*debug why*. This amendment adds three observation-only fields to `NeedView`,
+each retaining a small bounded summary the engine already computes each cycle but
+discarded at the barrier — the same posture as the original `MatchingSupplyExists`:
+
+- **`matching_supply`** (per-state cardinality). `occ.MatchingSupplyExists` was a
+  bool from a scan that early-returned on the first match; it now also *counts*
+  matching machines per state (`idle`/`configured`/`speculative`), **capped at
+  `matchingSupplyCap`** per state (`capped` flags a hit). Cheap for the common
+  pinned shape (instance-type bucket sums); capped walk for unpinned. Quantifies
+  the `NO_MATCHING_SUPPLY` (all zero) vs `PRIORITY_STARVED` (exist but held) split.
+- **`preemption`** (victim summary). Phase 2 already walks/picks victims for an
+  unmet preemptor; it now retains `{victims_found, capacity_freed}` on the
+  unresolved need (still-short is the existing deficit) — the `PREEMPTION_EXHAUSTED`
+  detail.
+- **`same_candidates`** (top-K domain coverage). The Same pre-pass already builds
+  per-domain coverage buckets and chooses one; it now retains the top
+  `sameCandidateCap` `{domain, coverage_per_mille, satisfiable}` (best-first) so
+  the `TOPOLOGY_UNSATISFIABLE` verdict shows why the chosen domain won and how
+  short the runners-up were.
+
+It also populates the previously-defined-but-unwired `parked_age_cycles`.
+
+**Hot-path / static-stability review:** all three are computed at/after the
+existing cycle barrier, bounded by caps, feed no claim/Action decision, and add
+no `pkg/coordinator` dependency — identical to the instrumentation this ADR
+already accepted. The "which higher-precedence Need took my machine" displacement
+chain is **deliberately not retained** (rebuilt each cycle, discarded at the
+barrier, a per-machine audit trail the roadmap rules out); the dashboard
+approximates it client-side from the full needs set.
+
 [ADR-0027]: ./0027-rollup-demand-is-a-constrained-resource-request.md
 [ADR-0029]: ./0029-phase1-omega-style-occ.md
 [ADR-0042]: ./0042-addendum-aged-acquisition-parking.md

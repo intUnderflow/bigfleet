@@ -148,6 +148,7 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		r.ClaimedMachines = nil
 		r.SameDomain = state.SameDomainFor(r.Need)
 		r.SameSatisfiable = state.SameSatisfiableFor(r.Need)
+		r.SameCandidates = state.SameCandidatesFor(r.Need)
 		sumAlloc := []needs.ResourceQty(nil)
 		for _, mid := range state.ClaimedFor(r.Need) {
 			claimed[mid] = struct{}{}
@@ -170,31 +171,39 @@ func RunCycle(snap *inventory.Snapshot, allNeeds []needs.Need, opts ...Option) C
 		}
 		r.Deficit = needs.SubResources(r.Need.AggregateResources, sumAlloc)
 		r.Unsatisfied = !needs.IsZero(r.Deficit)
-		// ADR-0061: classify why an Unsatisfied Need is short. A Need that
-		// claimed anything trivially has matching supply; otherwise scan
-		// the inventory for any machine of the right shape (held by anyone,
-		// at any priority). Observation-only, after the barrier — no claim
-		// decision rides on it.
+		// ADR-0061: classify why an Unsatisfied Need is short, and (ADR-0061
+		// amendment) quantify the matching supply by state. A Need that
+		// claimed anything trivially has matching supply; the count scans
+		// the inventory for machines of the right shape (held by anyone, at
+		// any priority), capped per state. Observation-only, after the
+		// barrier — no claim decision rides on it.
 		if r.Unsatisfied {
+			r.MatchingSupply = countMatchingSupply(snap, r.Need.Profile, r.Need.MinUnit)
 			r.MatchingSupplyExists = len(r.ClaimedMachines) > 0 ||
-				anyMatchingSupply(snap, r.Need.Profile, r.Need.MinUnit)
+				r.MatchingSupply.Idle+r.MatchingSupply.Speculative+r.MatchingSupply.Configured > 0
 		}
 	}
 
 	return CycleResult{Results: results, Claimed: claimed}
 }
 
-// anyMatchingSupply reports whether the inventory holds at least one
-// machine — in any of Idle / Speculative / Configured — whose shape
-// MatchProfile-passes profile and covers minUnit, ignoring claims and
-// priority. It reuses the snapshot's instance-type buckets (no sort, no
-// copy) and early-returns on the first match, so the common pinned case is
-// a small bucket walk; the unpinned fallback walks the full per-state slice
-// but still early-returns. Read-only; called only for Unsatisfied Needs at
-// the barrier (ADR-0061).
-func anyMatchingSupply(snap *inventory.Snapshot, profile needs.Profile, minUnit []needs.ResourceQty) bool {
+// matchingSupplyCap bounds the per-state count in countMatchingSupply so the
+// barrier scan stays cheap even for an unpinned shape against a large
+// inventory. A count that hits the cap sets Capped (the real number may be
+// higher); the operator only needs "some / many / none", not an exact tally.
+const matchingSupplyCap = 256
+
+// countMatchingSupply counts machines — in each of Idle / Speculative /
+// Configured — whose shape MatchProfile-passes profile and covers minUnit,
+// ignoring claims and priority, capped at matchingSupplyCap per state. It
+// reuses the snapshot's instance-type buckets (no sort, no copy), so the
+// common pinned case is a small bucket walk; the unpinned fallback walks the
+// full per-state slice but stops at the cap. Read-only; called only for
+// Unsatisfied Needs at the barrier (ADR-0061 amendment).
+func countMatchingSupply(snap *inventory.Snapshot, profile needs.Profile, minUnit []needs.ResourceQty) MatchingSupplyCardinality {
 	types := pinnedInstanceTypes(profile)
-	for _, st := range []machine.State{machine.StateIdle, machine.StateSpeculative, machine.StateConfigured} {
+	var card MatchingSupplyCardinality
+	count := func(st machine.State) int {
 		var pool []machine.Machine
 		if len(types) == 0 {
 			pool = snap.ListByState(st)
@@ -203,17 +212,26 @@ func anyMatchingSupply(snap *inventory.Snapshot, profile needs.Profile, minUnit 
 				pool = append(pool, snap.ListByStateInstanceType(st, t)...)
 			}
 		}
+		n := 0
 		for i := range pool {
 			m := &pool[i]
 			if !matchProfile(profile, *m) {
 				continue
 			}
 			if needs.Covers(needs.ResourceQtysFromMap(m.EffectiveAllocatable()), minUnit) {
-				return true
+				n++
+				if n >= matchingSupplyCap {
+					card.Capped = true
+					break
+				}
 			}
 		}
+		return n
 	}
-	return false
+	card.Idle = count(machine.StateIdle)
+	card.Speculative = count(machine.StateSpeculative)
+	card.Configured = count(machine.StateConfigured)
+	return card
 }
 
 // processNeed runs one Need through the broker. Tries Idle then
